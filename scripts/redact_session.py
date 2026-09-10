@@ -4,13 +4,15 @@
 The tool preserves the JSON structure, handles plain JSONL and gzip JSONL,
 creates a stable input snapshot, and replaces files atomically when
 --in-place is requested. A post-redaction scan fails closed if a recognized
-credential pattern remains.
+credential pattern remains. Large gzip outputs can be split into independently
+versioned parts with an integrity manifest for Git hosting.
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -23,6 +25,16 @@ from typing import Any, Iterator
 
 
 REDACTED = "[REDACTED]"
+
+SIZE_SUFFIXES = {
+    "b": 1,
+    "kib": 1024,
+    "mib": 1024**2,
+    "gib": 1024**3,
+    "kb": 1000,
+    "mb": 1000**2,
+    "gb": 1000**3,
+}
 
 # These are deliberately broad. Losing one command/output string is safer
 # than publishing a partial private-key block or an authentication header.
@@ -171,6 +183,104 @@ def scan_output(path: Path) -> list[tuple[int, str]]:
     return findings
 
 
+def parse_size(value: str) -> int:
+    match = re.fullmatch(r"\s*(\d+)\s*([kmgt]?i?b)?\s*", value, re.IGNORECASE)
+    if not match:
+        raise argparse.ArgumentTypeError(
+            "size must be a positive integer with an optional B, KiB, MiB, GiB, "
+            "KB, MB, or GB suffix"
+        )
+    amount = int(match.group(1))
+    suffix = (match.group(2) or "b").lower()
+    size = amount * SIZE_SUFFIXES[suffix]
+    if size <= 0:
+        raise argparse.ArgumentTypeError("size must be positive")
+    return size
+
+
+def split_archive(archive_path: Path, output_path: Path, part_size: int) -> tuple[Path, int]:
+    """Split a verified archive and write a manifest beside its parts."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    part_prefix = f"{output_path.name}.part-"
+    part_pattern = re.compile(re.escape(part_prefix) + r"\d{6}$")
+    old_parts = {
+        path
+        for path in output_path.parent.iterdir()
+        if path.is_file() and part_pattern.fullmatch(path.name)
+    }
+    temporary_parts: list[tuple[Path, Path]] = []
+    digest = hashlib.sha256()
+    total_bytes = 0
+    part_count = 0
+
+    try:
+        with archive_path.open("rb") as source:
+            while True:
+                chunk = source.read(part_size)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                total_bytes += len(chunk)
+                part_count += 1
+                final_path = output_path.parent / f"{part_prefix}{part_count:06d}"
+                fd, temporary_name = tempfile.mkstemp(
+                    prefix=f".{final_path.name}.", suffix=".tmp", dir=output_path.parent
+                )
+                temporary_path = Path(temporary_name)
+                try:
+                    with os.fdopen(fd, "wb") as target:
+                        target.write(chunk)
+                        target.flush()
+                        os.fsync(target.fileno())
+                except Exception:
+                    temporary_path.unlink(missing_ok=True)
+                    raise
+                temporary_parts.append((temporary_path, final_path))
+
+        if part_count == 0:
+            raise ValueError("cannot split an empty archive")
+
+        for temporary_path, final_path in temporary_parts:
+            os.replace(temporary_path, final_path)
+
+        manifest_path = Path(f"{output_path}.manifest.json")
+        manifest = {
+            "format": "wavevm-session-archive-shards",
+            "archive": output_path.name,
+            "compression": "gzip",
+            "part_prefix": part_prefix,
+            "part_count": part_count,
+            "part_size_bytes": part_size,
+            "compressed_size_bytes": total_bytes,
+            "sha256": digest.hexdigest(),
+            "restore": f"cat {part_prefix}* > {output_path.name}",
+        }
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{manifest_path.name}.", suffix=".tmp", dir=output_path.parent
+        )
+        temporary_manifest = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as target:
+                json.dump(manifest, target, indent=2, sort_keys=True)
+                target.write("\n")
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary_manifest, manifest_path)
+        except Exception:
+            temporary_manifest.unlink(missing_ok=True)
+            raise
+
+        # A valid manifest makes the new parts recoverable. Only then retire
+        # an older whole archive and any surplus parts from a previous split.
+        output_path.unlink(missing_ok=True)
+        for stale_path in old_parts - {final_path for _temporary, final_path in temporary_parts}:
+            stale_path.unlink()
+        return manifest_path, part_count
+    finally:
+        for temporary_path, _final_path in temporary_parts:
+            temporary_path.unlink(missing_ok=True)
+
+
 def scalar_values(value: Any) -> Iterator[str]:
     if isinstance(value, str):
         yield value
@@ -254,6 +364,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="exact output path; only valid with one input",
     )
+    parser.add_argument(
+        "--split-size",
+        type=parse_size,
+        metavar="SIZE",
+        help=(
+            "after redaction, split the complete gzip archive into parts no larger "
+            "than SIZE and write a SHA-256 manifest (for example 45MiB)"
+        ),
+    )
     args = parser.parse_args()
     if args.in_place and args.output_dir:
         parser.error("--in-place and --output-dir are mutually exclusive")
@@ -261,6 +380,16 @@ def parse_args() -> argparse.Namespace:
         parser.error("--in-place and --output are mutually exclusive")
     if args.output and len(args.inputs) != 1:
         parser.error("--output requires exactly one input")
+    if args.split_size is not None and args.in_place:
+        parser.error("--split-size cannot be used with --in-place")
+    if args.split_size is not None and not (args.output or args.output_dir):
+        parser.error("--split-size requires --output or --output-dir")
+    if args.split_size is not None:
+        split_targets = [args.output] if args.output else [
+            args.output_dir / input_path.name for input_path in args.inputs
+        ]
+        if any(not target.name.endswith(".gz") for target in split_targets):
+            parser.error("--split-size requires gzip output paths ending in .gz")
     if not args.in_place and not args.output_dir:
         if not args.output:
             parser.error("choose --in-place, --output, or --output-dir")
@@ -282,13 +411,35 @@ def main() -> int:
         else:
             output_path = args.output_dir / input_path.name
         snapshot_dir = args.snapshot_dir or output_path.parent
+        archive_path: Path | None = None
         try:
-            count, _ = process(input_path, output_path, literals, snapshot_dir)
+            if args.split_size is None:
+                count, _ = process(input_path, output_path, literals, snapshot_dir)
+                print(f"{input_path}: redacted {count} JSON value(s) -> {output_path}")
+            else:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                fd, temporary_name = tempfile.mkstemp(
+                    prefix=f".{output_path.name}.archive.",
+                    suffix=".gz",
+                    dir=output_path.parent,
+                )
+                os.close(fd)
+                archive_path = Path(temporary_name)
+                count, _ = process(input_path, archive_path, literals, snapshot_dir)
+                manifest_path, part_count = split_archive(
+                    archive_path, output_path, args.split_size
+                )
+                print(
+                    f"{input_path}: redacted {count} JSON value(s) -> "
+                    f"{part_count} parts + {manifest_path}"
+                )
         except (OSError, ValueError) as exc:
             print(f"error: {input_path}: {exc}", file=sys.stderr)
             return 1
+        finally:
+            if archive_path is not None:
+                archive_path.unlink(missing_ok=True)
         total += count
-        print(f"{input_path}: redacted {count} JSON value(s) -> {output_path}")
     print(f"total redacted JSON values: {total}")
     return 0
 
