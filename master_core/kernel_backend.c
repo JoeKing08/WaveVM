@@ -132,7 +132,16 @@ struct wvm_kernel_file_context {
 };
 
 static DEFINE_MUTEX(g_context_mutex);
-static struct wvm_kernel_context g_kernel_context;
+
+/*
+ * Multi-context registry for concurrent VM support.
+ * Simple fixed-size array indexed by vm_id % MAX_CONCURRENT_CONTEXTS.
+ * When multiple VMs hash to the same slot, we reject the bind with -EBUSY.
+ * Production systems should size this >= expected concurrent VMs per node.
+ */
+#define MAX_CONCURRENT_CONTEXTS 16
+static struct wvm_kernel_context g_kernel_contexts[MAX_CONCURRENT_CONTEXTS];
+static int g_active_context_count = 0;
 
 // --- [V29 Wavelet] 内核态脏区捕获与Diff提交结构 ---
 
@@ -216,9 +225,21 @@ struct wvm_inval_work {
     uint64_t gpa;
 };
 
+static struct wvm_kernel_context *wvm_kernel_find_context(uint32_t vm_id)
+{
+    int slot = vm_id % MAX_CONCURRENT_CONTEXTS;
+    struct wvm_kernel_context *ctx = &g_kernel_contexts[slot];
+    if (ctx->active && ctx->identity.vm_id == vm_id)
+        return ctx;
+    return NULL;
+}
+
 static struct wvm_kernel_context *wvm_active_context(void)
 {
-    return &g_kernel_context;
+    uint32_t vm_id = READ_ONCE(g_my_vm_id);
+    if (vm_id == 0)
+        return NULL;
+    return wvm_kernel_find_context(vm_id);
 }
 
 static struct wvm_kernel_transport *wvm_active_transport(void)
@@ -1639,24 +1660,28 @@ static int wvm_context_bind_file(
         mutex_unlock(&g_context_mutex);
         return result;
     }
-    if (g_kernel_context.active &&
-        !wvm_context_identity_equal(&g_kernel_context.identity, &identity)) {
+    int slot = identity.vm_id % MAX_CONCURRENT_CONTEXTS;
+    struct wvm_kernel_context *ctx = &g_kernel_contexts[slot];
+
+    if (ctx->active && !wvm_context_identity_equal(&ctx->identity, &identity)) {
         mutex_unlock(&g_context_mutex);
         return -EBUSY;
     }
-    if (!g_kernel_context.active) {
+    if (!ctx->active) {
         if (wvm_logic_bind_route_snapshot(&route_key) != 0) {
             mutex_unlock(&g_context_mutex);
             return -EINVAL;
         }
-        g_kernel_context.identity = identity;
-        g_kernel_context.active = 1;
+        ctx->identity = identity;
+        ctx->active = 1;
+        atomic_set(&ctx->refs, 0);
+        g_active_context_count++;
     }
-    file_context->context = &g_kernel_context;
+    file_context->context = ctx;
     file_context->identity = identity;
     file_context->bound = 1;
     WRITE_ONCE(g_my_vm_id, identity.vm_id);
-    atomic_inc(&g_kernel_context.refs);
+    atomic_inc(&ctx->refs);
     mutex_unlock(&g_context_mutex);
     return 0;
 }
@@ -1679,13 +1704,16 @@ static int wvm_context_unbind_file(
     mutex_lock(&g_context_mutex);
     file_context->bound = 0;
     memset(&file_context->identity, 0, sizeof(file_context->identity));
-    file_context->context = NULL;
-    if (atomic_dec_and_test(&g_kernel_context.refs)) {
-        g_kernel_context.active = 0;
-        memset(&g_kernel_context.identity, 0,
-               sizeof(g_kernel_context.identity));
-        wvm_logic_unbind_route_snapshot();
-        WRITE_ONCE(g_my_vm_id, 0);
+    {
+        struct wvm_kernel_context *ctx = file_context->context;
+        file_context->context = NULL;
+        if (ctx && atomic_dec_and_test(&ctx->refs)) {
+            ctx->active = 0;
+            memset(&ctx->identity, 0, sizeof(ctx->identity));
+            wvm_logic_unbind_route_snapshot();
+            WRITE_ONCE(g_my_vm_id, 0);
+            g_active_context_count--;
+        }
     }
     mutex_unlock(&g_context_mutex);
     return result;
@@ -1693,11 +1721,12 @@ static int wvm_context_unbind_file(
 
 static int wvm_context_accepts_vm_id(uint32_t vm_id)
 {
+    struct wvm_kernel_context *ctx;
     int result = 0;
 
     mutex_lock(&g_context_mutex);
-    if (g_kernel_context.active &&
-        g_kernel_context.identity.vm_id != vm_id)
+    ctx = wvm_kernel_find_context(vm_id);
+    if (!ctx || !ctx->active || ctx->identity.vm_id != vm_id)
         result = -EPERM;
     mutex_unlock(&g_context_mutex);
     return result;
@@ -1759,10 +1788,11 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         memset(&caps, 0, sizeof(caps));
         caps.magic = WVM_KERNEL_CONTEXT_MAGIC;
         caps.version = WVM_KERNEL_CONTEXT_ABI_VERSION;
-        caps.max_concurrent_contexts = 1;
-        caps.active_contexts = READ_ONCE(g_kernel_context.active) ? 1U : 0U;
-        caps.feature_bits = WVM_KERNEL_CAP_CONTEXT_BIND |
-                            WVM_KERNEL_CAP_SINGLE_CONTEXT;
+        caps.max_concurrent_contexts = MAX_CONCURRENT_CONTEXTS;
+        mutex_lock(&g_context_mutex);
+        caps.active_contexts = g_active_context_count;
+        mutex_unlock(&g_context_mutex);
+        caps.feature_bits = WVM_KERNEL_CAP_CONTEXT_BIND;
         if (copy_to_user(argp, &caps, sizeof(caps)))
             return -EFAULT;
         return 0;
