@@ -17,6 +17,41 @@
 #include "../common_include/wavevm_control_plane.h"
 #include "../common_include/wavevm_control_service.h"
 #include "../common_include/wavevm_admission_orchestrator.h"
+#include "../common_include/wavevm_admission_authority_owner.h"
+#include "../common_include/wavevm_admission_provider.h"
+#include "../common_include/wavevm_admission_route.h"
+#include "../common_include/wavevm_coordinator.h"
+
+/* Admission authority workspace owned by the control-plane service. */
+struct admission_workspace {
+    struct wvm_admission_evidence_owner evidence_owner;
+    struct wvm_admission_plan_provider plan_provider;
+    struct wvm_admission_route_compiler route_compiler;
+    struct wvm_admission_transport transport;
+    struct wvm_admission_authority_owner authority_owner;
+    struct wvm_membership_controller_capture membership_capture;
+    struct wvm_coordinator_prepare_options prepare_options;
+    struct wvm_coordinator_prepared_route prepared_route;
+    struct wvm_coordinator_prepared_vm prepared_vm;
+    struct wvm_coordinator_activation_options activation_options;
+    struct wvm_activation_record activation;
+    struct wvm_route_transaction_record route_transaction;
+    struct wvm_route_snapshot_record route_snapshot;
+    struct wvm_capability_record *capabilities;
+    struct wvm_resource_reservation *reservations;
+    struct wvm_coordinator_node_launch_plan *launch_plans;
+    struct wvm_admission_node_listener_plan *listener_plans;
+    struct wvm_route_rule_record *route_rules;
+    struct wvm_required_ack_entry *route_ack_entries;
+    struct wvm_node_record *capture_nodes;
+    struct wvm_gateway_record *capture_gateways;
+    uint8_t *route_snapshot_bytes;
+    uint8_t *route_ack_set_bytes;
+    size_t capacity;
+    size_t route_snapshot_bytes_capacity;
+    size_t route_ack_set_bytes_capacity;
+    int initialized;
+};
 
 struct control_context {
     struct wvm_control_plane *plane;
@@ -631,6 +666,70 @@ static int authenticate_local_peer(void *opaque, int stream_fd,
     return -1;
 }
 
+static int admission_workspace_reset(
+    void *context, struct wvm_coordinator_prepared_route *prepared_route,
+    struct wvm_coordinator_prepared_vm *prepared_vm,
+    struct wvm_coordinator_activation_options *activation_options,
+    struct wvm_activation_record *activation,
+    struct wvm_route_transaction_record *route_transaction,
+    struct wvm_route_snapshot_record *route_snapshot, char *error,
+    size_t error_len)
+{
+    (void)context;
+    (void)error;
+    (void)error_len;
+    if (!prepared_route || !prepared_vm || !activation_options ||
+        !activation || !route_transaction || !route_snapshot) {
+        return -1;
+    }
+    memset(prepared_route, 0, sizeof(*prepared_route));
+    memset(prepared_vm, 0, sizeof(*prepared_vm));
+    memset(activation_options, 0, sizeof(*activation_options));
+    memset(activation, 0, sizeof(*activation));
+    memset(route_transaction, 0, sizeof(*route_transaction));
+    memset(route_snapshot, 0, sizeof(*route_snapshot));
+    return 0;
+}
+
+static int admission_transport_resolve_node(
+    void *context, uint32_t physical_node_id, uint64_t node_instance_id,
+    struct wvm_admission_transport_target *target, char *error,
+    size_t error_len)
+{
+    (void)context;
+    (void)physical_node_id;
+    (void)node_instance_id;
+    (void)target;
+    snprintf(error, error_len,
+             "admission transport not yet connected to real network");
+    return -1;
+}
+
+static int admission_transport_submit(
+    void *context, const struct wvm_admission_transport_target *target,
+    const struct wvm_envelope *envelope, char *error, size_t error_len)
+{
+    (void)context;
+    (void)target;
+    (void)envelope;
+    snprintf(error, error_len,
+             "admission transport not yet connected to real network");
+    return -1;
+}
+
+static int admission_transport_ready(
+    void *context, const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len)
+{
+    (void)context;
+    (void)candidate;
+    (void)runtime_manifest;
+    snprintf(error, error_len,
+             "admission transport not yet connected to real network");
+    return -1;
+}
+
 static int authorize_self_registration(
     void *opaque, enum wvm_membership_controller_authorization_action action,
     const struct wvm_member_key *actor, const struct wvm_member_key *subject,
@@ -715,6 +814,8 @@ int main(int argc, char **argv)
     struct wvm_control_plane_membership_config membership_config;
     struct wvm_control_service_config service_config;
     struct control_context control_context;
+    struct admission_workspace admission_workspace;
+    struct wvm_admission_authority_owner_config authority_config;
     char admission_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_control_journal[WVM_CONTROL_PLANE_PATH_MAX];
@@ -727,6 +828,7 @@ int main(int argc, char **argv)
     }
     memset(&service, 0, sizeof(service));
     memset(&control_context, 0, sizeof(control_context));
+    memset(&admission_workspace, 0, sizeof(admission_workspace));
     shutdown_requested = 0;
     if (ensure_state_directory(options.state_directory) != 0 ||
         make_state_path(options.state_directory, "admission.journal",
@@ -751,8 +853,29 @@ int main(int argc, char **argv)
     membership_routes = calloc(options.capacity, sizeof(*membership_routes));
     dependencies = calloc(options.capacity, sizeof(*dependencies));
     operations = calloc(options.capacity, sizeof(*operations));
+
+    /* Allocate admission authority workspace storage. */
+    admission_workspace.capacity = options.capacity;
+    admission_workspace.route_snapshot_bytes_capacity = options.capacity * 512;
+    admission_workspace.route_ack_set_bytes_capacity = options.capacity * 64;
+    admission_workspace.capabilities = calloc(options.capacity, sizeof(*admission_workspace.capabilities));
+    admission_workspace.reservations = calloc(options.capacity, sizeof(*admission_workspace.reservations));
+    admission_workspace.launch_plans = calloc(options.capacity, sizeof(*admission_workspace.launch_plans));
+    admission_workspace.listener_plans = calloc(options.capacity, sizeof(*admission_workspace.listener_plans));
+    admission_workspace.route_rules = calloc(options.capacity, sizeof(*admission_workspace.route_rules));
+    admission_workspace.route_ack_entries = calloc(options.capacity, sizeof(*admission_workspace.route_ack_entries));
+    admission_workspace.capture_nodes = calloc(options.capacity, sizeof(*admission_workspace.capture_nodes));
+    admission_workspace.capture_gateways = calloc(options.capacity, sizeof(*admission_workspace.capture_gateways));
+    admission_workspace.route_snapshot_bytes = calloc(admission_workspace.route_snapshot_bytes_capacity, 1);
+    admission_workspace.route_ack_set_bytes = calloc(admission_workspace.route_ack_set_bytes_capacity, 1);
+
     if (!entries || !route_entries || !runtime_entries || !namespace_records ||
-        !members || !membership_routes || !dependencies || !operations) {
+        !members || !membership_routes || !dependencies || !operations ||
+        !admission_workspace.capabilities || !admission_workspace.reservations ||
+        !admission_workspace.launch_plans || !admission_workspace.listener_plans ||
+        !admission_workspace.route_rules || !admission_workspace.route_ack_entries ||
+        !admission_workspace.capture_nodes || !admission_workspace.capture_gateways ||
+        !admission_workspace.route_snapshot_bytes || !admission_workspace.route_ack_set_bytes) {
         fprintf(stderr, "wvm_ctl: cannot allocate bounded control-plane state\n");
         goto out;
     }
@@ -771,6 +894,90 @@ int main(int argc, char **argv)
         goto out;
     }
     control_context.lock_initialized = 1;
+
+    /*
+     * Bind the admission authority before membership opens: the control plane
+     * refuses the binding once its journals are live, so every component must
+     * be constructed and the authority registered here.
+     */
+    admission_workspace.membership_capture.nodes = admission_workspace.capture_nodes;
+    admission_workspace.membership_capture.node_capacity = admission_workspace.capacity;
+    admission_workspace.membership_capture.gateways = admission_workspace.capture_gateways;
+    admission_workspace.membership_capture.gateway_capacity = admission_workspace.capacity;
+    if (wvm_admission_evidence_owner_init(
+            &admission_workspace.evidence_owner,
+            admission_workspace.capabilities, admission_workspace.capacity,
+            admission_workspace.reservations, admission_workspace.capacity,
+            error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot initialize evidence owner: %s\n", error);
+        goto close_plane;
+    }
+    if (wvm_admission_plan_provider_init(
+            &admission_workspace.plan_provider,
+            admission_workspace.launch_plans, admission_workspace.capacity,
+            admission_workspace.listener_plans, admission_workspace.capacity,
+            error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot initialize plan provider: %s\n", error);
+        goto close_plane;
+    }
+    if (wvm_admission_route_compiler_init(
+            &admission_workspace.route_compiler,
+            WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1,
+            admission_workspace.route_rules, admission_workspace.capacity,
+            admission_workspace.route_ack_entries, admission_workspace.capacity,
+            admission_workspace.route_snapshot_bytes,
+            admission_workspace.route_snapshot_bytes_capacity,
+            admission_workspace.route_ack_set_bytes,
+            admission_workspace.route_ack_set_bytes_capacity,
+            error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot initialize route compiler: %s\n", error);
+        goto close_plane;
+    }
+    if (wvm_admission_transport_init(
+            &admission_workspace.transport,
+            options.local_physical_node_id,
+            options.local_runtime_instance_id,
+            NULL,
+            admission_transport_resolve_node,
+            admission_transport_submit,
+            admission_transport_ready,
+            error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot initialize admission transport: %s\n", error);
+        goto close_plane;
+    }
+
+    memset(&authority_config, 0, sizeof(authority_config));
+    authority_config.membership_controller = &plane.membership_controller;
+    authority_config.membership_capture = &admission_workspace.membership_capture;
+    authority_config.evidence_owner = &admission_workspace.evidence_owner;
+    authority_config.plan_provider = &admission_workspace.plan_provider;
+    authority_config.route_compiler = &admission_workspace.route_compiler;
+    authority_config.transport = &admission_workspace.transport;
+    authority_config.prepared_route = &admission_workspace.prepared_route;
+    authority_config.prepared_vm = &admission_workspace.prepared_vm;
+    authority_config.activation_options = &admission_workspace.activation_options;
+    authority_config.activation = &admission_workspace.activation;
+    authority_config.route_transaction = &admission_workspace.route_transaction;
+    authority_config.route_snapshot = &admission_workspace.route_snapshot;
+    authority_config.workspace_context = NULL;
+    authority_config.reset_workspace = admission_workspace_reset;
+
+    if (wvm_admission_authority_owner_init(
+            &admission_workspace.authority_owner,
+            &authority_config,
+            error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot initialize admission authority: %s\n", error);
+        goto close_plane;
+    }
+    if (wvm_control_plane_set_admission_authority(
+            &plane,
+            wvm_admission_authority_owner_binding(&admission_workspace.authority_owner),
+            error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot bind admission authority: %s\n", error);
+        goto close_plane;
+    }
+    admission_workspace.initialized = 1;
+
     memset(&membership_config, 0, sizeof(membership_config));
     membership_config.members = members;
     membership_config.member_capacity = options.capacity;
@@ -788,13 +995,20 @@ int main(int argc, char **argv)
         authorize_executor_membership_management;
     if (wvm_control_plane_configure_membership(&plane, &membership_config,
                                                error, sizeof(error)) != 0 ||
-        wvm_control_plane_open_membership(&plane, error, sizeof(error)) != 0 ||
-        wvm_control_plane_open(&plane, admission_journal, &namespace_allocator,
-                               error, sizeof(error)) != 0) {
+        wvm_control_plane_open_membership(&plane, error, sizeof(error)) != 0) {
         fprintf(stderr, "wvm_ctl: cannot open control-plane state: %s\n",
                 error[0] ? error : "unknown error");
         goto close_plane;
     }
+
+    /* Open admission journal after authority is bound. */
+    if (wvm_control_plane_open(&plane, admission_journal, &namespace_allocator,
+                               error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot open admission journal: %s\n",
+                error[0] ? error : "unknown error");
+        goto close_plane;
+    }
+
     memset(&service_config, 0, sizeof(service_config));
     service_config.plane = &plane;
     service_config.socket_path = options.socket_path;
@@ -841,6 +1055,16 @@ out:
         pthread_mutex_destroy(&control_context.lock);
     }
     destroy_principals(&auth);
+    free(admission_workspace.route_ack_set_bytes);
+    free(admission_workspace.route_snapshot_bytes);
+    free(admission_workspace.capture_gateways);
+    free(admission_workspace.capture_nodes);
+    free(admission_workspace.route_ack_entries);
+    free(admission_workspace.route_rules);
+    free(admission_workspace.listener_plans);
+    free(admission_workspace.launch_plans);
+    free(admission_workspace.reservations);
+    free(admission_workspace.capabilities);
     free(operations);
     free(dependencies);
     free(membership_routes);

@@ -36,14 +36,52 @@ static int callbacks_valid(
     const struct wvm_admission_orchestrator_callbacks *callbacks,
     char *error, size_t error_len)
 {
-    if (!callbacks || !callbacks->route_plan || !callbacks->route_prepare ||
-        !callbacks->route_commit ||
-        !callbacks->route_abort || !callbacks->reservation_prepare ||
-        !callbacks->reservation_commit || !callbacks->reservation_abort ||
-        !callbacks->participant_prepare || !callbacks->participant_commit ||
-        !callbacks->participant_abort || !callbacks->participant_ready) {
-        set_error(error, error_len,
-                  "admission orchestrator transport callbacks are incomplete");
+    if (!callbacks) {
+        set_error(error, error_len, "callbacks is NULL");
+        return -1;
+    }
+    if (!callbacks->route_plan) {
+        set_error(error, error_len, "route_plan is NULL");
+        return -1;
+    }
+    if (!callbacks->route_prepare) {
+        set_error(error, error_len, "route_prepare is NULL");
+        return -1;
+    }
+    if (!callbacks->route_commit) {
+        set_error(error, error_len, "route_commit is NULL");
+        return -1;
+    }
+    if (!callbacks->route_abort) {
+        set_error(error, error_len, "route_abort is NULL");
+        return -1;
+    }
+    if (!callbacks->reservation_prepare) {
+        set_error(error, error_len, "reservation_prepare is NULL");
+        return -1;
+    }
+    if (!callbacks->reservation_commit) {
+        set_error(error, error_len, "reservation_commit is NULL");
+        return -1;
+    }
+    if (!callbacks->reservation_abort) {
+        set_error(error, error_len, "reservation_abort is NULL");
+        return -1;
+    }
+    if (!callbacks->participant_prepare) {
+        set_error(error, error_len, "participant_prepare is NULL");
+        return -1;
+    }
+    if (!callbacks->participant_commit) {
+        set_error(error, error_len, "participant_commit is NULL");
+        return -1;
+    }
+    if (!callbacks->participant_abort) {
+        set_error(error, error_len, "participant_abort is NULL");
+        return -1;
+    }
+    if (!callbacks->participant_ready) {
+        set_error(error, error_len, "participant_ready is NULL");
         return -1;
     }
     return 0;

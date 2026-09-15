@@ -4,8 +4,8 @@
 /*
  * Caller-owned composition of the inputs required by one production admission
  * transaction. This module does not discover members, create endpoints, or
- * manufacture capacity. It binds already published control-plane authorities
- * to the orchestrator's single authority interface.
+ * manufacture capacity. It binds control-plane providers to the orchestrator's
+ * single authority interface; publication readiness is checked per admission.
  */
 
 #include <stddef.h>
@@ -51,7 +51,9 @@ struct wvm_admission_authority_owner_config {
 /*
  * All storage remains owned by CONFIG's caller. One owner workspace represents
  * one in-flight admission, so its caller must serialize new transactions or
- * provide independent owner/workspace instances.
+ * provide independent owner/workspace instances. Initialization may happen
+ * before membership/evidence/plan publication; the first transaction remains
+ * fail-closed until all three publications are complete and current.
  */
 struct wvm_admission_authority_owner {
     struct wvm_admission_authority_owner_config config;

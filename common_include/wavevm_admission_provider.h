@@ -22,6 +22,7 @@ struct wvm_admission_plan_provider {
     struct wvm_admission_node_listener_plan *node_listener_plans;
     size_t node_listener_plan_capacity;
     size_t node_listener_plan_count;
+    uint64_t inventory_revision;
     uint64_t membership_revision;
     uint64_t topology_revision;
     uint64_t admission_eligibility_revision;

@@ -121,6 +121,13 @@ int wvm_admission_route_compiler_init(
     return compiler_storage_valid(compiler, error, error_len);
 }
 
+int wvm_admission_route_compiler_validate(
+    const struct wvm_admission_route_compiler *compiler, char *error,
+    size_t error_len)
+{
+    return compiler_storage_valid(compiler, error, error_len);
+}
+
 static const struct wvm_gateway_record *select_gateway(
     const struct wvm_cluster_record_set *records,
     enum wvm_route_topology_kind topology_kind)

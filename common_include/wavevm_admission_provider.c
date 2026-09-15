@@ -146,6 +146,7 @@ static int plan_set_validate(
         !listener_plans || launch_count == 0 ||
         launch_count > provider->node_launch_plan_capacity ||
         listener_count > provider->node_listener_plan_capacity ||
+        records->inventory_revision == 0 ||
         records->membership_revision == 0 || records->topology_revision == 0 ||
         records->admission_eligibility_revision == 0) {
         set_error(error, error_len,
@@ -257,6 +258,7 @@ int wvm_admission_plan_provider_publish(
             node_listener_plan_count * sizeof(*provider->node_listener_plans));
     provider->node_launch_plan_count = node_launch_plan_count;
     provider->node_listener_plan_count = node_listener_plan_count;
+    provider->inventory_revision = records->inventory_revision;
     provider->membership_revision = records->membership_revision;
     provider->topology_revision = records->topology_revision;
     provider->admission_eligibility_revision =
@@ -276,6 +278,7 @@ int wvm_admission_plan_provider_validate(
                           provider->node_listener_plans,
                           provider->node_listener_plan_count, error,
                           error_len) != 0 ||
+        provider->inventory_revision != records->inventory_revision ||
         provider->membership_revision != records->membership_revision ||
         provider->topology_revision != records->topology_revision ||
         provider->admission_eligibility_revision !=

@@ -1956,11 +1956,28 @@ int wvm_control_plane_set_admission_authority(
     const struct wvm_admission_authority *authority, char *error,
     size_t error_len)
 {
-    if (!plane || !authority || plane->journal_fd >= 0 ||
-        plane->membership_open || plane->admission_authority ||
-        !admission_authority_complete(authority)) {
-        set_error(error, error_len,
-                  "control-plane admission authority binding is invalid");
+    if (!plane) {
+        set_error(error, error_len, "plane is NULL");
+        return -EINVAL;
+    }
+    if (!authority) {
+        set_error(error, error_len, "authority is NULL");
+        return -EINVAL;
+    }
+    if (plane->journal_fd >= 0) {
+        set_error(error, error_len, "admission journal already open");
+        return -EINVAL;
+    }
+    if (plane->membership_open) {
+        set_error(error, error_len, "membership already open");
+        return -EINVAL;
+    }
+    if (plane->admission_authority) {
+        set_error(error, error_len, "admission authority already set");
+        return -EINVAL;
+    }
+    if (!admission_authority_complete(authority)) {
+        set_error(error, error_len, "admission authority is incomplete");
         return -EINVAL;
     }
     plane->admission_authority = authority;

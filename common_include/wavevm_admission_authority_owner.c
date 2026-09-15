@@ -27,10 +27,13 @@ static int owner_config_valid(
         !config->prepared_vm || !config->activation_options ||
         !config->activation || !config->route_transaction ||
         !config->route_snapshot || !config->reset_workspace ||
+        !config->membership_capture->nodes ||
+        config->membership_capture->node_capacity == 0 ||
+        !config->membership_capture->gateways ||
+        config->membership_capture->gateway_capacity == 0 ||
+        !config->evidence_owner->initialized ||
         !config->plan_provider->initialized ||
-        !config->plan_provider->published ||
-        !config->plan_provider->options_template_published ||
-        wvm_admission_evidence_owner_validate(config->evidence_owner, error,
+        wvm_admission_route_compiler_validate(config->route_compiler, error,
                                               error_len) != 0) {
         if (error && error[0] == '\0') {
             set_error(error, error_len,
@@ -51,6 +54,15 @@ static int owner_prepare_input(
 
     if (!owner || !owner->initialized || !request || !transaction || !input ||
         owner_config_valid(&owner->config, error, error_len) != 0 ||
+        !owner->config.plan_provider->published ||
+        !owner->config.plan_provider->options_template_published ||
+        wvm_admission_evidence_owner_validate(owner->config.evidence_owner,
+                                              error, error_len) != 0) {
+        set_error(error, error_len,
+                  "admission authority has no complete published input");
+        return -1;
+    }
+    if (
         owner->config.reset_workspace(
             owner->config.workspace_context, owner->config.prepared_route,
             owner->config.prepared_vm, owner->config.activation_options,

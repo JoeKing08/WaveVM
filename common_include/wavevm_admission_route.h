@@ -39,6 +39,10 @@ int wvm_admission_route_compiler_init(
     uint8_t *ack_set_bytes, size_t ack_set_byte_capacity, char *error,
     size_t error_len);
 
+int wvm_admission_route_compiler_validate(
+    const struct wvm_admission_route_compiler *compiler, char *error,
+    size_t error_len);
+
 /* Signature-compatible with wvm_admission_route_plan_fn. */
 int wvm_admission_route_compile(
     void *context, const struct wvm_coordinator_transaction *transaction,

@@ -153,6 +153,7 @@ int main(void)
     struct wvm_admission_plan_provider plan_provider;
     struct wvm_admission_plan_provider unpublished_plan_provider;
     struct wvm_admission_route_compiler route_compiler;
+    struct wvm_admission_route_compiler unpublished_route_compiler;
     struct wvm_admission_transport transport;
     struct wvm_admission_authority_owner_config config;
     struct wvm_admission_authority_owner_config unpublished_config;
@@ -177,10 +178,16 @@ int main(void)
     struct wvm_activation_record activation;
     struct wvm_route_transaction_record route_transaction;
     struct wvm_route_snapshot_record route_snapshot;
+    struct wvm_route_rule_record route_rules[16];
+    struct wvm_required_ack_entry route_ack_entries[1];
+    uint8_t route_snapshot_bytes[65536];
+    uint8_t route_ack_set_bytes[4096];
     struct wvm_vm_request request;
     struct wvm_coordinator_transaction transaction;
     struct wvm_admission_orchestrator_input input;
-    struct workspace_state workspace;
+    struct workspace_state workspace = {0};
+    struct wvm_node_record capture_nodes[1];
+    struct wvm_gateway_record capture_gateways[1];
     char error[256] = {0};
 
     memset(&membership_controller, 0, sizeof(membership_controller));
@@ -194,6 +201,11 @@ int main(void)
     records.membership_revision = 11;
     records.topology_revision = 12;
     records.admission_eligibility_revision = 13;
+    records.inventory_revision = 7;
+    membership_capture.nodes = capture_nodes;
+    membership_capture.node_capacity = 1;
+    membership_capture.gateways = capture_gateways;
+    membership_capture.gateway_capacity = 1;
     fill_capability(source_capabilities);
     fill_launch(source_launch);
     fill_listener(source_listener, source_launch, leases);
@@ -217,6 +229,15 @@ int main(void)
                    &transport, 17, 500, NULL, resolve_node, submit, ready,
                    error, sizeof(error)) == 0,
                "initialize caller-owned admission transport")) {
+        return 1;
+    }
+    if (expect(wvm_admission_route_compiler_init(
+                   &route_compiler, WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1,
+                   route_rules, 16, route_ack_entries, 1,
+                   route_snapshot_bytes, sizeof(route_snapshot_bytes),
+                   route_ack_set_bytes, sizeof(route_ack_set_bytes), error,
+                   sizeof(error)) == 0,
+               "initialize caller-owned route compiler")) {
         return 1;
     }
 
@@ -251,8 +272,16 @@ int main(void)
     memset(&owner, 0, sizeof(owner));
     memset(error, 0, sizeof(error));
     if (expect(wvm_admission_authority_owner_init(
-                   &owner, &unpublished_config, error, sizeof(error)) != 0,
-               "reject unpublished evidence")) {
+                   &owner, &unpublished_config, error, sizeof(error)) == 0,
+               "bind configured but unpublished evidence")) {
+        return 1;
+    }
+    memset(&input, 0, sizeof(input));
+    memset(error, 0, sizeof(error));
+    if (expect(owner.authority.prepare_input(
+                   owner.authority.context, &request, &transaction, &input,
+                   error, sizeof(error)) != 0,
+               "fail closed before evidence publication")) {
         return 1;
     }
     unpublished_config = config;
@@ -260,8 +289,18 @@ int main(void)
     memset(&owner, 0, sizeof(owner));
     memset(error, 0, sizeof(error));
     if (expect(wvm_admission_authority_owner_init(
+                   &owner, &unpublished_config, error, sizeof(error)) == 0,
+               "bind configured but unpublished launch plan")) {
+        return 1;
+    }
+    unpublished_config = config;
+    memset(&unpublished_route_compiler, 0, sizeof(unpublished_route_compiler));
+    unpublished_config.route_compiler = &unpublished_route_compiler;
+    memset(&owner, 0, sizeof(owner));
+    memset(error, 0, sizeof(error));
+    if (expect(wvm_admission_authority_owner_init(
                    &owner, &unpublished_config, error, sizeof(error)) != 0,
-               "reject unpublished launch and listener plan")) {
+               "reject an unconfigured route compiler")) {
         return 1;
     }
     memset(&owner, 0, sizeof(owner));

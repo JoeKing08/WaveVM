@@ -85,6 +85,7 @@ int main(void)
     memset(&records, 0, sizeof(records));
     records.nodes = nodes;
     records.node_count = 2;
+    records.inventory_revision = 10;
     records.membership_revision = 11;
     records.topology_revision = 12;
     records.admission_eligibility_revision = 13;
@@ -139,6 +140,12 @@ int main(void)
                    "provide the bound template to the orchestrator")) {
             return 1;
         }
+    }
+    records.inventory_revision++;
+    if (expect(wvm_admission_plan_provider_validate(
+                   &provider, &records, error, sizeof(error)) != 0,
+               "reject a changed inventory revision")) {
+        return 1;
     }
     nodes[1].node_instance_id++;
     if (expect(wvm_admission_plan_provider_validate(
