@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "../common_include/wavevm_canonical.h"
 #include "../common_include/wavevm_control_plane.h"
 #include "../common_include/wavevm_control_service.h"
 #include "../common_include/wavevm_admission_orchestrator.h"
@@ -45,6 +46,7 @@ struct admission_workspace {
     struct wvm_required_ack_entry *route_ack_entries;
     struct wvm_node_record *capture_nodes;
     struct wvm_gateway_record *capture_gateways;
+    struct wvm_exclusive_lease *listener_leases;
     uint8_t *route_snapshot_bytes;
     uint8_t *route_ack_set_bytes;
     size_t capacity;
@@ -816,6 +818,7 @@ int main(int argc, char **argv)
     struct control_context control_context;
     struct admission_workspace admission_workspace;
     struct wvm_admission_authority_owner_config authority_config;
+    struct wvm_capability_record source_capability;
     char admission_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_control_journal[WVM_CONTROL_PLANE_PATH_MAX];
@@ -866,6 +869,8 @@ int main(int argc, char **argv)
     admission_workspace.route_ack_entries = calloc(options.capacity, sizeof(*admission_workspace.route_ack_entries));
     admission_workspace.capture_nodes = calloc(options.capacity, sizeof(*admission_workspace.capture_nodes));
     admission_workspace.capture_gateways = calloc(options.capacity, sizeof(*admission_workspace.capture_gateways));
+    admission_workspace.listener_leases = calloc(options.capacity * 2,
+                                                  sizeof(*admission_workspace.listener_leases));
     admission_workspace.route_snapshot_bytes = calloc(admission_workspace.route_snapshot_bytes_capacity, 1);
     admission_workspace.route_ack_set_bytes = calloc(admission_workspace.route_ack_set_bytes_capacity, 1);
 
@@ -875,6 +880,7 @@ int main(int argc, char **argv)
         !admission_workspace.launch_plans || !admission_workspace.listener_plans ||
         !admission_workspace.route_rules || !admission_workspace.route_ack_entries ||
         !admission_workspace.capture_nodes || !admission_workspace.capture_gateways ||
+        !admission_workspace.listener_leases ||
         !admission_workspace.route_snapshot_bytes || !admission_workspace.route_ack_set_bytes) {
         fprintf(stderr, "wvm_ctl: cannot allocate bounded control-plane state\n");
         goto out;
@@ -1001,6 +1007,215 @@ int main(int argc, char **argv)
         goto close_plane;
     }
 
+    /*
+     * Bootstrap single-node mode: register this ctl_tool process as the initial
+     * compute node with static capability/inventory/endpoint configuration.
+     *
+     * In production multi-node clusters, real node agents will register via
+     * authenticated control-plane RPC with dynamically probed capabilities.
+     * This bootstrap path enables single-node development and establishes the
+     * membership foundation for admission authority initialization.
+     */
+    {
+        struct wvm_node_record local_node;
+        struct wvm_member_key self_actor;
+        uint8_t profile_digest[WVM_SHA256_DIGEST_BYTES];
+
+        memset(&source_capability, 0, sizeof(source_capability));
+        source_capability.capability_id = WVM_CAPABILITY_ID_EXECUTION_TCG;
+        source_capability.capability_schema_version = WVM_CANONICAL_SCHEMA;
+        source_capability.physical_node_id = options.local_physical_node_id;
+        source_capability.node_instance_id = options.local_runtime_instance_id;
+        source_capability.provider_instance_id = options.local_runtime_instance_id;
+        source_capability.state = WVM_CAPABILITY_AVAILABLE;
+        source_capability.abi_version = 1;
+        source_capability.observed_at = 1;
+        source_capability.probe_operation_id[WVM_IDENTITY_ID_BYTES - 1] = 1;
+
+        memset(&local_node, 0, sizeof(local_node));
+        local_node.physical_node_id = options.local_physical_node_id;
+        local_node.node_instance_id = options.local_runtime_instance_id;
+        local_node.failure_domain_id = 1;
+        local_node.control_endpoint.data_transport = WVM_DATA_TRANSPORT_UDP;
+        local_node.control_endpoint.data_address_bytes = 4;
+        local_node.control_endpoint.data_address[0] = 127;
+        local_node.control_endpoint.data_address[1] = 0;
+        local_node.control_endpoint.data_address[2] = 0;
+        local_node.control_endpoint.data_address[3] = 1;
+        local_node.control_endpoint.data_port = 19100;
+        local_node.control_endpoint.control_transport = WVM_CONTROL_TRANSPORT_UNIX_STREAM;
+        local_node.control_endpoint.control_port = 19101;
+        local_node.sidecar_endpoint.data_transport = WVM_DATA_TRANSPORT_UDP;
+        local_node.sidecar_endpoint.data_address_bytes = 4;
+        local_node.sidecar_endpoint.data_address[0] = 127;
+        local_node.sidecar_endpoint.data_address[1] = 0;
+        local_node.sidecar_endpoint.data_address[2] = 0;
+        local_node.sidecar_endpoint.data_address[3] = 1;
+        local_node.sidecar_endpoint.data_port = 19120;
+        local_node.sidecar_endpoint.control_transport = WVM_CONTROL_TRANSPORT_UNIX_STREAM;
+        local_node.sidecar_endpoint.control_port = 19121;
+        local_node.role_bits = 1;
+        local_node.pod_id = 1;
+        local_node.local_vnode_first = 0;
+        local_node.local_vnode_count = 16;
+        local_node.inventory.physical_node_id = local_node.physical_node_id;
+        local_node.inventory.node_instance_id = local_node.node_instance_id;
+        local_node.inventory.failure_domain_id = local_node.failure_domain_id;
+        local_node.inventory.inventory_revision = 1;
+        local_node.inventory.registered_vcpu_slots = 8;
+        local_node.inventory.registered_memory_bytes = 16ULL * 1024 * 1024;
+        local_node.inventory.reserved_host_cpu_slots = 1;
+        local_node.inventory.reserved_host_memory_bytes = 1ULL * 1024 * 1024;
+        local_node.inventory.reserved_gateway_cpu_slots = 1;
+        local_node.inventory.reserved_gateway_memory_bytes = 1ULL * 1024 * 1024;
+        local_node.inventory.hosted_gateway_role_ids = NULL;
+        local_node.inventory.hosted_gateway_role_id_count = 0;
+        local_node.inventory.hosted_gateway_role_id_capacity = 0;
+        local_node.inventory.allocatable_vcpu_slots = 6;
+        local_node.inventory.allocatable_memory_bytes = 14ULL * 1024 * 1024;
+        memset(local_node.inventory.storage_capabilities_digest, 0x11,
+               sizeof(local_node.inventory.storage_capabilities_digest));
+        memset(local_node.inventory.accelerator_fault_capabilities_digest, 0x12,
+               sizeof(local_node.inventory.accelerator_fault_capabilities_digest));
+        memset(local_node.inventory.exclusive_resource_inventory_digest, 0x13,
+               sizeof(local_node.inventory.exclusive_resource_inventory_digest));
+        local_node.capability.physical_node_id = local_node.physical_node_id;
+        local_node.capability.node_instance_id = local_node.node_instance_id;
+        local_node.capability.profile_generation = 1;
+        if (wvm_capability_profile_digest(
+                source_capability.physical_node_id,
+                source_capability.node_instance_id,
+                local_node.capability.profile_generation, &source_capability, 1,
+                profile_digest, error, sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot derive local capability profile: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+        memcpy(local_node.capability.profile_digest, profile_digest,
+               sizeof(local_node.capability.profile_digest));
+        local_node.desired_membership_state = WVM_MANIFEST_MEMBER_ACTIVE;
+        local_node.observed_health_state = WVM_MEMBERSHIP_HEALTHY;
+        local_node.membership_revision = 1;
+        local_node.topology_revision = 1;
+
+        memset(&self_actor, 0, sizeof(self_actor));
+        self_actor.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+        self_actor.role_id = options.local_physical_node_id;
+        self_actor.instance_id = options.local_runtime_instance_id;
+
+        if (wvm_membership_controller_register_node(
+                &plane.membership_controller, &self_actor, &local_node, error,
+                sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot register local node: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+        fprintf(stderr, "wvm_ctl: local node registered (physical_node_id=%u, instance_id=%lu)\n",
+                options.local_physical_node_id, options.local_runtime_instance_id);
+        fprintf(stderr, "wvm_ctl: membership_controller.member_count = %zu\n",
+                plane.membership_controller.member_count);
+    }
+
+    /*
+     * Bootstrap evidence publication: single static capability record and
+     * launch plan for the registered node.
+     *
+     * Production clusters will have per-node capability providers publishing
+     * real CPU/memory/KVM capabilities discovered through hardware probing.
+     * This bootstrap path provides the minimal evidence required for admission
+     * authority to accept CREATE_VM requests in single-node mode.
+     */
+    {
+        struct wvm_cluster_record_set snapshot_records;
+        struct wvm_coordinator_node_launch_plan source_launch;
+        struct wvm_admission_node_listener_plan source_listener;
+
+        memset(&snapshot_records, 0, sizeof(snapshot_records));
+        if (wvm_membership_controller_capture(
+                &plane.membership_controller, &admission_workspace.membership_capture,
+                error, sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot capture membership snapshot: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+
+        memset(&source_launch, 0, sizeof(source_launch));
+        source_launch.physical_node_id = options.local_physical_node_id;
+        source_launch.expected_node_instance_id = options.local_runtime_instance_id;
+        source_launch.launch_plan.plan_version = WVM_NODE_RUNTIME_LAUNCH_PLAN_VERSION;
+        source_launch.launch_plan.node_runtime_data_port = 19100;
+        source_launch.launch_plan.node_runtime_control_port = 19121;
+        source_launch.launch_plan.local_executor_service_port = 19105;
+        source_launch.launch_plan.local_executor_control_port = 19121;
+        source_launch.launch_plan.executor_worker_count = 1;
+        source_launch.launch_plan.vcpu_handoff_record_capacity = 16;
+        source_launch.launch_plan.sync_batch_size = 1;
+        source_launch.launch_plan.guest_total_memory_bytes = 4096;
+        strcpy(source_launch.launch_plan.guest_machine.architecture, "x86_64");
+        strcpy(source_launch.launch_plan.guest_machine.machine_type, "pc-i440fx-5.2");
+        source_launch.launch_plan.guest_machine.qemu_compat_version = 502;
+        source_launch.launch_plan.guest_machine.firmware_policy = 1;
+        source_launch.launch_plan.consistency_policy.dirty_batch_size = 1;
+        source_launch.launch_plan.consistency_policy.handoff_commit_policy = 1;
+        source_launch.launch_plan.consistency_policy.subscriber_delivery_policy = 1;
+        source_launch.launch_plan.consistency_policy.max_commit_latency_ms = 1000;
+
+        memset(&source_listener, 0, sizeof(source_listener));
+        source_listener.physical_node_id = source_launch.physical_node_id;
+        source_listener.expected_node_instance_id = source_launch.expected_node_instance_id;
+        source_listener.node_runtime_data_port = source_launch.launch_plan.node_runtime_data_port;
+        source_listener.local_executor_service_port = source_launch.launch_plan.local_executor_service_port;
+        source_listener.lease_generation = 1;
+        source_listener.lease_entries = admission_workspace.listener_leases;
+        source_listener.lease_capacity = 2;
+
+        if (wvm_admission_evidence_owner_publish(
+                &admission_workspace.evidence_owner, &source_capability, 1, NULL, 0,
+                admission_workspace.membership_capture.nodes[0]
+                    .inventory.inventory_revision,
+                admission_workspace.membership_capture.nodes[0]
+                    .capability.profile_generation,
+                error, sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot publish admission evidence: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+
+        if (wvm_admission_evidence_owner_capture(
+                &admission_workspace.evidence_owner,
+                &admission_workspace.evidence_owner.evidence_view, error,
+                sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot capture admission evidence: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+
+        if (wvm_coordinator_capture_current_membership_records(
+                &plane.membership_controller, &admission_workspace.membership_capture,
+                &admission_workspace.evidence_owner.evidence_view, &snapshot_records,
+                error, sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot bind membership evidence: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+
+        if (wvm_admission_plan_provider_publish(
+                &admission_workspace.plan_provider, &snapshot_records,
+                &source_launch, 1, &source_listener, 1, error, sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot publish launch plan: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+
+        if (wvm_admission_plan_provider_set_options_template(
+                &admission_workspace.plan_provider, &admission_workspace.prepare_options,
+                error, sizeof(error)) != 0) {
+            fprintf(stderr, "wvm_ctl: cannot set coordinator options template: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+    }
+
     /* Open admission journal after authority is bound. */
     if (wvm_control_plane_open(&plane, admission_journal, &namespace_allocator,
                                error, sizeof(error)) != 0) {
@@ -1059,6 +1274,7 @@ out:
     free(admission_workspace.route_snapshot_bytes);
     free(admission_workspace.capture_gateways);
     free(admission_workspace.capture_nodes);
+    free(admission_workspace.listener_leases);
     free(admission_workspace.route_ack_entries);
     free(admission_workspace.route_rules);
     free(admission_workspace.listener_plans);
