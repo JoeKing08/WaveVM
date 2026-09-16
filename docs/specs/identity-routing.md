@@ -177,11 +177,44 @@ flat:    { vm_id, vm_incarnation, local_vnode }
 fractal: { vm_id, vm_incarnation, pod_or_prefix, local_vnode }
 ```
 
-The default current `WVM_SLAVE_BITS=12` makes 4096 the maximum local vnode
-fan-out in one flat or leaf-Pod route domain. It is not a global cluster limit.
-The existing low 24 node-ID bits can support a future hierarchical encoding,
-but only after every fixed user-space and kernel indexing assumption has been
-replaced by the per-Pod or derived-cache model.
+The current `WVM_SLAVE_BITS=12` reserves 4096 slots in fixed implementation
+tables. It does not define a permanent local or global capacity contract.
+Existing consumers that impose this bound must be migrated before advertising
+larger domains; changing the macro alone is insufficient.
+
+### 3.1 Address Space and Capacity Budgets
+
+The formal routed-frame prefix in `wire-ipc-abi.md` already carries a `u32`
+`destination_vnode_or_endpoint`. Values `0..0xfffffffe` are representable vnode
+IDs; `0xffffffff` is reserved and must reject. This gives 4,294,967,295 possible
+vnode values per VM-scoped flat or leaf-Pod domain. It is an address-space bound,
+not a physical-host count or an achievable deployment size. The old 24-bit
+composite node field is not the target contract and must not truncate formal
+IDs. Range/count arithmetic must reject overflow and inclusion of the sentinel.
+
+The control plane owns independent capacity budgets for cluster members,
+domain vnode counts, gateway adjacency and route records, and per-VM admission
+and runtime state. Each consumer also enforces its allocated record/byte limits,
+including serialized snapshot and control-message limits. A provider's supported
+capacity constrains the admitted plan; an operator cannot enable unsupported
+scale merely by raising a policy value. These are deployment resource budgets,
+not per-VM hand-authored routes or test-only overrides.
+
+Identity validity and occupancy limits are separate: a sparse high vnode ID
+does not consume all lower-numbered entries. Allocate bounded storage for actual
+records and retained snapshot generations, with explicit count/capacity checks.
+Lookups use complete keys; they must not require node IDs to index a dense global
+array. Kernel caches and subscriber sets need the same property, using bounded
+sparse or lazily allocated blocks while preserving batching and queue concurrency.
+Insufficient capacity must cause an explicit admission/prepare failure without
+truncation, partial route publication, or leaked reservations.
+
+A deployment may keep a 4096-vnode domain budget, raise it within supported
+resource limits, or use several bounded Pods. Flat routing must remain available
+above 4096 when connectivity and consumer budgets permit. Fractal routing is a
+topology/aggregation choice, not a mandatory response to crossing that constant.
+Multiple Pods may reuse local vnode values because their destination scopes
+differ; global membership/admission limits must not inherit one Pod's budget.
 
 ## 4. Authority and Route Snapshots
 
@@ -228,7 +261,9 @@ Only next-hop selection differs.
 
 A flat route domain maps the complete VM-scoped destination directly to the
 target sidecar or node-runtime ingress endpoint. It is selected only when the
-declared local fan-out and gateway resource limits fit one domain.
+required sidecar connectivity and declared domain/consumer budgets fit one
+domain. No permanent 4096-vnode ceiling applies. A high numeric vnode ID alone
+does not require a gateway or a topology change.
 
 ### 5.2 Fractal
 
@@ -250,9 +285,12 @@ only exact rules with `destination_scope=0`. A fractal exact rule has a
 nonzero destination scope. These are control-plane validation rules, so a
 gateway never receives an ambiguous snapshot that can only fail at lookup.
 
-The control plane chooses `flat`, `fractal`, or `auto` from the cluster graph,
-fan-out policy, and active topology. A VM request may express placement policy
-but does not hand-author its gateway path.
+The control plane chooses `flat`, `fractal`, or `auto` from connectivity,
+route-aggregation policy, independent resource budgets, and active topology.
+It must not select hierarchy solely because membership or a vnode ID exceeds
+4096. A VM request may express placement policy but does not hand-author its
+gateway path. A topology change still requires the normal prepared snapshot
+transaction; increasing a capacity budget does not itself change live routes.
 
 ## 6. Lookup and Error Semantics
 
@@ -313,7 +351,8 @@ cannot independently create, remove, or reactivate a member.
 | Current file or symbol | Current behavior | Required migration direction |
 | --- | --- | --- |
 | `common_include/wavevm_protocol.h` | Encodes `vm_id` in the high 8 bits and an unstructured 24-bit node field. | Define a versioned route key carrying incarnation and fractal scope in the next ABI. |
-| `common_include/wavevm_config.h` | Sets `WVM_SLAVE_BITS=12`, `WVM_MAX_SLAVES`, and route-sized arrays. | Treat 4096 as leaf-domain fan-out; remove global-array assumptions before scale claims. |
+| `common_include/wavevm_config.h` | Sets `WVM_SLAVE_BITS=12`, `WVM_MAX_SLAVES`, and route-sized arrays. | Replace shared fixed limits with independent resource budgets and storage sized for actual records; 4096 is not a permanent flat/leaf ceiling. |
+| `common_include/wavevm_cluster.c`, `wavevm_admission.[ch]`, and `wavevm_runtime_dispatch.c` | Bound whole-cluster records, admission arrays, or local vnode values by the old shared constants. | Separate member/plan capacities from domain occupancy and ID validity; validate complete scoped destinations without dense-ID assumptions. |
 | `master_core/user_backend.c` | Checks raw target IDs against `WVM_MAX_GATEWAYS` even though normal sends use the local sidecar. | Cache only local sidecar/derived next-hop state; do not require every destination to fit one local array. |
 | `gateway_service/aggregator.c` | Looks up composite IDs, falls back to raw IDs, and may learn/update route addresses. | Use strict complete keys and immutable snapshot lookup; retain legacy fallback only for `vm_id=0` during migration. |
 | `common_include/wavevm_resources.c` | Allocates sequential vnodes from static `NODE` records. | Import as bootstrap data into a versioned member/topology registry. |
@@ -332,8 +371,10 @@ cannot independently create, remove, or reactivate a member.
    hierarchy fields to legacy nodes.
 5. Reject mixed routes that use a nonzero `vm_id` with raw fallback once all
    participating nodes advertise the new capability.
-6. Remove `WVM_MAX_GATEWAYS` global-destination assumptions only after flat and
-   fractal contract tests prove per-scope lookup and kernel-cache isolation.
+6. Remove `WVM_MAX_GATEWAYS` global-destination assumptions and fixed whole-cluster
+   admission arrays, with flat/fractal tests proving independent capacity checks,
+   sparse complete-key lookup, and kernel-cache isolation. Keep resource limits
+   explicit; no mixed fallback to an old dense table may truncate larger IDs.
 7. Implement the legacy namespace epoch reset before attempting nonzero VM-ID
    reuse on a legacy-wire deployment.
 
@@ -345,8 +386,20 @@ cannot independently create, remove, or reactivate a member.
 - A nonzero VM route miss never strips the VM ID and retries a raw lookup.
 - Flat and fractal deployments deliver identical semantic operations to the
   same target node runtime for equivalent admitted manifests.
-- A 4096-entry leaf fixture accepts the final valid vnode and rejects the next
-  one until a fractal/POD representation is selected.
+- A domain fixture budgeted for 4096 vnodes accepts 4096 admitted entries and
+  rejects an additional entry without partial publication. A separate flat
+  fixture with sufficient budgets admits more than 4096 entries, compiles the
+  snapshot, and resolves/forwards destinations on both sides of the old boundary
+  without adding a Pod or gateway layer. Compiler initialization alone is not
+  evidence for this test.
+- Sparse domain fixtures route IDs `0`, `4096`, `65536`, and `0xfffffffe` using
+  bounded storage proportional to their entries; `0xffffffff` and overflowing
+  vnode ranges reject. Occupancy limits must not be used as numeric-ID limits.
+- Multiple leaf Pods reuse local vnode values and exceed 4096 total members
+  while each remains within its own budget. Membership capture, admission,
+  compiled routes, and forwarding preserve scope and do not hit a global
+  leaf-sized array. An over-budget control workspace or serialized snapshot
+  rejects explicitly without truncation or resource leaks.
 - A fractal fixture proves that an intermediate gateway holds only prefix
   routes, not every leaf endpoint.
 - Route generation replacement under load never yields a partial table, loop,

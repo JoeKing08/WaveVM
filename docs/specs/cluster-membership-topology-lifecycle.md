@@ -397,13 +397,19 @@ An unplanned role failure is handled in this order:
 
 ## 6. Flat and Fractal Route Scope
 
-`WVM_SLAVE_BITS=12` currently bounds one local route domain to 4096 logical
-vnodes. It is a leaf-Pod fan-out constraint, not the desired global cluster
-capacity. The current wire field reserves 24 node-ID bits, but its existence
-does not make fixed 4096-entry user/kernel arrays scale-capable.
+`WVM_SLAVE_BITS=12` describes a current 4096-slot implementation limit, not a
+permanent flat-domain, leaf-Pod, or cluster capacity. Membership capture and
+admission must not size all member records or scratch storage from one domain's
+vnode limit. Cluster members, domain vnodes, gateway adjacency/routes, and
+per-VM workspaces have independent, explicit resource budgets and bounded
+storage sized for actual records. Record/byte limits, including serialized
+snapshot limits, remain enforced before publication or activation.
 
-The identity/routing specification must define the exact future encoding. Its
-logical form is:
+The formal routed-frame prefix uses a `u32` vnode/endpoint and a separate `u64`
+destination scope. `0xffffffff` is reserved; the representable vnode range is
+`0..0xfffffffe`. This address space is not a physical-host capacity claim.
+The detailed budget and sparse-ID contract is in `identity-routing.md` Section
+3.1. The logical destination form is:
 
 ```text
 flat:    { vm namespace, local vnode }
@@ -420,8 +426,19 @@ In a fractal deployment:
 - Every layer preserves the same VM namespace and incarnation rules.
 
 The control plane selects `flat`, `fractal`, or a policy such as `auto` from
-the cluster graph and per-domain capacity. Users request VM resources and
-policy, not hand-authored per-destination gateway routes.
+connectivity, route-aggregation policy, and the independent capacity budgets.
+A directly connected flat domain may exceed 4096 when its consumers have
+sufficient capacity; neither a high vnode ID nor crossing the old constant
+alone forces hierarchy. Conversely, several Pods may each retain a 4096-vnode
+budget while the cluster total grows beyond it. Existing global-array checks
+must be removed and verified before claiming either behavior works.
+
+Users request VM resources and policy, not hand-authored per-destination
+gateway routes. Budget changes do not make new members ACTIVE, alter existing
+VM placement, or replace live routes without the normal membership/admission
+and prepared snapshot transactions. Missing capacity rejects explicitly rather
+than truncating captures, silently changing topology, or publishing part of a
+route set.
 
 ### 6.1 VM Route-Scope Lifecycle
 
@@ -532,6 +549,7 @@ completion from a member process still being alive.
 | `gateway_service/aggregator.c` | Parses `ROUTE` groups, learns addresses, and offers an in-place route add/update control path. | Consume prepared immutable snapshots; do not infer membership from packet source or modify live maps as membership operations. |
 | `master_core/user_backend.c` | Uses a fixed `WVM_MAX_GATEWAYS` table and sends through a local sidecar. | Keep only local sidecar/derived next-hop state in the node runtime; remove global flat-target assumptions after the route-scope contract exists. |
 | `master_core/kernel_backend.c` | Holds module-global route state keyed by current fixed limits. | Convert to versioned per-VM accelerator cache after `kernel-accelerator.md`; it cannot be membership truth. |
+| `common_include/wavevm_cluster.c` and `wavevm_admission.[ch]` | Whole-cluster validation, snapshot/plan arrays, and scratch arrays use `WVM_MAX_SLAVES`/`WVM_MAX_GATEWAYS`. | Use caller-owned bounded member, gateway, and admission storage sized for actual records; do not inherit a single domain's vnode budget. |
 | Test scripts | Materialize one-off `NODE` and `ROUTE` files. | Generate bounded fixtures from manifests and topology records. |
 
 The current gateway control structure names `DEL_ROUTE`, but the current receive
@@ -601,3 +619,11 @@ correct member lifecycle.
   or become active without revalidation.
 - Flat and fractal fixtures retain the same VM namespace and route-generation
   semantics, while each leaf route domain remains within its declared fan-out.
+- A flat membership/admission fixture exceeds 4096 with sufficient independent
+  workspace and route budgets and compiles/uses routes without a hierarchy
+  change. A multi-Pod fixture exceeds that cluster total while every Pod stays
+  within its own declared budget and overlapping local vnode IDs remain distinct.
+  Both exercise actual capture/admission/route operations, not only record setup.
+- Capacity exhaustion during capture or prepare rejects without partial member
+  snapshots, route publication, or reservation leaks. Sparse high IDs consume
+  only their actual records and are checked separately from occupancy budgets.

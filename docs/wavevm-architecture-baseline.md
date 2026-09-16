@@ -665,12 +665,25 @@ degraded, paused, or failed lifecycle outcome; it must not be reported as
 healthy. A physical-host failure marks every hosted compute/gateway role
 unreachable together; host removal drains all hosted roles before stop.
 
-The default `WVM_SLAVE_BITS=12` limit is a maximum of 4096 logical vnodes in
-one flat or leaf-Pod route domain, not the long-term global cluster limit. A
-fractal topology must route by a Pod or prefix at intermediate gateways and by
-local vnode within a leaf Pod. The exact wire encoding and per-level fan-out
-belong to `docs/specs/identity-routing.md`; merely increasing a fixed array or selecting a
-multi-hop test script is not a scale implementation.
+The current `WVM_SLAVE_BITS=12` implementation reserves 4096 logical vnode
+slots. This is not a permanent flat-domain, leaf-Pod, or global cluster limit.
+Cluster membership capacity, per-domain vnode capacity, gateway adjacency and
+route capacity, and per-VM admission workspace must have independent resource
+budgets. Storage follows actual records within those budgets, not the largest
+node ID or the entire representable address space. A deployment may retain a
+4096-vnode domain budget without imposing it on the whole cluster.
+
+A flat domain may exceed 4096 vnodes when direct sidecar connectivity and the
+declared control-plane and route-consumer budgets permit it. Crossing that
+number alone must not force fractal routing. Fractal routing remains available
+for network topology and route aggregation: intermediate gateways route by Pod
+or prefix, and leaf domains resolve local vnodes. Both topologies use the same
+semantic services and snapshot rules. The formal destination field is `u32`
+with `0xffffffff` reserved; its address space is not a tested cluster-capacity
+claim. Exact addressing, capacity checks, and acceptance tests belong to
+`docs/specs/identity-routing.md`. Existing fixed-array limits remain real until
+their consumers are migrated and verified; increasing a macro alone does not
+complete that work.
 
 ## 9. Consistency Model
 
@@ -1021,12 +1034,14 @@ ABIs without choosing contradictory alternatives.
   activated reservations remain held until lifecycle teardown.
 - Nonzero VM route namespaces use strict composite keys at every flat or
   fractal gateway level. Raw-ID fallback is legacy behavior for `vm_id=0` only.
-- A flat route domain has bounded local vnode fan-out. The control plane selects
-  flat or fractal topology from the cluster graph and capacity policy; an
-  operator does not hand-author one route per VM destination. Until the
-  identity/routing contract and per-Pod route implementation exist, current
-  4096-vnode tables remain a hard implementation limit rather than a promised
-  fractal scale capability.
+- Flat and leaf-Pod domains have independently budgeted vnode capacity, without
+  a permanent 4096-vnode ceiling. The control plane selects flat or fractal
+  topology from connectivity, route-aggregation needs, and resource budgets;
+  exceeding the old constant alone does not force hierarchy. An operator does
+  not hand-author one route per VM destination. Global membership and admission
+  storage must not inherit a leaf-domain budget. Current fixed-array limits
+  remain implementation restrictions until migrated and tested in both
+  topologies; neither wide IDs nor hierarchy alone prove supported scale.
 - V1 supports controlled member registration, cordon, and drain only through
   prepared/acknowledged route snapshots with a persisted required-survivor ACK
   set. Adding a member may make capacity available to future VM admissions; it

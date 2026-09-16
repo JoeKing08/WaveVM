@@ -110,6 +110,7 @@ struct wvm_kernel_context {
     struct wvm_kernel_context_identity identity;
     int active;
     atomic_t refs;
+    struct hlist_node hash_node;  /* For registry hash table */
     uint32_t kernel_epoch;
     struct rw_semaphore mapping_sem;
     struct address_space *mapping;
@@ -135,13 +136,18 @@ static DEFINE_MUTEX(g_context_mutex);
 
 /*
  * Multi-context registry for concurrent VM support.
- * Simple fixed-size array indexed by vm_id % MAX_CONCURRENT_CONTEXTS.
- * When multiple VMs hash to the same slot, we reject the bind with -EBUSY.
- * Production systems should size this >= expected concurrent VMs per node.
+ * Hash table to handle collisions properly, with reference counting.
  */
-#define MAX_CONCURRENT_CONTEXTS 16
-static struct wvm_kernel_context g_kernel_contexts[MAX_CONCURRENT_CONTEXTS];
+#define WVM_CONTEXT_HASH_BITS 4
+#define WVM_CONTEXT_HASH_SIZE (1 << WVM_CONTEXT_HASH_BITS)
+static DEFINE_HASHTABLE(g_context_registry, WVM_CONTEXT_HASH_BITS);
 static int g_active_context_count = 0;
+
+/*
+ * Shared transport for all VM contexts.
+ * TX ring, diff queue, and gateway table are shared infrastructure.
+ */
+static struct wvm_kernel_transport *g_shared_transport;
 
 // --- [V29 Wavelet] 内核态脏区捕获与Diff提交结构 ---
 
@@ -190,6 +196,7 @@ typedef struct {
 
 // --- QoS 发送队列 ---
 struct tx_slot_t {
+    struct wvm_kernel_context *context;  /* Per-VM context for this TX */
     int len;
     uint32_t target_id;
     uint8_t data[TX_SLOT_SIZE];
@@ -225,15 +232,141 @@ struct wvm_inval_work {
     uint64_t gpa;
 };
 
+/* Forward declaration */
+static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx);
+
 static struct wvm_kernel_context *wvm_kernel_find_context(uint32_t vm_id)
 {
-    int slot = vm_id % MAX_CONCURRENT_CONTEXTS;
-    struct wvm_kernel_context *ctx = &g_kernel_contexts[slot];
-    if (ctx->active && ctx->identity.vm_id == vm_id)
-        return ctx;
+    struct wvm_kernel_context *ctx;
+
+    mutex_lock(&g_context_mutex);
+    hash_for_each_possible(g_context_registry, ctx, hash_node, vm_id) {
+        if (ctx->active && ctx->identity.vm_id == vm_id) {
+            atomic_inc(&ctx->refs);
+            mutex_unlock(&g_context_mutex);
+            return ctx;
+        }
+    }
+    mutex_unlock(&g_context_mutex);
     return NULL;
 }
 
+static void wvm_kernel_put_context(struct wvm_kernel_context *ctx)
+{
+    if (ctx && atomic_dec_and_test(&ctx->refs)) {
+        /* Context refs reached 0, destroy it */
+        wvm_kernel_destroy_context(ctx);
+    }
+}
+
+static struct wvm_kernel_context *wvm_kernel_allocate_context(uint32_t vm_id)
+{
+    struct wvm_kernel_context *ctx;
+    int cpu;
+
+    ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+    if (!ctx)
+        return NULL;
+
+    ctx->identity.vm_id = vm_id;
+    atomic_set(&ctx->refs, 1);
+    ctx->active = 0;  /* Not active until fully initialized */
+    ctx->transport = g_shared_transport;
+    INIT_RADIX_TREE(&ctx->page_tree, GFP_ATOMIC);
+    spin_lock_init(&ctx->page_tree_lock);
+    init_rwsem(&ctx->mapping_sem);
+    init_waitqueue_head(&ctx->irq_wait_queue);
+    atomic_set(&ctx->irq_pending, 0);
+
+    /*
+     * Runtime-sized: nr_cpu_ids * MAX_IDS_PER_CPU.
+     * The request namespace belongs to each kernel context.
+     */
+    ctx->req_ctx_count = (size_t)nr_cpu_ids * (size_t)MAX_IDS_PER_CPU;
+    ctx->req_ctx = vzalloc(sizeof(struct req_ctx_t) * ctx->req_ctx_count);
+    if (!ctx->req_ctx)
+        goto fail_ctx;
+    for (size_t j = 0; j < ctx->req_ctx_count; j++)
+        init_waitqueue_head(&ctx->req_ctx[j].wq);
+
+    ctx->id_pool = alloc_percpu(struct id_pool_t);
+    if (!ctx->id_pool)
+        goto fail_req_ctx;
+
+    for_each_online_cpu(cpu) {
+        struct id_pool_t *pool = per_cpu_ptr(ctx->id_pool, cpu);
+        spin_lock_init(&pool->lock);
+        pool->ids = vzalloc(sizeof(uint32_t) * MAX_IDS_PER_CPU);
+        if (!pool->ids)
+            goto fail_id_pool;
+        pool->head = 0;
+        pool->tail = 0;
+    }
+
+    mutex_lock(&g_context_mutex);
+    hash_add(g_context_registry, &ctx->hash_node, vm_id);
+    g_active_context_count++;
+    mutex_unlock(&g_context_mutex);
+
+    return ctx;
+
+fail_id_pool:
+    for_each_possible_cpu(cpu) {
+        struct id_pool_t *pool = per_cpu_ptr(ctx->id_pool, cpu);
+        if (pool && pool->ids)
+            vfree(pool->ids);
+    }
+    free_percpu(ctx->id_pool);
+fail_req_ctx:
+    vfree(ctx->req_ctx);
+fail_ctx:
+    kfree(ctx);
+    return NULL;
+}
+
+static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
+{
+    int cpu;
+
+    if (!ctx)
+        return;
+
+    mutex_lock(&g_context_mutex);
+    if (ctx->active) {
+        hash_del(&ctx->hash_node);
+        g_active_context_count--;
+        ctx->active = 0;
+    }
+    mutex_unlock(&g_context_mutex);
+
+    /* Clean up id_pool */
+    if (ctx->id_pool) {
+        for_each_possible_cpu(cpu) {
+            struct id_pool_t *pool = per_cpu_ptr(ctx->id_pool, cpu);
+            if (pool && pool->ids)
+                vfree(pool->ids);
+        }
+        free_percpu(ctx->id_pool);
+    }
+
+    /* Clean up req_ctx */
+    if (ctx->req_ctx)
+        vfree(ctx->req_ctx);
+
+    /* Clean up radix tree */
+    /* TODO: iterate and free all pages */
+
+    kfree(ctx);
+}
+
+/*
+ * DEPRECATED: wvm_active_context() uses global g_my_vm_id which cannot support
+ * concurrent VMs. Callers should use:
+ * - IOCTL paths: wvm_context_for_file(file_context)
+ * - mmap/fault: extract from vma->vm_private_data
+ * - socket RX: lookup from envelope VM identity
+ * - async work: store context pointer in work item
+ */
 static struct wvm_kernel_context *wvm_active_context(void)
 {
     uint32_t vm_id = READ_ONCE(g_my_vm_id);
@@ -268,13 +401,19 @@ static struct wvm_kernel_context *wvm_context_from_vma(
     return wvm_context_for_file(file_context);
 }
 
+/*
+ * DEPRECATED: This function uses global g_my_vm_id as fallback and should not
+ * be relied upon in multi-VM scenarios. Callers should pass context explicitly.
+ */
 uint32_t wvm_kernel_current_vm_id(void)
 {
-    uint32_t vm_id = READ_ONCE(g_kernel_context.identity.vm_id);
+    struct wvm_kernel_context *context = wvm_active_context();
 
-    if (vm_id == 0)
-        vm_id = READ_ONCE(g_my_vm_id);
-    return vm_id;
+    if (context)
+        return READ_ONCE(context->identity.vm_id);
+
+    /* Fallback to legacy global (deprecated) */
+    return READ_ONCE(g_my_vm_id);
 }
 EXPORT_SYMBOL_GPL(wvm_kernel_current_vm_id);
 
@@ -545,9 +684,7 @@ static int raw_kernel_send(struct wvm_kernel_context *context,
  * [后果] 保证了系统在“内存洪流”中依然能及时响应心跳与版本确认包，防止了由于网络拥塞导致的误判定节点下线。
  */
 static int tx_worker_thread_fn(void *data) {
-    struct wvm_kernel_context *context = data;
-    struct wvm_kernel_transport *transport =
-        context ? context->transport : NULL;
+    struct wvm_kernel_transport *transport = data;
     /* Large TX slots (up to 64KB) cannot live on kernel stack. */
     struct tx_slot_t *slot = kvzalloc(sizeof(*slot), GFP_KERNEL);
     if (!slot || !transport) {
@@ -577,15 +714,15 @@ static int tx_worker_thread_fn(void *data) {
             }
             spin_unlock_bh(&transport->fast_ring.lock);
             
-            if (found) { 
+            if (found) {
                 // [V29] CRC Calculation offloaded to worker thread
                 struct wvm_header *hdr = (struct wvm_header *)slot->data;
                 hdr->crc32 = 0;
                 hdr->crc32 = htonl(calculate_crc32(slot->data, slot->len));
-                
-                raw_kernel_send(context, slot->data, slot->len,
+
+                raw_kernel_send(slot->context, slot->data, slot->len,
                                 slot->target_id);
-                cond_resched(); 
+                cond_resched();
             }
         }
 
@@ -611,8 +748,8 @@ static int tx_worker_thread_fn(void *data) {
                 struct wvm_header *hdr = (struct wvm_header *)slot->data;
                 hdr->crc32 = 0;
                 hdr->crc32 = htonl(calculate_crc32(slot->data, slot->len));
-                
-                raw_kernel_send(context, slot->data, slot->len,
+
+                raw_kernel_send(slot->context, slot->data, slot->len,
                                 slot->target_id);
             }
             // Preempt if fast packet arrives
@@ -650,6 +787,7 @@ static int k_send_packet(void *data, int len, uint32_t target_id) {
     spin_lock_irqsave(&ring->lock, flags);
     uint32_t next = (ring->tail + 1) % TX_RING_SIZE;
     if (next != ring->head) {
+        ring->slots[ring->tail].context = context;
         ring->slots[ring->tail].len = len;
         ring->slots[ring->tail].target_id = target_id;
         memcpy(ring->slots[ring->tail].data, data, len);
@@ -939,9 +1077,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
  * [后果] 实现了极低带宽下的高频内存同步。它只传输变动的比特，使得在千兆网环境下也能模拟出万兆总线的写入吞吐量。
  */
 static int committer_thread_fn(void *data) {
-    struct wvm_kernel_context *context = data;
-    struct wvm_kernel_transport *transport =
-        context ? context->transport : NULL;
+    struct wvm_kernel_transport *transport = data;
 
     if (!transport)
         return -EINVAL;
@@ -1660,23 +1796,38 @@ static int wvm_context_bind_file(
         mutex_unlock(&g_context_mutex);
         return result;
     }
-    int slot = identity.vm_id % MAX_CONCURRENT_CONTEXTS;
-    struct wvm_kernel_context *ctx = &g_kernel_contexts[slot];
 
-    if (ctx->active && !wvm_context_identity_equal(&ctx->identity, &identity)) {
-        mutex_unlock(&g_context_mutex);
-        return -EBUSY;
+    /* Find existing context or allocate new one */
+    struct wvm_kernel_context *ctx = NULL;
+    hash_for_each_possible(g_context_registry, ctx, hash_node, identity.vm_id) {
+        if (ctx->identity.vm_id == identity.vm_id) {
+            /* Found existing context for this vm_id */
+            if (!wvm_context_identity_equal(&ctx->identity, &identity)) {
+                /* Identity mismatch - different VM with same vm_id */
+                mutex_unlock(&g_context_mutex);
+                return -EBUSY;
+            }
+            break;
+        }
     }
-    if (!ctx->active) {
+
+    if (!ctx) {
+        /* No existing context, allocate new one */
         if (wvm_logic_bind_route_snapshot(&route_key) != 0) {
             mutex_unlock(&g_context_mutex);
             return -EINVAL;
         }
+        ctx = wvm_kernel_allocate_context(identity.vm_id);
+        if (!ctx) {
+            mutex_unlock(&g_context_mutex);
+            return -ENOMEM;
+        }
         ctx->identity = identity;
         ctx->active = 1;
-        atomic_set(&ctx->refs, 0);
+        hash_add(g_context_registry, &ctx->hash_node, identity.vm_id);
         g_active_context_count++;
     }
+
     file_context->context = ctx;
     file_context->identity = identity;
     file_context->bound = 1;
@@ -1788,7 +1939,7 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         memset(&caps, 0, sizeof(caps));
         caps.magic = WVM_KERNEL_CONTEXT_MAGIC;
         caps.version = WVM_KERNEL_CONTEXT_ABI_VERSION;
-        caps.max_concurrent_contexts = MAX_CONCURRENT_CONTEXTS;
+        caps.max_concurrent_contexts = 0;  /* Dynamic registry, no fixed limit */
         mutex_lock(&g_context_mutex);
         caps.active_contexts = g_active_context_count;
         mutex_unlock(&g_context_mutex);
@@ -1929,10 +2080,27 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 
     case IOCTL_SET_VM_ID: {
         uint32_t vm_id;
+        struct wvm_kernel_context *context;
 
-        if (copy_from_user(&vm_id, argp, sizeof(vm_id))) return -EFAULT;
-        if (wvm_context_accepts_vm_id(vm_id) != 0) return -EPERM;
-        WRITE_ONCE(g_kernel_context.identity.vm_id, vm_id);
+        if (copy_from_user(&vm_id, argp, sizeof(vm_id)))
+            return -EFAULT;
+
+        /* Find existing context or allocate new one */
+        context = wvm_kernel_find_context(vm_id);
+        if (!context) {
+            context = wvm_kernel_allocate_context(vm_id);
+            if (!context)
+                return -ENOMEM;
+        }
+
+        /* Mark context as active */
+        context->active = 1;
+
+        /* Release the reference we acquired from find_context */
+        if (context->active)
+            wvm_kernel_put_context(context);
+
+        /* Update legacy global for compatibility - will be removed */
         WRITE_ONCE(g_my_vm_id, vm_id);
         break;
     }
@@ -2022,7 +2190,10 @@ static int __init wavevm_init(void) {
     struct sockaddr_in bind_addr;
     struct wvm_kernel_transport *transport;
 
-    memset(&g_kernel_context, 0, sizeof(g_kernel_context));
+    /* Initialize context registry (hash table) */
+    hash_init(g_context_registry);
+    g_active_context_count = 0;
+
     transport = kzalloc(sizeof(*transport), GFP_KERNEL);
     if (!transport)
         return -ENOMEM;
@@ -2030,77 +2201,40 @@ static int __init wavevm_init(void) {
     transport->local_slave_port = module_local_slave_port;
     INIT_LIST_HEAD(&transport->diff_queue);
     spin_lock_init(&transport->diff_lock);
-    g_kernel_context.transport = transport;
-    atomic_set(&g_kernel_context.refs, 0);
-    atomic_set(&g_kernel_context.irq_pending, 0);
-    init_waitqueue_head(&g_kernel_context.irq_wait_queue);
-    INIT_RADIX_TREE(&g_kernel_context.page_tree, GFP_ATOMIC);
-    spin_lock_init(&g_kernel_context.page_tree_lock);
     init_waitqueue_head(&transport->tx_wq);
-    init_waitqueue_head(&transport->diff_wq); // [V29] Init diff waiter
-    init_rwsem(&g_kernel_context.mapping_sem);
+    init_waitqueue_head(&transport->diff_wq);
 
     /*
-     * [FIX] 必须用 nr_cpu_ids 而非 num_online_cpus()。
-     * get_cpu() 返回的是逻辑 CPU ID（可能不连续），例如 CPU 0,1,4,5 在线时
-     * num_online_cpus()=4 但 get_cpu() 可能返回 5，导致 combined_idx 越界。
-     * nr_cpu_ids 是内核保证的最大 CPU ID + 1，覆盖所有可能的 get_cpu() 返回值。
+     * Contexts are now allocated on-demand via wvm_kernel_allocate_context()
+     * when IOCTL_SET_VM_ID is called. The transport is shared across all contexts.
      */
-    /*
-     * Runtime-sized: nr_cpu_ids * MAX_IDS_PER_CPU. The original fixed sizing
-     * (1024 * 65536) is too large for most test environments and can stall
-     * insmod. The request namespace belongs to the active kernel context.
-     */
-    g_kernel_context.req_ctx_count =
-        (size_t)nr_cpu_ids * (size_t)MAX_IDS_PER_CPU;
-    g_kernel_context.req_ctx =
-        vzalloc(sizeof(struct req_ctx_t) * g_kernel_context.req_ctx_count);
-    if (!g_kernel_context.req_ctx)
-        goto fail_transport;
-    for (size_t i = 0; i < g_kernel_context.req_ctx_count; i++)
-        init_waitqueue_head(&g_kernel_context.req_ctx[i].wq);
-
-    g_kernel_context.id_pool = alloc_percpu(struct id_pool_t);
-    if (!g_kernel_context.id_pool) {
-        goto fail_context_allocations;
-    }
-
-    for_each_online_cpu(cpu) {
-        struct id_pool_t *pool =
-            per_cpu_ptr(g_kernel_context.id_pool, cpu);
-        spin_lock_init(&pool->lock);
-        pool->ids = vzalloc(sizeof(uint32_t) * MAX_IDS_PER_CPU);
-        pool->head = 0; pool->tail = MAX_IDS_PER_CPU;
-        for (uint32_t i = 0; i < MAX_IDS_PER_CPU; i++) pool->ids[i] = i; 
-    }
+    g_shared_transport = transport;
 
     size_t slab_size = sizeof(struct wvm_header) + 4096 + sizeof(struct wvm_mem_ack_payload);
     wvm_pkt_cache = kmem_cache_create("wvm_data", slab_size, 0, SLAB_HWCACHE_ALIGN, NULL);
 
     if (init_ring(&transport->fast_ring) != 0 ||
         init_ring(&transport->slow_ring) != 0)
-        goto fail_context_allocations;
+        goto fail_contexts;
 
-    transport->tx_thread =
-        kthread_run(tx_worker_thread_fn, &g_kernel_context, "wavevm_qos_tx");
+    transport->tx_thread = kthread_run(tx_worker_thread_fn, transport, "wavevm_qos_tx");
     if (IS_ERR(transport->tx_thread)) {
         transport->tx_thread = NULL;
-        goto fail_context_allocations;
+        goto fail_contexts;
     }
-    
-    // [V29] 启动 Diff 提交线程
-    transport->committer_thread =
-        kthread_run(committer_thread_fn, &g_kernel_context, "wvm_diff_commit");
+
+    /* Diff committer thread processes all active contexts */
+    transport->committer_thread = kthread_run(committer_thread_fn, transport, "wvm_diff_commit");
     if (IS_ERR(transport->committer_thread)) {
         transport->committer_thread = NULL;
-        goto fail_context_allocations;
+        goto fail_contexts;
     }
 
     if (wvm_core_init(&k_ops, 1) != 0)
-        goto fail_context_allocations;
+        goto fail_contexts;
 
     if (misc_register(&wvm_misc))
-        goto fail_context_allocations;
+        goto fail_contexts;
     if (sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP,
                          &transport->socket) < 0)
         goto fail_misc;
@@ -2115,71 +2249,59 @@ static int __init wavevm_init(void) {
      * compatibility with both the old sockaddr and new sockaddr_unsized APIs.
      */
     kernel_bind(transport->socket, (void *)&bind_addr, sizeof(bind_addr));
-    transport->socket->sk->sk_user_data = &g_kernel_context;
+    transport->socket->sk->sk_user_data = transport;
     transport->socket->sk->sk_data_ready = wavevm_udp_data_ready;
 
-    k_log("WaveVM V29.5 'Wavelet' Kernel Backend Loaded (Mode A Active).");
+    k_log("WaveVM V29.5 'Wavelet' Kernel Backend Loaded (Mode A Active, hash-based registry).");
     return 0;
 
 fail_misc:
     misc_deregister(&wvm_misc);
-fail_context_allocations:
+fail_contexts:
     wvm_transport_stop(transport);
-    for_each_possible_cpu(cpu) {
-        struct id_pool_t *pool =
-            g_kernel_context.id_pool
-                ? per_cpu_ptr(g_kernel_context.id_pool, cpu)
-                : NULL;
-        if (pool && pool->ids) {
-            vfree(pool->ids);
-            pool->ids = NULL;
-        }
-    }
-    if (g_kernel_context.id_pool) {
-        free_percpu(g_kernel_context.id_pool);
-        g_kernel_context.id_pool = NULL;
-    }
-    vfree(g_kernel_context.req_ctx);
-    g_kernel_context.req_ctx = NULL;
-    g_kernel_context.req_ctx_count = 0;
-fail_transport:
-    g_kernel_context.transport = NULL;
     kfree(transport);
     return -ENOMEM;
 }
 
 static void __exit wavevm_exit(void) {
-    int cpu;
-    struct wvm_kernel_transport *transport = g_kernel_context.transport;
-    
+    struct wvm_kernel_transport *transport = g_shared_transport;
+    struct wvm_kernel_context *ctx;
+    struct hlist_node *tmp;
+    int bkt;
+
     // 1. 先停掉所有自产的内核线程
     wvm_transport_stop(transport);
-    
+
     // 2. 刷新系统工作队列 (Workqueue Flush)
     // 确保所有 schedule_async_unmap 扔出去的任务都已执行完毕。
     // 如果不加这行，卸载模块后，系统队列里可能还有任务在跑，会执行已被卸载的代码 -> 崩溃。
-    flush_scheduled_work(); 
+    flush_scheduled_work();
 
     // 3. 等待 RCU 回调 (RCU Barrier)
     // 确保所有 kfree_rcu 的内存都已真正释放。
-    rcu_barrier(); 
+    rcu_barrier();
 
     // 4. 释放其余资源
     misc_deregister(&wvm_misc);
-    
-    for_each_possible_cpu(cpu) {
-        struct id_pool_t *pool =
-            g_kernel_context.id_pool
-                ? per_cpu_ptr(g_kernel_context.id_pool, cpu)
-                : NULL;
-        if (pool && pool->ids) vfree(pool->ids);
+
+    /* Clean up all active contexts in hash table */
+    mutex_lock(&g_context_mutex);
+    hash_for_each_safe(g_context_registry, bkt, tmp, ctx, hash_node) {
+        hash_del(&ctx->hash_node);
+        g_active_context_count--;
+        mutex_unlock(&g_context_mutex);
+
+        /* Context cleanup without mutex held */
+        wvm_kernel_put_context(ctx);
+
+        mutex_lock(&g_context_mutex);
     }
-    if (g_kernel_context.id_pool)
-        free_percpu(g_kernel_context.id_pool);
-    vfree(g_kernel_context.req_ctx);
+    mutex_unlock(&g_context_mutex);
+
     // [FIX-M4] 销毁 slab 缓存，防止模块卸载后内存泄漏
-    if (wvm_pkt_cache) kmem_cache_destroy(wvm_pkt_cache);
-    g_kernel_context.transport = NULL;
+    if (wvm_pkt_cache)
+        kmem_cache_destroy(wvm_pkt_cache);
+
     kfree(transport);
 }
 

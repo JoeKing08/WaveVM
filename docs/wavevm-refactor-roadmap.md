@@ -297,9 +297,19 @@ Actions:
 - Restrict raw-node fallback to legacy `vm_id=0`; a missing nonzero composite
   route must fail.
 - Define generation-based atomic route replacement and in-flight packet rules.
-- Define a bounded leaf-Pod route domain and an explicit fractal address/prefix
-  model. The current 12-bit `WVM_SLAVE_BITS` is a per-domain fan-out limit, not
-  a promise that current code can route a 4097th vnode.
+- Define independently budgeted flat and leaf-Pod route domains and an explicit
+  fractal address/prefix model. `WVM_SLAVE_BITS=12` describes the current fixed
+  storage limit, not a permanent topology boundary. Separate cluster members,
+  per-domain vnodes, gateway adjacency/routes, and per-VM admission capacity.
+  Replace ID-indexed global arrays and fixed admission scratch arrays with
+  bounded storage sized for actual records; kernel subscriber/cache storage
+  must not grow with the full ID space. Preserve batching and queue concurrency.
+- Permit flat domains above 4096 when connectivity and resource budgets allow;
+  do not require a topology change merely to cross the old constant. Validate
+  sparse high vnode IDs and capacity exhaustion separately from ID validity.
+  Prove actual route compilation/lookup above 4096, plus membership/admission
+  across multiple Pods whose total exceeds an individual Pod budget. The
+  `u32` destination space is an encoding bound, not a supported-scale claim.
 - Define the relationship between cluster membership revision, topology
   revision, per-VM route generation, VM incarnation, and existing node/page
   epochs. These identifiers must not be overloaded.
