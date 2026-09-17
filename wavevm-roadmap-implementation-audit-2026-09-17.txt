@@ -1,0 +1,375 @@
+WaveVM 纲领落地审计
+日期：2026-09-17
+审计对象：/workspaces/WaveVM 工作区
+Git HEAD：eea0e289f（Complete typed dispatch and per-VM gateway isolation）
+
+一、结论
+
+“持久化plan.txt 六项全部完成”不成立。当前不是只剩真实双节点或 guest
+启动验收，而是还存在可直接从源码确认的生产入口缺口和运行时错误。
+
+最重要的区别是：
+1. 契约、数据结构、组合库、部分运行时接线确实已经实现，并非没有进展。
+2. authority owner 已经绑定到 ctl_tool，不能沿用“还没调用
+   set_admission_authority”的旧结论。
+3. 但绑定后的生产 transport 仍是返回失败的占位实现；准入输入和实际
+   membership/evidence 来源也未闭环，不能据此称 CREATE_VM 已就绪。
+4. 统一 node_runtime 可以编译；这不证明真实 TCG helper、Mode A 或完整
+   多 VM 生命周期可运行。下面列出了独立于测试环境的具体阻断。
+5. 多 context 目前不能宣称可用，更不能宣称双 VM 内核隔离已验证。
+6. 新增的容量解耦要求也没有落地，4096 仍同时约束身份数值和全局集合。
+
+本报告不估算“完成百分比”，也不把 UFFD、控制面 HA、自动迁移等扩展
+加固要求混入最低可用版本。最低可用版本要求见 roadmap:28，扩展见 :50。
+
+二、审计范围与证据等级
+
+依据：docs/wavevm-architecture-baseline.md、docs/wavevm-refactor-roadmap.md、
+docs/specs/ 下的身份/路由、控制面、内存、vCPU、内核加速、设备与生命周期
+契约，以及 goal.txt、持久化plan.txt。
+
+重点追踪 ctl_tool -> admission/membership -> node_runtime -> executor/QEMU，
+以及 gateway 和共享内核模块。本文相对路径均相对于仓库根目录，行号以本次
+工作区为准。
+
+证据分为：源码确定的缺陷、实跑的局部回归、尚未证明的验收项。不把注释、
+测试名称、打印 PASS、历史构建产物当作运行成功的证据。这是以生产调用链为
+主的审计，不是逐行形式化证明，也未重跑所有历史测试。
+
+三、P1：生产闭环和正确性阻断
+
+F01. 生产 admission transport 三个关键回调仍无条件失败
+
+位置：ctl_tool/main.c:696、:710、:722；安装回调在 :942。
+resolve_node、submit、ready 均返回 -1，并写入
+“admission transport not yet connected to real network”。
+因此即便修好前面的拓扑和输入，生产 CREATE 也无法投递准入阶段或获得真实
+participant readiness。通用 transport 库存在，不等于生产网络适配已接通。
+契约：docs/specs/runtime-manifest-lifecycle.md:459、:480。
+验收：通过真实控制入口完成 prepare/activate/commit 和回执；丢失/拒绝一个
+participant 时必须有限失败并回滚，不能改成虚假的成功回调。
+
+F02. CREATE 的 prepare 输入及事务工作区存储没有构造完整
+
+位置：ctl_tool/main.c:834、:1210；reset 在 :687。
+prepare_options 从零初始化后被发布，没有补齐 machine、execution profile、
+编码缓冲、资源策略等必填内容；reset 又将 prepared_vm、activation 等清零，
+没有重新绑定其外部存储。provider 的 bind_options 只填 launch/listener
+指针及数量，见 common_include/wavevm_admission_provider.c:329。
+common_include/wavevm_coordinator.c:836、:854 会拒绝这些输入，返回
+“coordinator prepare input is invalid”。该问题可能被更早的拓扑失败遮住。
+验收：让实际 serve 请求进入 coordinator prepare 并生成非空候选 manifest、
+reservation、每节点 runtime manifest；同时测试一次失败后重用工作区。
+
+F03. 正式注册入口没有完成 join 到可调度状态的闭环
+
+位置：ctl_tool/main.c:1106；
+common_include/wavevm_membership_controller.c:2025；
+common_include/wavevm_membership_control.c:1194。
+bootstrap 只调用 register_node；注册会将记录规范化为 PENDING/RECOVERING，
+不是调用方填 ACTIVE/HEALTHY 就能就绪。REGISTER 到此返回，REJOIN 也只开始
+验证；已有 join coordinator 尚未被这些生产入口驱动完成。
+新启动的 serve 还没有 gateway record，route compiler 在
+common_include/wavevm_admission_route.c:311 拒绝零 gateway。
+契约：docs/specs/cluster-membership-topology-lifecycle.md:259。
+验收：真实注册 -> 能力验证 -> 路由 prepare/ACK -> ACTIVE；未完成 ACK 的
+成员不可分配资源。不能跳过状态机强行把记录标为 ACTIVE。
+
+F04. 生产 capability/evidence/launch publication 仍是固定启动夹具
+
+位置：ctl_tool/main.c:1024、:1065、:1076、:1172、:1202。
+代码直接声明 TCG AVAILABLE，使用固定 probe/时间、容量及摘要，并发布一个
+节点的 capability、零 reservation 和一份本地 launch/listener plan。
+没有相应真实探测来源，也没有随成员/库存变化完整更新这些发布物的闭环。
+provider 的完整覆盖和 revision 校验见
+common_include/wavevm_admission_provider.c:144、:281。
+影响：既无法据此保证能力真实，也不能支持注册更多节点后正常准入。
+契约：docs/specs/capability-fault-engines.md:65；
+docs/specs/resource-placement-admission.md:56。
+验收：提供可追踪的实际探测、库存、reservation 和节点启动计划快照；成员或
+inventory revision 变化后重新构建，不能用固定数字填满结构体代替生产来源。
+
+F05. TCG helper 的第 0 个索引被拒绝，错误路径又可能无限等候
+
+位置：slave_daemon/slave_hybrid.c:3384；
+wavevm-qemu/accel/wavevm/wavevm-all.c:798、:808、:964；
+slave_daemon/slave_hybrid.c:1336。
+helper 导出从 0 开始的 WVM_EXECUTOR_VCPU_INDEX，但授权解析复用“必须非零”
+的 u64 parser，合法索引 0 因而失败。session thread 随后 break 返回，没有
+发送错误结果或关闭会话 FD；对端 poll 循环没有总 deadline，helper 进程仍在
+时可一直等下去，直到 shutdown 等外部事件。
+契约：docs/specs/vcpu-handoff.md:354 的有界失败要求。
+验收：真实启动 helper 0 并完成一次 typed RUN/EXIT；非法身份必须产生明确
+错误或 EOF；helper 无响应时在契约期限内失败。只测 codec 不足以覆盖本项。
+
+F06. executor 按宿主能力自动启动后端，而非按准入 backend 启动
+
+位置：slave_daemon/slave_hybrid.c:699、:3647、:1310。
+init_kvm_global() 默认探测 /dev/kvm；启动随后按 g_kvm_available 分支，只在
+非 KVM 分支建立 TCG sessions。若 VM 已准入为 TCG，而资源节点实际有 KVM，
+TCG 请求到达时可能根本没有 session 数组，返回 -EAGAIN。
+WVM_FORCE_TCG 环境变量能影响分支，但不是 manifest 驱动的实现。
+影响：违反“TCG VM 可以使用 KVM 节点 CPU，整 VM 执行 backend 一致”的设计。
+验收：在 KVM 可用节点上，明确准入 TCG，且不靠测试环境变量即可正确启动；
+准入 KVM 却不能使用 KVM 时必须失败，不能偷偷换 backend。
+
+F07. typed TCG 执行仍依赖未初始化的旧内存转发和旧 fence
+
+位置：wavevm-qemu/accel/wavevm/wavevm-user-mem.c:1129、:2245；
+slave_daemon/slave_hybrid.c:3242、:3544、:3549。
+typed session 进入 helper 后，缺页仍发送旧 UDP MEM_READ；代理只有从旧协议
+下行包学习到 gateway 才转发上行请求。typed UNIX-session handoff 本身不会
+初始化这条学习路径，typed-only 冷启动下的首次远程缺页因而会被丢弃/重试。
+脏页完成还使用 MSG_PING/SYNC_MAGIC，不是 typed memory fence。
+契约：docs/wavevm-refactor-roadmap.md:435；
+docs/specs/wire-ipc-abi.md:340。
+验收：没有预热旧流量时首次远程缺页也成功；提交和 vCPU fence 均经统一
+runtime 关联。不要通过补心跳、预发旧包或恢复 executor 越级通信来绕过。
+
+F08. Mode A 能力 ABI 不一致，首次 context bind 还存在锁递归和重复发布
+
+位置：master_core/kernel_backend.c:2003；
+wavevm-qemu/accel/wavevm/wavevm-runtime-registration.h:127。
+QUERY_CAPS 返回 max_concurrent_contexts=0 表示“动态无限”，但 QEMU 明确将
+0 判为不支持。当前两端不会就“Mode A 可用”达成一致。
+
+即便修好能力检查，kernel_backend.c:1836 的 bind 已持有 g_context_mutex，
+在 :1864 调 allocator，allocator 又在 :312 获取同一 mutex，首次有效新建
+绑定会自锁。allocator 在 :313 发布 hash/count，bind 又在 :1871 重复发布
+同一 hash_node/count；不能仅删掉其中一处锁就认为修复完成。
+此外 :1922 附近也有持锁调用内部再取锁的 find_context 路径。
+验收：能力协商一致，首次绑定有界完成，重复绑定幂等，两个 context 的 registry
+计数及生命周期正确。此项是静态确定缺陷，本审计未加载模块去触发宿主死锁。
+
+F09. 新 kernel context 的 request ID pool 初始化为空
+
+位置：master_core/kernel_backend.c:305、:309、:604。
+allocator 分配 ids 后既没有填可用 ID，也把 head/tail 都设为 0；分配器只有
+tail != head 才能取 ID。因此新 context 首次 RPC/缺页无法取得请求 ID，不能
+指望 free 路径凭空补出第一批请求。
+验收：每 context、每 CPU 的首个分配、耗尽、归还、generation 防旧回包均有
+真实断言；保留 per-CPU 池设计，不需要为修复而改成全局串行 RPC。
+
+F10. “per-task context”实为全局单槽，异步路径仍会取错 VM
+
+位置：master_core/kernel_backend.c:81、:383、:397、:1878、:1967。
+g_bound_task/g_bound_context 只有一组；并发 IOCTL 会覆盖它。未匹配 current
+时又回退到全局 g_my_vm_id，后者由最近一次 bind 修改。
+dirty worker 在 :1169 用全局 current_vm_id 构造发送身份，在 :1177 却从
+task->context 查页版本，:1190 后的路由/发送又重新解析活动 context。
+这会把 A 的数据与 B 的身份、路由或请求池混用；TX ring 存 context 指针
+不能修复“入队前已经选错 context”。
+契约：docs/specs/kernel-accelerator.md:115、:270。
+验收：显式沿 file/VMA/work/request/TX/RX 传递拥有正确引用的 context；并发
+交错两个 VM，验证 bytes/version/ACK/route 不串，并覆盖一个退出另一个继续。
+同时审查 find/get/put 配对及 teardown；本次未对全部引用路径做穷尽证明。
+
+F11. RX 的 sk_data_ready 路径调用可睡眠 mutex
+
+位置：master_core/kernel_backend.c:1615、:1653、:248；安装回调在 :2391。
+网络接收回调直接调用 wvm_kernel_find_context()，后者 mutex_lock。该回调可在
+softirq/原子上下文执行，不能依赖“平时锁不竞争”来保证可睡眠操作合法。
+验收：在合法执行上下文中做 registry 操作，或采用合适的非睡眠查找/引用机制；
+通过 lockdep/并发 RX 检查。不要简单把整条多队列数据面塞进一把全局锁。
+
+F12. 内核仍是独立语义权威，且权威目录/路由没有按 VM 隔离
+
+位置：master_core/logic_core.c:240、:256、:365、:591。
+g_dir_table 按 GPA 查找，page metadata 没有完整 VM/incarnation key；
+g_logic_route_context 也是一个全局对象。在共享内核模块内，不同 context
+的同 GPA 仍会命中同一目录状态，第二个路由绑定也会碰到单一全局路由权威。
+这里不是说“所有全局变量都错误”：每 VM 一个用户进程可以靠进程隔离；一个
+被多 VM 共用的内核模块不行。
+
+Mode A QEMU 在 wavevm-cpu.c:2527 不连接用户态 runtime vCPU socket，
+在 :1321 经 IOCTL_WVM_REMOTE_RUN，kernel_backend.c:2061 直接走旧 RPC；
+kernel_backend.c:1006 的缺页也构造旧 MEM_READ。context bind 尚未让这些
+操作经过统一 handoff、operation identity、fence 权威。
+契约：roadmap:435，尤其“Kernel logic_core is no longer an independent
+semantic authority”；kernel-accelerator.md:96、:281。
+验收：Mode A 必须是同一用户态权威加派生加速状态，而不是将旧内核权威复制
+成多份就交付。单 context 安全拒绝门可以暂时保留，但不能宣称多 VM 完成。
+
+F13. 仍可达的旧 full-page commit 不推进版本，绕开统一提交语义
+
+位置：master_core/logic_core.c:2475、:2506、:2513。
+full_page_same_version 在提交基线等于当前版本时成立；代码覆盖页内容后仍
+保留 commit_version，不推进版本。两个从同一旧版本出发的不同写入因此可以
+先后被接受；依赖新版本判重/更新的订阅者也无法可靠区分更新。
+full_page_catchup 还允许整页快照走不同的版本追平规则。
+这不是单纯已经废弃的函数：旧 kernel RX/logic 路径仍然可达。
+契约：docs/specs/memory-consistency.md:192、:237。
+验收：full/diff/resync 都遵循同一 base-version、operation identity 和提交
+版本规则；同基线冲突写拒绝，重试只重放已提交结果。保留异步 diff 优化，
+不能靠取消并发、关闭 diff 或每次全量同步来掩盖本项。
+
+四、P2：规模契约、验收证据与交付缺口
+
+F14. u32 身份、单域容量、全局容量仍未解耦
+
+位置：common_include/wavevm_config.h:29、:52、:53；
+common_include/wavevm_runtime_dispatch.c:160、:190；
+common_include/wavevm_cluster.c:398、:402。
+runtime dispatch 直接用 vnode 的数值与 WVM_MAX_GATEWAYS=4096 比较；全局
+record set 也用同一个 WVM_MAX_SLAVES 限制节点/gateway 数量。
+因此即使只有一个高值稀疏 vnode，也被拒；增加 Pod 也不能自然突破全局集合
+的 4096 限制。固定大小 admission/reservation 数组仍与这个宏关联。
+这违反 docs/specs/identity-routing.md:185 的独立容量预算与完整身份要求。
+纲领承诺的是 u32 可表示身份、稀疏分配和独立预算，不是单机实际容纳几十亿
+节点，也不是分形自动突破所有容量。仅调大宏不能算完成。
+验收：少量高值 vnode、不相交 Pod 复用局部 vnode、跨 Pod 总量超过单 Pod
+预算、显式容量不足、保留值及范围溢出，均有真实准备/拒绝和清理断言。
+
+F15. 远程存储仍是旧协议；不能把整份 subsystem specs 宣称完成
+
+位置：wavevm-qemu/accel/wavevm/wavevm-all.c:2400、:2414、:2445、:2461；
+master_core/main_wrapper.c:1331；slave_daemon/slave_hybrid.c:2984。
+远程 block 路径仍围绕 {lba,len,is_write}、旧 header 和简单 ACK；没有完整
+operation key、queue sequence、flush/FUA 持久完成和去重语义。
+docs/specs/storage-device-authority.md:51、:194 已明确要求迁移这些路径。
+coordinator 还在 common_include/wavevm_coordinator.c:835 拒绝非空
+storage_device_plan。这属于尚未交付的远程存储能力，不是“已经完成的新协议”。
+边界：本项不等于原生 QEMU 的本地磁盘已经损坏，也不要求当前实现任意 GPU/
+VFIO 分布式设备。最低版本若不支持远程存储，应明确拒绝并标注范围；若按
+全部 specs 收口，则需补齐而不能把旧 ACK 当作 flush 成功。
+
+F16. 三类 PASS 被误读为完整多 VM/路由/准入验收
+
+1. tests/control-plane/test_mode_b_multivm.c:178 起的隔离场景主要是 printf。
+   实际填 capability 并计算摘要，但没有运行两个 VM，也没有对 GPA、版本、
+   目录或提交串线做行为断言。最后打印“All ... isolation tests PASS”。
+2. test_route_topology_validation.c:105、:118 主要验证两种 route compiler
+   初始化，并打印拓扑性质；没有真实 compile/forward 或 KVM/TCG 执行矩阵。
+3. test_multivm_isolation.c:152 验证两个身份的本地 namespace/socket/shm 命名
+   和清理隔离。这是有效局部测试，但没有加载 /dev/wavevm 或驱动双内核 context。
+4. test_ctl_create_vm.c:311 明确预期 PRECONDITION_FAILED，且返回身份全为 0。
+   它验证拒绝/replay/restart，不是成功创建。测试里的旧错误标签也不应当作
+   “代码根本没绑定 authority”的证据。
+5. test_executor_bridge.c:545 注入 stub；test_executor_session.sh:8 只链接
+   codec，不能替代真实 QEMU helper/后端链验收。
+
+上述脚本退出 0 并不造假于“命令结果”，但把结果描述成 Mode A 双 VM 隔离、
+Mode B 实际隔离或完整 backend/topology 验收，明显超过了断言覆盖范围。
+test_lifecycle_projection、authority owner、gateway integration 等另有真实
+组件断言，不能因此否定全部测试。应修正的是证据对应的结论范围。
+
+F17. 当前工作区能构建，不等于提交后的仓库可复现构建
+
+node_runtime/runtime_context.h、node_runtime/executor_runtime.h 均存在于本地，
+但 git ls-files 没有它们，状态为未跟踪。node_runtime/main.c:18、:21、
+master_core/main_wrapper.c:46、slave_daemon/slave_hybrid.c:50 等依赖它们。
+本次 make 成功使用了这两份本地文件；只检出 HEAD 的新工作区缺少所需源码。
+验收：将需要的源码纳入交付，再做干净检出的构建。不能把这两份头文件当作
+构建产物删除。本审计没有替实现者 add 或修改它们。
+
+F18. CI 仍指向旧部署/配置入口，Phase 10 未完成
+
+位置：.circleci/config.yml:63、:81；
+scripts/ci_dual_node.sh:193、:203、:312；slave_daemon/Makefile。
+pipeline 还构建旧 master/slave 目标，脚本仍生成 NODE/VM/ROUTE 配置并调用
+已经移除的 wvm_ctl --plan。现在 master_core/Makefile 是统一 runtime 的
+转发入口，slave Makefile 仍指向独立 wavevm_node_slave，调用契约不一致。
+本轮没有运行 CircleCI，也不要求立刻做真实双节点；这只是明确证明当前 CI
+尚未迁移，不能把旧脚本作为重构完成后的验收入口。
+没有遗留业务，不建议为修 CI 恢复旧 CLI；应让 CI 消费正式 manifest/control
+路径，并分别验证 Mode A/B 与 KVM/TCG 两个独立维度。
+
+五、持久化 plan 的逐项判断
+
+第 1 项，唯一 manifest/typed 生产路径：部分完成。
+新入口和拒绝门存在，但 Mode A、TCG 内存/fence、block 等仍依赖旧语义路径。
+
+第 2 项，统一 node_runtime/executor typed dispatch：部分完成。
+统一二进制确实可构建，typed dispatch/bridge/coordinator 等组件存在；
+不是“master/slave 完全没有合并”。但删除几个 projection helper 名称不代表
+底层旧数组/旧内存协议已消失，F05-F07、F12 说明真实后端还没有完成闭环。
+
+第 3 项，membership 与生产 admission：组合实现已推进，生产未完成。
+owner 初始化及 set_admission_authority 已完成，事务编排、provider、capture、
+可靠 control stream 和 replay 等也有代码；F01-F04 阻止正式创建和动态加入。
+cordon/drain/replacement 库与局部测试不等于实际成员/路由 ACK 闭环已验收。
+
+第 4 项，Mode B 多 VM 隔离与生命周期：基础设施存在，验收不成立。
+有身份命名、socket/shm 隔离及清理的局部证据；没有本轮可支持“真实两 VM
+并行 CPU/内存操作与生命周期隔离已完成”的证据。不能将缺验证直接判为
+必然串 VM，也不能反过来宣称已正确隔离。
+
+第 5 项，Mode A 多 context 与双 VM 隔离：明确未完成，且有实质错误。
+registry、部分 per-context 字段、RX/TX/work context 传递是真实进展；
+F08-F12 表明能力、锁、请求池、并发身份和语义权威均未收口。
+common_include/wavevm_admission.c:869 仍保留独占 kernel-context lease。
+这可以作为临时安全拒绝门，不是多 context 可用的证明；不得先改成每 VM
+lease 解除保护，再让共享内核状态发生真实互相覆盖。
+
+第 6 项，flat/fractal 与 KVM/TCG 分层验证：局部完成，不能全部勾选。
+存在真实 projection/gateway 组件测试，但没有完整 backend/topology 行为矩阵，
+新增的 route init/能力摘要测试不能替代它。F05-F07 已找到实际执行障碍。
+真实双节点和最终 guest E2E 本就可以稍后做；未到这一步不等于一切工作无效，
+但源码已经存在的阻断也不能统称为“仅缺 E2E”。
+
+六、映射到 roadmap/specs 的整体进度
+
+Phase 0-4：架构方向与多数契约文本、schema、codec、planner 和事务基础设施
+已经有较完整形态；不需要推倒重写。新容量预算合同尚未转为全部消费者实现，
+部分文档仍有旧 V1/兼容描述，需要以后与现行“无旧业务”约束统一。
+
+Phase 5：用户态 authority 和统一 runtime 已有主体，但 Mode A 仍有第二套
+权威，真实 TCG 内存链也未统一，不能标完成。
+Phase 6：命名和 namespace 隔离有证据，实际多 VM 数据面/生命周期尚未闭环。
+Phase 7：库级 admission/membership 能力已有积累，生产 provider/transport/
+join readiness 存在明确缺口。
+Phase 8：多 context 是进行中的改造，不是通过验收的实现。
+Phase 9：fault_engine 接口/验证框架存在，不等于所有具体 fault engine 已接入。
+完整 UFFD/可插拔扩展可以延后；最低版本仍必须有正确的用户态 fallback 和
+KVM dirty/resync 语义，不能以 Phase 9 可延后为由跳过。
+Phase 10：组件测试不少，但正式 CI 入口、真实矩阵和 guest 最终验收未完成。
+
+专项说明：gateway 有 route delivery/runtime 和集成测试，应算已落地的一部分。
+本报告没有证明 gateway 全部正确，也没有把所有失败都归给 gateway。分形多层
+路由仍需结合真实 route snapshot、scoped identity 和上述容量边界验收。
+
+七、本次实际执行的验证
+
+以下脚本串行执行，每个设 120 秒上限，均退出 0：
+1. tests/control-plane/test_mode_b_multivm.sh
+2. tests/control-plane/test_route_topology_validation.sh
+3. tests/control-plane/test_multivm_isolation.sh
+4. tests/control-plane/test_lifecycle_projection.sh
+5. tests/control-plane/test_admission_authority_owner.sh
+6. tests/control-plane/test_ctl_create_vm.sh
+7. tests/control-plane/test_gateway_route_control_integration.sh
+
+timeout 120 make -C node_runtime -B -j2：成功；有声明/格式/未使用变量等 warning，
+不是 -Werror 全绿。本轮生成的 node_runtime 对象和二进制已 clean；未删除之前
+已有的 master/QEMU 构建物或未跟踪源码。
+
+没有执行：全量 tests/control-plane、QEMU 重编译、内核模块重编译/加载、真实
+双 VM 内核压力、CircleCI 双节点、guest 登录与远程 CPU/内存 E2E。
+已有 wavevm.ko 及历史通过记录不能代替当前源码运行证据。
+
+八、建议的收口顺序与验收门
+
+1. 先撤销“全部完成”的进度结论，保留 Mode A 的临时安全拒绝边界。本报告
+   没有修改 plan，交由实施方按证据更新，不能删除旧失败证据来做成全绿。
+2. 按 Phase 5-7 补齐正式用户态链：manifest 指定后端、真实 TCG session/
+   memory/fence、生产输入/provider/transport/receiver 和 join/readiness。
+   可先做不启动完整 guest 的有界小事务/缺页/执行 smoke。
+3. 将 Mode B 两个 VM 的真实同 GPA 写读、并发 handoff、停 A 不影响 B、
+   stale incarnation/旧回包拒绝做成测试；再按 Phase 8 收口内核纯加速和
+   registry/引用/异步 context，并重复同样的隔离场景。
+4. 同步完成独立容量预算、稀疏完整身份和 Pod scope 测试；不要在错误的
+   dense-ID 假设上继续叠更多支持规模的声明。
+5. 明确远程存储在本次交付中的范围，补齐所承诺的 typed block 语义，或维持
+   显式拒绝且不宣称该 subsystem 完成；不能把静默弱化语义作为实现。
+6. 最后迁移正式 CI 并运行 flat/fractal、KVM/TCG、Mode A/B 的有效组合。
+   每个成功用例证明真实 guest readiness/SSH 和远程 vCPU、远程内存活动；
+   不把端口监听、进程存活、初始化 PASS 当作最终成功。
+
+以上不要求增加无业务价值的旧兼容层，不要求靠全局串行化换正确性，也不要求
+为了眼前 smoke 移除 MPSC、多队列、批处理、异步 diff 等优化。当前首先缺的是
+正确的权威边界与实际生产接线，不是再造更多只有接口名称的抽象。
+
+最终判断：已经完成相当一部分契约和组件实现，但“全纲领落地，只剩调 guest”
+是不准确的。应把进度描述改为“组件主体已建立，生产闭环与共享内核正确性仍在
+施工，若干测试结论需降回其实际覆盖范围”。本次仅新增此审计报告，未修代码、
+未改纲领/plan，也未提交或推送。
