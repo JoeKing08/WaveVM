@@ -76,6 +76,11 @@ struct wvm_mem_slot {
 uint32_t g_my_vm_id = 0;
 EXPORT_SYMBOL(g_my_vm_id);
 
+/* Per-task context tracking: map current task to its VM context */
+static DEFINE_SPINLOCK(g_task_context_lock);
+static struct task_struct *g_bound_task = NULL;
+static struct wvm_kernel_context *g_bound_context = NULL;
+
 static int module_service_port = 9000;
 module_param(module_service_port, int, 0644);
 static int module_local_slave_port = 9001;
@@ -123,6 +128,7 @@ struct wvm_kernel_context {
     struct radix_tree_root page_tree;
     spinlock_t page_tree_lock;
     struct wvm_kernel_transport *transport;
+    struct sockaddr_in gateway_table[WVM_MAX_GATEWAYS];
 };
 
 struct wvm_kernel_file_context {
@@ -214,7 +220,7 @@ struct wvm_kernel_transport {
     int service_port;
     int local_slave_port;
     struct socket *socket;
-    struct sockaddr_in gateway_table[WVM_MAX_GATEWAYS];
+    /* gateway_table moved to per-context in wvm_kernel_context */
     struct wvm_tx_ring_t fast_ring;
     struct wvm_tx_ring_t slow_ring;
     struct task_struct *tx_thread;
@@ -366,10 +372,26 @@ static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
  * - mmap/fault: extract from vma->vm_private_data
  * - socket RX: lookup from envelope VM identity
  * - async work: store context pointer in work item
+ *
+ * IMPROVED: Now checks per-task binding first before falling back to g_my_vm_id
  */
 static struct wvm_kernel_context *wvm_active_context(void)
 {
-    uint32_t vm_id = READ_ONCE(g_my_vm_id);
+    struct wvm_kernel_context *ctx = NULL;
+    uint32_t vm_id;
+
+    /* First try: per-task context binding */
+    spin_lock(&g_task_context_lock);
+    if (g_bound_task == current && g_bound_context) {
+        ctx = g_bound_context;
+        atomic_inc(&ctx->refs);
+        spin_unlock(&g_task_context_lock);
+        return ctx;
+    }
+    spin_unlock(&g_task_context_lock);
+
+    /* Fallback: legacy global vm_id */
+    vm_id = READ_ONCE(g_my_vm_id);
     if (vm_id == 0)
         return NULL;
     return wvm_kernel_find_context(vm_id);
@@ -640,14 +662,14 @@ static int k_check_req_status(uint64_t full_id) {
 
 // --- 发送逻辑 ---
 static void k_set_gateway_ip(uint32_t gw_id, uint32_t ip, uint16_t port) {
-    struct wvm_kernel_transport *transport = wvm_active_transport();
+    struct wvm_kernel_context *context = wvm_active_context();
 
     // [Fix #1] 入参可能是 composite ID，先解码为裸 node_id 再索引静态数组
     uint32_t raw_node_id = WVM_GET_NODEID(gw_id);
-    if (transport && raw_node_id < WVM_MAX_GATEWAYS) {
-        transport->gateway_table[raw_node_id].sin_family = AF_INET;
-        transport->gateway_table[raw_node_id].sin_addr.s_addr = ip;
-        transport->gateway_table[raw_node_id].sin_port = port;
+    if (context && raw_node_id < WVM_MAX_GATEWAYS) {
+        context->gateway_table[raw_node_id].sin_family = AF_INET;
+        context->gateway_table[raw_node_id].sin_addr.s_addr = ip;
+        context->gateway_table[raw_node_id].sin_port = port;
     }
 }
 
@@ -658,12 +680,12 @@ static int raw_kernel_send(struct wvm_kernel_context *context,
         context ? context->transport : NULL;
     // [Fix #1] target_id 可能是 composite ID，解码为裸 node_id 索引 gateway_table
     uint32_t raw_id = WVM_GET_NODEID(target_id);
-    if (!transport || !transport->socket || raw_id >= WVM_MAX_GATEWAYS ||
-        transport->gateway_table[raw_id].sin_port == 0) {
+    if (!context || !transport || !transport->socket || raw_id >= WVM_MAX_GATEWAYS ||
+        context->gateway_table[raw_id].sin_port == 0) {
         return -ENODEV;
     }
 
-    to_addr = transport->gateway_table[raw_id];
+    to_addr = context->gateway_table[raw_id];
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = &to_addr;
     msg.msg_namelen = sizeof(to_addr);
@@ -1327,8 +1349,10 @@ static void try_flush_reorder_q(kvm_page_meta_t *meta) {
  * [关键逻辑] 校验版本号：顺序包直接 kmap 写入，乱序包存入 skb_head 队列进行重排。处理完后触发 try_flush 链式应用。
  * [后果] 这是 V30 性能超越 V28 的秘密武器。它在内核底层完成了数据的“无感更新”，Guest 甚至不知道内存已经变了。
  */
-static void handle_kernel_push(struct wvm_header *hdr, void *payload) {
-    struct wvm_kernel_context *context = wvm_active_context();
+static void handle_kernel_push(struct wvm_kernel_context *context,
+                                struct wvm_header *hdr, void *payload) {
+    if (!context)
+        return;
     uint16_t type = ntohs(hdr->msg_type);
     uint8_t flags = hdr->flags; 
     uint64_t gpa, push_version;
@@ -1411,8 +1435,10 @@ static void handle_kernel_push(struct wvm_header *hdr, void *payload) {
  * [关键逻辑] 遍历 Radix-Tree 映射的物理页，利用 wmb 内存屏障和 memset 直接操作硬件页，并强制推进逻辑时钟。
  * [后果] 它让分布式虚拟机的“冷启动”与“克隆”速度达到了硬件极限，绕过了所有缓慢的软件协议栈处理路径。
  */
-static void handle_kernel_rpc_batch(void *payload, uint32_t payload_len) {
-    struct wvm_kernel_context *context = wvm_active_context();
+static void handle_kernel_rpc_batch(struct wvm_kernel_context *context,
+                                     void *payload, uint32_t payload_len) {
+    if (!context)
+        return;
 
     if (payload_len < sizeof(struct wvm_rpc_batch_memset)) return;
 
@@ -1537,7 +1563,7 @@ static void internal_process_single_packet(
     // 5. [V29 核心] Prophet 处理
     if (type == MSG_RPC_BATCH_MEMSET) {
         uint32_t payload_len = ntohs(hdr->payload_len);
-        handle_kernel_rpc_batch(payload, payload_len);
+        handle_kernel_rpc_batch(context, payload, payload_len);
         return; // 处理完毕直接返回，不需要 Logic Core 介入
     }
 
@@ -1545,7 +1571,7 @@ static void internal_process_single_packet(
     // 6. [V29 核心] 拦截主动推送 (Direct Kernel Push)
     // 这是 V29 性能翻倍的关键。必须在内核态直接处理 Diff/Full Push。
     if (type == MSG_PAGE_PUSH_FULL || type == MSG_PAGE_PUSH_DIFF) {
-        handle_kernel_push(hdr, payload);
+        handle_kernel_push(context, hdr, payload);
         return;
     }
 
@@ -1587,17 +1613,17 @@ static void internal_process_single_packet(
  * [后果] 配合 Gateway 的聚合逻辑，它在内核态实现了“多包合一”的高效处理，极大地减轻了 CPU 软中断的负荷。
  */
 static void wavevm_udp_data_ready(struct sock *sk) {
-    struct wvm_kernel_context *context =
-        sk ? (struct wvm_kernel_context *)sk->sk_user_data : NULL;
+    struct wvm_kernel_transport *transport =
+        sk ? (struct wvm_kernel_transport *)sk->sk_user_data : NULL;
     struct sk_buff *skb;
 
-    if (!context)
+    if (!transport)
         return;
     while ((skb = skb_dequeue(&sk->sk_receive_queue)) != NULL) {
         // 1. 线性化：确保 skb->data 是连续内存，方便指针操作
-        if (skb_is_nonlinear(skb) && skb_linearize(skb) != 0) { 
-            kfree_skb(skb); 
-            continue; 
+        if (skb_is_nonlinear(skb) && skb_linearize(skb) != 0) {
+            kfree_skb(skb);
+            continue;
         }
 
         uint32_t offset = 0;
@@ -1618,10 +1644,28 @@ static void wavevm_udp_data_ready(struct sock *sk) {
             // 边界检查
             if (offset + pkt_len > total_len) break;
 
-            // 调用单包处理逻辑 (注意：该函数内部已包含 CRC 校验)
-            internal_process_single_packet(context, hdr, src_ip);
+            // 3. [Multi-VM] 从协议头 target_id 解码 vm_id 并查找对应 context
+            uint32_t target_id = ntohl(hdr->target_id);
+            uint32_t vm_id = WVM_GET_VMID(target_id);
+            struct wvm_kernel_context *context = NULL;
 
-            // 3. 指针后移
+            if (vm_id != 0) {
+                context = wvm_kernel_find_context(vm_id);
+            } else {
+                // 向后兼容：vm_id=0 时使用全局 g_my_vm_id 查找
+                uint32_t legacy_vm_id = READ_ONCE(g_my_vm_id);
+                if (legacy_vm_id != 0)
+                    context = wvm_kernel_find_context(legacy_vm_id);
+            }
+
+            if (context) {
+                // 调用单包处理逻辑 (注意：该函数内部已包含 CRC 校验)
+                internal_process_single_packet(context, hdr, src_ip);
+                wvm_kernel_put_context(context);  // 释放引用
+            }
+            // else: 丢弃未知 VM 的包
+
+            // 4. 指针后移
             offset += pkt_len;
         }
 
@@ -1917,21 +1961,38 @@ static int wvm_release(struct inode *inode, struct file *filp) {
 static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     void __user *argp = (void __user *)arg;
     struct wvm_kernel_file_context *file_context = filp->private_data;
+    struct wvm_kernel_context *ctx = NULL;
+    long ret;
+
+    /* Bind current task to file's VM context for duration of IOCTL */
+    if (file_context && file_context->context) {
+        ctx = file_context->context;
+        spin_lock(&g_task_context_lock);
+        g_bound_task = current;
+        g_bound_context = ctx;
+        spin_unlock(&g_task_context_lock);
+    }
 
     switch (cmd) {
     case IOCTL_WVM_BIND_CONTEXT: {
         struct wvm_ioctl_context_bind request;
 
-        if (copy_from_user(&request, argp, sizeof(request)))
-            return -EFAULT;
-        return wvm_context_bind_file(file_context, &request);
+        if (copy_from_user(&request, argp, sizeof(request))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        ret = wvm_context_bind_file(file_context, &request);
+        goto out;
     }
     case IOCTL_WVM_UNBIND_CONTEXT: {
         struct wvm_ioctl_context_bind request;
 
-        if (copy_from_user(&request, argp, sizeof(request)))
-            return -EFAULT;
-        return wvm_context_unbind_file(file_context, &request);
+        if (copy_from_user(&request, argp, sizeof(request))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        ret = wvm_context_unbind_file(file_context, &request);
+        goto out;
     }
     case IOCTL_WVM_QUERY_CAPS: {
         struct wvm_ioctl_context_caps caps;
@@ -1944,19 +2005,24 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         caps.active_contexts = g_active_context_count;
         mutex_unlock(&g_context_mutex);
         caps.feature_bits = WVM_KERNEL_CAP_CONTEXT_BIND;
-        if (copy_to_user(argp, &caps, sizeof(caps)))
-            return -EFAULT;
-        return 0;
+        if (copy_to_user(argp, &caps, sizeof(caps))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        ret = 0;
+        goto out;
     }
     case IOCTL_SET_GATEWAY: {
         struct wvm_ioctl_gateway gw;
-        struct wvm_kernel_transport *transport =
-            wvm_context_for_file(file_context)->transport;
-        if (copy_from_user(&gw, argp, sizeof(gw))) return -EFAULT;
-        if (transport && gw.gw_id < WVM_MAX_GATEWAYS) {
-            transport->gateway_table[gw.gw_id].sin_family = AF_INET;
-            transport->gateway_table[gw.gw_id].sin_addr.s_addr = gw.ip;
-            transport->gateway_table[gw.gw_id].sin_port = gw.port;
+        struct wvm_kernel_context *context = wvm_context_for_file(file_context);
+        if (copy_from_user(&gw, argp, sizeof(gw))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        if (context && gw.gw_id < WVM_MAX_GATEWAYS) {
+            context->gateway_table[gw.gw_id].sin_family = AF_INET;
+            context->gateway_table[gw.gw_id].sin_addr.s_addr = gw.ip;
+            context->gateway_table[gw.gw_id].sin_port = gw.port;
         }
         break;
     }
@@ -1964,9 +2030,11 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         struct wvm_ioctl_remote_run remote_run;
         struct wvm_ipc_cpu_run_req *req = &remote_run.req;
         struct wvm_ipc_cpu_run_ack *ack = &remote_run.ack;
+        int rpc_ret;
 
         if (copy_from_user(&remote_run, argp, sizeof(remote_run))) {
-            return -EFAULT;
+            ret = -EFAULT;
+            goto out;
         }
 
         uint32_t target = req->slave_id;
@@ -1981,7 +2049,8 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
                        req->vcpu_index, raw, target);
                 dbg_nodev++;
             }
-            return -ENODEV;
+            ret = -ENODEV;
+            goto out;
         }
 
         /*
@@ -1989,11 +2058,12 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
          * context payload cannot identify the guest vCPU on the slave.
          */
         memset(ack, 0, sizeof(*ack));
-        int ret = wvm_rpc_call(MSG_VCPU_RUN, req, sizeof(*req),
+        rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, req, sizeof(*req),
                                target, ack, sizeof(*ack));
-        if (ret < 0) ack->status = ret;
+        if (rpc_ret < 0) ack->status = rpc_ret;
         if (copy_to_user(argp, &remote_run, sizeof(remote_run))) {
-            return -EFAULT;
+            ret = -EFAULT;
+            goto out;
         }
         break;
     }
@@ -2002,37 +2072,57 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
             wvm_context_for_file(file_context);
 
         if (wait_event_interruptible(context->irq_wait_queue,
-                                     atomic_read(&context->irq_pending) != 0))
-            return -ERESTARTSYS;
+                                     atomic_read(&context->irq_pending) != 0)) {
+            ret = -ERESTARTSYS;
+            goto out;
+        }
         atomic_set(&context->irq_pending, 0);
-        uint32_t irq = 16; 
-        if (copy_to_user(argp, &irq, sizeof(irq))) return -EFAULT;
+        uint32_t irq = 16;
+        if (copy_to_user(argp, &irq, sizeof(irq))) {
+            ret = -EFAULT;
+            goto out;
+        }
         break;
     }
 
     case IOCTL_SET_MEM_LAYOUT: {
         struct wvm_ioctl_mem_layout layout;
-        if (copy_from_user(&layout, argp, sizeof(layout))) return -EFAULT;
-        return wvm_set_mem_layout(wvm_context_for_file(file_context), &layout);
+        if (copy_from_user(&layout, argp, sizeof(layout))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        ret = wvm_set_mem_layout(wvm_context_for_file(file_context), &layout);
+        goto out;
     }
 
     case IOCTL_UPDATE_MEM_ROUTE: {
         struct wvm_ioctl_route_update head;
-        
+        uint32_t *buf;
+
         // 1. 读取头部元数据
-        if (copy_from_user(&head, argp, sizeof(head))) return -EFAULT;
-        
+        if (copy_from_user(&head, argp, sizeof(head))) {
+            ret = -EFAULT;
+            goto out;
+        }
+
         // 安全检查：参数注入通常只有几个整数，限制数量防止滥用
-        if (head.count > 1024) return -EINVAL;
+        if (head.count > 1024) {
+            ret = -EINVAL;
+            goto out;
+        }
 
         // 2. 分配临时缓冲区
-        uint32_t *buf = vmalloc(head.count * sizeof(uint32_t));
-        if (!buf) return -ENOMEM;
+        buf = vmalloc(head.count * sizeof(uint32_t));
+        if (!buf) {
+            ret = -ENOMEM;
+            goto out;
+        }
 
         // 3. 读取 Payload (具体的数值)
         if (copy_from_user(buf, (uint8_t*)argp + sizeof(head), head.count * sizeof(uint32_t))) {
             vfree(buf);
-            return -EFAULT;
+            ret = -EFAULT;
+            goto out;
         }
 
         // 4. 传导给 Logic Core
@@ -2042,7 +2132,7 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
             // [FIX-M5] 移除 uint16_t 截断，保留完整 uint32_t
             wvm_set_mem_mapping(head.start_index + i, buf[i]);
         }
-        
+
         vfree(buf);
         break;
     }
@@ -2052,23 +2142,32 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         uint32_t *buf;
         size_t bytes;
 
-        if (copy_from_user(&head, argp, sizeof(head))) return -EFAULT;
+        if (copy_from_user(&head, argp, sizeof(head))) {
+            ret = -EFAULT;
+            goto out;
+        }
         if (head.count > WVM_MEMORY_ROUTE_TABLE_SIZE ||
             head.start_index >= WVM_MEMORY_ROUTE_TABLE_SIZE ||
             head.start_index + head.count > WVM_MEMORY_ROUTE_TABLE_SIZE) {
-            return -EINVAL;
+            ret = -EINVAL;
+            goto out;
         }
 
         bytes = (size_t)head.count * sizeof(uint32_t);
         if (head.count != 0 && bytes / sizeof(uint32_t) != head.count) {
-            return -EINVAL;
+            ret = -EINVAL;
+            goto out;
         }
         buf = vmalloc(bytes);
-        if (!buf && bytes != 0) return -ENOMEM;
+        if (!buf && bytes != 0) {
+            ret = -ENOMEM;
+            goto out;
+        }
         if (bytes != 0 &&
             copy_from_user(buf, (uint8_t *)argp + sizeof(head), bytes)) {
             vfree(buf);
-            return -EFAULT;
+            ret = -EFAULT;
+            goto out;
         }
 
         for (uint32_t i = 0; i < head.count; i++) {
@@ -2082,15 +2181,19 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         uint32_t vm_id;
         struct wvm_kernel_context *context;
 
-        if (copy_from_user(&vm_id, argp, sizeof(vm_id)))
-            return -EFAULT;
+        if (copy_from_user(&vm_id, argp, sizeof(vm_id))) {
+            ret = -EFAULT;
+            goto out;
+        }
 
         /* Find existing context or allocate new one */
         context = wvm_kernel_find_context(vm_id);
         if (!context) {
             context = wvm_kernel_allocate_context(vm_id);
-            if (!context)
-                return -ENOMEM;
+            if (!context) {
+                ret = -ENOMEM;
+                goto out;
+            }
         }
 
         /* Mark context as active */
@@ -2108,8 +2211,10 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     // [PATCH] 处理 Epoch 更新
     case IOCTL_UPDATE_EPOCH: {
         uint32_t new_epoch;
-        if (copy_from_user(&new_epoch, (void __user *)arg, sizeof(uint32_t)))
-            return -EFAULT;
+        if (copy_from_user(&new_epoch, (void __user *)arg, sizeof(uint32_t))) {
+            ret = -EFAULT;
+            goto out;
+        }
         WRITE_ONCE(wvm_context_for_file(file_context)->kernel_epoch,
                    new_epoch);
         // printk(KERN_INFO "[WVM] Kernel Epoch updated to %u\n", new_epoch);
@@ -2118,17 +2223,36 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 
     case IOCTL_UPDATE_CPU_ROUTE: {
         struct wvm_ioctl_route_update head;
-        if (copy_from_user(&head, argp, sizeof(head))) return -EFAULT;
-        if (head.count > 4096 || head.start_index >= 4096) return -EINVAL;
-        if (head.start_index + head.count > 4096) return -EINVAL;
+        uint32_t *buf;
+        size_t bytes;
 
-        size_t bytes = (size_t)head.count * sizeof(uint32_t);
-        if (head.count != 0 && bytes / sizeof(uint32_t) != head.count) return -EINVAL;
-        uint32_t *buf = vmalloc(bytes);
-        if (!buf) return -ENOMEM;
+        if (copy_from_user(&head, argp, sizeof(head))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        if (head.count > 4096 || head.start_index >= 4096) {
+            ret = -EINVAL;
+            goto out;
+        }
+        if (head.start_index + head.count > 4096) {
+            ret = -EINVAL;
+            goto out;
+        }
+
+        bytes = (size_t)head.count * sizeof(uint32_t);
+        if (head.count != 0 && bytes / sizeof(uint32_t) != head.count) {
+            ret = -EINVAL;
+            goto out;
+        }
+        buf = vmalloc(bytes);
+        if (!buf) {
+            ret = -ENOMEM;
+            goto out;
+        }
         if (copy_from_user(buf, (uint8_t *)argp + sizeof(head), head.count * sizeof(uint32_t))) {
             vfree(buf);
-            return -EFAULT;
+            ret = -EFAULT;
+            goto out;
         }
 
         for (uint32_t i = 0; i < head.count; i++) {
@@ -2142,9 +2266,23 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         break;
     }
 
-    default: return -EINVAL;
+    default:
+        ret = -EINVAL;
+        goto out;
     }
-    return 0;
+    ret = 0;
+
+out:
+    /* Unbind current task from VM context */
+    if (ctx) {
+        spin_lock(&g_task_context_lock);
+        if (g_bound_task == current && g_bound_context == ctx) {
+            g_bound_task = NULL;
+            g_bound_context = NULL;
+        }
+        spin_unlock(&g_task_context_lock);
+    }
+    return ret;
 }
 
 static const struct vm_operations_struct wvm_vm_ops = {

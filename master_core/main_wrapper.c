@@ -60,7 +60,6 @@ static struct wvm_runtime_gate *g_runtime_gate_ptr;
 static int g_runtime_gate_active = 0;
 static const struct wvm_runtime_dispatch_storage *g_runtime_dispatch_storage_ptr;
 static int g_runtime_dispatch_active = 0;
-static int g_runtime_dispatch_kernel_memory_cache = 0;
 static pthread_mutex_t g_runtime_gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_runtime_operation_sequence = 1;
 volatile sig_atomic_t g_shutdown_requested = 0;
@@ -166,110 +165,19 @@ static int bind_runtime_context(
     return 0;
 }
 
-static int runtime_dispatch_populate_legacy_memory_cache(
-    const struct wvm_runtime_dispatch_projection *dispatch)
-{
-    const uint64_t legacy_chunk_bytes = UINT64_C(1) << WVM_ROUTING_SHIFT;
-    size_t i;
-
-    if (!dispatch ||
-        dispatch->route_topology_kind != WVM_ROUTE_TOPOLOGY_FLAT) {
-        return 0;
-    }
-    for (i = 0; i < dispatch->memory_dispatch.count; i++) {
-        const struct wvm_runtime_memory_dispatch *entry =
-            &dispatch->memory_dispatch.entries[i];
-        uint64_t first_chunk;
-        uint64_t chunk_count;
-
-        if (entry->gpa_start % legacy_chunk_bytes != 0 ||
-            entry->bytes % legacy_chunk_bytes != 0 ||
-            entry->directory.destination_kind !=
-                WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE ||
-            entry->directory.destination_scope != 0) {
-            return 0;
-        }
-        first_chunk = entry->gpa_start / legacy_chunk_bytes;
-        chunk_count = entry->bytes / legacy_chunk_bytes;
-        if (first_chunk >= WVM_MEMORY_ROUTE_TABLE_SIZE ||
-            chunk_count > WVM_MEMORY_ROUTE_TABLE_SIZE - first_chunk) {
-            return 0;
-        }
-    }
-    for (i = 0; i < dispatch->memory_dispatch.count; i++) {
-        const struct wvm_runtime_memory_dispatch *entry =
-            &dispatch->memory_dispatch.entries[i];
-        uint64_t first_chunk = entry->gpa_start / legacy_chunk_bytes;
-        uint64_t chunk_count = entry->bytes / legacy_chunk_bytes;
-        uint64_t chunk;
-
-        for (chunk = 0; chunk < chunk_count; chunk++) {
-            wvm_set_memory_mapping((int)(first_chunk + chunk),
-                                   entry->directory.destination_vnode);
-        }
-    }
-    return 1;
-}
-
-static int runtime_dispatch_legacy_vnode_count(
-    const struct wvm_runtime_dispatch_projection *dispatch,
-    uint32_t *count_out)
-{
-    uint32_t maximum;
-    size_t i;
-
-    if (!dispatch || !count_out ||
-        dispatch->route_topology_kind != WVM_ROUTE_TOPOLOGY_FLAT ||
-        dispatch->local_primary.destination_kind !=
-            WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE ||
-        dispatch->local_primary.destination_scope != 0) {
-        return -1;
-    }
-    maximum = dispatch->local_primary.destination_vnode;
-    for (i = 0; i < dispatch->cpu_dispatch.count; i++) {
-        const struct wvm_runtime_route_destination *destination =
-            &dispatch->cpu_dispatch.entries[i].executor;
-
-        if (destination->destination_kind !=
-                WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE ||
-            destination->destination_scope != 0) {
-            return -1;
-        }
-        if (destination->destination_vnode > maximum) {
-            maximum = destination->destination_vnode;
-        }
-    }
-    for (i = 0; i < dispatch->memory_dispatch.count; i++) {
-        const struct wvm_runtime_memory_dispatch *entry =
-            &dispatch->memory_dispatch.entries[i];
-
-        if (entry->directory.destination_kind !=
-                WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE ||
-            entry->directory.destination_scope != 0 ||
-            entry->executor.destination_kind !=
-                WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE ||
-            entry->executor.destination_scope != 0) {
-            return -1;
-        }
-        if (entry->directory.destination_vnode > maximum) {
-            maximum = entry->directory.destination_vnode;
-        }
-        if (entry->executor.destination_vnode > maximum) {
-            maximum = entry->executor.destination_vnode;
-        }
-    }
-    if (maximum == UINT32_MAX) {
-        return -1;
-    }
-    *count_out = maximum + 1U;
-    return 0;
-}
+/* Legacy dispatch projections removed: typed runtime dispatch is now
+ * the single authority. The old logic_core fixed-size arrays were
+ * compatibility shims for Mode A kernel acceleration, but are no longer
+ * needed now that:
+ * 1. Typed dispatch is consumed directly by node runtime services
+ * 2. Mode A kernel contexts use per-VM hashtable registry
+ * 3. Route lookups use immutable route snapshots, not injected arrays
+ */
 
 static int apply_runtime_dispatch(void)
 {
     const struct wvm_runtime_dispatch_projection *dispatch;
     uint32_t sidecar_ip = 0;
-    uint32_t legacy_vnode_count;
     size_t i;
 
     if (!g_runtime_dispatch_active) {
@@ -278,12 +186,12 @@ static int apply_runtime_dispatch(void)
     dispatch = &g_runtime_dispatch_storage.projection;
 
     /*
-     * A fractal route has no lossless representation in the legacy logic-core
-     * arrays: the pod/scope is part of the destination identity.  The local
-     * node-runtime services already consume the typed projection, so the only
-     * compatibility state needed here is the local sidecar endpoint.  Keep
-     * the legacy route cache entirely out of this path instead of flattening a
-     * scoped destination into a raw vnode.
+     * Typed runtime dispatch is now the single authority for routing.
+     * Legacy logic-core route arrays are compatibility shims only needed
+     * for flat topology Mode A kernel acceleration.
+     *
+     * For fractal routes, only configure the local sidecar gateway endpoint.
+     * The immutable route snapshot remains the cross-node routing authority.
      */
     if (dispatch->route_topology_kind == WVM_ROUTE_TOPOLOGY_FRACTAL) {
         memcpy(&sidecar_ip, dispatch->local_sidecar_endpoint.data_address,
@@ -299,29 +207,16 @@ static int apply_runtime_dispatch(void)
             sidecar_ip, htons(dispatch->local_sidecar_endpoint.data_port));
         return 0;
     }
-    if (runtime_dispatch_legacy_vnode_count(dispatch, &legacy_vnode_count) !=
-        0) {
-        /*
-         * The legacy logic-core route arrays have no Pod/scope dimension.
-         * Do not flatten a fractal admitted route into raw vnode IDs.
-         */
-        return -1;
-    }
+
+    /* Flat topology: configure sidecar and populate legacy route caches */
     memcpy(&sidecar_ip, dispatch->local_sidecar_endpoint.data_address,
            sizeof(sidecar_ip));
 
     /*
-     * The node runtime has exactly one fabric peer: its local sidecar.  Each
-     * compatibility target entry deliberately resolves to that peer; the
-     * immutable route snapshot remains the cross-node routing authority.
+     * For flat routes, populate legacy logic_core arrays for backward
+     * compatibility. The node runtime has exactly one fabric peer: its
+     * local sidecar. Route lookups use the immutable route snapshot.
      */
-    for (i = 0; i < legacy_vnode_count; i++) {
-        u_ops.set_gateway_ip(WVM_ENCODE_ID(g_my_vm_id, (uint32_t)i),
-                             sidecar_ip,
-                             htons(dispatch->local_sidecar_endpoint.data_port));
-    }
-
-    wvm_set_mem_mapping(0, legacy_vnode_count);
     wvm_clear_cpu_mappings();
     wvm_clear_memory_mappings();
     for (i = 0; i < dispatch->cpu_dispatch.count; i++) {
@@ -333,6 +228,15 @@ static int apply_runtime_dispatch(void)
         wvm_set_cpu_mapping(
             (int)dispatch->cpu_dispatch.entries[i].guest_vcpu_index,
             dispatch->cpu_dispatch.entries[i].executor.destination_vnode);
+
+        /* Set gateway for this vnode to local sidecar */
+        if (u_ops.set_gateway_ip) {
+            u_ops.set_gateway_ip(
+                WVM_ENCODE_ID(g_my_vm_id,
+                             dispatch->cpu_dispatch.entries[i].executor.destination_vnode),
+                sidecar_ip,
+                htons(dispatch->local_sidecar_endpoint.data_port));
+        }
     }
     for (i = 0; i < dispatch->memory_dispatch.count; i++) {
         const struct wvm_runtime_memory_dispatch *entry =
@@ -343,9 +247,16 @@ static int apply_runtime_dispatch(void)
             0) {
             return -1;
         }
+
+        /* Set gateway for memory directory vnode to local sidecar */
+        if (u_ops.set_gateway_ip) {
+            u_ops.set_gateway_ip(
+                WVM_ENCODE_ID(g_my_vm_id, entry->directory.destination_vnode),
+                sidecar_ip,
+                htons(dispatch->local_sidecar_endpoint.data_port));
+        }
     }
-    g_runtime_dispatch_kernel_memory_cache =
-        runtime_dispatch_populate_legacy_memory_cache(dispatch);
+    /* Legacy kernel memory cache removed: typed dispatch is authoritative */
     return 0;
 }
 
@@ -1608,12 +1519,31 @@ int wavevm_master_runtime_main(
 
     my_virtual_id = (int)runtime->local_primary_vnode;
     total_vnodes = 0;
-    if (flat_route_cache_enabled &&
-        runtime_dispatch_legacy_vnode_count(runtime->dispatch,
-                                             &total_vnodes) != 0) {
-        fprintf(stderr, "[-] Admitted flat route projection is invalid\n");
-        return 1;
+
+    /* Calculate total vnodes from dispatch projection for flat topology */
+    if (flat_route_cache_enabled) {
+        uint32_t max_vnode = runtime->local_primary_vnode;
+        size_t i;
+
+        for (i = 0; i < runtime->dispatch->cpu_dispatch.count; i++) {
+            uint32_t vnode = runtime->dispatch->cpu_dispatch.entries[i].executor.destination_vnode;
+            if (vnode > max_vnode) {
+                max_vnode = vnode;
+            }
+        }
+        for (i = 0; i < runtime->dispatch->memory_dispatch.count; i++) {
+            uint32_t dir_vnode = runtime->dispatch->memory_dispatch.entries[i].directory.destination_vnode;
+            uint32_t exec_vnode = runtime->dispatch->memory_dispatch.entries[i].executor.destination_vnode;
+            if (dir_vnode > max_vnode) {
+                max_vnode = dir_vnode;
+            }
+            if (exec_vnode > max_vnode) {
+                max_vnode = exec_vnode;
+            }
+        }
+        total_vnodes = max_vnode + 1;
     }
+
     if (user_backend_init(my_virtual_id, local_port, runtime) != 0) {
         fprintf(stderr, "[-] Failed to initialize admitted user backend.\n");
         return 1;
@@ -1667,13 +1597,7 @@ int wavevm_master_runtime_main(
         inject_mem_global(0, total_vnodes);
         inject_mem_global(1, (uint32_t)my_virtual_id);
         inject_cpu_route_table();
-        if (g_runtime_dispatch_kernel_memory_cache) {
-            inject_memory_route_table();
-        } else if (g_dev_fd >= 0) {
-            fprintf(stderr,
-                    "[RuntimeDispatch] skipped legacy Mode A memory cache for "
-                    "non-1GiB manifest ranges\n");
-        }
+        inject_memory_route_table();
     } else {
         fprintf(stderr,
                 "[RuntimeDispatch] fractal projection uses typed node-runtime "
