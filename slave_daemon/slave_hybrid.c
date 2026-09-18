@@ -1333,6 +1333,9 @@ static int execute_tcg_executor_session(
         return sent < 0 ? -errno : -EIO;
     }
 
+    /* Poll with total deadline per vcpu-handoff.md contract (30s) */
+    int attempts = 0;
+    const int max_attempts = 300; /* 30 seconds at 100ms intervals */
     for (;;) {
         struct pollfd descriptor = {.fd = fd, .events = POLLIN};
         int poll_result = poll(&descriptor, 1, 100);
@@ -1347,6 +1350,13 @@ static int execute_tcg_executor_session(
             return -errno;
         }
         if (poll_result == 0) {
+            if (++attempts >= max_attempts) {
+                if (error && error_len != 0) {
+                    snprintf(error, error_len,
+                             "TCG executor session timeout (no response in 30s)");
+                }
+                return -ETIMEDOUT;
+            }
             continue;
         }
         if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
@@ -3634,7 +3644,7 @@ int wavevm_executor_runtime_main(
     printf("[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)\n");
     printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d, VM=%u\n",
            g_service_port, g_num_cores, g_ram_mb, g_base_id, (unsigned)g_slave_vm_id);
-    
+
     init_kvm_global();
     if (g_kernel_context_bind_failed) {
         fprintf(stderr,
@@ -3644,7 +3654,28 @@ int wavevm_executor_runtime_main(
         return 1;
     }
 
-    if (g_kvm_available) {
+    /* Select backend from manifest, not host capability auto-detection */
+    enum wvm_manifest_backend admitted_backend =
+        g_executor_manifest_storage.manifest.negotiated_profile.backend;
+    int use_kvm = 0;
+
+    if (admitted_backend == WVM_MANIFEST_BACKEND_KVM) {
+        if (!g_kvm_available) {
+            fprintf(stderr,
+                    "[Backend] Manifest requires KVM but /dev/kvm is unavailable\n");
+            executor_publish_startup_state(EXECUTOR_FAILED);
+            return 1;
+        }
+        use_kvm = 1;
+    } else if (admitted_backend == WVM_MANIFEST_BACKEND_TCG) {
+        use_kvm = 0;
+    } else {
+        fprintf(stderr, "[Backend] Unknown manifest backend %d\n", admitted_backend);
+        executor_publish_startup_state(EXECUTOR_FAILED);
+        return 1;
+    }
+
+    if (use_kvm) {
         if (g_executor_local_only) {
             struct wvm_kvm_page_cache_config cache_config;
             uint64_t guest_bytes =

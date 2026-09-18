@@ -241,20 +241,34 @@ struct wvm_inval_work {
 /* Forward declaration */
 static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx);
 
+/*
+ * Find and reference an active context by vm_id. Caller must hold g_context_mutex.
+ * Returns context with refs incremented, or NULL if not found.
+ */
+static struct wvm_kernel_context *wvm_kernel_find_context_locked(uint32_t vm_id)
+{
+    struct wvm_kernel_context *ctx;
+
+    hash_for_each_possible(g_context_registry, ctx, hash_node, vm_id) {
+        if (ctx->active && ctx->identity.vm_id == vm_id) {
+            atomic_inc(&ctx->refs);
+            return ctx;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Convenience wrapper: find and reference a context with internal locking.
+ */
 static struct wvm_kernel_context *wvm_kernel_find_context(uint32_t vm_id)
 {
     struct wvm_kernel_context *ctx;
 
     mutex_lock(&g_context_mutex);
-    hash_for_each_possible(g_context_registry, ctx, hash_node, vm_id) {
-        if (ctx->active && ctx->identity.vm_id == vm_id) {
-            atomic_inc(&ctx->refs);
-            mutex_unlock(&g_context_mutex);
-            return ctx;
-        }
-    }
+    ctx = wvm_kernel_find_context_locked(vm_id);
     mutex_unlock(&g_context_mutex);
-    return NULL;
+    return ctx;
 }
 
 static void wvm_kernel_put_context(struct wvm_kernel_context *ctx)
@@ -265,10 +279,18 @@ static void wvm_kernel_put_context(struct wvm_kernel_context *ctx)
     }
 }
 
+/*
+ * Pure allocator: caller must hold g_context_mutex and handle registry publish.
+ * Returns with refcount=1, active=0. Caller is responsible for:
+ *   - hash_add(g_context_registry, &ctx->hash_node, vm_id)
+ *   - g_active_context_count++
+ *   - setting ctx->active = 1 after full initialization
+ */
 static struct wvm_kernel_context *wvm_kernel_allocate_context(uint32_t vm_id)
 {
     struct wvm_kernel_context *ctx;
     int cpu;
+    uint32_t i;
 
     ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
     if (!ctx)
@@ -276,7 +298,7 @@ static struct wvm_kernel_context *wvm_kernel_allocate_context(uint32_t vm_id)
 
     ctx->identity.vm_id = vm_id;
     atomic_set(&ctx->refs, 1);
-    ctx->active = 0;  /* Not active until fully initialized */
+    ctx->active = 0;  /* Caller sets to 1 after publish */
     ctx->transport = g_shared_transport;
     INIT_RADIX_TREE(&ctx->page_tree, GFP_ATOMIC);
     spin_lock_init(&ctx->page_tree_lock);
@@ -299,21 +321,22 @@ static struct wvm_kernel_context *wvm_kernel_allocate_context(uint32_t vm_id)
     if (!ctx->id_pool)
         goto fail_req_ctx;
 
+    /* F09 fix: populate per-CPU ID pools with usable IDs [0..MAX_IDS_PER_CPU) */
     for_each_online_cpu(cpu) {
         struct id_pool_t *pool = per_cpu_ptr(ctx->id_pool, cpu);
         spin_lock_init(&pool->lock);
         pool->ids = vzalloc(sizeof(uint32_t) * MAX_IDS_PER_CPU);
         if (!pool->ids)
             goto fail_id_pool;
+        /* Populate the free list with all valid local IDs */
+        for (i = 0; i < MAX_IDS_PER_CPU; i++) {
+            pool->ids[i] = i;
+        }
         pool->head = 0;
-        pool->tail = 0;
+        pool->tail = MAX_IDS_PER_CPU;  /* All IDs available */
     }
 
-    mutex_lock(&g_context_mutex);
-    hash_add(g_context_registry, &ctx->hash_node, vm_id);
-    g_active_context_count++;
-    mutex_unlock(&g_context_mutex);
-
+    /* No registry publish here; caller does hash_add + g_active_context_count++ */
     return ctx;
 
 fail_id_pool:
@@ -1861,15 +1884,16 @@ static int wvm_context_bind_file(
             mutex_unlock(&g_context_mutex);
             return -EINVAL;
         }
+        /* Allocator now requires caller to hold mutex and publish */
         ctx = wvm_kernel_allocate_context(identity.vm_id);
         if (!ctx) {
             mutex_unlock(&g_context_mutex);
             return -ENOMEM;
         }
         ctx->identity = identity;
-        ctx->active = 1;
         hash_add(g_context_registry, &ctx->hash_node, identity.vm_id);
         g_active_context_count++;
+        ctx->active = 1;  /* Mark active after registry publish */
     }
 
     file_context->context = ctx;
@@ -1917,12 +1941,16 @@ static int wvm_context_unbind_file(
 static int wvm_context_accepts_vm_id(uint32_t vm_id)
 {
     struct wvm_kernel_context *ctx;
-    int result = 0;
+    int result = -EPERM;
 
     mutex_lock(&g_context_mutex);
-    ctx = wvm_kernel_find_context(vm_id);
-    if (!ctx || !ctx->active || ctx->identity.vm_id != vm_id)
-        result = -EPERM;
+    /* Direct hash lookup without calling find_context (avoids nested lock) */
+    hash_for_each_possible(g_context_registry, ctx, hash_node, vm_id) {
+        if (ctx->active && ctx->identity.vm_id == vm_id) {
+            result = 0;
+            break;
+        }
+    }
     mutex_unlock(&g_context_mutex);
     return result;
 }
@@ -2000,7 +2028,7 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         memset(&caps, 0, sizeof(caps));
         caps.magic = WVM_KERNEL_CONTEXT_MAGIC;
         caps.version = WVM_KERNEL_CONTEXT_ABI_VERSION;
-        caps.max_concurrent_contexts = 0;  /* Dynamic registry, no fixed limit */
+        caps.max_concurrent_contexts = 65535;  /* Large finite value for dynamic registry */
         mutex_lock(&g_context_mutex);
         caps.active_contexts = g_active_context_count;
         mutex_unlock(&g_context_mutex);
@@ -2187,20 +2215,25 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         }
 
         /* Find existing context or allocate new one */
-        context = wvm_kernel_find_context(vm_id);
+        mutex_lock(&g_context_mutex);
+        context = wvm_kernel_find_context_locked(vm_id);
         if (!context) {
             context = wvm_kernel_allocate_context(vm_id);
             if (!context) {
+                mutex_unlock(&g_context_mutex);
                 ret = -ENOMEM;
                 goto out;
             }
+            hash_add(g_context_registry, &context->hash_node, vm_id);
+            g_active_context_count++;
+            context->active = 1;
+        } else {
+            /* find_context_locked already incremented refs */
         }
+        mutex_unlock(&g_context_mutex);
 
-        /* Mark context as active */
-        context->active = 1;
-
-        /* Release the reference we acquired from find_context */
-        if (context->active)
+        /* Release the reference we acquired from find_context_locked */
+        if (context)
             wvm_kernel_put_context(context);
 
         /* Update legacy global for compatibility - will be removed */

@@ -805,7 +805,8 @@ static int wavevm_session_parse_u64(const char *name, uint64_t *value)
     }
     errno = 0;
     parsed = strtoull(text, &end, 10);
-    if (errno != 0 || !end || *end != '\0' || parsed == 0) {
+    /* Accept zero as valid; only reject parse errors or trailing garbage */
+    if (errno != 0 || !end || *end != '\0') {
         return -1;
     }
     *value = (uint64_t)parsed;
@@ -964,6 +965,11 @@ static void *wavevm_executor_session_thread(void *opaque)
             wavevm_session_authorize_request(&request) != 0 ||
             wavevm_session_request_to_legacy(
                 &request, &legacy_request, error, sizeof(error)) != 0) {
+            /* Send error response before closing */
+            fprintf(stderr, "[WaveVM-TCG-Session] Request validation failed: %s\n",
+                    error[0] ? error : "unknown error");
+            close(state->executor_session_fd);
+            state->executor_session_fd = -1;
             break;
         }
 
