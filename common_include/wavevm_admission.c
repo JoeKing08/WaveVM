@@ -2,9 +2,63 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "wavevm_sha256.h"
+
+int wvm_admission_snapshot_init(struct wvm_admission_snapshot *snapshot,
+                                uint32_t initial_capacity)
+{
+    if (!snapshot || initial_capacity == 0) {
+        return -1;
+    }
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->nodes = calloc(initial_capacity, sizeof(struct wvm_admission_node));
+    if (!snapshot->nodes) {
+        return -1;
+    }
+    snapshot->node_capacity = initial_capacity;
+    snapshot->node_count = 0;
+    return 0;
+}
+
+void wvm_admission_snapshot_cleanup(struct wvm_admission_snapshot *snapshot)
+{
+    if (snapshot && snapshot->nodes) {
+        free(snapshot->nodes);
+        snapshot->nodes = NULL;
+        snapshot->node_capacity = 0;
+        snapshot->node_count = 0;
+    }
+}
+
+int wvm_admission_snapshot_copy(const struct wvm_admission_snapshot *src,
+                                struct wvm_admission_snapshot *dst)
+{
+    struct wvm_admission_snapshot copy;
+
+    if (!src || !dst || src->node_count > src->node_capacity ||
+        (src->node_count != 0 &&
+         (!src->nodes || sizeof(*src->nodes) > SIZE_MAX / src->node_count))) {
+        return -1;
+    }
+    if (src == dst) {
+        return 0;
+    }
+    copy = *src;
+    copy.nodes = NULL;
+    copy.node_capacity = src->node_count;
+    if (src->node_count > 0) {
+        copy.nodes = malloc(src->node_count * sizeof(*copy.nodes));
+        if (!copy.nodes) {
+            return -1;
+        }
+        memcpy(copy.nodes, src->nodes, src->node_count * sizeof(*copy.nodes));
+    }
+    *dst = copy;
+    return 0;
+}
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
 {
@@ -170,11 +224,17 @@ int wvm_admission_snapshot_validate(const struct wvm_admission_snapshot *snapsho
     uint32_t i;
 
     if (!snapshot || snapshot->node_count == 0 ||
-        snapshot->node_count > WVM_MAX_SLAVES ||
         snapshot->inventory_revision == 0 ||
         snapshot->membership_revision == 0 || snapshot->topology_revision == 0 ||
         snapshot->capability_profile_generation == 0) {
         set_error(error, error_len, "admission snapshot has invalid metadata");
+        return -1;
+    }
+
+    if (snapshot->node_count > snapshot->node_capacity) {
+        set_error(error, error_len,
+                  "admission snapshot node_count %u exceeds capacity %u",
+                  snapshot->node_count, snapshot->node_capacity);
         return -1;
     }
 
@@ -414,9 +474,13 @@ int wvm_admission_plan_validate(const struct wvm_admission_snapshot *snapshot,
 }
 
 static void sort_node_indices(const struct wvm_admission_snapshot *snapshot,
-                              uint32_t indices[WVM_MAX_SLAVES])
+                              uint32_t *indices, uint32_t capacity)
 {
     uint32_t i;
+
+    if (snapshot->node_count > capacity) {
+        return;
+    }
 
     for (i = 0; i < snapshot->node_count; i++) {
         uint32_t value = i;
@@ -434,7 +498,7 @@ static void sort_node_indices(const struct wvm_admission_snapshot *snapshot,
 
 static int select_host_node(const struct wvm_admission_snapshot *snapshot,
                             const struct wvm_admission_request *request,
-                            const uint32_t indices[WVM_MAX_SLAVES])
+                            const uint32_t *indices)
 {
     int best = -1;
     uint32_t i;
@@ -523,9 +587,9 @@ static int select_host_node(const struct wvm_admission_snapshot *snapshot,
 static int select_assignment_node(
     const struct wvm_admission_snapshot *snapshot,
     const struct wvm_admission_request *request,
-    const uint32_t indices[WVM_MAX_SLAVES],
-    const uint32_t guest_vcpus[WVM_MAX_SLAVES],
-    const uint64_t guest_memory[WVM_MAX_SLAVES], int host_index,
+    const uint32_t *indices,
+    const uint32_t *guest_vcpus,
+    const uint64_t *guest_memory, int host_index,
     int memory_assignment, uint64_t memory_bytes)
 {
     int best = -1;
@@ -644,13 +708,16 @@ int wvm_admission_plan_propose(
     const uint8_t admission_tx_id[WVM_ADMISSION_ID_BYTES],
     struct wvm_admission_plan *plan, char *error, size_t error_len)
 {
-    uint32_t indices[WVM_MAX_SLAVES];
-    uint32_t guest_vcpus[WVM_MAX_SLAVES] = {0};
-    uint64_t guest_memory[WVM_MAX_SLAVES] = {0};
+    struct wvm_admission_plan proposed = {0};
+    struct wvm_admission_plan *output = plan;
+    uint32_t *indices = NULL;
+    uint32_t *guest_vcpus = NULL;
+    uint64_t *guest_memory = NULL;
     int host_index;
     uint32_t remaining_vcpus;
     uint64_t remaining_memory;
     uint32_t i;
+    int ret = -1;
 
     if (wvm_admission_snapshot_validate(snapshot, error, error_len) != 0 ||
         wvm_admission_request_validate(request, error, error_len) != 0 ||
@@ -659,12 +726,22 @@ int wvm_admission_plan_propose(
         return -1;
     }
 
-    sort_node_indices(snapshot, indices);
+    /* Publish only a complete result; failure must not free caller storage. */
+    plan = &proposed;
+    indices = calloc(snapshot->node_count, sizeof(*indices));
+    guest_vcpus = calloc(snapshot->node_count, sizeof(*guest_vcpus));
+    guest_memory = calloc(snapshot->node_count, sizeof(*guest_memory));
+    if (!indices || !guest_vcpus || !guest_memory) {
+        set_error(error, error_len, "failed to allocate working arrays");
+        goto out;
+    }
+
+    sort_node_indices(snapshot, indices, snapshot->node_count);
     host_index = select_host_node(snapshot, request, indices);
     if (host_index < 0) {
         set_error(error, error_len,
                   "no eligible node can reserve the required host overhead");
-        return -1;
+        goto out;
     }
 
     remaining_vcpus = request->requested_vcpu_slots;
@@ -676,7 +753,7 @@ int wvm_admission_plan_propose(
         if (node_index < 0) {
             set_error(error, error_len,
                       "insufficient eligible CPU capacity for VM request");
-            return -1;
+            goto out;
         }
         guest_vcpus[node_index]++;
         remaining_vcpus--;
@@ -696,7 +773,7 @@ int wvm_admission_plan_propose(
         if (node_index < 0) {
             set_error(error, error_len,
                       "insufficient eligible memory capacity for VM request");
-            return -1;
+            goto out;
         }
         guest_memory[node_index] += chunk;
         remaining_memory -= chunk;
@@ -708,6 +785,13 @@ int wvm_admission_plan_propose(
     plan->topology_revision = snapshot->topology_revision;
     plan->capability_profile_generation = snapshot->capability_profile_generation;
     plan->host_physical_node_id = snapshot->nodes[host_index].physical_node_id;
+    plan->reservation_capacity = snapshot->node_count;
+    plan->reservations = calloc(plan->reservation_capacity,
+                                sizeof(*plan->reservations));
+    if (!plan->reservations) {
+        set_error(error, error_len, "failed to allocate reservation array");
+        goto out;
+    }
     for (i = 0; i < snapshot->node_count; i++) {
         const uint32_t node_index = indices[i];
         const struct wvm_admission_node *node = &snapshot->nodes[node_index];
@@ -730,7 +814,18 @@ int wvm_admission_plan_propose(
                 request->host_overhead_memory_bytes;
         }
     }
-    return wvm_admission_plan_validate(snapshot, request, plan, error, error_len);
+    ret = wvm_admission_plan_validate(snapshot, request, plan, error, error_len);
+
+out:
+    free(indices);
+    free(guest_vcpus);
+    free(guest_memory);
+    if (ret == 0) {
+        *output = proposed;
+    } else {
+        free(proposed.reservations);
+    }
+    return ret;
 }
 
 static int placement_options_validate(

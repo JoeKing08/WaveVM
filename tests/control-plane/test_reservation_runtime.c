@@ -44,7 +44,7 @@ int main(void)
 {
     struct wvm_admission_node node;
     struct wvm_admission_node other_node;
-    struct wvm_resource_reservation stored[4];
+    struct wvm_resource_reservation stored[5];
     struct wvm_resource_reservation other_stored[2];
     struct wvm_resource_reservation first;
     struct wvm_resource_reservation conflicting;
@@ -129,7 +129,7 @@ int main(void)
     replay_mismatch.exclusive_leases.entries = &conflict_lease;
 
     if (expect(wvm_local_reservation_registry_init(
-                   &registry, &node, stored, 4, error, sizeof(error)) == 0,
+                   &registry, &node, stored, 5, error, sizeof(error)) == 0,
                "initialize registry") ||
         expect(wvm_local_reservation_prepare(
                    &registry, &first, &result, error, sizeof(error)) == 0 &&
@@ -153,7 +153,7 @@ int main(void)
         return 1;
     }
     if (expect(wvm_local_reservation_abort(
-                   &registry, distinct.reservation_id, &result, error,
+                   &registry, &distinct, &result, error,
                    sizeof(error)) == 0,
                "release distinct reservation before reuse checks")) {
         wvm_local_reservation_registry_destroy(&registry);
@@ -187,11 +187,11 @@ int main(void)
         return 1;
     }
     if (expect(wvm_local_reservation_abort(
-                   &registry, mode_b_first.reservation_id, &result, error,
+                   &registry, &mode_b_first, &result, error,
                    sizeof(error)) == 0,
                "release first Mode B reservation") ||
         expect(wvm_local_reservation_abort(
-                   &registry, mode_b_second.reservation_id, &result, error,
+                   &registry, &mode_b_second, &result, error,
                    sizeof(error)) == 0,
                "release second Mode B reservation")) {
         wvm_local_reservation_registry_destroy(&other_registry);
@@ -222,11 +222,11 @@ int main(void)
         activation.required_route_snapshot_count = 1;
         activation.required_route_snapshot_capacity = 1;
         if (expect(wvm_local_reservation_commit(
-                       &registry, first.reservation_id, &activation, &result,
+                       &registry, &first, &activation, &result,
                        error, sizeof(error)) != 0,
                    "reject mismatched activation") ||
             expect(wvm_local_reservation_abort(
-                       &registry, first.reservation_id, &result, error,
+                       &registry, &first, &result, error,
                        sizeof(error)) == 0,
                    "release the first kernel context lease") ||
             expect(wvm_local_reservation_prepare(
@@ -235,7 +235,7 @@ int main(void)
                        result == WVM_RESERVATION_RUNTIME_NEW,
                    "reuse the kernel context lease after release") ||
             expect(wvm_local_reservation_abort(
-                       &registry, conflicting.reservation_id, &result, error,
+                       &registry, &conflicting, &result, error,
                        sizeof(error)) == 0,
                    "release the reused kernel context lease") ||
             expect(wvm_local_reservation_reap_expired(&registry, 100) == 0,

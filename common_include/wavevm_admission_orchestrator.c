@@ -183,9 +183,13 @@ static int abort_pre_activation(
 {
     int cleanup_failed = 0;
     char cleanup_error[256] = {0};
+    struct wvm_coordinator_activation_options options;
 
-    if (wvm_coordinator_decide_abort(
-            transaction, input->activation_options, input->prepared_vm,
+    if (wvm_control_plane_activation_options(
+            input->control_plane, input->coordinator_instance_id, &options,
+            error, error_len) != 0 ||
+        wvm_coordinator_decide_abort(
+            transaction, &options, input->prepared_vm,
             input->activation, error, error_len) != 0 ||
         wvm_control_plane_record_activation(
             input->control_plane, transaction, input->activation, error,
@@ -237,8 +241,13 @@ static int abort_unpersisted_local(
     struct wvm_coordinator_transaction *transaction, char *error,
     size_t error_len)
 {
-    if (wvm_coordinator_decide_abort(
-            transaction, input->activation_options, input->prepared_vm,
+    struct wvm_coordinator_activation_options options;
+
+    if (wvm_control_plane_activation_options(
+            input->control_plane, input->coordinator_instance_id, &options,
+            error, error_len) != 0 ||
+        wvm_coordinator_decide_abort(
+            transaction, &options, input->prepared_vm,
             input->activation, error, error_len) != 0 ||
         wvm_coordinator_abort_local(transaction, input->prepared_vm,
                                     input->activation, error, error_len) != 0) {
@@ -287,7 +296,7 @@ static int prepared_input_valid(
           !input->refresh_input)) ||
         !input->prepared_route ||
         !input->prepare_options || !input->prepared_vm ||
-        !input->activation_options || !input->activation ||
+        input->coordinator_instance_id == 0 || !input->activation ||
         !input->route_transaction || !input->route_snapshot) {
         set_error(error, error_len,
                   "admission authority did not supply complete planning input");
@@ -349,6 +358,7 @@ int wvm_admission_orchestrator_run(
     enum wvm_control_plane_submit_result submit_result;
     struct wvm_coordinator_transaction *transaction;
     struct wvm_cluster_record_set captured_records;
+    struct wvm_coordinator_activation_options activation_options;
     const struct wvm_cluster_record_set *records;
     int route_prepared = 0;
     int candidate_durable = 0;
@@ -470,23 +480,29 @@ int wvm_admission_orchestrator_run(
             WVM_LIFECYCLE_PARTICIPANTS_PREPARED, error, error_len) != 0 ||
         (refresh_membership_evidence(input, WVM_ADMISSION_INPUT_ACTIVATION,
                                     transaction, error, error_len) != 0) ||
+        wvm_control_plane_activation_options(
+            input->control_plane, input->coordinator_instance_id,
+            &activation_options, error, error_len) != 0 ||
         (input->membership_controller
              ? wvm_coordinator_decide_activation_current_membership(
                    input->membership_controller, input->membership_capture,
                    input->membership_evidence, input->request, transaction,
                    input->prepared_route, input->id_provider,
-                   input->activation_options, input->prepared_vm,
+                   &activation_options, input->prepared_vm,
                    input->activation, error, error_len)
              : wvm_coordinator_decide_activation(
                    input->request, transaction, records,
                    input->prepared_route, input->id_provider,
-                   input->activation_options, input->prepared_vm,
-                   input->activation, error, error_len)) != 0 ||
-        wvm_control_plane_record_activation(input->control_plane, transaction,
-                                            input->activation, error,
-                                            error_len) != 0) {
+                   &activation_options, input->prepared_vm,
+                   input->activation, error, error_len)) != 0) {
         return abort_pre_activation(input, transaction, route_prepared, error,
                                     error_len);
+    }
+    /* A failed write may still have persisted ACTIVATE. Never send ABORT. */
+    if (wvm_control_plane_record_activation(input->control_plane, transaction,
+                                            input->activation, error,
+                                            error_len) != 0) {
+        return -1;
     }
 
     /* From this point the durable activation decision is authoritative. */

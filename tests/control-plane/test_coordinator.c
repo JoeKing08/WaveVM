@@ -1,18 +1,62 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "wavevm_canonical.h"
 #include "wavevm_control_plane.h"
 #include "wavevm_coordinator.h"
 #include "wavevm_admission_orchestrator.h"
+#include "wavevm_admission_receiver.h"
 #include "wavevm_membership.h"
 #include "wavevm_reservation_runtime.h"
 #include "wavevm_runtime_names.h"
 
 #define MIB (1024ULL * 1024ULL)
+
+static int fail_fsync_after = -1;
+static int fail_write_fd = -1;
+static size_t write_budget;
+ssize_t __real_write(int fd, const void *bytes, size_t count);
+ssize_t __wrap_write(int fd, const void *bytes, size_t count)
+{
+    ssize_t result;
+
+    if (fd != fail_write_fd) {
+        return __real_write(fd, bytes, count);
+    }
+    if (write_budget == 0) {
+        errno = EIO;
+        return -1;
+    }
+    if (count > write_budget) {
+        count = write_budget;
+    }
+    result = __real_write(fd, bytes, count);
+    if (result > 0) {
+        write_budget -= (size_t)result;
+    }
+    return result;
+}
+
+int __real_fsync(int fd);
+int __wrap_fsync(int fd)
+{
+    if (fail_fsync_after == 0) {
+        fail_fsync_after = -1;
+        errno = EIO;
+        return -1;
+    }
+    if (fail_fsync_after > 0) {
+        fail_fsync_after--;
+    }
+    return __real_fsync(fd);
+}
+
+#include "../../ctl_tool/admission_workspace.h"
 
 struct id_provider_context {
     uint8_t next_id;
@@ -116,6 +160,7 @@ static int fill_node(struct wvm_node_record *node, uint32_t node_id,
     fill_endpoint(&node->sidecar_endpoint, (uint8_t)node_id,
                   (uint16_t)(9200 + node_id), (uint16_t)(9300 + node_id));
     node->role_bits = 1;
+    node->local_vnode_first = node_id * 16;
     node->local_vnode_count = 16;
     node->inventory.physical_node_id = node_id;
     node->inventory.node_instance_id = node_instance;
@@ -281,6 +326,7 @@ static void initialize_prepared_vm(struct wvm_coordinator_prepared_vm *prepared,
 {
     size_t i;
 
+    wvm_coordinator_prepared_vm_cleanup(prepared);
     memset(prepared, 0, sizeof(*prepared));
     prepared->fence.selected_members.entries = buffers->selected_members;
     prepared->fence.selected_members.capacity =
@@ -354,7 +400,7 @@ static int build_prepared_route(
     const struct wvm_coordinator_transaction *transaction,
     const struct wvm_cluster_record_set *records,
     const struct wvm_gateway_record *gateway,
-    struct wvm_route_rule_record route_rules[1],
+    struct wvm_route_rule_record route_rules[3],
     struct wvm_required_ack_entry ack_entries[1],
     struct wvm_route_snapshot_record *snapshot,
     struct wvm_coordinator_prepared_route *prepared_route, char *error,
@@ -364,7 +410,8 @@ static int build_prepared_route(
     uint8_t digest[WVM_SHA256_DIGEST_BYTES];
     size_t encoded_bytes;
 
-    if (!transaction || !records || !gateway || !route_rules || !ack_entries ||
+    if (!transaction || !records || records->node_count > 2 ||
+        !gateway || !route_rules || !ack_entries ||
         !snapshot || !prepared_route) {
         return -1;
     }
@@ -376,7 +423,7 @@ static int build_prepared_route(
     snapshot->topology_kind = WVM_ROUTE_TOPOLOGY_FLAT;
     snapshot->operation_retention_horizon_ms = 6000;
     snapshot->retirement_policy = 1;
-    memset(route_rules, 0, sizeof(*route_rules));
+    memset(route_rules, 0, 3 * sizeof(*route_rules));
     route_rules[0].destination_kind = WVM_ROUTE_DESTINATION_EXACT_VNODE;
     route_rules[0].destination_vnode_or_endpoint = gateway->gateway_id;
     route_rules[0].next_hop_kind = WVM_ROUTE_NEXT_HOP_GATEWAY;
@@ -385,9 +432,22 @@ static int build_prepared_route(
     route_rules[0].next_hop_member.instance_id = gateway->gateway_instance_id;
     route_rules[0].next_hop_endpoint = gateway->endpoint;
     route_rules[0].hop_limit = 1;
+    for (size_t i = 0; i < records->node_count; i++) {
+        const struct wvm_node_record *node = &records->nodes[i];
+        struct wvm_route_rule_record *rule = &route_rules[i + 1];
+
+        rule->destination_kind = WVM_ROUTE_DESTINATION_EXACT_VNODE;
+        rule->destination_vnode_or_endpoint = node->local_vnode_first;
+        rule->next_hop_kind = WVM_ROUTE_NEXT_HOP_ENDPOINT;
+        rule->next_hop_member = (struct wvm_member_key){
+            WVM_MANIFEST_ROLE_NODE_RUNTIME, node->physical_node_id,
+            node->node_instance_id};
+        rule->next_hop_endpoint = node->sidecar_endpoint;
+        rule->hop_limit = 1;
+    }
     snapshot->next_hop_rules.entries = route_rules;
-    snapshot->next_hop_rules.count = 1;
-    snapshot->next_hop_rules.capacity = 1;
+    snapshot->next_hop_rules.count = 1 + records->node_count;
+    snapshot->next_hop_rules.capacity = 3;
 
     memset(ack_entries, 0, sizeof(*ack_entries));
     ack_entries[0].member_key.role_type = WVM_MANIFEST_ROLE_GATEWAY;
@@ -461,10 +521,146 @@ static int persist_route_transaction_state(
                                                       error_len);
 }
 
+static int test_activation_durability(
+    struct wvm_control_plane *plane,
+    struct wvm_vm_namespace_allocator *allocator, const char *journal_path,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_activation_record *activation)
+{
+    const size_t torn_lengths[] = {1, 60, 65};
+    const struct wvm_control_plane_entry *entry;
+    struct wvm_activation_record changed = *activation;
+    struct wvm_coordinator_activation_options metadata = {9, 8, 7};
+    struct wvm_coordinator_activation_options old_metadata = metadata;
+    uint64_t sequence = plane->next_journal_sequence;
+    off_t prefix_size = lseek(plane->journal_fd, 0, SEEK_END);
+    uint16_t original_state;
+    uint16_t decided_state = activation->decision == WVM_ACTIVATION_ACTIVATE
+                                 ? WVM_LIFECYCLE_ACTIVATION_DECIDED
+                                 : WVM_LIFECYCLE_ABORTING;
+    char error[256] = {0};
+    size_t i;
+
+    entry = wvm_control_plane_find_request(plane, transaction->request_id);
+    if (!entry || prefix_size < 0) {
+        return -1;
+    }
+    original_state = entry->transaction.state;
+    changed.durable_decision_sequence++;
+    if (expect(wvm_control_plane_record_activation(
+                   plane, transaction, &changed, error, sizeof(error)) != 0 &&
+                   lseek(plane->journal_fd, 0, SEEK_END) == prefix_size &&
+                   plane->next_journal_sequence == sequence &&
+                   !plane->journal_failed,
+               "reject stale decision sequence without changing journal") ||
+        expect(wvm_control_plane_activation_options(
+                   plane, 0, &metadata, error, sizeof(error)) != 0 &&
+                   memcmp(&metadata, &old_metadata, sizeof(metadata)) == 0,
+               "missing owner preserves metadata output")) {
+        return -1;
+    }
+    plane->next_journal_sequence = UINT64_MAX;
+    if (expect(wvm_control_plane_activation_options(
+                   plane, 9, &metadata, error, sizeof(error)) != 0 &&
+                   memcmp(&metadata, &old_metadata, sizeof(metadata)) == 0,
+               "reject exhausted journal sequence")) {
+        return -1;
+    }
+    plane->next_journal_sequence = sequence;
+    for (i = 0; i < sizeof(torn_lengths) / sizeof(torn_lengths[0]); i++) {
+        fail_write_fd = plane->journal_fd;
+        write_budget = torn_lengths[i];
+        int result = wvm_control_plane_record_activation(
+            plane, transaction, activation, error, sizeof(error));
+        fail_write_fd = -1;
+        if (expect(result != 0 && plane->journal_failed &&
+                       plane->next_journal_sequence == sequence &&
+                       wvm_control_plane_find_request(plane, transaction->request_id)
+                               ->transaction.state == original_state,
+                   "partial decision write fences writer without deciding") ||
+            expect(wvm_control_plane_record_activation(
+                       plane, transaction, activation, error, sizeof(error)) != 0 &&
+                       wvm_control_plane_transition(
+                           plane, transaction, original_state,
+                           WVM_LIFECYCLE_ABORTING, error, sizeof(error)) != 0 &&
+                       lseek(plane->journal_fd, 0, SEEK_END) ==
+                           prefix_size + (off_t)torn_lengths[i],
+                   "uncertain writer cannot append a second decision or transition")) {
+            return -1;
+        }
+        wvm_control_plane_close(plane);
+        wvm_vm_namespace_allocator_init(allocator, allocator->records,
+                                        allocator->record_capacity, 1);
+        if (expect(wvm_control_plane_open(plane, journal_path, allocator, error,
+                                          sizeof(error)) == 0 &&
+                       !plane->journal_failed &&
+                       plane->next_journal_sequence == sequence &&
+                       lseek(plane->journal_fd, 0, SEEK_END) == prefix_size &&
+                       wvm_control_plane_find_request(plane, transaction->request_id)
+                               ->transaction.state == original_state,
+                   "reopen discards only torn decision and preserves prepared state")) {
+            return -1;
+        }
+    }
+    fail_fsync_after = 0;
+    if (expect(wvm_control_plane_record_activation(
+                   plane, transaction, activation, error, sizeof(error)) != 0 &&
+                   plane->journal_failed &&
+                   wvm_control_plane_activation_options(
+                       plane, 9, &metadata, error, sizeof(error)) != 0 &&
+                   wvm_control_plane_record_activation(
+                       plane, transaction, activation, error, sizeof(error)) != 0,
+               "complete write with failed fsync stays fenced until recovery")) {
+        return -1;
+    }
+    wvm_control_plane_close(plane);
+    wvm_vm_namespace_allocator_init(allocator, allocator->records,
+                                    allocator->record_capacity, 1);
+    for (i = 0; i < 2; i++) {
+        fail_fsync_after = (int)i;
+        if (expect(wvm_control_plane_open(plane, journal_path, allocator, error,
+                                         sizeof(error)) != 0 &&
+                       plane->journal_fd == -1 &&
+                       allocator->record_count == 0 &&
+                       wvm_control_plane_activation_options(
+                           plane, 9, &metadata, error, sizeof(error)) != 0,
+                   "recovery sync failure cannot reopen writer or restore namespaces")) {
+            fail_fsync_after = -1;
+            return -1;
+        }
+    }
+    if (expect(wvm_control_plane_open(plane, journal_path, allocator, error,
+                                      sizeof(error)) == 0 &&
+                   !plane->journal_failed &&
+                   plane->next_journal_sequence == sequence + 1 &&
+                   wvm_control_plane_find_request(plane, transaction->request_id)
+                           ->transaction.state == decided_state &&
+                   wvm_control_plane_find_request(plane, transaction->request_id)
+                           ->transaction.transaction_sequence == sequence,
+               "decision frame alone restores lifecycle after uncertain fsync")) {
+        fprintf(stderr, "activation recovery: %s\n", error);
+        return -1;
+    }
+    prefix_size = lseek(plane->journal_fd, 0, SEEK_END);
+    changed = *activation;
+    changed.decided_at++;
+    if (expect(wvm_control_plane_record_activation(
+                   plane, transaction, activation, error, sizeof(error)) == 0 &&
+                   wvm_control_plane_record_activation(
+                       plane, transaction, &changed, error, sizeof(error)) != 0 &&
+                   plane->next_journal_sequence == sequence + 1 &&
+                   lseek(plane->journal_fd, 0, SEEK_END) == prefix_size,
+               "exact decision replay succeeds without rewriting; conflicts reject")) {
+        return -1;
+    }
+    return 0;
+}
+
 enum orchestrator_test_failure {
     ORCHESTRATOR_TEST_NO_FAILURE = 0,
     ORCHESTRATOR_TEST_RESERVATION_PREPARE = 1,
     ORCHESTRATOR_TEST_PARTICIPANT_COMMIT = 2,
+    ORCHESTRATOR_TEST_ACTIVATION_FSYNC = 3,
 };
 
 struct orchestrator_test_hooks {
@@ -637,6 +833,10 @@ static int orchestrator_participant_prepare(
     (void)error;
     (void)error_len;
     hooks->participant_prepares++;
+    if (hooks->failure == ORCHESTRATOR_TEST_ACTIVATION_FSYNC) {
+        /* Persist PARTICIPANTS_PREPARED, then fail the decision's fsync. */
+        fail_fsync_after = 1;
+    }
     return 0;
 }
 
@@ -688,6 +888,683 @@ static int orchestrator_participant_ready(
                                       error, error_len);
 }
 
+static unsigned recovery_callback_count(const struct orchestrator_test_hooks *hooks)
+{
+    return hooks->route_commits + hooks->route_aborts +
+           hooks->reservation_commits + hooks->reservation_aborts +
+           hooks->participant_commits + hooks->participant_aborts +
+           hooks->participant_readies;
+}
+
+static int test_recovery_guards(
+    struct wvm_admission_recovery_input *input,
+    const uint8_t other_route_operation[WVM_IDENTITY_ID_BYTES])
+{
+    const struct wvm_coordinator_transaction *original = input->transaction;
+    struct wvm_coordinator_transaction wrong = *original;
+    const struct orchestrator_test_hooks *hooks = input->callback_context;
+    const unsigned calls = recovery_callback_count(hooks);
+    struct wvm_route_transaction_record saved_route = *input->route_transaction;
+    char error[256] = {0};
+    int result;
+
+    input->control_plane->journal_failed = 1;
+    result = wvm_admission_orchestrator_recover(input, error, sizeof(error));
+    input->control_plane->journal_failed = 0;
+    if (expect(result != 0 && recovery_callback_count(hooks) == calls,
+               "fenced recovery sends no stage or readiness callbacks")) {
+        return -1;
+    }
+    wrong.manifest_generation++;
+    input->transaction = &wrong;
+    result = wvm_admission_orchestrator_recover(input, error, sizeof(error));
+    input->transaction = original;
+    if (expect(result != 0 && recovery_callback_count(hooks) == calls,
+               "recovery rejects wrong generation before callbacks")) {
+        return -1;
+    }
+    input->prepared_vm->candidate.candidate_created_at++;
+    result = wvm_admission_orchestrator_recover(input, error, sizeof(error));
+    input->prepared_vm->candidate.candidate_created_at--;
+    if (expect(result != 0 && recovery_callback_count(hooks) == calls,
+               "recovery rejects a modified candidate before callbacks")) {
+        return -1;
+    }
+    memcpy(input->route_transaction->operation_id, other_route_operation,
+           WVM_IDENTITY_ID_BYTES);
+    result = wvm_admission_orchestrator_recover(input, error, sizeof(error));
+    *input->route_transaction = saved_route;
+    return expect(result != 0 && recovery_callback_count(hooks) == calls,
+                  "another admission's durable route cannot authorize recovery");
+}
+
+static int test_abort_recovery(
+    struct wvm_control_plane *plane,
+    const struct wvm_coordinator_transaction *transaction,
+    struct wvm_coordinator_prepared_vm *prepared,
+    struct wvm_route_transaction_record *route_transaction,
+    struct wvm_route_snapshot_record *snapshot)
+{
+    struct orchestrator_test_hooks hooks = {0};
+    struct wvm_admission_orchestrator_callbacks callbacks = {
+        .route_commit = orchestrator_route_commit,
+        .route_abort = orchestrator_route_abort,
+        .reservation_commit = orchestrator_reservation_commit,
+        .reservation_abort = orchestrator_reservation_abort,
+        .participant_commit = orchestrator_participant_commit,
+        .participant_abort = orchestrator_participant_abort,
+        .participant_ready = orchestrator_participant_ready,
+    };
+    struct wvm_admission_recovery_input input = {
+        .control_plane = plane,
+        .transaction = transaction,
+        .prepared_vm = prepared,
+        .route_transaction = route_transaction,
+        .route_snapshot = snapshot,
+        .callbacks = &callbacks,
+        .callback_context = &hooks,
+    };
+    char error[256] = {0};
+
+    prepared->reservations[0].node_instance_id++;
+    int result = wvm_admission_orchestrator_recover(&input, error, sizeof(error));
+    prepared->reservations[0].node_instance_id--;
+    if (expect(result != 0 && recovery_callback_count(&hooks) == 0,
+               "ABORT recovery validates reservations before callbacks")) {
+        return -1;
+    }
+    return expect(wvm_admission_orchestrator_recover(
+                      &input, error, sizeof(error)) == 0 &&
+                      wvm_control_plane_find_request(plane, transaction->request_id)
+                              ->transaction.state == WVM_LIFECYCLE_ABORTED &&
+                      hooks.route_aborts == 1 &&
+                      hooks.reservation_aborts == prepared->reservation_count &&
+                      hooks.participant_aborts == prepared->node_runtime_manifest_count &&
+                      hooks.route_commits == 0 && hooks.reservation_commits == 0 &&
+                      hooks.participant_commits == 0 && hooks.participant_readies == 0,
+                  "recover durable ABORT without a caller-supplied decision");
+}
+
+static int receiver_slot(void *context, uint32_t vm_id, uint64_t incarnation,
+                         uint64_t generation,
+                         struct wvm_admission_receiver_slot **slot,
+                         char *error, size_t error_len)
+{
+    (void)vm_id;
+    (void)incarnation;
+    (void)generation;
+    (void)error;
+    (void)error_len;
+    *slot = context;
+    return 0;
+}
+
+static int receiver_request(struct wvm_admission_receiver *receiver,
+                            const struct wvm_candidate_vm_manifest *candidate,
+                            uint16_t message_type, const uint8_t *bytes,
+                            size_t count, uint16_t expected_status,
+                            char *error, size_t error_len)
+{
+    struct wvm_envelope request = {0};
+    struct wvm_control_result result;
+
+    request.message_type = message_type;
+    request.origin_physical_node_id = receiver->config.controller_physical_node_id;
+    request.origin_runtime_instance_id = receiver->config.controller_runtime_instance_id;
+    request.operation_id[0] = 1;
+    request.delivery_attempt_id = 1;
+    request.vm_id = candidate->vm_id;
+    request.vm_incarnation = candidate->vm_incarnation;
+    request.manifest_generation = candidate->manifest_generation;
+    request.route_scope_id = candidate->route_scope_key.route_scope_id;
+    request.topology_revision = candidate->prepared_route_snapshot_key.topology_revision;
+    request.route_generation = candidate->prepared_route_snapshot_key.route_generation;
+    memcpy(request.route_snapshot_digest,
+           candidate->prepared_route_snapshot_key.snapshot_digest,
+           sizeof(request.route_snapshot_digest));
+    request.payload = bytes;
+    request.payload_bytes = count;
+    if (wvm_admission_receiver_apply(receiver, &request,
+            &receiver->config.controller_member_key, &result, error, error_len) != 0 ||
+        result.status_code != expected_status) {
+        return -1;
+    }
+    return 0;
+}
+
+static int receiver_stage(struct wvm_admission_receiver *receiver,
+                          const struct wvm_admission_reservation_stage *stage,
+                          uint16_t expected_status, char *error, size_t error_len)
+{
+    uint8_t bytes[16384];
+    size_t count;
+
+    if (wvm_admission_reservation_stage_encode(stage, bytes, sizeof(bytes),
+                                              &count, error, error_len) != 0) {
+        return -1;
+    }
+    return receiver_request(receiver, stage->candidate, stage->message_type,
+                             bytes, count, expected_status, error, error_len);
+}
+
+static int test_reservation_receiver(
+    const struct wvm_coordinator_prepared_vm *prepared,
+    const struct wvm_activation_record *activation)
+{
+    struct wvm_admission_receiver receiver = {0};
+    struct wvm_admission_receiver_config config = {0};
+    struct wvm_admission_receiver_slot slot = {0};
+    struct wvm_admission_reservation_stage_storage scratch = {0};
+    struct prepared_buffers buffers = {0};
+    struct wvm_capability_ref execution_capabilities[4];
+    struct wvm_exclusive_lease reservation_leases[3];
+    struct wvm_route_snapshot_key activation_routes[4];
+    struct wvm_local_reservation_registry registry = {0};
+    struct wvm_resource_reservation stored[4];
+    struct wvm_resource_reservation committed = prepared->reservations[0];
+    struct wvm_admission_reservation_stage stage = {0};
+    struct wvm_admission_node node = {0};
+    const struct wvm_resource_reservation *reservation = &prepared->reservations[0];
+    char directory[] = "/tmp/wavevm-receiver.XXXXXX";
+    char path[128], state_path[128], lock_path[144], runtime_path[128];
+    char error[256] = {0};
+    int status = -1;
+    uint64_t committed_bytes;
+
+    if (!mkdtemp(directory)) {
+        return -1;
+    }
+    snprintf(path, sizeof(path), "%s/reservations", directory);
+    snprintf(state_path, sizeof(state_path), "%s/state", directory);
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", state_path);
+    snprintf(runtime_path, sizeof(runtime_path), "%s/runtime", directory);
+    node.physical_node_id = reservation->physical_node_id;
+    node.node_instance_id = reservation->node_instance_id;
+    node.inventory_revision = reservation->inventory_revision;
+    node.allocatable_vcpu_slots = reservation->guest_vcpu_slots +
+                                 reservation->overhead_vcpu_slots;
+    node.allocatable_memory_bytes = reservation->guest_memory_bytes +
+                                   reservation->overhead_memory_bytes;
+    scratch.candidate_storage = (struct wvm_admission_candidate_stage_storage){
+        .vcpu_placements = buffers.vcpus, .vcpu_placement_capacity = 4,
+        .memory_placements = buffers.memory, .memory_placement_capacity = 4,
+        .required_members = buffers.selected_members, .required_member_capacity = 4,
+        .required_capabilities = buffers.required_capabilities, .required_capability_capacity = 4,
+        .execution_capabilities = execution_capabilities, .execution_capability_capacity = 4,
+        .reservation_requirements = buffers.requirements, .reservation_requirement_capacity = 4,
+        .reservation_requirement_leases = &buffers.listener_leases[0][0],
+        .reservation_requirement_lease_capacity = 3,
+    };
+    scratch.reservation_leases = reservation_leases;
+    scratch.reservation_lease_capacity = 3;
+    scratch.activation_route_snapshot_keys = activation_routes;
+    scratch.activation_route_snapshot_key_capacity = 4;
+    config.controller_member_key = (struct wvm_member_key){WVM_MANIFEST_ROLE_NODE_RUNTIME, 91, 92};
+    config.controller_physical_node_id = 91;
+    config.controller_runtime_instance_id = 92;
+    config.local_physical_node_id = node.physical_node_id;
+    config.local_node_instance_id = node.node_instance_id;
+    config.reservation_registry = &registry;
+    config.reservation_scratch_storage = &scratch;
+    config.resolve_slot = receiver_slot;
+    config.context = &slot;
+    slot.runtime_manifest_path = runtime_path;
+    stage.candidate = &prepared->candidate;
+    stage.reservation = reservation;
+    stage.message_type = WVM_ENVELOPE_MSG_PREPARE_RESERVATION;
+    if (wvm_local_reservation_registry_init(&registry, &node, stored, 4,
+                                            error, sizeof(error)) != 0 ||
+        wvm_admission_receiver_init(&receiver, &config, error, sizeof(error)) != 0 ||
+        receiver_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                        error, sizeof(error)) != 0 || registry.reservation_count != 0 ||
+        wvm_local_reservation_registry_open(&registry, path, 1024 * 1024,
+                                            error, sizeof(error)) != 0 ||
+        wvm_admission_receiver_slot_open(&receiver, &slot, state_path,
+            prepared->candidate.vm_id, prepared->candidate.vm_incarnation,
+            prepared->candidate.manifest_generation, error, sizeof(error)) != 0 ||
+        receiver_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS,
+                        error, sizeof(error)) != 0 ||
+        receiver_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS,
+                        error, sizeof(error)) != 0 || registry.reservation_count != 1) {
+        goto out;
+    }
+    wvm_local_reservation_registry_destroy(&registry);
+    if (wvm_local_reservation_registry_init(&registry, &node, stored, 4,
+                                            error, sizeof(error)) != 0 ||
+        wvm_local_reservation_registry_open(&registry, path, 1024 * 1024,
+                                            error, sizeof(error)) != 0 ||
+        wvm_resource_reservation_commit(&committed, activation, error,
+                                        sizeof(error)) != 0) {
+        goto out;
+    }
+    stage.message_type = WVM_ENVELOPE_MSG_COMMIT_RESERVATION;
+    stage.reservation = &committed;
+    stage.activation = activation;
+    if (receiver_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS,
+                        error, sizeof(error)) != 0 ||
+        stored[0].state != WVM_RESERVATION_COMMITTED ||
+        registry.prepared_memory_bytes != 0 ||
+        registry.committed_memory_bytes != node.allocatable_memory_bytes) {
+        goto out;
+    }
+    committed_bytes = registry.journal_bytes;
+    if (receiver_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS,
+                        error, sizeof(error)) != 0 ||
+        committed_bytes != registry.journal_bytes) {
+        goto out;
+    }
+    stage.message_type = WVM_ENVELOPE_MSG_ABORT_RESERVATION;
+    stage.reservation = reservation;
+    stage.activation = NULL;
+    stage.abort_reason = WVM_ADMISSION_ABORT_REASON_PRE_ACTIVATION_FAILURE;
+    if (receiver_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                        error, sizeof(error)) != 0 ||
+        stored[0].state != WVM_RESERVATION_COMMITTED ||
+        committed_bytes != registry.journal_bytes) {
+        goto out;
+    }
+    status = 0;
+out:
+    if (status != 0) {
+        fprintf(stderr, "reservation receiver integration: %s\n", error);
+    }
+    wvm_admission_receiver_destroy(&receiver);
+    wvm_admission_receiver_slot_close(&slot);
+    wvm_local_reservation_registry_destroy(&registry);
+    unlink(path);
+    unlink(state_path);
+    unlink(lock_path);
+    rmdir(directory);
+    return status;
+}
+
+struct participant_decode_buffers {
+    struct prepared_buffers data;
+    struct wvm_capability_ref execution_capabilities[4];
+    struct wvm_capability_ref runtime_capabilities[4];
+    struct wvm_route_snapshot_key activation_routes[4];
+};
+
+static void participant_storage_init(
+    struct wvm_admission_participant_stage_storage *storage,
+    struct participant_decode_buffers *buffers)
+{
+    memset(storage, 0, sizeof(*storage));
+    storage->candidate_storage = (struct wvm_admission_candidate_stage_storage){
+        .vcpu_placements = buffers->data.vcpus, .vcpu_placement_capacity = 4,
+        .memory_placements = buffers->data.memory, .memory_placement_capacity = 4,
+        .required_members = buffers->data.selected_members, .required_member_capacity = 4,
+        .required_capabilities = buffers->data.required_capabilities, .required_capability_capacity = 4,
+        .execution_capabilities = buffers->execution_capabilities, .execution_capability_capacity = 4,
+        .reservation_requirements = buffers->data.requirements, .reservation_requirement_capacity = 4,
+        .reservation_requirement_leases = &buffers->data.listener_leases[0][0],
+        .reservation_requirement_lease_capacity = 3,
+    };
+    storage->runtime_vcpu_assignments = buffers->data.local_vcpus[0];
+    storage->runtime_vcpu_assignment_capacity = 4;
+    storage->runtime_memory_assignments = buffers->data.local_memory[0];
+    storage->runtime_memory_assignment_capacity = 4;
+    storage->runtime_capabilities = buffers->runtime_capabilities;
+    storage->runtime_capability_capacity = 4;
+    storage->runtime_dependencies = buffers->data.dependencies[0];
+    storage->runtime_dependency_capacity = 4;
+    storage->activation_route_snapshot_keys = buffers->activation_routes;
+    storage->activation_route_snapshot_key_capacity = 4;
+}
+
+struct participant_receiver_context {
+    struct wvm_admission_receiver_slot slot;
+    const struct wvm_cluster_record_set *records;
+    const struct wvm_route_snapshot_record *route;
+    int reject_delivery;
+};
+
+static int participant_slot(void *context, uint32_t vm_id, uint64_t incarnation,
+                             uint64_t generation,
+                             struct wvm_admission_receiver_slot **slot,
+                             char *error, size_t error_len)
+{
+    struct participant_receiver_context *owner = context;
+
+    return receiver_slot(&owner->slot, vm_id, incarnation, generation, slot,
+                          error, error_len);
+}
+
+static int participant_delivery_inputs(
+    void *context, const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime,
+    const struct wvm_activation_record *activation,
+    const struct wvm_cluster_record_set **records,
+    const struct wvm_route_snapshot_record **route, char *error, size_t error_len)
+{
+    struct participant_receiver_context *owner = context;
+
+    (void)candidate;
+    (void)runtime;
+    (void)activation;
+    (void)error;
+    (void)error_len;
+    *records = owner->records;
+    *route = owner->route;
+    return owner->reject_delivery ? -1 : 0;
+}
+
+static int participant_stage(struct wvm_admission_receiver *receiver,
+                              const struct wvm_admission_participant_stage *stage,
+                              uint16_t expected_status, char *error, size_t error_len)
+{
+    uint8_t bytes[16384];
+    size_t count;
+
+    if (wvm_admission_participant_stage_encode(stage, bytes, sizeof(bytes),
+                                               &count, error, error_len) != 0) {
+        return -1;
+    }
+    return receiver_request(receiver, stage->candidate, stage->message_type,
+                             bytes, count, expected_status, error, error_len);
+}
+
+static int participant_reopen(struct wvm_admission_receiver *receiver,
+                               struct wvm_admission_receiver_slot *slot,
+                               const char *path,
+                               const struct wvm_candidate_vm_manifest *candidate,
+                               char *error, size_t error_len)
+{
+    wvm_admission_receiver_slot_close(slot);
+    return wvm_admission_receiver_slot_open(
+        receiver, slot, path, candidate->vm_id, candidate->vm_incarnation,
+        candidate->manifest_generation, error, error_len);
+}
+
+/* These exercise real stage codecs, durable participant state, reservation
+ * authority and delivery files. They do not start a guest or a network peer. */
+static int test_participant_receiver(
+    const struct wvm_coordinator_prepared_vm *prepared,
+    const struct wvm_activation_record *activation,
+    const struct wvm_cluster_record_set *records,
+    const struct wvm_route_snapshot_record *route, unsigned scenario)
+{
+    struct wvm_admission_receiver receiver = {0};
+    struct wvm_admission_receiver_config config = {0};
+    struct participant_receiver_context owner = {0};
+    struct wvm_admission_receiver_slot *slot = &owner.slot;
+    struct participant_decode_buffers retained_buffers = {0}, scratch_buffers = {0};
+    struct wvm_admission_receiver_slot competitor = {0};
+    struct wvm_local_reservation_registry registry = {0};
+    struct wvm_resource_reservation stored[4];
+    struct wvm_admission_node node = {0};
+    struct wvm_admission_participant_stage stage = {0};
+    struct wvm_activation_record conflicting_activation = *activation;
+    struct wvm_node_runtime_manifest active = prepared->node_runtime_manifests[0];
+    const struct wvm_candidate_vm_manifest *candidate = &prepared->candidate;
+    const struct wvm_resource_reservation *reservation = &prepared->reservations[0];
+    enum wvm_reservation_runtime_result reservation_result;
+    char directory[] = "/tmp/wavevm-participant.XXXXXX";
+    char state_path[160], lock_path[170], reservation_path[160], runtime_path[160];
+    char route_path[256] = {0}, dispatch_path[256] = {0};
+    char error[256] = {0};
+    int status = -1, fd = -1;
+    struct stat info;
+    uint8_t byte;
+
+    if (!mkdtemp(directory)) {
+        return -1;
+    }
+    snprintf(state_path, sizeof(state_path), "%s/state", directory);
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", state_path);
+    snprintf(reservation_path, sizeof(reservation_path), "%s/reservations", directory);
+    snprintf(runtime_path, sizeof(runtime_path), "%s/runtime", directory);
+    slot->runtime_manifest_path = runtime_path;
+    competitor.runtime_manifest_path = runtime_path;
+    participant_storage_init(&slot->prepared_storage, &retained_buffers);
+    participant_storage_init(&slot->scratch_storage, &scratch_buffers);
+    node.physical_node_id = reservation->physical_node_id;
+    node.node_instance_id = reservation->node_instance_id;
+    node.inventory_revision = reservation->inventory_revision;
+    node.allocatable_vcpu_slots = reservation->guest_vcpu_slots + reservation->overhead_vcpu_slots;
+    node.allocatable_memory_bytes = reservation->guest_memory_bytes + reservation->overhead_memory_bytes;
+    config.controller_member_key = (struct wvm_member_key){WVM_MANIFEST_ROLE_NODE_RUNTIME, 91, 92};
+    config.controller_physical_node_id = 91;
+    config.controller_runtime_instance_id = 92;
+    config.local_physical_node_id = node.physical_node_id;
+    config.local_node_instance_id = node.node_instance_id;
+    config.reservation_registry = &registry;
+    config.resolve_slot = participant_slot;
+    config.delivery_inputs = participant_delivery_inputs;
+    config.context = &owner;
+    owner.records = records;
+    owner.route = route;
+    stage.candidate = candidate;
+    stage.runtime_manifest = &prepared->node_runtime_manifests[0];
+    stage.message_type = WVM_ENVELOPE_MSG_PREPARE_MANIFEST;
+    if (wvm_route_snapshot_path_from_manifest(runtime_path, route_path,
+            sizeof(route_path), error, sizeof(error)) != 0 ||
+        wvm_runtime_dispatch_path_from_manifest(runtime_path, dispatch_path,
+            sizeof(dispatch_path), error, sizeof(error)) != 0 ||
+        wvm_local_reservation_registry_init(&registry, &node, stored, 4, error, sizeof(error)) != 0 ||
+        wvm_local_reservation_registry_open(&registry, reservation_path, 1024 * 1024,
+                                            error, sizeof(error)) != 0 ||
+        wvm_local_reservation_prepare(&registry, reservation, &reservation_result,
+                                       error, sizeof(error)) != 0 ||
+        wvm_admission_receiver_init(&receiver, &config, error, sizeof(error)) != 0 ||
+        participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                           error, sizeof(error)) != 0 ||
+        participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) != 0 ||
+        wvm_admission_receiver_slot_open(&receiver, &competitor, state_path,
+            candidate->vm_id, candidate->vm_incarnation, candidate->manifest_generation,
+            error, sizeof(error)) == 0) {
+        goto out;
+    }
+    if (scenario != 2 &&
+        (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
+         participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
+         participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) != 0 ||
+         !slot->has_prepared || slot->has_activated ||
+         slot->gate.state != WVM_RUNTIME_GATE_PREPARED)) {
+        goto out;
+    }
+    if (scenario == 1 || scenario == 2) {
+        stage.message_type = WVM_ENVELOPE_MSG_ABORT_MANIFEST;
+        stage.abort_reason = WVM_ADMISSION_ABORT_REASON_PRE_ACTIVATION_FAILURE;
+        if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
+            participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) != 0 ||
+            participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
+            !slot->has_aborted || slot->has_prepared || slot->gate.state != WVM_RUNTIME_GATE_EMPTY) {
+            goto out;
+        }
+        stage.message_type = WVM_ENVELOPE_MSG_PREPARE_MANIFEST;
+        stage.abort_reason = 0;
+        if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                               error, sizeof(error)) != 0) {
+            goto out;
+        }
+        status = 0;
+        goto out;
+    }
+    active.has_activation_fence = 1;
+    memcpy(active.activation_fence, activation->activation_fence, WVM_IDENTITY_ID_BYTES);
+    stage.message_type = WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST;
+    stage.runtime_manifest = &active;
+    stage.activation = activation;
+    if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                           error, sizeof(error)) != 0 || slot->has_activation_decision ||
+        wvm_local_reservation_commit(&registry, reservation, activation, &reservation_result,
+                                     error, sizeof(error)) != 0) {
+        goto out;
+    }
+    conflicting_activation.activation_fence[0] ^= 1;
+    memcpy(active.activation_fence, conflicting_activation.activation_fence, WVM_IDENTITY_ID_BYTES);
+    stage.activation = &conflicting_activation;
+    if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                           error, sizeof(error)) != 0 || slot->has_activation_decision) {
+        goto out;
+    }
+    stage.activation = activation;
+    memcpy(active.activation_fence, activation->activation_fence, WVM_IDENTITY_ID_BYTES);
+    if (scenario == 3 || scenario == 4) {
+        /* Fail either the snapshot fsync or the directory fsync after rename. */
+        fail_fsync_after = (int)scenario - 3;
+        if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                               error, sizeof(error)) != 0 || !slot->state_failed ||
+            slot->has_activated || access(runtime_path, F_OK) == 0 ||
+            participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                               error, sizeof(error)) != 0 ||
+            participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) != 0 ||
+            slot->has_activation_decision != (scenario == 4)) {
+            goto out;
+        }
+    }
+    owner.reject_delivery = 1;
+    if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                           error, sizeof(error)) != 0 ||
+        !slot->has_activation_decision || slot->has_activated ||
+        participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) != 0 ||
+        !slot->has_activation_decision || slot->gate.state != WVM_RUNTIME_GATE_PREPARED) {
+        goto out;
+    }
+    stage.message_type = WVM_ENVELOPE_MSG_ABORT_MANIFEST;
+    stage.activation = NULL;
+    stage.runtime_manifest = &prepared->node_runtime_manifests[0];
+    stage.abort_reason = WVM_ADMISSION_ABORT_REASON_PRE_ACTIVATION_FAILURE;
+    if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                           error, sizeof(error)) != 0) {
+        goto out;
+    }
+    stage.message_type = WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST;
+    stage.activation = activation;
+    stage.runtime_manifest = &active;
+    stage.abort_reason = 0;
+    owner.reject_delivery = 0;
+    if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
+        !slot->has_activated || slot->gate.state != WVM_RUNTIME_GATE_ACTIVE ||
+        access(runtime_path, F_OK) != 0) {
+        goto out;
+    }
+    slot->gate.next_connection_id = 123;
+    if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
+        slot->gate.next_connection_id != 123 ||
+        participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) != 0 ||
+        slot->has_activated ||
+        participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0) {
+        goto out;
+    }
+    wvm_admission_receiver_slot_close(slot);
+    if (wvm_admission_receiver_slot_open(&receiver, slot, state_path,
+            candidate->vm_id + 1, candidate->vm_incarnation, candidate->manifest_generation,
+            error, sizeof(error)) == 0) {
+        goto out;
+    }
+    receiver.config.local_node_instance_id++;
+    if (participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) == 0) {
+        goto out;
+    }
+    receiver.config.local_node_instance_id--;
+    fd = open(state_path, O_RDWR);
+    if (fd < 0 || fstat(fd, &info) != 0 ||
+        pread(fd, &byte, 1, info.st_size - 1) != 1) {
+        goto out;
+    }
+    byte ^= 1;
+    if (pwrite(fd, &byte, 1, info.st_size - 1) != 1 ||
+        participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) == 0 ||
+        ftruncate(fd, 13) != 0 ||
+        participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) == 0) {
+        goto out;
+    }
+    status = 0;
+out:
+    fail_fsync_after = -1;
+    if (status != 0) {
+        fprintf(stderr, "participant receiver scenario %u: %s\n", scenario, error);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    wvm_admission_receiver_slot_close(&competitor);
+    wvm_admission_receiver_slot_close(slot);
+    wvm_admission_receiver_destroy(&receiver);
+    wvm_local_reservation_registry_destroy(&registry);
+    unlink(reservation_path);
+    unlink(runtime_path);
+    unlink(route_path);
+    unlink(dispatch_path);
+    unlink(state_path);
+    unlink(lock_path);
+    rmdir(directory);
+    return status;
+}
+
+static int test_ctl_workspace(
+    const struct wvm_vm_request *request,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_cluster_record_set *records,
+    const struct wvm_coordinator_prepared_route *route,
+    const struct wvm_coordinator_prepare_options *template)
+{
+    struct wvm_ctl_admission_buffers buffers = {0};
+    struct wvm_coordinator_prepared_vm prepared = {0};
+    struct wvm_coordinator_prepared_vm saved;
+    struct wvm_coordinator_prepare_options options = *template;
+    struct wvm_activation_record activation = {0};
+    struct wvm_coordinator_activation_options decision = {10, 11, 12};
+    void *allocation;
+    uint8_t *candidate_bytes;
+    char error[256] = {0};
+    size_t iteration;
+    int result = -1;
+
+    for (iteration = 0; iteration < 2; iteration++) {
+        if (expect(wvm_ctl_admission_buffers_reset(
+                       &buffers, request->requested_vcpus, records->node_count,
+                       records->node_count + records->gateway_count,
+                       WVM_CTL_ADMISSION_WORKSPACE_BYTES, &prepared, &options,
+                       &activation, error, sizeof(error)) == 0,
+                   "allocate and rebind controller transaction workspace") ||
+            expect(!prepared.candidate_manifest_bytes &&
+                       !prepared.node_runtime_manifest_count &&
+                       !prepared.reservation_count &&
+                       !activation.required_route_snapshot_count &&
+                       prepared.reservations != records->resource_reservations,
+                   "reset counts without aliasing published evidence") ||
+            expect(wvm_coordinator_prepare(
+                       request, transaction, records, route, &options,
+                       &prepared, error, sizeof(error)) == 0,
+                   "prepare with production-owned nested buffers") ||
+            expect(wvm_coordinator_decide_abort(
+                       transaction, &decision, &prepared, &activation,
+                       error, sizeof(error)) == 0 &&
+                       activation.required_route_snapshot_count == 1,
+                   "activation output remains bound after reset")) {
+            goto out;
+        }
+        saved = prepared;
+        allocation = buffers.allocation;
+        candidate_bytes = options.candidate_manifest_bytes;
+        if (expect(wvm_ctl_admission_buffers_reset(
+                       &buffers, UINT32_MAX, UINT32_MAX, UINT32_MAX, SIZE_MAX,
+                       &prepared, &options, &activation, error,
+                       sizeof(error)) != 0 &&
+                       wvm_ctl_admission_buffers_reset(
+                           &buffers, request->requested_vcpus, records->node_count,
+                           records->node_count + records->gateway_count, 1,
+                           &prepared, &options, &activation, error,
+                           sizeof(error)) != 0,
+                   "reject arithmetic overflow and exhausted byte budget") ||
+            expect(buffers.allocation == allocation &&
+                       options.candidate_manifest_bytes == candidate_bytes &&
+                       memcmp(&saved, &prepared, sizeof(prepared)) == 0 &&
+                       activation.required_route_snapshot_count == 1,
+                   "failed reset leaves prior output valid")) {
+            goto out;
+        }
+    }
+    result = 0;
+out:
+    wvm_ctl_admission_buffers_destroy(&buffers, &prepared);
+    wvm_ctl_admission_buffers_destroy(&buffers, &prepared);
+    return result;
+}
+
 int main(void)
 {
     struct wvm_capability_record capabilities[8];
@@ -696,19 +1573,19 @@ int main(void)
     struct wvm_cluster_record_set records;
     struct wvm_vm_request request;
     struct wvm_vm_request abort_request;
-    struct wvm_vm_namespace_record namespace_records[5];
+    struct wvm_vm_namespace_record namespace_records[6];
     struct wvm_vm_namespace_allocator namespace_allocator;
-    struct wvm_control_plane_entry control_plane_entries[5];
-    struct wvm_control_plane_route_entry control_plane_route_entries[5];
+    struct wvm_control_plane_entry control_plane_entries[6];
+    struct wvm_control_plane_route_entry control_plane_route_entries[6];
     struct wvm_control_plane_runtime_manifest_entry
         control_plane_runtime_manifest_entries[12];
     struct wvm_control_plane control_plane;
-    struct wvm_control_plane_entry recovered_control_plane_entries[5];
-    struct wvm_control_plane_route_entry recovered_control_plane_route_entries[5];
+    struct wvm_control_plane_entry recovered_control_plane_entries[6];
+    struct wvm_control_plane_route_entry recovered_control_plane_route_entries[6];
     struct wvm_control_plane_runtime_manifest_entry
         recovered_runtime_manifest_entries[12];
     struct wvm_control_plane recovered_control_plane;
-    struct wvm_vm_namespace_record recovered_namespace_records[5];
+    struct wvm_vm_namespace_record recovered_namespace_records[6];
     struct wvm_vm_namespace_allocator recovered_namespace_allocator;
     struct id_provider_context provider_context = {
         .next_id = 1,
@@ -721,8 +1598,8 @@ int main(void)
     };
     struct wvm_coordinator_transaction transaction;
     struct wvm_coordinator_transaction abort_transaction;
-    struct wvm_route_rule_record route_rules[1];
-    struct wvm_route_rule_record abort_route_rules[1];
+    struct wvm_route_rule_record route_rules[3];
+    struct wvm_route_rule_record abort_route_rules[3];
     struct wvm_required_ack_entry ack_entries[1];
     struct wvm_required_ack_entry abort_ack_entries[1];
     struct wvm_route_snapshot_record route_snapshot;
@@ -740,9 +1617,9 @@ int main(void)
     struct wvm_admission_node_listener_plan abort_listener_plans[2];
     struct wvm_exclusive_lease listener_leases[2][3];
     struct wvm_exclusive_lease abort_listener_leases[2][3];
-    struct wvm_coordinator_prepared_vm prepared;
-    struct wvm_coordinator_prepared_vm rejected_prepared;
-    struct wvm_coordinator_prepared_vm abort_prepared;
+    struct wvm_coordinator_prepared_vm prepared = {0};
+    struct wvm_coordinator_prepared_vm rejected_prepared = {0};
+    struct wvm_coordinator_prepared_vm abort_prepared = {0};
     struct prepared_buffers buffers;
     struct prepared_buffers rejected_buffers;
     struct prepared_buffers abort_buffers;
@@ -897,6 +1774,11 @@ int main(void)
                                     ack_entries, &route_snapshot,
                                     &prepared_route, error, sizeof(error)) == 0,
                "build prepared canonical route ACK set")) {
+        return 1;
+    }
+
+    if (test_ctl_workspace(&request, &transaction, &records, &prepared_route,
+                           &options) != 0) {
         return 1;
     }
 
@@ -1099,15 +1981,20 @@ int main(void)
     abort_activation.required_route_snapshot_keys = abort_route_keys;
     abort_activation.required_route_snapshot_capacity =
         sizeof(abort_route_keys) / sizeof(abort_route_keys[0]);
-    activation_options.durable_decision_sequence = 2;
-    activation_options.decided_at = 2001;
-    if (expect(wvm_coordinator_decide_abort(
+    if (expect(wvm_control_plane_activation_options(
+                   &control_plane, activation_options.coordinator_instance_id,
+                   &activation_options, error, sizeof(error)) == 0 &&
+                   wvm_coordinator_decide_abort(
                    &abort_transaction, &activation_options, &abort_prepared,
                    &abort_activation, error, sizeof(error)) == 0,
                "persist pre-activation abort decision") ||
         expect(abort_activation.decision == WVM_ACTIVATION_ABORT &&
                    !abort_activation.has_activation_fence,
                "abort carries no activation fence") ||
+        expect(test_activation_durability(
+                   &control_plane, &namespace_allocator, control_plane_journal,
+                   &abort_transaction, &abort_activation) == 0,
+               "abort decision journal faults and recovery") ||
         expect(wvm_control_plane_record_activation(
                    &control_plane, &abort_transaction, &abort_activation, error,
                    sizeof(error)) == 0,
@@ -1117,14 +2004,10 @@ int main(void)
                    WVM_LIFECYCLE_ABORTING, WVM_LIFECYCLE_ABORTED, error,
                    sizeof(error)) != 0,
                "reject abort completion before exact route abort") ||
-        expect(persist_route_transaction_state(
-                   &control_plane, &abort_route_transaction,
-                   WVM_ROUTE_TRANSACTION_ABORTED, error, sizeof(error)) == 0 &&
-                   wvm_control_plane_transition(
-                       &control_plane, &abort_transaction,
-                       WVM_LIFECYCLE_ABORTING, WVM_LIFECYCLE_ABORTED, error,
-                       sizeof(error)) == 0,
-               "complete abort only after exact route abort") ||
+        expect(test_abort_recovery(&control_plane, &abort_transaction,
+                                   &abort_prepared, &abort_route_transaction,
+                                   &abort_route_snapshot) == 0,
+               "complete abort from the recovered durable decision") ||
         expect(wvm_coordinator_abort_local(
                    &abort_transaction, &abort_prepared, &abort_activation, error,
                    sizeof(error)) == 0,
@@ -1152,8 +2035,12 @@ int main(void)
     activation.required_route_snapshot_keys = activation_route_keys;
     activation.required_route_snapshot_capacity =
         sizeof(activation_route_keys) / sizeof(activation_route_keys[0]);
-    activation_options.durable_decision_sequence = 3;
-    activation_options.decided_at = 2002;
+    if (expect(wvm_control_plane_activation_options(
+                   &control_plane, activation_options.coordinator_instance_id,
+                   &activation_options, error, sizeof(error)) == 0,
+               "capture decision metadata from the journal owner")) {
+        return 1;
+    }
     records.admission_eligibility_revision++;
     if (expect(wvm_coordinator_decide_activation(
                    &request, &transaction, &records, &prepared_route,
@@ -1184,7 +2071,20 @@ int main(void)
                "bind durable activation fence to prepared candidate")) {
         return 1;
     }
-    if (expect(wvm_control_plane_record_activation(
+    if (test_reservation_receiver(&prepared, &activation) != 0) {
+        return 1;
+    }
+    for (unsigned scenario = 0; scenario < 5; scenario++) {
+        if (test_participant_receiver(&prepared, &activation, &records,
+                                       &route_snapshot, scenario) != 0) {
+            return 1;
+        }
+    }
+    if (expect(test_activation_durability(
+                   &control_plane, &namespace_allocator, control_plane_journal,
+                   &transaction, &activation) == 0,
+               "activation decision journal faults and recovery") ||
+        expect(wvm_control_plane_record_activation(
                    &control_plane, &transaction, &activation, error,
                    sizeof(error)) == 0,
                "persist activation before local commit") ||
@@ -1382,11 +2282,11 @@ int main(void)
         struct wvm_exclusive_lease orchestrator_listener_leases[2][3];
         struct wvm_capability_ref orchestrator_capabilities[2];
         struct prepared_buffers orchestrator_buffers;
-        struct wvm_coordinator_prepared_vm orchestrator_prepared;
+        struct wvm_coordinator_prepared_vm orchestrator_prepared = {0};
         struct wvm_coordinator_prepared_route orchestrator_route;
         struct wvm_route_transaction_record orchestrator_route_transaction;
         struct wvm_route_snapshot_record orchestrator_route_snapshot;
-        struct wvm_route_rule_record orchestrator_route_rules[1];
+        struct wvm_route_rule_record orchestrator_route_rules[3];
         struct wvm_required_ack_entry orchestrator_ack_entries[1];
         struct wvm_activation_record orchestrator_activation;
         struct wvm_route_snapshot_key orchestrator_activation_keys[1];
@@ -1438,8 +2338,6 @@ int main(void)
         orchestrator_activation.required_route_snapshot_capacity =
             sizeof(orchestrator_activation_keys) /
             sizeof(orchestrator_activation_keys[0]);
-        activation_options.durable_decision_sequence = 3;
-        activation_options.decided_at = 3000;
         memset(&hooks, 0, sizeof(hooks));
         hooks.gateway = &gateway;
         hooks.route_rules = orchestrator_route_rules;
@@ -1466,7 +2364,8 @@ int main(void)
         orchestrator_input.prepared_route = &orchestrator_route;
         orchestrator_input.prepare_options = &orchestrator_options;
         orchestrator_input.prepared_vm = &orchestrator_prepared;
-        orchestrator_input.activation_options = &activation_options;
+        orchestrator_input.coordinator_instance_id =
+            activation_options.coordinator_instance_id;
         orchestrator_input.activation = &orchestrator_activation;
         orchestrator_input.route_transaction =
             &orchestrator_route_transaction;
@@ -1593,86 +2492,119 @@ int main(void)
             return 1;
         }
 
-        orchestrator_request.request_id[WVM_IDENTITY_ID_BYTES - 1] = 0x46;
-        hooks.failure = ORCHESTRATOR_TEST_PARTICIPANT_COMMIT;
-        hooks.route_operation_suffix = 0x55;
-        hooks.route_prepares = 0;
-        hooks.route_commits = 0;
-        hooks.route_aborts = 0;
-        hooks.reservation_prepares = 0;
-        hooks.reservation_commits = 0;
-        hooks.reservation_aborts = 0;
-        hooks.participant_prepares = 0;
-        hooks.participant_commits = 0;
-        hooks.participant_aborts = 0;
-        hooks.participant_readies = 0;
-        for (i = 0; i < 2; i++) {
-            orchestrator_launch_plans[i]
-                .launch_plan.node_runtime_data_port += 40;
-            orchestrator_launch_plans[i]
-                .launch_plan.local_executor_service_port += 40;
-            orchestrator_listener_plans[i].node_runtime_data_port =
-                orchestrator_launch_plans[i].launch_plan.node_runtime_data_port;
-            orchestrator_listener_plans[i].local_executor_service_port =
+        for (unsigned fault = 0; fault < 2; fault++) {
+            orchestrator_request.request_id[WVM_IDENTITY_ID_BYTES - 1] = 0x46 + fault;
+            hooks.failure = fault ? ORCHESTRATOR_TEST_ACTIVATION_FSYNC
+                                  : ORCHESTRATOR_TEST_PARTICIPANT_COMMIT;
+            hooks.route_operation_suffix = 0x55 + fault;
+            hooks.route_prepares = 0;
+            hooks.route_commits = 0;
+            hooks.route_aborts = 0;
+            hooks.reservation_prepares = 0;
+            hooks.reservation_commits = 0;
+            hooks.reservation_aborts = 0;
+            hooks.participant_prepares = 0;
+            hooks.participant_commits = 0;
+            hooks.participant_aborts = 0;
+            hooks.participant_readies = 0;
+            for (i = 0; i < 2; i++) {
                 orchestrator_launch_plans[i]
-                    .launch_plan.local_executor_service_port;
-        }
-        memset(&orchestrator_buffers, 0, sizeof(orchestrator_buffers));
-        initialize_prepared_vm(&orchestrator_prepared, &orchestrator_buffers);
-        orchestrator_prepared.reservation_registries = failure_registries;
-        orchestrator_prepared.reservation_registry_count =
-            sizeof(failure_registries) / sizeof(failure_registries[0]);
-        memset(&orchestrator_route, 0, sizeof(orchestrator_route));
-        memset(&orchestrator_route_transaction, 0,
-               sizeof(orchestrator_route_transaction));
-        memset(&orchestrator_route_snapshot, 0,
-               sizeof(orchestrator_route_snapshot));
-        memset(&orchestrator_activation, 0, sizeof(orchestrator_activation));
-        orchestrator_activation.required_route_snapshot_keys =
-            orchestrator_activation_keys;
-        orchestrator_activation.required_route_snapshot_capacity = 1;
-        if (expect(wvm_admission_orchestrator_run(
-                       &orchestrator_input, error, sizeof(error)) != 0 &&
-                       orchestrator_submit_result ==
-                           WVM_CONTROL_PLANE_SUBMIT_NEW &&
-                       orchestrator_activation.has_activation_fence &&
-                       wvm_control_plane_find_request(
-                           &control_plane, orchestrator_request.request_id)
-                               ->transaction.state ==
-                           WVM_LIFECYCLE_ACTIVATION_DECIDED &&
-                       wvm_control_plane_find_route_transaction(
-                           &control_plane,
-                           orchestrator_route_transaction.operation_id)
-                               ->state == WVM_ROUTE_TRANSACTION_PREPARING &&
-                       hooks.route_aborts == 0,
-                   "post-activation failure remains recoverable")) {
-            return 1;
-        }
-        hooks.failure = ORCHESTRATOR_TEST_NO_FAILURE;
-        memset(&recovery_input, 0, sizeof(recovery_input));
-        recovery_input.control_plane = &control_plane;
-        recovery_input.transaction = &orchestrator_transaction;
-        recovery_input.prepared_vm = &orchestrator_prepared;
-        recovery_input.activation = &orchestrator_activation;
-        recovery_input.route_transaction = &orchestrator_route_transaction;
-        recovery_input.route_snapshot = &orchestrator_route_snapshot;
-        recovery_input.callbacks = &callbacks;
-        recovery_input.callback_context = &hooks;
-        if (expect(wvm_admission_orchestrator_recover(
-                       &recovery_input, error, sizeof(error)) == 0 &&
-                       wvm_control_plane_find_request(
-                           &control_plane, orchestrator_request.request_id)
-                               ->transaction.state == WVM_LIFECYCLE_RUNNING,
-                   "recover durable activation to RUNNING")) {
-            return 1;
-        }
-        for (i = 0; i < orchestrator_prepared.node_runtime_manifest_count;
-             i++) {
-            if (expect(wvm_runtime_ready_remove(
-                           &orchestrator_prepared.node_runtime_manifests[i],
-                           error, sizeof(error)) == 0,
-                       "remove recovered readiness evidence")) {
+                    .launch_plan.node_runtime_data_port += 40;
+                orchestrator_launch_plans[i]
+                    .launch_plan.local_executor_service_port += 40;
+                orchestrator_listener_plans[i].node_runtime_data_port =
+                    orchestrator_launch_plans[i].launch_plan.node_runtime_data_port;
+                orchestrator_listener_plans[i].local_executor_service_port =
+                    orchestrator_launch_plans[i]
+                        .launch_plan.local_executor_service_port;
+            }
+            memset(&orchestrator_buffers, 0, sizeof(orchestrator_buffers));
+            initialize_prepared_vm(&orchestrator_prepared, &orchestrator_buffers);
+            orchestrator_prepared.reservation_registries = failure_registries;
+            orchestrator_prepared.reservation_registry_count =
+                sizeof(failure_registries) / sizeof(failure_registries[0]);
+            memset(&orchestrator_route, 0, sizeof(orchestrator_route));
+            memset(&orchestrator_route_transaction, 0,
+                   sizeof(orchestrator_route_transaction));
+            memset(&orchestrator_route_snapshot, 0,
+                   sizeof(orchestrator_route_snapshot));
+            memset(&orchestrator_activation, 0, sizeof(orchestrator_activation));
+            orchestrator_activation.required_route_snapshot_keys =
+                orchestrator_activation_keys;
+            orchestrator_activation.required_route_snapshot_capacity = 1;
+            if (expect(wvm_admission_orchestrator_run(
+                           &orchestrator_input, error, sizeof(error)) != 0 &&
+                           orchestrator_submit_result ==
+                               WVM_CONTROL_PLANE_SUBMIT_NEW &&
+                           orchestrator_activation.has_activation_fence &&
+                           wvm_control_plane_find_request(
+                               &control_plane, orchestrator_request.request_id)
+                                   ->transaction.state ==
+                               (fault ? WVM_LIFECYCLE_PARTICIPANTS_PREPARED
+                                      : WVM_LIFECYCLE_ACTIVATION_DECIDED) &&
+                           wvm_control_plane_find_route_transaction(
+                               &control_plane,
+                               orchestrator_route_transaction.operation_id)
+                                   ->state == WVM_ROUTE_TRANSACTION_PREPARING &&
+                           hooks.route_aborts == 0 &&
+                           hooks.reservation_aborts == 0 &&
+                           hooks.participant_aborts == 0 &&
+                           (!fault || (control_plane.journal_failed &&
+                                        hooks.reservation_commits == 0 &&
+                                        hooks.participant_commits == 0)),
+                       "post-activation failure remains recoverable")) {
                 return 1;
+            }
+            if (fault) {
+                wvm_control_plane_close(&control_plane);
+                wvm_vm_namespace_allocator_init(
+                    &namespace_allocator, namespace_records,
+                    sizeof(namespace_records) / sizeof(namespace_records[0]), 1);
+                if (expect(wvm_control_plane_open(
+                               &control_plane, control_plane_journal,
+                               &namespace_allocator, error, sizeof(error)) == 0 &&
+                               wvm_control_plane_find_request(
+                                   &control_plane, orchestrator_request.request_id)
+                                       ->transaction.state ==
+                                   WVM_LIFECYCLE_ACTIVATION_DECIDED,
+                           "orchestrator resumes a surviving uncertain decision forward")) {
+                    return 1;
+                }
+            }
+            hooks.failure = ORCHESTRATOR_TEST_NO_FAILURE;
+            memset(&recovery_input, 0, sizeof(recovery_input));
+            recovery_input.control_plane = &control_plane;
+            recovery_input.transaction = &orchestrator_transaction;
+            recovery_input.prepared_vm = &orchestrator_prepared;
+            recovery_input.route_transaction = &orchestrator_route_transaction;
+            recovery_input.route_snapshot = &orchestrator_route_snapshot;
+            recovery_input.callbacks = &callbacks;
+            recovery_input.callback_context = &hooks;
+            if (test_recovery_guards(&recovery_input,
+                                     abort_route_transaction.operation_id) != 0) {
+                return 1;
+            }
+            /* Recovery must not depend on the process's old decision or route state. */
+            memset(&orchestrator_activation, 0, sizeof(orchestrator_activation));
+            orchestrator_route_transaction.state = WVM_ROUTE_TRANSACTION_ABORTED;
+            if (expect(wvm_admission_orchestrator_recover(
+                           &recovery_input, error, sizeof(error)) == 0 &&
+                           wvm_control_plane_find_request(
+                               &control_plane, orchestrator_request.request_id)
+                                   ->transaction.state == WVM_LIFECYCLE_RUNNING &&
+                           hooks.reservation_aborts == 0 &&
+                           hooks.participant_aborts == 0,
+                       "recover durable activation to RUNNING")) {
+                return 1;
+            }
+            for (i = 0; i < orchestrator_prepared.node_runtime_manifest_count;
+                 i++) {
+                if (expect(wvm_runtime_ready_remove(
+                               &orchestrator_prepared.node_runtime_manifests[i],
+                               error, sizeof(error)) == 0,
+                           "remove recovered readiness evidence")) {
+                    return 1;
+                }
             }
         }
             wvm_local_reservation_registry_destroy(
@@ -1680,6 +2612,7 @@ int main(void)
             wvm_local_reservation_registry_destroy(
                 &failure_registries_storage[1]);
         }
+        wvm_coordinator_prepared_vm_cleanup(&orchestrator_prepared);
     }
 
     capabilities[3].state = WVM_CAPABILITY_UNAVAILABLE;
@@ -1745,6 +2678,9 @@ int main(void)
     wvm_control_plane_close(&recovered_control_plane);
     wvm_local_reservation_registry_destroy(&registry_17);
     wvm_local_reservation_registry_destroy(&registry_99);
+    wvm_coordinator_prepared_vm_cleanup(&prepared);
+    wvm_coordinator_prepared_vm_cleanup(&rejected_prepared);
+    wvm_coordinator_prepared_vm_cleanup(&abort_prepared);
     unlink(control_plane_journal);
     puts("coordinator tests: PASS");
     return 0;

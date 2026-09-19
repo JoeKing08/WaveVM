@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "wavevm_canonical.h"
@@ -215,6 +216,39 @@ int main(void)
         return 1;
     }
 
+    {
+        struct wvm_cluster_snapshot previous = constrained_snapshot;
+        struct wvm_cluster_snapshot untouched;
+        struct wvm_cluster_snapshot sentinel;
+        uint32_t saved_kind = constraints[0].constraint_kind;
+
+        memset(&untouched, 0xa5, sizeof(untouched));
+        sentinel = untouched;
+        constraints[0].constraint_kind = 0;
+        if (expect(wvm_cluster_snapshot_apply_host_constraints(
+                       &records, &snapshot, &constraint_list, &untouched,
+                       error, sizeof(error)) != 0 &&
+                       memcmp(&untouched, &sentinel, sizeof(untouched)) == 0,
+                   "invalid constraint leaves uninitialized output untouched") ||
+            expect(wvm_cluster_snapshot_apply_host_constraints(
+                       &records, &snapshot, &constraint_list,
+                       &constrained_snapshot, error, sizeof(error)) != 0 &&
+                       memcmp(&constrained_snapshot, &previous,
+                              sizeof(previous)) == 0,
+                   "failed constraint preserves previous snapshot")) {
+            return 1;
+        }
+        constraints[0].constraint_kind = saved_kind;
+        if (expect(wvm_cluster_snapshot_apply_host_constraints(
+                       &records, &snapshot, &constraint_list, &snapshot,
+                       error, sizeof(error)) != 0 &&
+                       snapshot.admission.nodes[1].membership_state ==
+                           WVM_ADMISSION_MEMBER_ACTIVE,
+                   "reject in-place constraint without changing source")) {
+            return 1;
+        }
+    }
+
     memset(&request, 0, sizeof(request));
     request.vm_id = 256;
     request.vm_incarnation = 1;
@@ -290,14 +324,46 @@ int main(void)
         return 1;
     }
 
+    {
+        struct wvm_cluster_snapshot untouched;
+        struct wvm_cluster_snapshot before;
+
+        memset(&untouched, 0xa5, sizeof(untouched));
+        memcpy(&before, &untouched, sizeof(before));
+        nodes[0].membership_revision++;
+        if (expect(wvm_cluster_snapshot_build(&records, &untouched, error,
+                                              sizeof(error)) != 0 &&
+                       memcmp(&untouched, &before, sizeof(untouched)) == 0,
+                   "invalid record cannot free an uninitialized output")) {
+            return 1;
+        }
+        memcpy(&before, &snapshot, sizeof(before));
+        if (expect(wvm_cluster_snapshot_build(&records, &snapshot, error,
+                                              sizeof(error)) != 0 &&
+                       memcmp(&snapshot, &before, sizeof(snapshot)) == 0,
+                   "invalid record preserves the previous snapshot") ||
+            expect(wvm_admission_snapshot_validate(&snapshot.admission, error,
+                                                    sizeof(error)) == 0,
+                   "previous snapshot remains usable after build failure")) {
+            return 1;
+        }
+        nodes[0].membership_revision--;
+    }
+
     capabilities[5].state = WVM_CAPABILITY_UNAVAILABLE;
     capabilities[5].reason_code = 1;
     if (expect(wvm_cluster_snapshot_build(&records, &snapshot, error,
                                           sizeof(error)) != 0,
-               "reject stale capability profile digest")) {
+               "reject stale capability profile digest") ||
+        expect(wvm_admission_snapshot_validate(&snapshot.admission, error,
+                                                sizeof(error)) == 0,
+               "post-allocation failure preserves the previous snapshot")) {
         return 1;
     }
 
+    free(plan.reservations);
+    wvm_admission_snapshot_cleanup(&constrained_snapshot.admission);
+    wvm_admission_snapshot_cleanup(&snapshot.admission);
     puts("cluster-snapshot tests: PASS");
     return 0;
 }

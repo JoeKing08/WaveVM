@@ -112,6 +112,20 @@ int wvm_control_transport_serve_once(
     struct wvm_control_stream *transport, char *error, size_t error_len);
 
 /*
+ * Exchange one CREATE_VM or admission-stage request on a caller-owned,
+ * authenticated stream socket. The owner supplies the verified peer identity,
+ * configures I/O timeouts, serializes exchanges, and closes the socket on error.
+ * This is framing only, not a TLS connector; never pass an unwrapped TLS socket.
+ * Zero means a correlated reply was received, NOT semantic success: inspect
+ * RESULT.status_code and the stage-specific recorded state before proceeding.
+ * Failure leaves RESULT unchanged.
+ */
+int wvm_control_transport_exchange(
+    int stream_fd, uint32_t peer_physical_node_id,
+    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
+    struct wvm_control_result *result, char *error, size_t error_len);
+
+/*
  * Encode a typed result and write CTRL_RESULT back on the same ordered stream.
  * Production control-plane streams should use the apply callback so each
  * connection owns its response path; the legacy dispatch/sink form remains

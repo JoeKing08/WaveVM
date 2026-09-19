@@ -358,6 +358,8 @@ int main(void)
     uint32_t captured_gateway_parent_ids[4];
     uint32_t captured_gateway_child_ids[4];
     struct wvm_membership_controller_capture capture;
+    struct wvm_membership_controller_member_status member_status;
+    struct wvm_membership_controller_member_status saved_status;
     struct wvm_member_key node_member;
     struct wvm_member_key gateway_member;
     struct wvm_member_key child_gateway_member;
@@ -474,6 +476,38 @@ int main(void)
         wvm_membership_controller_close(&controller);
         unlink(journal_path);
         return 1;
+    }
+
+    if (expect(wvm_membership_controller_member_status(
+                   &controller, &node_member, &member_status, error,
+                   sizeof(error)) == 0 &&
+                   memcmp(&member_status.endpoint, &node.control_endpoint,
+                          sizeof(member_status.endpoint)) == 0,
+               "copy endpoint without capturing hosted gateway lists") ||
+        expect(wvm_membership_controller_member_status(
+                   &controller, &gateway_member, &member_status, error,
+                   sizeof(error)) == 0 &&
+                   memcmp(&member_status.endpoint, &gateway.endpoint,
+                          sizeof(member_status.endpoint)) == 0,
+               "copy gateway endpoint without capturing parent/child lists")) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return 1;
+    }
+    saved_status = member_status;
+    {
+        struct wvm_member_key stale_key = node_member;
+
+        stale_key.instance_id++;
+        if (expect(wvm_membership_controller_member_status(
+                       &controller, &stale_key, &member_status, error,
+                       sizeof(error)) != 0 &&
+                       memcmp(&saved_status, &member_status, sizeof(member_status)) == 0,
+                   "stale instance lookup cannot return a replacement endpoint")) {
+            wvm_membership_controller_close(&controller);
+            unlink(journal_path);
+            return 1;
+        }
     }
 
     if (expect(wvm_membership_controller_begin_validation(

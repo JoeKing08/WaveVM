@@ -33,12 +33,14 @@ struct wvm_resource_vm {
     uint32_t memory_chunk_count;
     uint32_t vcpu_nodes[WVM_CPU_ROUTE_TABLE_SIZE];
     uint32_t memory_nodes[WVM_RESOURCE_MAX_MEMORY_CHUNKS];
-    uint16_t vcpus_per_node[WVM_MAX_SLAVES];
-    uint64_t memory_mb_per_node[WVM_MAX_SLAVES];
+    uint32_t node_capacity;
+    uint16_t *vcpus_per_node;
+    uint64_t *memory_mb_per_node;
 };
 
 struct wvm_resource_plan {
-    struct wvm_resource_node nodes[WVM_MAX_SLAVES];
+    struct wvm_resource_node *nodes;
+    uint32_t node_capacity;
     struct wvm_resource_vm vms[WVM_MAX_VMS];
     uint8_t vm_present[WVM_MAX_VMS];
     uint32_t node_count;

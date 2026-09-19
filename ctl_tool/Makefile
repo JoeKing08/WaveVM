@@ -4,7 +4,7 @@ LDFLAGS ?= -pthread
 
 TARGET = wvm_ctl
 COMMON_DIR = ../common_include
-SRCS = main.c \
+SRCS = main.c admission_workspace.c \
 	$(COMMON_DIR)/wavevm_sha256.c \
 	$(COMMON_DIR)/wavevm_canonical.c \
 	$(COMMON_DIR)/wavevm_identity.c \

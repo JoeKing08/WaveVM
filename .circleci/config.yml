@@ -60,9 +60,8 @@ jobs:
       - run:
           name: Build WaveVM services
           command: |
-            make -j$(nproc) -C gateway_service
-            make -j$(nproc) -C slave_daemon
-            make -j$(nproc) -C master_core
+            make -j$(nproc) -C node_runtime
+            make -j$(nproc) -C ctl_tool
 
       - run:
           name: Download CirrosOS image

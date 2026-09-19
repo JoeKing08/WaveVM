@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "wavevm_canonical.h"
@@ -1271,6 +1272,89 @@ static int validate_record_type(const uint8_t *bytes, size_t byte_count,
     return 0;
 }
 
+static int activation_transaction(
+    const struct wvm_control_plane *plane,
+    const struct wvm_control_plane_entry *entry,
+    const struct wvm_activation_record *activation, uint64_t sequence,
+    const uint8_t digest[WVM_SHA256_DIGEST_BYTES],
+    struct wvm_admission_transaction_record *updated, char *error,
+    size_t error_len)
+{
+    if (!entry || !entry->transaction.has_candidate_manifest_digest ||
+        !entry->transaction.has_prepared_route_snapshot_key ||
+        entry->transaction.has_activation_record_digest || sequence == 0 ||
+        activation->durable_decision_sequence != sequence ||
+        memcmp(entry->transaction.admission_tx_id, activation->admission_tx_id,
+               sizeof(activation->admission_tx_id)) != 0 ||
+        memcmp(entry->transaction.candidate_manifest_digest,
+               activation->candidate_manifest_digest,
+               sizeof(activation->candidate_manifest_digest)) != 0 ||
+        activation->required_route_snapshot_count != 1 ||
+        !route_snapshot_key_equal(
+            &entry->transaction.prepared_route_snapshot_key,
+            &activation->required_route_snapshot_keys[0])) {
+        set_error(error, error_len,
+                  "activation does not match undecided transaction and journal sequence");
+        return -1;
+    }
+    if (durable_route_snapshot_has_state(
+            plane, &entry->transaction.prepared_route_snapshot_key,
+            WVM_ROUTE_TRANSACTION_PREPARING, error, error_len) != 0) {
+        return -1;
+    }
+    *updated = entry->transaction;
+    if (activation->decision == WVM_ACTIVATION_ACTIVATE &&
+        entry->transaction.state == WVM_LIFECYCLE_PARTICIPANTS_PREPARED) {
+        updated->state = WVM_LIFECYCLE_ACTIVATION_DECIDED;
+    } else if (activation->decision == WVM_ACTIVATION_ABORT &&
+               entry->transaction.state >= WVM_LIFECYCLE_PLANNED &&
+               entry->transaction.state < WVM_LIFECYCLE_ACTIVATION_DECIDED) {
+        updated->state = WVM_LIFECYCLE_ABORTING;
+    } else {
+        set_error(error, error_len,
+                  "activation decision is invalid for durable transaction state");
+        return -1;
+    }
+    updated->has_activation_record_digest = 1;
+    memcpy(updated->activation_record_digest, digest,
+           sizeof(updated->activation_record_digest));
+    updated->transaction_sequence = sequence;
+    return wvm_admission_transaction_record_validate(updated, error, error_len);
+}
+
+static int replay_activation(struct wvm_control_plane *plane,
+                              const uint8_t *bytes, size_t byte_count,
+                              uint64_t sequence, char *error, size_t error_len)
+{
+    struct wvm_activation_record activation = {0};
+    struct wvm_route_snapshot_key route_key;
+    struct wvm_admission_transaction_record updated;
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+    size_t i;
+
+    activation.required_route_snapshot_keys = &route_key;
+    activation.required_route_snapshot_capacity = 1;
+    if (wvm_activation_record_decode(bytes, byte_count, &activation, error,
+                                     error_len) != 0) {
+        return -1;
+    }
+    wvm_sha256_digest(bytes, byte_count, digest);
+    for (i = 0; i < plane->entry_count; i++) {
+        if (memcmp(plane->entries[i].transaction.admission_tx_id,
+                   activation.admission_tx_id,
+                   sizeof(activation.admission_tx_id)) == 0) {
+            if (activation_transaction(plane, &plane->entries[i], &activation,
+                                        sequence, digest, &updated, error,
+                                        error_len) != 0) {
+                return -1;
+            }
+            return apply_transaction_record(plane, &updated, error, error_len);
+        }
+    }
+    set_error(error, error_len, "activation journal frame has no transaction");
+    return -1;
+}
+
 static int replay_journal_frame(struct wvm_control_plane *plane,
                                 uint16_t kind, uint64_t sequence,
                                 const uint8_t *payload, size_t payload_bytes,
@@ -1279,7 +1363,7 @@ static int replay_journal_frame(struct wvm_control_plane *plane,
     struct wvm_admission_transaction_record transaction;
     uint16_t record_type;
 
-    if (!plane || !payload || sequence == 0 ||
+    if (!plane || !payload || sequence == 0 || sequence == UINT64_MAX ||
         (plane->next_journal_sequence != 0 &&
          sequence != plane->next_journal_sequence)) {
         set_error(error, error_len, "journal sequence is invalid");
@@ -1324,6 +1408,10 @@ static int replay_journal_frame(struct wvm_control_plane *plane,
             set_error(error, error_len, "journal transaction frame is invalid");
             return -1;
         }
+    } else if (kind == WVM_CONTROL_JOURNAL_ACTIVATION &&
+               replay_activation(plane, payload, payload_bytes, sequence,
+                                  error, error_len) != 0) {
+        return -1;
     } else if (kind == WVM_CONTROL_JOURNAL_ROUTE_TRANSACTION &&
                apply_route_transaction_record(plane, payload, payload_bytes,
                                               error, error_len) != 0) {
@@ -1353,9 +1441,11 @@ static int append_journal_frame(struct wvm_control_plane *plane, uint16_t kind,
     uint8_t digest[WVM_SHA256_DIGEST_BYTES];
     uint64_t sequence;
 
-    if (!plane || plane->journal_fd < 0 || !payload || payload_bytes == 0 ||
+    if (!plane || plane->journal_fd < 0 || plane->journal_failed ||
+        !payload || payload_bytes == 0 ||
         payload_bytes > WVM_CONTROL_PLANE_MAX_RECORD_BYTES ||
-        !sequence_out || plane->next_journal_sequence == 0) {
+        !sequence_out || plane->next_journal_sequence == 0 ||
+        plane->next_journal_sequence == UINT64_MAX) {
         set_error(error, error_len, "cannot append control-plane journal frame");
         return -1;
     }
@@ -1371,6 +1461,7 @@ static int append_journal_frame(struct wvm_control_plane *plane, uint16_t kind,
     if (write_full(plane->journal_fd, header, sizeof(header)) != 0 ||
         write_full(plane->journal_fd, payload, payload_bytes) != 0 ||
         fsync(plane->journal_fd) != 0) {
+        plane->journal_failed = 1;
         set_error(error, error_len, "cannot persist control-plane journal: %s",
                   strerror(errno));
         return -1;
@@ -1860,6 +1951,7 @@ static int restore_namespace(
 
     if (transaction->state >= WVM_LIFECYCLE_COMMITTED &&
         transaction->state != WVM_LIFECYCLE_STOPPED &&
+        transaction->state != WVM_LIFECYCLE_ABORTING &&
         transaction->state != WVM_LIFECYCLE_ABORTED) {
         state = WVM_VM_NAMESPACE_ACTIVE;
     }
@@ -2143,6 +2235,39 @@ int wvm_control_plane_membership_apply(
         error_len);
 }
 
+static int sync_journal_directory(const char *path)
+{
+    char *parent = strdup(path);
+    char *slash;
+    int fd;
+    int result;
+    int saved_errno;
+
+    if (!parent) {
+        return -1;
+    }
+    slash = strrchr(parent, '/');
+    if (slash) {
+        slash[slash == parent ? 1 : 0] = '\0';
+    } else {
+        free(parent);
+        parent = strdup(".");
+        if (!parent) {
+            return -1;
+        }
+    }
+    fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    free(parent);
+    if (fd < 0) {
+        return -1;
+    }
+    result = fsync(fd);
+    saved_errno = errno;
+    close(fd);
+    errno = saved_errno;
+    return result;
+}
+
 int wvm_control_plane_open(
     struct wvm_control_plane *plane, const char *journal_path,
     struct wvm_vm_namespace_allocator *namespace_allocator, char *error,
@@ -2169,6 +2294,10 @@ int wvm_control_plane_open(
         wvm_control_plane_close(plane);
         return -1;
     }
+    plane->entry_count = 0;
+    memset(plane->entries, 0, plane->entry_capacity * sizeof(*plane->entries));
+    plane->next_journal_sequence = 1;
+    plane->journal_failed = 0;
     while (1) {
         uint8_t *payload;
         uint8_t digest[WVM_SHA256_DIGEST_BYTES];
@@ -2264,6 +2393,14 @@ int wvm_control_plane_open(
             return -1;
         }
         free(payload);
+    }
+    /* Surviving complete frames may come from an unsuccessful prior fsync. */
+    if (fsync(plane->journal_fd) != 0 ||
+        sync_journal_directory(journal_path) != 0) {
+        set_error(error, error_len, "cannot sync recovered control-plane journal: %s",
+                  strerror(errno));
+        wvm_control_plane_close(plane);
+        return -1;
     }
     for (i = 0; i < plane->entry_count; i++) {
         if (restore_namespace(namespace_allocator,
@@ -3321,6 +3458,27 @@ int wvm_control_plane_read_runtime_manifest(
     return 0;
 }
 
+int wvm_control_plane_activation_options(
+    const struct wvm_control_plane *plane, uint64_t coordinator_instance_id,
+    struct wvm_coordinator_activation_options *options, char *error,
+    size_t error_len)
+{
+    struct timespec now;
+
+    if (!plane || plane->journal_fd < 0 || plane->journal_failed ||
+        plane->next_journal_sequence == 0 ||
+        plane->next_journal_sequence == UINT64_MAX ||
+        coordinator_instance_id == 0 || !options ||
+        clock_gettime(CLOCK_REALTIME, &now) != 0 || now.tv_sec <= 0) {
+        set_error(error, error_len, "activation metadata requires a writable journal and owner");
+        return -1;
+    }
+    options->coordinator_instance_id = coordinator_instance_id;
+    options->durable_decision_sequence = plane->next_journal_sequence;
+    options->decided_at = (uint64_t)now.tv_sec;
+    return 0;
+}
+
 int wvm_control_plane_record_activation(
     struct wvm_control_plane *plane,
     const struct wvm_coordinator_transaction *transaction,
@@ -3332,74 +3490,53 @@ int wvm_control_plane_record_activation(
     uint8_t *activation_bytes = NULL;
     uint8_t activation_digest[WVM_SHA256_DIGEST_BYTES];
     size_t activation_byte_count = 0;
-    uint64_t ignored_sequence;
-    enum wvm_lifecycle_state next_state;
+    uint64_t sequence;
 
-    if (!plane || !transaction || !activation ||
+    if (!plane || plane->journal_fd < 0 || plane->journal_failed ||
+        !transaction || !activation ||
         encode_activation_alloc(activation, &activation_bytes,
                                 &activation_byte_count, activation_digest,
                                 error, error_len) != 0) {
         return -1;
     }
     entry = find_mutable_request(plane, transaction->request_id);
-    if (!entry || !entry->transaction.has_candidate_manifest_digest ||
-        !entry->transaction.has_prepared_route_snapshot_key ||
+    if (!entry ||
         entry->transaction.vm_id != transaction->vm_id ||
         entry->transaction.vm_incarnation != transaction->vm_incarnation ||
-        memcmp(entry->transaction.admission_tx_id, activation->admission_tx_id,
-               sizeof(activation->admission_tx_id)) != 0 ||
-        memcmp(entry->transaction.candidate_manifest_digest,
-               activation->candidate_manifest_digest,
-               sizeof(activation->candidate_manifest_digest)) != 0 ||
-        activation->required_route_snapshot_count != 1 ||
-        !route_snapshot_key_equal(
-            &entry->transaction.prepared_route_snapshot_key,
-            &activation->required_route_snapshot_keys[0])) {
+        entry->transaction.manifest_generation != transaction->manifest_generation ||
+        memcmp(entry->transaction.admission_tx_id, transaction->admission_tx_id,
+               sizeof(transaction->admission_tx_id)) != 0) {
         free(activation_bytes);
         set_error(error, error_len,
                   "activation does not match durable candidate transaction");
         return -1;
     }
-    if (durable_route_snapshot_has_state(
-            plane, &entry->transaction.prepared_route_snapshot_key,
-            WVM_ROUTE_TRANSACTION_PREPARING, error, error_len) != 0) {
+    if (entry->transaction.has_activation_record_digest) {
+        int matches = memcmp(entry->transaction.activation_record_digest,
+                             activation_digest, sizeof(activation_digest)) == 0;
         free(activation_bytes);
-        return -1;
+        if (!matches) {
+            set_error(error, error_len, "activation conflicts with durable decision");
+        }
+        return matches ? 0 : -1;
     }
-    if (activation->decision == WVM_ACTIVATION_ACTIVATE) {
-        if (entry->transaction.state != WVM_LIFECYCLE_PARTICIPANTS_PREPARED) {
-            free(activation_bytes);
-            set_error(error, error_len,
-                      "activation decision requires prepared participants");
-            return -1;
-        }
-        next_state = WVM_LIFECYCLE_ACTIVATION_DECIDED;
-    } else if (activation->decision == WVM_ACTIVATION_ABORT) {
-        if (entry->transaction.state >= WVM_LIFECYCLE_ACTIVATION_DECIDED) {
-            free(activation_bytes);
-            set_error(error, error_len,
-                      "post-decision transaction cannot take pre-activation abort");
-            return -1;
-        }
-        next_state = WVM_LIFECYCLE_ABORTING;
-    } else {
+    if (activation_transaction(plane, entry, activation,
+                                plane->next_journal_sequence,
+                                activation_digest, &updated_transaction,
+                                error, error_len) != 0) {
         free(activation_bytes);
-        set_error(error, error_len, "activation has invalid decision");
         return -1;
     }
     if (append_journal_frame(plane, WVM_CONTROL_JOURNAL_ACTIVATION,
                              activation_bytes, activation_byte_count,
-                             &ignored_sequence, error, error_len) != 0) {
+                             &sequence, error, error_len) != 0) {
         free(activation_bytes);
         return -1;
     }
-    updated_transaction = entry->transaction;
-    updated_transaction.state = next_state;
-    updated_transaction.has_activation_record_digest = 1;
-    memcpy(updated_transaction.activation_record_digest, activation_digest,
-           sizeof(updated_transaction.activation_record_digest));
+    /* The decision frame itself is the state transition, including on replay. */
+    entry->transaction = updated_transaction;
     free(activation_bytes);
-    return append_transaction(plane, &updated_transaction, error, error_len);
+    return 0;
 }
 
 int wvm_control_plane_start_if_ready(

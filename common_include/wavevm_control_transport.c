@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 static void set_error(char *error, size_t error_len, const char *message)
@@ -75,8 +76,11 @@ static int read_full(int fd, uint8_t *bytes, size_t byte_count,
         if (errno == EINTR) {
             continue;
         }
-        set_error(error, error_len, "control stream read failed");
-        return -errno;
+        {
+            int saved_errno = errno;
+            set_error(error, error_len, "control stream read failed");
+            return -saved_errno;
+        }
     }
     if (bytes_read) {
         *bytes_read = offset;
@@ -90,7 +94,8 @@ static int write_full(int fd, const uint8_t *bytes, size_t byte_count,
     size_t offset = 0;
 
     while (offset < byte_count) {
-        ssize_t result = write(fd, bytes + offset, byte_count - offset);
+        ssize_t result = send(fd, bytes + offset, byte_count - offset,
+                              MSG_NOSIGNAL);
 
         if (result > 0) {
             offset += (size_t)result;
@@ -103,10 +108,38 @@ static int write_full(int fd, const uint8_t *bytes, size_t byte_count,
         if (errno == EINTR) {
             continue;
         }
-        set_error(error, error_len, "control stream write failed");
-        return -errno;
+        {
+            int saved_errno = errno;
+            set_error(error, error_len, "control stream write failed");
+            return -saved_errno;
+        }
     }
     return 0;
+}
+
+static int admission_request(uint16_t message_type)
+{
+    switch (message_type) {
+    case WVM_ENVELOPE_MSG_PREPARE_RESERVATION:
+    case WVM_ENVELOPE_MSG_COMMIT_RESERVATION:
+    case WVM_ENVELOPE_MSG_ABORT_RESERVATION:
+    case WVM_ENVELOPE_MSG_PREPARE_MANIFEST:
+    case WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST:
+    case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
+    case WVM_ENVELOPE_MSG_ROUTE_PREPARE:
+    case WVM_ENVELOPE_MSG_ROUTE_COMMIT:
+    case WVM_ENVELOPE_MSG_ROUTE_ABORT:
+    case WVM_ENVELOPE_MSG_ROUTE_RETIRE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int typed_request(uint16_t message_type)
+{
+    return message_type == WVM_ENVELOPE_MSG_CREATE_VM ||
+           admission_request(message_type);
 }
 
 static int supported_request(uint16_t message_type)
@@ -115,7 +148,15 @@ static int supported_request(uint16_t message_type)
            message_type == WVM_ENVELOPE_MSG_REJOIN ||
            message_type == WVM_ENVELOPE_MSG_CORDON ||
            message_type == WVM_ENVELOPE_MSG_DRAIN ||
-           message_type == WVM_ENVELOPE_MSG_CREATE_VM;
+           typed_request(message_type);
+}
+
+static int forwarding_metadata_is_empty(const struct wvm_envelope *envelope)
+{
+    return envelope && envelope->route.destination_kind == 0 &&
+           envelope->route.destination_scope == 0 &&
+           envelope->route.destination_vnode_or_endpoint == 0 &&
+           envelope->route.hop_limit == 0 && envelope->route.hop_count == 0;
 }
 
 static int route_metadata_is_empty(const struct wvm_envelope *envelope)
@@ -131,10 +172,19 @@ static int route_metadata_is_empty(const struct wvm_envelope *envelope)
             return 0;
         }
     }
-    return envelope->route.destination_kind == 0 &&
-           envelope->route.destination_scope == 0 &&
-           envelope->route.destination_vnode_or_endpoint == 0 &&
-           envelope->route.hop_limit == 0 && envelope->route.hop_count == 0;
+    return forwarding_metadata_is_empty(envelope);
+}
+
+static int request_metadata_valid(const struct wvm_envelope *request)
+{
+    if (!request || request->flags != 0 ||
+        !supported_request(request->message_type)) {
+        return 0;
+    }
+    if (admission_request(request->message_type)) {
+        return request->vm_id != 0 && forwarding_metadata_is_empty(request);
+    }
+    return request->vm_id == 0 && route_metadata_is_empty(request);
 }
 
 static int send_payload_result(struct wvm_control_stream *transport,
@@ -173,11 +223,16 @@ static int send_payload_result(struct wvm_control_stream *transport,
         return -EPROTO;
     }
     write_be32(prefix, (uint32_t)frame_bytes);
-    if (write_full(transport->config.stream_fd, prefix, sizeof(prefix), error,
-                   error_len) != 0 ||
-        write_full(transport->config.stream_fd, frame, frame_bytes, error,
-                   error_len) != 0) {
-        return -EPIPE;
+    {
+        int result = write_full(transport->config.stream_fd, prefix,
+                                sizeof(prefix), error, error_len);
+        if (result == 0) {
+            result = write_full(transport->config.stream_fd, frame, frame_bytes,
+                                error, error_len);
+        }
+        if (result != 0) {
+            return result;
+        }
     }
     transport->response_sent = 1;
     return 0;
@@ -311,6 +366,106 @@ int wvm_control_result_decode(const uint8_t bytes[WVM_CONTROL_RESULT_BYTES],
     return 0;
 }
 
+int wvm_control_transport_exchange(
+    int stream_fd, uint32_t peer_physical_node_id,
+    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
+    struct wvm_control_result *result, char *error, size_t error_len)
+{
+    uint8_t prefix[WVM_CONTROL_TRANSPORT_FRAME_PREFIX_BYTES];
+    uint8_t reply[WVM_ENVELOPE_HEADER_BYTES + WVM_CONTROL_RESULT_BYTES];
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+    struct wvm_envelope response;
+    struct wvm_control_result decoded;
+    uint8_t *frame;
+    size_t frame_bytes;
+    size_t capacity;
+    int status;
+
+    if (stream_fd < 0 || peer_physical_node_id == 0 ||
+        peer_runtime_instance_id == 0 || !result ||
+        !request_metadata_valid(request) ||
+        !typed_request(request->message_type) ||
+        request->payload_bytes > WVM_ENVELOPE_MAX_LOCAL_PAYLOAD) {
+        set_error(error, error_len, "control exchange input is invalid");
+        return -EINVAL;
+    }
+    capacity = WVM_ENVELOPE_HEADER_BYTES + request->payload_bytes;
+    frame = malloc(capacity);
+    if (!frame) {
+        set_error(error, error_len, "control exchange allocation failed");
+        return -ENOMEM;
+    }
+    status = wvm_envelope_encode(request, WVM_ENVELOPE_TRANSPORT_LOCAL,
+                                 frame, capacity, &frame_bytes, error,
+                                 error_len);
+    if (status != 0) {
+        free(frame);
+        return -EPROTO;
+    }
+    write_be32(prefix, (uint32_t)frame_bytes);
+    status = write_full(stream_fd, prefix, sizeof(prefix), error, error_len);
+    if (status == 0) {
+        status = write_full(stream_fd, frame, frame_bytes, error, error_len);
+    }
+    free(frame);
+    if (status != 0) {
+        return status;
+    }
+    status = read_full(stream_fd, prefix, sizeof(prefix), NULL, error, error_len);
+    if (status != 0) {
+        if (status == 1) {
+            set_error(error, error_len, "control reply prefix is truncated");
+            return -EPROTO;
+        }
+        return status;
+    }
+    frame_bytes = read_be32(prefix);
+    if (frame_bytes != sizeof(reply)) {
+        set_error(error, error_len, "control reply length is invalid");
+        return -EMSGSIZE;
+    }
+    status = read_full(stream_fd, reply, frame_bytes, NULL, error, error_len);
+    if (status != 0) {
+        if (status == 1) {
+            set_error(error, error_len, "control reply is truncated");
+            return -EPROTO;
+        }
+        return status;
+    }
+    if (wvm_envelope_decode(reply, frame_bytes, WVM_ENVELOPE_TRANSPORT_LOCAL,
+                            &response, error, error_len) != 0 ||
+        response.message_type != WVM_ENVELOPE_MSG_CTRL_RESULT ||
+        response.flags != 0 || response.vm_id != 0 ||
+        !route_metadata_is_empty(&response) ||
+        response.origin_physical_node_id != peer_physical_node_id ||
+        response.origin_runtime_instance_id != peer_runtime_instance_id ||
+        response.delivery_attempt_id != request->delivery_attempt_id ||
+        memcmp(response.operation_id, request->operation_id,
+               WVM_IDENTITY_ID_BYTES) != 0 ||
+        response.payload_bytes != WVM_CONTROL_RESULT_BYTES ||
+        wvm_control_result_decode(response.payload, &decoded) != 0 ||
+        memcmp(decoded.in_reply_to_operation_id, request->operation_id,
+               WVM_IDENTITY_ID_BYTES) != 0) {
+        set_error(error, error_len, "control reply does not match request or peer");
+        return -EPROTO;
+    }
+    if (admission_request(request->message_type) &&
+        decoded.status_code == WVM_CONTROL_RESULT_SUCCESS) {
+        wvm_envelope_semantic_digest(request->payload, request->payload_bytes,
+                                     digest);
+        if (decoded.vm_id != request->vm_id ||
+            decoded.vm_incarnation != request->vm_incarnation ||
+            decoded.manifest_generation != request->manifest_generation ||
+            decoded.route_scope_id != request->route_scope_id ||
+            memcmp(decoded.record_digest, digest, sizeof(digest)) != 0) {
+            set_error(error, error_len, "admission reply does not bind request");
+            return -EPROTO;
+        }
+    }
+    *result = decoded;
+    return 0;
+}
+
 int wvm_control_transport_serve_once(
     struct wvm_control_stream *transport, char *error, size_t error_len)
 {
@@ -369,9 +524,7 @@ int wvm_control_transport_serve_once(
     }
     if (wvm_envelope_decode(frame, frame_bytes, WVM_ENVELOPE_TRANSPORT_LOCAL,
                             &request, error, error_len) != 0 ||
-        request.flags != 0 ||
-        !route_metadata_is_empty(&request) ||
-        !supported_request(request.message_type)) {
+        !request_metadata_valid(&request)) {
         free(frame);
         if (!error || error[0] == '\0') {
             set_error(error, error_len, "control stream request is invalid");
@@ -385,7 +538,7 @@ int wvm_control_transport_serve_once(
     if (authenticate_result != 0) {
         int response_result;
 
-        if (request.message_type == WVM_ENVELOPE_MSG_CREATE_VM) {
+        if (typed_request(request.message_type)) {
             struct wvm_control_result result;
 
             memset(&result, 0, sizeof(result));
@@ -407,7 +560,7 @@ int wvm_control_transport_serve_once(
         free(frame);
         return response_result;
     }
-    if (request.message_type == WVM_ENVELOPE_MSG_CREATE_VM) {
+    if (typed_request(request.message_type)) {
         struct wvm_control_result result;
 
         memset(&result, 0, sizeof(result));

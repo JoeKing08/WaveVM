@@ -35,6 +35,10 @@ struct wvm_cluster_snapshot {
     uint32_t active_gateway_count;
 };
 
+/*
+ * On success, transfers an allocated nodes array to SNAPSHOT. The caller
+ * releases it before reusing a successful output. Failure leaves SNAPSHOT intact.
+ */
 int wvm_cluster_snapshot_build(
     const struct wvm_cluster_record_set *records,
     struct wvm_cluster_snapshot *snapshot, char *error, size_t error_len);
@@ -45,6 +49,9 @@ int wvm_cluster_snapshot_build(
  * non-schedulable in the returned immutable snapshot; source records remain
  * unchanged. LABEL constraints reject until a canonical NodeMetadata record
  * exists, rather than consulting a launcher or host environment.
+ * Source and destination must be distinct. On success the caller owns the
+ * returned nodes; release an old output before replacement. Failure leaves
+ * the destination unchanged.
  */
 int wvm_cluster_snapshot_apply_host_constraints(
     const struct wvm_cluster_record_set *records,

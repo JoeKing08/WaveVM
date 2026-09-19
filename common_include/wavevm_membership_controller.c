@@ -3323,6 +3323,9 @@ int wvm_membership_controller_member_status(
     memset(status, 0, sizeof(*status));
     status->kind = entry->kind;
     status->member_key = entry->member_key;
+    status->endpoint = entry->kind == WVM_MEMBERSHIP_COMPUTE
+                           ? entry->node.control_endpoint
+                           : entry->gateway.endpoint;
     status->desired_membership_state = entry_state(entry);
     status->observed_health_state = entry_health(entry);
     status->active_dependency_count = entry->active_dependency_count;

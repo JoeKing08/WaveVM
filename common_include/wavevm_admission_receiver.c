@@ -1,9 +1,14 @@
 #include "wavevm_admission_receiver.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "wavevm_envelope.h"
 
@@ -85,12 +90,12 @@ static int encode_runtime_manifest(const void *record, uint8_t *bytes,
                                             encoded_bytes, error, error_len);
 }
 
-static int encode_reservation(const void *record, uint8_t *bytes,
+static int encode_activation(const void *record, uint8_t *bytes,
                               size_t capacity, size_t *encoded_bytes,
                               char *error, size_t error_len)
 {
-    return wvm_resource_reservation_encode(record, bytes, capacity,
-                                           encoded_bytes, error, error_len);
+    return wvm_activation_record_encode(record, bytes, capacity, encoded_bytes,
+                                         error, error_len);
 }
 
 static int canonical_equal(canonical_encode_fn encode, const void *left,
@@ -257,7 +262,16 @@ static int reservation_matches_requirement(
     const struct wvm_reservation_requirement *requirement = NULL;
     size_t i;
 
-    if (!candidate || !reservation) {
+    if (!candidate || !reservation ||
+        candidate->vm_id != reservation->vm_id ||
+        candidate->vm_incarnation != reservation->vm_incarnation ||
+        memcmp(candidate->admission_tx_id, reservation->admission_tx_id,
+               WVM_IDENTITY_ID_BYTES) != 0 ||
+        memcmp(candidate->manifest_digest, reservation->candidate_manifest_digest,
+               WVM_SHA256_DIGEST_BYTES) != 0 ||
+        memcmp(candidate->eligibility_fence_digest,
+               reservation->eligibility_fence_digest,
+               WVM_SHA256_DIGEST_BYTES) != 0) {
         return 0;
     }
     for (i = 0; i < candidate->reservation_requirements.count; i++) {
@@ -343,46 +357,67 @@ static int resolve_slot(struct wvm_admission_receiver *receiver,
     return 0;
 }
 
-static int validate_local_runtime(
-    const struct wvm_admission_receiver *receiver,
-    const struct wvm_admission_participant_stage *stage)
+static int slot_is_durable(const struct wvm_admission_receiver_slot *slot,
+                           const struct wvm_envelope *request)
 {
+    return slot && slot->state_path && slot->state_lock_fd >= 0 &&
+           !slot->state_failed && slot->vm_id == request->vm_id &&
+           slot->vm_incarnation == request->vm_incarnation &&
+           slot->manifest_generation == request->manifest_generation;
+}
+
+static int local_reservation_matches_stage(
+    const struct wvm_admission_receiver *receiver,
+    const struct wvm_admission_participant_stage *stage,
+    enum wvm_reservation_state state)
+{
+    struct wvm_local_reservation_registry *registry;
     const struct wvm_resource_reservation *reservation;
+    int matches;
 
     if (!receiver || !stage || !stage->candidate || !stage->runtime_manifest ||
-        !receiver->config.reservation_registry ||
+        !(registry = receiver->config.reservation_registry) ||
+        !registry->initialized ||
         stage->runtime_manifest->physical_node_id !=
             receiver->config.local_physical_node_id ||
         stage->runtime_manifest->expected_node_instance_id !=
             receiver->config.local_node_instance_id ||
         !route_key_equal(&stage->runtime_manifest->required_route_snapshot_key,
-                         &stage->candidate->prepared_route_snapshot_key) ||
-        !(reservation = wvm_local_reservation_find(
-              receiver->config.reservation_registry,
-              stage->runtime_manifest->reservation_id)) ||
-        reservation->state != WVM_RESERVATION_PREPARED ||
-        !reservation_matches_requirement(stage->candidate, reservation)) {
-        return -1;
-    }
-    return 0;
-}
-
-static int local_reservation_is_committed(
-    const struct wvm_admission_receiver *receiver,
-    const struct wvm_admission_participant_stage *stage)
-{
-    const struct wvm_resource_reservation *reservation;
-
-    if (!receiver || !stage || !stage->candidate || !stage->runtime_manifest ||
-        !receiver->config.reservation_registry ||
-        !(reservation = wvm_local_reservation_find(
-              receiver->config.reservation_registry,
-              stage->runtime_manifest->reservation_id)) ||
-        reservation->state != WVM_RESERVATION_COMMITTED ||
-        !reservation_matches_requirement(stage->candidate, reservation)) {
+                         &stage->candidate->prepared_route_snapshot_key)) {
         return 0;
     }
-    return 1;
+    pthread_mutex_lock(&registry->lock);
+    reservation = wvm_local_reservation_find(registry,
+                                             stage->runtime_manifest->reservation_id);
+    matches = registry->journal_fd >= 0 && !registry->journal_failed &&
+              reservation && reservation->state == state &&
+              reservation_matches_requirement(stage->candidate, reservation) &&
+              (state != WVM_RESERVATION_COMMITTED ||
+               (stage->activation && reservation->has_activation_fence &&
+                memcmp(reservation->activation_fence, stage->activation->activation_fence,
+                       WVM_IDENTITY_ID_BYTES) == 0));
+    pthread_mutex_unlock(&registry->lock);
+    return matches;
+}
+
+static int local_reservation_allows_abort(
+    const struct wvm_admission_receiver *receiver,
+    const uint8_t reservation_id[WVM_IDENTITY_ID_BYTES])
+{
+    struct wvm_local_reservation_registry *registry = receiver->config.reservation_registry;
+    const struct wvm_resource_reservation *reservation;
+    int allowed;
+
+    if (!registry || !registry->initialized) {
+        return 0;
+    }
+    pthread_mutex_lock(&registry->lock);
+    reservation = wvm_local_reservation_find(registry, reservation_id);
+    allowed = registry->journal_fd >= 0 && !registry->journal_failed &&
+              (!reservation || (!reservation->has_activation_fence &&
+                                reservation->state != WVM_RESERVATION_COMMITTED));
+    pthread_mutex_unlock(&registry->lock);
+    return allowed;
 }
 
 static int prepared_slot_uses_reservation(
@@ -396,7 +431,8 @@ static int prepared_slot_uses_reservation(
     if (!receiver || !request || !reservation_id) {
         return -1;
     }
-    if (resolve_slot(receiver, request, &slot, error, error_len) != 0) {
+    if (resolve_slot(receiver, request, &slot, error, error_len) != 0 ||
+        !slot_is_durable(slot, request)) {
         return -1;
     }
     return slot->has_prepared &&
@@ -412,13 +448,14 @@ static int apply_reservation_stage(
 {
     struct wvm_admission_reservation_stage_storage *storage;
     struct wvm_admission_reservation_stage stage;
-    const struct wvm_resource_reservation *local_reservation;
     enum wvm_reservation_runtime_result reservation_result;
-    int equal;
+    int equal = -1;
 
     if (!receiver->config.reservation_registry ||
-        !receiver->config.reservation_scratch_storage) {
-        set_error(error, error_len, "local reservation authority is unavailable");
+        !receiver->config.reservation_scratch_storage ||
+        !wvm_local_reservation_registry_is_durable(
+            receiver->config.reservation_registry)) {
+        set_error(error, error_len, "durable local reservation authority is unavailable");
         return -1;
     }
     storage = receiver->config.reservation_scratch_storage;
@@ -447,17 +484,8 @@ static int apply_reservation_stage(
         if (!activation_matches_route(stage.activation, stage.candidate) ||
             wvm_local_reservation_commit(
                 receiver->config.reservation_registry,
-                stage.reservation->reservation_id, stage.activation,
-                &reservation_result, error, error_len) != 0 ||
-            !(local_reservation = wvm_local_reservation_find(
-                  receiver->config.reservation_registry,
-                  stage.reservation->reservation_id)) ||
-            (equal = canonical_equal(encode_reservation, local_reservation,
-                                     stage.reservation, error, error_len)) != 1) {
-            if (equal == 0) {
-                set_error(error, error_len,
-                          "committed reservation differs from controller stage");
-            }
+                stage.reservation, stage.activation,
+                &reservation_result, error, error_len) != 0) {
             goto fail;
         }
         result->recorded_state = WVM_RESERVATION_COMMITTED;
@@ -467,7 +495,7 @@ static int apply_reservation_stage(
             error_len);
         if (equal != 0 ||
             wvm_local_reservation_abort(receiver->config.reservation_registry,
-                                        stage.reservation->reservation_id,
+                                        stage.reservation,
                                         &reservation_result, error,
                                         error_len) != 0) {
             if (equal > 0) {
@@ -497,6 +525,142 @@ static int decode_participant_scratch(
         return -1;
     }
     return candidate_matches_request(stage->candidate, request) ? 0 : -1;
+}
+
+static int state_parent_open(const char *path)
+{
+    char parent[4096];
+    const char *slash = strrchr(path, '/');
+    size_t length = slash ? (size_t)(slash - path) : 0;
+
+    if (!slash) {
+        return open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    }
+    if (length == 0) {
+        length = 1;
+    }
+    if (length >= sizeof(parent)) {
+        return -1;
+    }
+    memcpy(parent, path, length);
+    parent[length] = '\0';
+    return open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+}
+
+static int state_write_full(int fd, const uint8_t *bytes, size_t count)
+{
+    size_t offset = 0;
+
+    while (offset < count) {
+        ssize_t written = write(fd, bytes + offset, count - offset);
+
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        if (written <= 0) {
+            return -1;
+        }
+        offset += (size_t)written;
+    }
+    return 0;
+}
+
+/* A complete envelope supplies the existing framing, CRC, and payload digest.
+ * Rename makes each bounded slot a single durable snapshot, not a growing log. */
+static int persist_participant_stage(
+    struct wvm_admission_receiver_slot *slot, const struct wvm_envelope *request,
+    char *error, size_t error_len)
+{
+    uint8_t *bytes = NULL;
+    size_t count = 0;
+    char temporary[4096] = {0};
+    int fd = -1, directory_fd = -1, result = -1;
+    int length;
+
+    if (!slot_is_durable(slot, request) ||
+        request->payload_bytes > WVM_ENVELOPE_MAX_LOCAL_PAYLOAD) {
+        set_error(error, error_len, "participant durable state is unavailable");
+        return -1;
+    }
+    bytes = malloc(WVM_ENVELOPE_HEADER_BYTES + request->payload_bytes);
+    if (!bytes ||
+        wvm_envelope_encode(request, WVM_ENVELOPE_TRANSPORT_LOCAL, bytes,
+                            WVM_ENVELOPE_HEADER_BYTES + request->payload_bytes,
+                            &count, error, error_len) != 0) {
+        goto out;
+    }
+    length = snprintf(temporary, sizeof(temporary), "%s.tmp.XXXXXX",
+                       slot->state_path);
+    if (length < 0 || (size_t)length >= sizeof(temporary)) {
+        temporary[0] = '\0';
+        goto out;
+    }
+    directory_fd = state_parent_open(slot->state_path);
+    if (directory_fd < 0 || (fd = mkstemp(temporary)) < 0 ||
+        fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 ||
+        state_write_full(fd, bytes, count) != 0 || fsync(fd) != 0) {
+        goto out;
+    }
+    if (rename(temporary, slot->state_path) != 0 || fsync(directory_fd) != 0) {
+        goto out;
+    }
+    result = 0;
+out:
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (directory_fd >= 0) {
+        close(directory_fd);
+    }
+    if (temporary[0]) {
+        unlink(temporary);
+    }
+    free(bytes);
+    if (result != 0) {
+        slot->state_failed = 1;
+        set_error(error, error_len, "cannot persist participant stage; reopen required");
+    }
+    return result;
+}
+
+static int restore_participant_stage(
+    struct wvm_admission_receiver *receiver,
+    struct wvm_admission_receiver_slot *slot, const struct wvm_envelope *request,
+    char *error, size_t error_len)
+{
+    struct wvm_admission_participant_stage stage;
+
+    if (request->flags != 0 || !slot_is_durable(slot, request) ||
+        (request->message_type != WVM_ENVELOPE_MSG_PREPARE_MANIFEST &&
+         request->message_type != WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST &&
+         request->message_type != WVM_ENVELOPE_MSG_ABORT_MANIFEST) ||
+        wvm_admission_participant_stage_decode(
+            request->payload, request->payload_bytes, request->message_type,
+            &slot->prepared_storage, &stage, error, error_len) != 0 ||
+        !candidate_matches_request(stage.candidate, request) ||
+        stage.runtime_manifest->physical_node_id !=
+            receiver->config.local_physical_node_id ||
+        stage.runtime_manifest->expected_node_instance_id !=
+            receiver->config.local_node_instance_id ||
+        (stage.activation &&
+         !activation_matches_route(stage.activation, stage.candidate))) {
+        set_error(error, error_len, "participant state does not bind this slot");
+        return -1;
+    }
+    slot->has_aborted = request->message_type == WVM_ENVELOPE_MSG_ABORT_MANIFEST;
+    slot->has_activation_decision =
+        request->message_type == WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST;
+    slot->has_prepared = !slot->has_aborted;
+    slot->has_activated = 0;
+    wvm_runtime_gate_init(&slot->gate);
+    if (slot->has_prepared &&
+        wvm_runtime_gate_prepare(&slot->gate, &slot->prepared_storage.runtime_manifest,
+                                 receiver->config.local_physical_node_id,
+                                 receiver->config.local_node_instance_id,
+                                 error, error_len) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 static int activate_delivery(struct wvm_admission_receiver *receiver,
@@ -537,6 +701,7 @@ static int apply_participant_stage(
     int equal;
 
     if (resolve_slot(receiver, request, &slot, error, error_len) != 0 ||
+        !slot_is_durable(slot, request) ||
         decode_participant_scratch(request, slot, &scratch, error, error_len) !=
             0 ||
         scratch.runtime_manifest->physical_node_id !=
@@ -548,9 +713,9 @@ static int apply_participant_stage(
     }
     result_bind_candidate(result, scratch.candidate);
     if (request->message_type == WVM_ENVELOPE_MSG_PREPARE_MANIFEST) {
-        if (slot->has_activated) {
+        if (slot->has_activation_decision || slot->has_aborted) {
             set_error(error, error_len,
-                      "manifest prepare cannot follow local activation");
+                      "manifest prepare cannot follow an activation or abort decision");
             return -1;
         }
         if (slot->has_prepared) {
@@ -565,61 +730,78 @@ static int apply_participant_stage(
                           "manifest prepare conflicts with retained projection");
                 return -1;
             }
-        } else if (wvm_admission_participant_stage_decode(
-                       request->payload, request->payload_bytes,
-                       request->message_type, &slot->prepared_storage, &scratch,
-                       error, error_len) != 0 ||
-                   validate_local_runtime(receiver, &scratch) != 0 ||
-                   wvm_runtime_gate_prepare(
-                       &slot->gate, &slot->prepared_storage.runtime_manifest,
-                       receiver->config.local_physical_node_id,
-                       receiver->config.local_node_instance_id, error,
-                       error_len) != 0) {
+        } else if (!local_reservation_matches_stage(receiver, &scratch,
+                                                     WVM_RESERVATION_PREPARED)) {
             set_error(error, error_len, "cannot retain local runtime prepare");
             return -1;
         } else {
-            slot->has_prepared = 1;
+            if (restore_participant_stage(receiver, slot, request, error,
+                                           error_len) != 0 ||
+                persist_participant_stage(slot, request, error, error_len) != 0) {
+                slot->state_failed = 1;
+                return -1;
+            }
         }
         result->recorded_state = WVM_LIFECYCLE_PARTICIPANTS_PREPARED;
     } else if (request->message_type == WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST) {
-        if (!slot->has_prepared || !activation_matches_route(scratch.activation,
-                                                             scratch.candidate) ||
+        if (!slot->has_prepared || slot->has_aborted ||
+            !activation_matches_route(scratch.activation, scratch.candidate) ||
             canonical_equal(encode_candidate, &slot->prepared_storage.candidate,
                             scratch.candidate, error, error_len) != 1 ||
             runtime_projection_equal(&slot->prepared_storage.runtime_manifest,
                                      scratch.runtime_manifest, 1, error,
                                      error_len) != 1 ||
-            !local_reservation_is_committed(receiver, &scratch) ||
-            activate_delivery(receiver, slot, scratch.candidate,
-                              scratch.runtime_manifest, scratch.activation, error,
-                              error_len) != 0 ||
-            wvm_runtime_gate_bind_activation(&slot->gate,
-                                              scratch.runtime_manifest, error,
-                                              error_len) != 0 ||
-            wvm_runtime_gate_activate(&slot->gate,
-                                      scratch.activation->activation_fence, error,
-                              error_len) != 0) {
+            !local_reservation_matches_stage(receiver, &scratch,
+                                               WVM_RESERVATION_COMMITTED) ||
+            (slot->has_activation_decision &&
+             canonical_equal(encode_activation, &slot->prepared_storage.activation,
+                             scratch.activation, error, error_len) != 1)) {
             set_error(error, error_len, "cannot activate local runtime projection");
+            return -1;
+        }
+        if (!slot->has_activation_decision) {
+            struct wvm_admission_participant_stage retained;
+
+            /* Retain the decision before publishing any runnable projection.
+             * A crash here must retry activation, never fall back to abort. */
+            if (wvm_admission_participant_stage_decode(
+                    request->payload, request->payload_bytes, request->message_type,
+                    &slot->prepared_storage, &retained, error, error_len) != 0 ||
+                persist_participant_stage(slot, request, error, error_len) != 0) {
+                slot->state_failed = 1;
+                return -1;
+            }
+            slot->has_activation_decision = 1;
+        }
+        if (activate_delivery(receiver, slot, scratch.candidate,
+                               scratch.runtime_manifest, scratch.activation,
+                               error, error_len) != 0 ||
+            wvm_runtime_gate_activate(&slot->gate,
+                                      scratch.activation->activation_fence,
+                                      error, error_len) != 0) {
             return -1;
         }
         slot->has_activated = 1;
         result->recorded_state = WVM_LIFECYCLE_COMMITTED;
     } else {
-        if (slot->has_prepared &&
-            (slot->has_activated ||
-             canonical_equal(encode_candidate, &slot->prepared_storage.candidate,
+        if (slot->has_activation_decision ||
+            !local_reservation_allows_abort(receiver,
+                                            scratch.runtime_manifest->reservation_id) ||
+            ((slot->has_prepared || slot->has_aborted) &&
+             (canonical_equal(encode_candidate, &slot->prepared_storage.candidate,
                              scratch.candidate, error, error_len) != 1 ||
              runtime_projection_equal(&slot->prepared_storage.runtime_manifest,
                                       scratch.runtime_manifest, 1, error,
-                                      error_len) != 1 ||
-             wvm_runtime_gate_abort_prepared(
-                 &slot->gate, &slot->prepared_storage.runtime_manifest, error,
-                 error_len) != 0)) {
+                                      error_len) != 1))) {
             set_error(error, error_len, "cannot abort local runtime projection");
             return -1;
         }
-        slot->has_prepared = 0;
-        slot->has_activated = 0;
+        if (!slot->has_aborted &&
+            (restore_participant_stage(receiver, slot, request, error, error_len) != 0 ||
+             persist_participant_stage(slot, request, error, error_len) != 0)) {
+            slot->state_failed = 1;
+            return -1;
+        }
         result->recorded_state = WVM_LIFECYCLE_ABORTED;
     }
     result->status_code = WVM_CONTROL_RESULT_SUCCESS;
@@ -659,6 +841,120 @@ void wvm_admission_receiver_slot_init(struct wvm_admission_receiver_slot *slot)
     wvm_runtime_gate_init(&slot->gate);
     slot->has_prepared = 0;
     slot->has_activated = 0;
+    slot->has_activation_decision = 0;
+    slot->has_aborted = 0;
+    slot->vm_id = 0;
+    slot->vm_incarnation = 0;
+    slot->manifest_generation = 0;
+    slot->state_path = NULL;
+    slot->state_lock_fd = -1;
+    slot->state_failed = 0;
+}
+
+void wvm_admission_receiver_slot_close(struct wvm_admission_receiver_slot *slot)
+{
+    if (!slot) {
+        return;
+    }
+    if (slot->state_path && slot->state_lock_fd >= 0) {
+        close(slot->state_lock_fd);
+    }
+    free(slot->state_path);
+    wvm_admission_receiver_slot_init(slot);
+}
+
+int wvm_admission_receiver_slot_open(
+    struct wvm_admission_receiver *receiver,
+    struct wvm_admission_receiver_slot *slot, const char *state_path,
+    uint32_t vm_id, uint64_t vm_incarnation, uint64_t manifest_generation,
+    char *error, size_t error_len)
+{
+    char lock_path[4096];
+    struct stat info;
+    struct wvm_envelope saved;
+    uint8_t *bytes = NULL;
+    size_t count, offset = 0;
+    int fd = -1, directory_fd = -1, result = -1;
+    int length;
+
+    if (!receiver_config_valid(receiver) || !slot || slot->state_path ||
+        !state_path || !state_path[0] || !slot->runtime_manifest_path ||
+        !slot->runtime_manifest_path[0] ||
+        strcmp(state_path, slot->runtime_manifest_path) == 0 ||
+        !vm_id || !vm_incarnation || !manifest_generation) {
+        set_error(error, error_len, "participant state open input is invalid");
+        return -1;
+    }
+    wvm_admission_receiver_slot_init(slot);
+    slot->state_path = strdup(state_path);
+    slot->vm_id = vm_id;
+    slot->vm_incarnation = vm_incarnation;
+    slot->manifest_generation = manifest_generation;
+    length = snprintf(lock_path, sizeof(lock_path), "%s.lock", state_path);
+    if (!slot->state_path || length < 0 || (size_t)length >= sizeof(lock_path)) {
+        goto out;
+    }
+    slot->state_lock_fd = open(lock_path,
+                              O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (slot->state_lock_fd < 0 ||
+        fstat(slot->state_lock_fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        flock(slot->state_lock_fd, LOCK_EX | LOCK_NB) != 0 ||
+        fsync(slot->state_lock_fd) != 0 ||
+        (directory_fd = state_parent_open(state_path)) < 0) {
+        goto out;
+    }
+    fd = open(state_path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ENOENT &&
+            lstat(slot->runtime_manifest_path, &info) != 0 && errno == ENOENT &&
+            fsync(directory_fd) == 0) {
+            result = 0;
+        }
+        goto out;
+    }
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_size < WVM_ENVELOPE_HEADER_BYTES ||
+        (uintmax_t)info.st_size >
+            WVM_ENVELOPE_HEADER_BYTES + WVM_ENVELOPE_MAX_LOCAL_PAYLOAD) {
+        goto out;
+    }
+    count = (size_t)info.st_size;
+    bytes = malloc(count);
+    if (!bytes) {
+        goto out;
+    }
+    while (offset < count) {
+        ssize_t received = read(fd, bytes + offset, count - offset);
+
+        if (received < 0 && errno == EINTR) {
+            continue;
+        }
+        if (received <= 0) {
+            goto out;
+        }
+        offset += (size_t)received;
+    }
+    if (wvm_envelope_decode(bytes, count, WVM_ENVELOPE_TRANSPORT_LOCAL,
+                            &saved, error, error_len) != 0 ||
+        restore_participant_stage(receiver, slot, &saved, error, error_len) != 0 ||
+        fsync(fd) != 0 || fsync(directory_fd) != 0) {
+        goto out;
+    }
+    result = 0;
+out:
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (directory_fd >= 0) {
+        close(directory_fd);
+    }
+    free(bytes);
+    if (result != 0) {
+        wvm_admission_receiver_slot_close(slot);
+        slot->state_failed = 1;
+        set_error(error, error_len, "cannot open or recover participant state");
+    }
+    return result;
 }
 
 int wvm_admission_receiver_init(

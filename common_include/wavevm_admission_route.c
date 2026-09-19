@@ -300,6 +300,7 @@ int wvm_admission_route_compile(
     size_t error_len)
 {
     struct wvm_admission_route_compiler *compiler = context;
+    struct wvm_cluster_snapshot snapshot = {0};
     const struct wvm_gateway_record *gateway;
     uint8_t snapshot_digest[WVM_SHA256_DIGEST_BYTES];
     size_t encoded_bytes;
@@ -311,13 +312,14 @@ int wvm_admission_route_compile(
         !route_snapshot || records->gateway_count == 0 ||
         wvm_vm_route_scope_key_validate(&transaction->route_scope_key, error,
                                         error_len) != 0 ||
-        wvm_cluster_snapshot_build(records, &(struct wvm_cluster_snapshot){0},
+        wvm_cluster_snapshot_build(records, &snapshot,
                                    error, error_len) != 0) {
         if (error && error[0] == '\0') {
             set_error(error, error_len, "admission route compiler input is invalid");
         }
         return -1;
     }
+    wvm_admission_snapshot_cleanup(&snapshot.admission);
     gateway = select_gateway(records, compiler->topology_kind);
     if (!gateway) {
         set_error(error, error_len,

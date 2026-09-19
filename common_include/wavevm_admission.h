@@ -80,7 +80,8 @@ struct wvm_admission_snapshot {
     uint64_t topology_revision;
     uint64_t capability_profile_generation;
     uint32_t node_count;
-    struct wvm_admission_node nodes[WVM_MAX_SLAVES];
+    uint32_t node_capacity;
+    struct wvm_admission_node *nodes;
 };
 
 /*
@@ -123,7 +124,8 @@ struct wvm_admission_plan {
     uint64_t capability_profile_generation;
     uint32_t host_physical_node_id;
     uint32_t reservation_count;
-    struct wvm_admission_reservation reservations[WVM_MAX_SLAVES];
+    uint32_t reservation_capacity;
+    struct wvm_admission_reservation *reservations;
 };
 
 /*
@@ -157,6 +159,27 @@ struct wvm_admission_placement_options {
     size_t listener_plan_count;
 };
 
+/*
+ * Initialize snapshot with given initial capacity for nodes array.
+ * Returns 0 on success, -1 on allocation failure.
+ */
+int wvm_admission_snapshot_init(struct wvm_admission_snapshot *snapshot,
+                                uint32_t initial_capacity);
+
+/*
+ * Free dynamically allocated nodes array. Safe to call multiple times.
+ */
+void wvm_admission_snapshot_cleanup(struct wvm_admission_snapshot *snapshot);
+
+/*
+ * Create an independent deep copy of a snapshot, allocating new nodes array.
+ * Release an existing destination before replacing it. Self-copy is a no-op.
+ * Returns 0 on success, -1 on invalid input or allocation failure; failure
+ * leaves the destination unchanged.
+ */
+int wvm_admission_snapshot_copy(const struct wvm_admission_snapshot *src,
+                                struct wvm_admission_snapshot *dst);
+
 int wvm_admission_snapshot_validate(const struct wvm_admission_snapshot *snapshot,
                                     char *error, size_t error_len);
 
@@ -172,6 +195,10 @@ int wvm_admission_plan_validate(const struct wvm_admission_snapshot *snapshot,
  * Select a complete resource reservation plan from one immutable snapshot.
  * The caller owns admission_tx_id; retries must use the same ID only while
  * the snapshot/fence remains valid.
+ */
+/*
+ * On success, transfers an allocated reservation array to PLAN. The caller
+ * releases it before reusing a successful output. Failure leaves PLAN intact.
  */
 int wvm_admission_plan_propose(
     const struct wvm_admission_snapshot *snapshot,

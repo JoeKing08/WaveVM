@@ -18,9 +18,9 @@ static int expect(int condition, const char *message)
 }
 
 static int reset_workspace(
-    void *context, struct wvm_coordinator_prepared_route *prepared_route,
+    void *context, const struct wvm_vm_request *request,
+    struct wvm_coordinator_prepared_route *prepared_route,
     struct wvm_coordinator_prepared_vm *prepared_vm,
-    struct wvm_coordinator_activation_options *activation_options,
     struct wvm_activation_record *activation,
     struct wvm_route_transaction_record *route_transaction,
     struct wvm_route_snapshot_record *route_snapshot, char *error,
@@ -30,13 +30,12 @@ static int reset_workspace(
 
     (void)error;
     (void)error_len;
-    if (!state || !prepared_route || !prepared_vm || !activation_options ||
+    if (!state || !request || !prepared_route || !prepared_vm ||
         !activation || !route_transaction || !route_snapshot) {
         return -1;
     }
     memset(prepared_route, 0, sizeof(*prepared_route));
     memset(prepared_vm, 0, sizeof(*prepared_vm));
-    memset(activation_options, 0, sizeof(*activation_options));
     memset(activation, 0, sizeof(*activation));
     memset(route_transaction, 0, sizeof(*route_transaction));
     memset(route_snapshot, 0, sizeof(*route_snapshot));
@@ -174,7 +173,6 @@ int main(void)
     struct wvm_coordinator_prepare_options options;
     struct wvm_coordinator_prepared_route prepared_route;
     struct wvm_coordinator_prepared_vm prepared_vm;
-    struct wvm_coordinator_activation_options activation_options;
     struct wvm_activation_record activation;
     struct wvm_route_transaction_record route_transaction;
     struct wvm_route_snapshot_record route_snapshot;
@@ -250,7 +248,6 @@ int main(void)
     config.transport = &transport;
     config.prepared_route = &prepared_route;
     config.prepared_vm = &prepared_vm;
-    config.activation_options = &activation_options;
     config.activation = &activation;
     config.route_transaction = &route_transaction;
     config.route_snapshot = &route_snapshot;
@@ -324,7 +321,8 @@ int main(void)
                    input.membership_capture == &membership_capture &&
                    input.prepared_route == &prepared_route &&
                    input.prepared_vm == &prepared_vm &&
-                   input.activation_options == &activation_options &&
+                   input.coordinator_instance_id ==
+                       transport.controller_instance_id &&
                    input.activation == &activation &&
                    input.route_transaction == &route_transaction &&
                    input.route_snapshot == &route_snapshot &&

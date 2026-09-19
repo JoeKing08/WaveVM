@@ -202,7 +202,7 @@ static int node_capability_profile(
 }
 
 static void sorted_node_indices(const struct wvm_cluster_record_set *records,
-                                size_t indices[WVM_MAX_SLAVES])
+                                size_t *indices)
 {
     size_t i;
 
@@ -223,12 +223,27 @@ static void sorted_node_indices(const struct wvm_cluster_record_set *records,
 static int validate_gateway_graph(const struct wvm_cluster_record_set *records,
                                   char *error, size_t error_len)
 {
-    size_t indegree[WVM_MAX_GATEWAYS] = {0};
-    size_t queue[WVM_MAX_GATEWAYS];
+    size_t *indegree = NULL;
+    size_t *queue = NULL;
     size_t queue_head = 0;
     size_t queue_tail = 0;
     size_t processed = 0;
     size_t i;
+    int ret = -1;
+
+    if (records->gateway_count > SIZE_MAX / sizeof(*indegree)) {
+        set_error(error, error_len, "gateway count would overflow allocation");
+        return -1;
+    }
+
+    indegree = calloc(records->gateway_count, sizeof(*indegree));
+    queue = calloc(records->gateway_count, sizeof(*queue));
+    if (!indegree || !queue) {
+        set_error(error, error_len, "failed to allocate gateway graph arrays");
+        free(indegree);
+        free(queue);
+        return -1;
+    }
 
     for (i = 0; i < records->gateway_count; i++) {
         const struct wvm_gateway_record *gateway = &records->gateways[i];
@@ -306,9 +321,15 @@ static int validate_gateway_graph(const struct wvm_cluster_record_set *records,
     }
     if (processed != records->gateway_count) {
         set_error(error, error_len, "gateway topology contains a cycle");
-        return -1;
+        ret = -1;
+        goto cleanup;
     }
-    return 0;
+    ret = 0;
+
+cleanup:
+    free(indegree);
+    free(queue);
+    return ret;
 }
 
 static int admission_node_index(const struct wvm_admission_snapshot *snapshot,
@@ -395,12 +416,15 @@ int wvm_cluster_snapshot_build(
     const struct wvm_cluster_record_set *records,
     struct wvm_cluster_snapshot *snapshot, char *error, size_t error_len)
 {
-    size_t indices[WVM_MAX_SLAVES];
+    struct wvm_cluster_snapshot built = {0};
+    struct wvm_cluster_snapshot *output = snapshot;
+    size_t *indices = NULL;
     size_t i;
+    int ret = -1;
 
     if (!records || !snapshot || !records->nodes || records->node_count == 0 ||
-        records->node_count > WVM_MAX_SLAVES ||
-        records->gateway_count > WVM_MAX_GATEWAYS ||
+        records->node_count > UINT32_MAX ||
+        records->gateway_count > UINT32_MAX ||
         (records->gateway_count != 0 && !records->gateways) ||
         records->inventory_revision == 0 || records->membership_revision == 0 ||
         records->topology_revision == 0 ||
@@ -408,6 +432,14 @@ int wvm_cluster_snapshot_build(
         records->capability_profile_generation == 0 ||
         capability_set_validate(records, error, error_len) != 0) {
         set_error(error, error_len, "cluster record set is invalid");
+        return -1;
+    }
+
+    /* Keep failed validation and allocation local to this build. */
+    snapshot = &built;
+    indices = calloc(records->node_count, sizeof(*indices));
+    if (!indices) {
+        set_error(error, error_len, "failed to allocate index array");
         return -1;
     }
     for (i = 0; i < records->node_count; i++) {
@@ -418,11 +450,11 @@ int wvm_cluster_snapshot_build(
                 records->membership_revision ||
             records->nodes[i].topology_revision != records->topology_revision) {
             set_error(error, error_len, "node record set is invalid");
-            return -1;
+            goto out;
         }
     }
     if (validate_gateway_graph(records, error, error_len) != 0) {
-        return -1;
+        goto out;
     }
 
     memset(snapshot, 0, sizeof(*snapshot));
@@ -432,6 +464,13 @@ int wvm_cluster_snapshot_build(
     snapshot->admission.capability_profile_generation =
         records->capability_profile_generation;
     snapshot->admission.node_count = (uint32_t)records->node_count;
+    snapshot->admission.node_capacity = (uint32_t)records->node_count;
+    snapshot->admission.nodes = calloc(records->node_count,
+                                       sizeof(*snapshot->admission.nodes));
+    if (!snapshot->admission.nodes) {
+        set_error(error, error_len, "failed to allocate admission node array");
+        goto out;
+    }
     sorted_node_indices(records, indices);
     for (i = 0; i < records->node_count; i++) {
         const struct wvm_node_record *node = &records->nodes[indices[i]];
@@ -443,7 +482,7 @@ int wvm_cluster_snapshot_build(
         if (node_capability_profile(records, node, &backend_capabilities,
                                     &runtime_capabilities, error,
                                     error_len) != 0) {
-            return -1;
+            goto out;
         }
         admission_node->physical_node_id = node->physical_node_id;
         admission_node->node_instance_id = node->node_instance_id;
@@ -474,7 +513,7 @@ int wvm_cluster_snapshot_build(
     if (apply_reservation_occupancy(records, snapshot, error, error_len) != 0 ||
         wvm_admission_snapshot_validate(&snapshot->admission, error,
                                         error_len) != 0) {
-        return -1;
+        goto out;
     }
     for (i = 0; i < records->gateway_count; i++) {
         if (records->gateways[i].desired_membership_state ==
@@ -483,7 +522,16 @@ int wvm_cluster_snapshot_build(
             snapshot->active_gateway_count++;
         }
     }
-    return 0;
+    ret = 0;
+
+out:
+    free(indices);
+    if (ret == 0) {
+        *output = built;
+    } else {
+        wvm_admission_snapshot_cleanup(&built.admission);
+    }
+    return ret;
 }
 
 static int parse_decimal_u64(const char *text, uint64_t *value_out)
@@ -586,9 +634,12 @@ int wvm_cluster_snapshot_apply_host_constraints(
     struct wvm_cluster_snapshot *constrained_snapshot, char *error,
     size_t error_len)
 {
+    struct wvm_cluster_snapshot filtered = {0};
+    struct wvm_cluster_snapshot *output = constrained_snapshot;
     uint32_t i;
 
     if (!records || !snapshot || !constraints || !constrained_snapshot ||
+        snapshot == constrained_snapshot ||
         wvm_admission_snapshot_validate(&snapshot->admission, error,
                                         error_len) != 0 ||
         (constraints->count != 0 && !constraints->entries) ||
@@ -596,7 +647,15 @@ int wvm_cluster_snapshot_apply_host_constraints(
         set_error(error, error_len, "host constraint snapshot input is invalid");
         return -1;
     }
-    *constrained_snapshot = *snapshot;
+
+    constrained_snapshot = &filtered;
+    constrained_snapshot->active_gateway_count = snapshot->active_gateway_count;
+    if (wvm_admission_snapshot_copy(&snapshot->admission,
+                                    &constrained_snapshot->admission) != 0) {
+        set_error(error, error_len, "failed to allocate constrained snapshot");
+        return -1;
+    }
+
     for (i = 0; i < constrained_snapshot->admission.node_count; i++) {
         struct wvm_admission_node *node =
             &constrained_snapshot->admission.nodes[i];
@@ -608,6 +667,7 @@ int wvm_cluster_snapshot_apply_host_constraints(
                                                   error, error_len);
 
             if (matches < 0) {
+                wvm_admission_snapshot_cleanup(&constrained_snapshot->admission);
                 return -1;
             }
             if (!matches) {
@@ -616,8 +676,14 @@ int wvm_cluster_snapshot_apply_host_constraints(
             }
         }
     }
-    return wvm_admission_snapshot_validate(&constrained_snapshot->admission,
-                                           error, error_len);
+
+    if (wvm_admission_snapshot_validate(&constrained_snapshot->admission,
+                                        error, error_len) != 0) {
+        wvm_admission_snapshot_cleanup(&constrained_snapshot->admission);
+        return -1;
+    }
+    *output = filtered;
+    return 0;
 }
 
 static int required_member_add(

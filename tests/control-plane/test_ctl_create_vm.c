@@ -314,7 +314,7 @@ int main(int argc, char **argv)
                    first_result.vm_incarnation == 0 &&
                    first_result.manifest_generation == 0 &&
                    first_result.route_scope_id == 0,
-               "fail closed without an admission authority") != 0 ||
+               "fail closed without published admission evidence and plans") != 0 ||
         expect(exchange_create_vm(socket_path, &request, operation_id,
                                    &replay_result) == 0 &&
                    memcmp(&first_result, &replay_result,

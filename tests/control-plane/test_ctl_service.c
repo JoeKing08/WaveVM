@@ -84,6 +84,39 @@ static pid_t start_service(const char *program, const char *state_directory,
     _exit(127);
 }
 
+static int check_pending_membership(const char *journal_path)
+{
+    struct wvm_membership_controller controller;
+    struct wvm_membership_controller_member_entry members[8];
+    struct wvm_membership_controller_route_entry routes[8];
+    struct wvm_membership_dependency dependencies[8];
+    char error[256] = {0};
+    int result = -1;
+
+    wvm_membership_controller_init(&controller, members, 8, routes, 8,
+                                    dependencies, 8, NULL, NULL);
+    if (expect(wvm_membership_controller_open(&controller, journal_path,
+                                              error, sizeof(error)) == 0,
+               "reopen persisted membership") != 0) {
+        goto out;
+    }
+    if (expect(controller.member_count == 1 && controller.route_count == 0,
+               "persist only the registered member, without invented routes") != 0) {
+        goto out;
+    }
+    result = expect(
+        members[0].kind == WVM_MEMBERSHIP_COMPUTE &&
+            members[0].member_key.role_id == 17 &&
+            members[0].member_key.instance_id == 101 &&
+            members[0].node.desired_membership_state == WVM_MANIFEST_MEMBER_PENDING &&
+            members[0].node.observed_health_state == WVM_MEMBERSHIP_RECOVERING &&
+            !members[0].has_activation_route_operation_id,
+        "registration and restart cannot activate a member without route commit");
+out:
+    wvm_membership_controller_close(&controller);
+    return result;
+}
+
 static void fill_endpoint(struct wvm_endpoint *endpoint)
 {
     memset(endpoint, 0, sizeof(*endpoint));
@@ -297,6 +330,7 @@ int main(int argc, char **argv)
     char error[256] = {0};
     FILE *principal_file;
     struct stat socket_stat;
+    struct stat journal_stat;
     pid_t child = -1;
     int result = 1;
 
@@ -338,7 +372,25 @@ int main(int argc, char **argv)
     operation_id[WVM_IDENTITY_ID_BYTES - 1] = 1;
     child = start_service(argv[1], state_directory, socket_path, principal_path);
     if (expect(child > 0 && wait_for_path(socket_path, 1) == 0,
+               "start control plane with an empty cluster") != 0 ||
+        expect(stat(membership_journal, &journal_stat) == 0 &&
+                   journal_stat.st_size == 0,
+               "startup does not fabricate compute membership") != 0) {
+        goto out;
+    }
+    if (kill(child, SIGTERM) != 0 || wait_for_exit(child) != 0 ||
+        expect(wait_for_path(socket_path, 0) == 0,
+               "stop empty-cluster daemon") != 0) {
+        child = -1;
+        goto out;
+    }
+    child = -1;
+    child = start_service(argv[1], state_directory, socket_path, principal_path);
+    if (expect(child > 0 && wait_for_path(socket_path, 1) == 0,
                "start manifest-free control-plane daemon") != 0 ||
+        expect(stat(membership_journal, &journal_stat) == 0 &&
+                   journal_stat.st_size == 0,
+               "empty-cluster restart does not fabricate compute membership") != 0 ||
         expect(stat(socket_path, &socket_stat) == 0 &&
                    (socket_stat.st_mode & 0777) == (S_IRUSR | S_IWUSR),
                "publish protected control socket") != 0 ||
@@ -360,6 +412,9 @@ int main(int argc, char **argv)
         goto out;
     }
     child = -1;
+    if (check_pending_membership(membership_journal) != 0) {
+        goto out;
+    }
     child = start_service(argv[1], state_directory, socket_path, principal_path);
     if (expect(child > 0 && wait_for_path(socket_path, 1) == 0,
                "restart durable control-plane daemon") != 0 ||
@@ -378,6 +433,9 @@ out:
         if (wait_for_exit(child) != 0) {
             result = 1;
         }
+    }
+    if (result == 0 && check_pending_membership(membership_journal) != 0) {
+        result = 1;
     }
     unlink(socket_path);
     unlink(principal_path);

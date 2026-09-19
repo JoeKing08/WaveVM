@@ -23,9 +23,9 @@
  * after durable BEGIN and before any evidence capture or participant stage.
  */
 typedef int (*wvm_admission_workspace_reset_fn)(
-    void *context, struct wvm_coordinator_prepared_route *prepared_route,
+    void *context, const struct wvm_vm_request *request,
+    struct wvm_coordinator_prepared_route *prepared_route,
     struct wvm_coordinator_prepared_vm *prepared_vm,
-    struct wvm_coordinator_activation_options *activation_options,
     struct wvm_activation_record *activation,
     struct wvm_route_transaction_record *route_transaction,
     struct wvm_route_snapshot_record *route_snapshot, char *error,
@@ -40,7 +40,6 @@ struct wvm_admission_authority_owner_config {
     struct wvm_admission_transport *transport;
     struct wvm_coordinator_prepared_route *prepared_route;
     struct wvm_coordinator_prepared_vm *prepared_vm;
-    struct wvm_coordinator_activation_options *activation_options;
     struct wvm_activation_record *activation;
     struct wvm_route_transaction_record *route_transaction;
     struct wvm_route_snapshot_record *route_snapshot;

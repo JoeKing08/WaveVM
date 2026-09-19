@@ -1,0 +1,164 @@
+WaveVM 审计修复复核与实施建议
+日期：2026-09-19
+针对：audit-fix-status-2026-09-19.txt
+========================================
+
+一、结论与复核范围
+
+建议先修新引入的回归，再推进真实 CREATE；目前不能把 F13-F17 统一标成“修完”。
+
+本轮阅读了状态报告并核对相关代码改动，只运行了一个 admission 小测试，
+没有修改实现，没有运行完整双节点或 guest 验收。以下不是全部纲领的重新审计。
+
+已执行：
+  ulimit -c 0
+  timeout 90 bash tests/control-plane/test_admission_plan.sh
+
+结果：段错误退出，exit code 139。
+
+二、需要先纠正的状态
+
+1. F14：存在实际回归，不能标成完全修复
+
+tests/control-plane/test_admission_plan.c:114：
+调用方仍把 snapshot.nodes 当内嵌数组使用。改成指针后，没有为其分配空间，
+零初始化 snapshot 后直接写 snapshot.nodes[0]。上述测试实际发生了段错误。
+
+common_include/wavevm_cluster.c:642：
+wvm_cluster_snapshot_apply_host_constraints 仍使用：
+  *constrained_snapshot = *snapshot;
+随后修改 constrained_snapshot->admission.nodes 中的 membership_state。
+数组改成指针后，两份 snapshot 共享 nodes，这会污染原始快照，影响后续规划。
+
+需要整体补齐：初始化、容量约束、独立副本、释放及失败清理。
+可以采用明确的调用方缓冲区所有权，或有配套生命周期 API 的动态存储；
+也可将筛选结果单独保存。不能只把数组声明改成指针而保留原有值拷贝语义。
+
+master_core/main_wrapper.c:200：
+分形入口仍按 WVM_MAX_GATEWAYS 限制 destination_vnode。
+因此目前尚未端到端解除身份地址空间与容量预算的耦合。
+动态分配数组本身也不等于完成独立的集群成员、域、gateway 和每 VM 容量预算。
+
+建议验收：原有 admission 测试通过；host constraints 不改变输入快照；
+重复构造和销毁不泄漏；失败清理安全；稀疏高 ID 能通过实际 runtime 消费路径，
+同时真正超出容量预算的请求仍会被拒绝。
+
+2. F15：不是只差缓存和测试，而是端到端语义还没有接通
+
+wavevm-qemu/accel/wavevm/wavevm-all.c:2479：
+发送请求的 VM 身份、incarnation、manifest generation、origin 身份、
+semantic digest 和 queue sequence 尚未正确填入，仍有零值占位。
+
+master_core/main_wrapper.c:1364：
+接收 typed IPC 后重新构造旧网络包，丢掉操作身份、队列排序、digest 和 FUA
+等语义。旧网络包执行成功后再包装 typed completion，不等于实现 typed 契约。
+未知操作还会落成 READ；写请求缺少完整载荷长度检查，相关乘法也需防溢出。
+
+common_include/wavevm_coordinator.c:835：
+在此状态下移除非空 storage_device_plan 的拒绝条件过早。
+应明确拒绝尚未实现契约的远程存储配置，直到准入、路由、执行、结果关联和
+持久化语义全部接通。这是能力准入边界，不是要求保留旧业务兼容。
+
+协议字段也应对照 storage-device-authority.md 重新检查：不能将规范要求的
+VM 身份宽度、128-bit operation identity、结果关联与持久化信息随意缩减。
+WVM_BLOCK_TYPED 环境开关加上旧路径回退，不能作为最终的双协议生产设计。
+本项目没有需要维持的旧业务，应收敛到正式路径。
+
+3. F10：per-CPU context 仍然不能保证 VM 归属正确
+
+master_core/kernel_backend.c:451：
+wvm_set_active_context 只在赋值期间禁止抢占，函数返回后就恢复抢占。
+后续 fault/ioctl 中存在睡眠和等待，也可能迁移 CPU；同一 CPU 上的另一任务
+可以覆盖 context。之后获取的 context 可能为空或属于另一个 VM。
+
+建议从 file、VMA、work item 等真实所有者显式传递 context，并明确引用生命周期。
+不要用长期禁止抢占或全局锁修补；这些路径需要睡眠，也不能牺牲多 VM 并发。
+因此不建议将尚有这些问题的 Mode A 作为最小 CREATE 的前置依赖。
+
+4. 其他状态表述
+
+F13：统一版本推进的方向正确，但还需验证旧版本提交、重试及版本边界。
+不能仅根据删除特殊分支就宣布完整内存一致性验收通过。
+
+F16：修正的是测试声明，避免 PASS 超出断言覆盖范围；这不代表补齐了实际
+多 VM 隔离或拓扑行为测试。
+
+F17：runtime_context.h 和 executor_runtime.h 是此前提交 8c77a8f6b 补跟踪的。
+应记录为“已在后续提交修复”，不是原审计误判或无需修复。
+
+三、对报告四个问题的回答
+
+问题 1：Operation cache 的优先级和归属
+
+可以独立开发和做契约测试，不必等真实双节点。但在远程存储明确拒绝准入时，
+它不必成为 CPU/内存 CREATE 闭环的前置条件。
+
+cache 应位于目标 node runtime 内，靠近存储执行模块、在实际产生副作用之前，
+按 VM 身份和生命周期管理。executor 是 runtime 内部模块，不是另起独立 slave
+权威；gateway 也不应承担存储副作用去重权威。
+
+必须实现的语义：
+- 相同完整操作身份、相同语义：处理中合并等待，完成后重放结果。
+- 相同身份、不同语义：拒绝冲突。
+- 缓存结果过期：明确返回过期，不因“查不到结果”就重新执行写入。
+- digest 覆盖操作、设备、地址、长度、标志及数据，不能只有 SHA256(data)。
+- 保持不同队列并行，不能用全局串行化代替队列顺序。
+- Flush/FUA 要从设备请求一路传到真实执行边界，并有对应持久化完成依据。
+
+“拒绝所有重复 operation_id”不是正确的重试协议；completion 丢失后的相同请求
+需要能安全获得此前结果。缓存有界性和保留期也必须与重试窗口契约一致。
+
+问题 2：CI 是否可以绕过控制面
+
+不要新增绕过控制面的生产启动路径。
+测试夹具可以继续用于组件烟测，但不能把这种测试称为正式 CREATE 验收。
+CI 最终应调用真正的控制面和统一 node runtime，不需要恢复旧 CLI 或旧独立进程。
+
+CI 改写可与生产接口接线并行准备，但不能通过制造固定 evidence、固定 ACK 或
+预先拼好成功状态来代替真实准入。组件测试与生产闭环测试应明确区分。
+
+问题 3：最小 CREATE 的可验收范围
+
+最小闭环有意义，建议先用 Mode B，而不是以 Mode A 内核问题作为依赖。
+Mode A/B 与 KVM/TCG 是独立维度，此建议不意味着 Mode B 只能使用 TCG。
+
+先用单机回环上的真实控制端和参与端、本地 QEMU 磁盘，完成：
+  注册 -> 实际能力探测 -> JOIN/路由确认 -> ACTIVE
+       -> CREATE prepare/activate/commit -> 销毁及资源释放
+
+JOIN 应在成员可调度之前完成，不是 CREATE 后再补。
+ACK、能力证据、资源预留必须真实，不能用固定成功值替代。
+同时验证失败回滚、重复请求、参与者不可达及资源释放。
+
+优先连接现有 ctl_tool、coordinator、admission、cluster 与 runtime 接口。
+已有 placement 算法和状态机，不是需要从零重写所有规划逻辑；主要缺口是
+生产输入、真实传输和调用闭环。应先逐项识别可复用实现，避免无谓扩大任务。
+
+单机闭环只能证明这一阶段的生产组合路径；不能用它宣称分布式和 guest 启动
+已经通过。后续再进行双节点控制/数据通路烟测，最后是完整 guest/SSH 验收。
+
+问题 4：推荐顺序、验收及风险
+
+推荐顺序：回归修复 -> C -> A -> B。
+
+第一步：修 F14，收紧未完成远程存储能力的准入，并撤掉不成立的“已完成”结论。
+Mode A 的 context 问题应明确保留为未完成项，不能靠 per-CPU 改名算作解决。
+
+C：打通正式 CREATE，同时验证失败回滚、重复请求和资源释放。
+在最小范围内接通真实接口，不需要先把完整 guest 启动作为控制面验收条件。
+
+A：完整接通 typed 存储，再验证重复写只执行一次、completion 丢失后的重放、
+不同语义冲突、结果过期、队列顺序与 Flush/FUA 持久化。
+只加 cache 而继续通过旧网络包执行，无法补齐这些语义。
+
+B：迁移双节点 CI，先验证控制和数据通路，再做完整 guest/SSH 验收。
+CI 脚本准备无需机械地等待 A，但远程存储未通过时必须显式排除该能力，
+不能让不完整的实现参与准入后又把结果视为整个系统通过。
+
+风险边界：
+只要各阶段复用正式接口、明确未支持能力并拒绝相应准入，就是分阶段实现，
+不是 workaround。新增 CI 专用生产旁路、包裹旧协议冒充 typed 契约、
+或用全局串行化掩盖生命周期与排序问题，才会继续累积架构债。
+
+保留 MPSC、多队列和异步 diff 等优化方向；修正其所有权、排序及生命周期边界，
+不要为了先获得 PASS 就将其永久删除或变相全局串行化。

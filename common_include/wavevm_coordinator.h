@@ -111,6 +111,9 @@ struct wvm_coordinator_prepare_options {
  *
  * The coordinator fills all counts and immutable fields; it does not own
  * caller memory and performs no network or process launch.
+ * Zero-initialize this structure before binding caller storage. The snapshot
+ * and admission plan contain heap-owned scratch; release those with
+ * wvm_coordinator_prepared_vm_cleanup() before resetting or retiring it.
  */
 struct wvm_coordinator_prepared_vm {
     struct wvm_cluster_snapshot cluster_snapshot;
@@ -140,6 +143,10 @@ struct wvm_coordinator_prepared_vm {
     size_t node_runtime_manifest_count;
     size_t node_runtime_manifest_capacity;
 };
+
+/* Release planning scratch only, without aborting or freeing caller buffers. */
+void wvm_coordinator_prepared_vm_cleanup(
+    struct wvm_coordinator_prepared_vm *prepared_vm);
 
 int wvm_coordinator_begin(
     const struct wvm_vm_request *request,
@@ -234,6 +241,16 @@ int wvm_coordinator_decide_abort(
  * participant commit/ACK transport remains outside this in-memory primitive.
  */
 int wvm_coordinator_commit_local(
+    const struct wvm_coordinator_transaction *transaction,
+    struct wvm_coordinator_prepared_vm *prepared_vm,
+    const struct wvm_activation_record *activation, char *error,
+    size_t error_len);
+
+/*
+ * Validate ABORT inputs before contacting participants, without releasing any
+ * local resources or clearing runtime projections.
+ */
+int wvm_coordinator_validate_abort(
     const struct wvm_coordinator_transaction *transaction,
     struct wvm_coordinator_prepared_vm *prepared_vm,
     const struct wvm_activation_record *activation, char *error,

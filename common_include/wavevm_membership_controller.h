@@ -38,6 +38,7 @@ struct wvm_membership_controller_member_entry {
 struct wvm_membership_controller_member_status {
     enum wvm_membership_member_kind kind;
     struct wvm_member_key member_key;
+    struct wvm_endpoint endpoint;
     enum wvm_manifest_member_state desired_membership_state;
     enum wvm_membership_health_state observed_health_state;
     uint64_t active_dependency_count;

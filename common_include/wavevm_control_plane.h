@@ -91,6 +91,7 @@ struct wvm_control_plane_membership_config {
  */
 struct wvm_control_plane {
     int journal_fd;
+    int journal_failed;
     uint64_t next_journal_sequence;
     struct wvm_control_plane_entry *entries;
     size_t entry_count;
@@ -304,9 +305,20 @@ int wvm_control_plane_read_runtime_manifest(
     size_t error_len);
 
 /*
- * The activation record is appended and fsync'd before the transaction index
- * moves to ACTIVATION_DECIDED or ABORTING. Callers may issue remote commit or
- * abort RPCs only after this returns success.
+ * Capture metadata under the caller's single-writer lock immediately before
+ * deciding. record_activation rejects a stale sequence; no intervening journal
+ * write is allowed. The timestamp is wall-clock seconds, not a timeout clock.
+ */
+int wvm_control_plane_activation_options(
+    const struct wvm_control_plane *plane, uint64_t coordinator_instance_id,
+    struct wvm_coordinator_activation_options *options, char *error,
+    size_t error_len);
+
+/*
+ * A single fsync'd activation frame moves the transaction index to
+ * ACTIVATION_DECIDED or ABORTING, including on replay. Callers may issue remote
+ * commit or abort RPCs only after success. A write error fences further writes
+ * until close/open successfully replays and syncs the journal and its directory.
  */
 int wvm_control_plane_record_activation(
     struct wvm_control_plane *plane,

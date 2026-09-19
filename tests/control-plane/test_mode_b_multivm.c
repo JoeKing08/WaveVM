@@ -220,6 +220,8 @@ int main(void) {
     printf("  ✓ Cluster supports both execution modes\n");
     printf("  ✓ Cluster includes memory-only participant\n");
 
-    printf("\n=== All Mode B multi-VM isolation tests PASS ===\n");
+    printf("\n=== Mode B multi-VM capability and digest computation PASS ===\n");
+    printf("NOTE: This test verifies capability structure construction and digest calculation.\n");
+    printf("      It does not run actual VMs or validate GPA/version/directory runtime behavior.\n");
     return 0;
 }

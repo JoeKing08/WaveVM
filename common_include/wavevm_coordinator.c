@@ -41,7 +41,7 @@ static void abort_registered_reservations(
                 registry->physical_node_id ==
                     prepared_vm->reservations[i].physical_node_id) {
                 (void)wvm_local_reservation_abort(
-                    registry, prepared_vm->reservations[i].reservation_id, NULL,
+                    registry, &prepared_vm->reservations[i], NULL,
                     NULL, 0);
                 break;
             }
@@ -611,8 +611,8 @@ static int current_fence_matches(
     const struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
     size_t error_len)
 {
-    struct wvm_cluster_snapshot snapshot;
-    struct wvm_cluster_snapshot constrained_snapshot;
+    struct wvm_cluster_snapshot snapshot = {0};
+    struct wvm_cluster_snapshot constrained_snapshot = {0};
     struct wvm_admission_eligibility_fence current_fence;
     struct wvm_required_member *selected_members;
     size_t selected_member_capacity;
@@ -670,6 +670,8 @@ static int current_fence_matches(
 
 out:
     free(selected_members);
+    wvm_admission_snapshot_cleanup(&constrained_snapshot.admission);
+    wvm_admission_snapshot_cleanup(&snapshot.admission);
     return result;
 }
 
@@ -803,6 +805,19 @@ int wvm_coordinator_begin(
     return 0;
 }
 
+void wvm_coordinator_prepared_vm_cleanup(
+    struct wvm_coordinator_prepared_vm *prepared_vm)
+{
+    if (!prepared_vm) {
+        return;
+    }
+    wvm_admission_snapshot_cleanup(&prepared_vm->cluster_snapshot.admission);
+    free(prepared_vm->admission_plan.reservations);
+    memset(&prepared_vm->cluster_snapshot, 0,
+           sizeof(prepared_vm->cluster_snapshot));
+    memset(&prepared_vm->admission_plan, 0, sizeof(prepared_vm->admission_plan));
+}
+
 int wvm_coordinator_prepare(
     const struct wvm_vm_request *request,
     const struct wvm_coordinator_transaction *transaction,
@@ -812,7 +827,7 @@ int wvm_coordinator_prepare(
     struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
     size_t error_len)
 {
-    struct wvm_cluster_snapshot constrained_snapshot;
+    struct wvm_cluster_snapshot constrained_snapshot = {0};
     struct wvm_admission_request admission_request;
     struct wvm_admission_placement_options placement_options;
     struct wvm_candidate_vm_manifest candidate;
@@ -820,6 +835,7 @@ int wvm_coordinator_prepare(
     struct wvm_local_name_identity local_name_identity;
     uint8_t placement_digest[WVM_SHA256_DIGEST_BYTES];
     size_t i;
+    int result = -1;
 
     if (!request || !transaction || !records || !options || !prepared_vm ||
         wvm_vm_request_validate(request, error, error_len) != 0 ||
@@ -832,6 +848,8 @@ int wvm_coordinator_prepare(
         bytes_are_zero(transaction->manifest_id, sizeof(transaction->manifest_id)) ||
         wvm_vm_route_scope_key_validate(&transaction->route_scope_key, error,
                                         error_len) != 0 ||
+        /* Keep remote storage closed until identity, replay, ordering and
+         * persistence are verified across the complete typed execution path. */
         request->storage_device_plan.assignments.count != 0 ||
         wvm_machine_config_validate(&options->guest_machine, error,
                                     error_len) != 0 ||
@@ -871,6 +889,7 @@ int wvm_coordinator_prepare(
                   "resolved accelerator profile violates request policy");
         return -1;
     }
+    wvm_coordinator_prepared_vm_cleanup(prepared_vm);
     memset(&admission_request, 0, sizeof(admission_request));
     if (build_admission_request(request, transaction, options,
                                 &admission_request, error, error_len) != 0 ||
@@ -882,7 +901,7 @@ int wvm_coordinator_prepare(
         route_is_prepared_for_transaction(transaction, prepared_route,
                                           &constrained_snapshot, error,
                                           error_len) != 0) {
-        return -1;
+        goto out;
     }
 
     if (wvm_admission_plan_propose(&constrained_snapshot.admission,
@@ -895,7 +914,7 @@ int wvm_coordinator_prepare(
             &prepared_vm->admission_plan, &transaction->route_scope_key,
             prepared_route->required_ack_set, &prepared_vm->fence, error,
             error_len) != 0) {
-        return -1;
+        goto out;
     }
 
     memset(&placement_options, 0, sizeof(placement_options));
@@ -922,7 +941,7 @@ int wvm_coordinator_prepare(
             options->placement_plan_bytes_capacity,
             &prepared_vm->placement_plan_bytes, placement_digest, error,
             error_len) != 0) {
-        return -1;
+        goto out;
     }
     memcpy(prepared_vm->placement_plan.plan_digest, placement_digest,
            sizeof(prepared_vm->placement_plan.plan_digest));
@@ -930,7 +949,7 @@ int wvm_coordinator_prepare(
     required_capabilities = prepared_vm->candidate.required_capabilities;
     if (!required_capabilities.entries || required_capabilities.capacity == 0) {
         set_error(error, error_len, "candidate capability output is missing");
-        return -1;
+        goto out;
     }
     required_capabilities.count = 0;
     for (i = 0; i < prepared_vm->fence.selected_members.count; i++) {
@@ -943,7 +962,7 @@ int wvm_coordinator_prepare(
                                        error, error_len) != 0) {
             set_error(error, error_len,
                       "selected member lacks required V1 namespace capability");
-            return -1;
+            goto out;
         }
     }
 
@@ -998,7 +1017,7 @@ int wvm_coordinator_prepare(
             options->candidate_manifest_bytes_capacity,
             &prepared_vm->candidate_manifest_bytes,
             prepared_vm->candidate_manifest_digest, error, error_len) != 0) {
-        return -1;
+        goto out;
     }
     memcpy(candidate.manifest_digest, prepared_vm->candidate_manifest_digest,
            sizeof(candidate.manifest_digest));
@@ -1010,7 +1029,7 @@ int wvm_coordinator_prepare(
         prepared_vm->node_runtime_manifest_capacity <
             candidate.reservation_requirements.count) {
         set_error(error, error_len, "prepared VM output buffers are too small");
-        return -1;
+        goto out;
     }
 
     prepared_vm->reservation_count = 0;
@@ -1040,7 +1059,7 @@ int wvm_coordinator_prepare(
             set_error(error, error_len,
                       "coordinator node launch plan is invalid or mismatched");
             abort_registered_reservations(prepared_vm);
-            return -1;
+            goto out;
         }
         if (wvm_resource_reservation_derive(
                 &candidate.reservation_requirements.entries[i], &candidate,
@@ -1057,7 +1076,7 @@ int wvm_coordinator_prepare(
             wvm_node_runtime_manifest_validate(runtime_manifest, error,
                                                error_len) != 0) {
             abort_registered_reservations(prepared_vm);
-            return -1;
+            goto out;
         }
         if (prepared_vm->reservation_registries) {
             struct wvm_local_reservation_registry *registry;
@@ -1067,7 +1086,7 @@ int wvm_coordinator_prepare(
                 wvm_local_reservation_prepare(registry, reservation, NULL,
                                               error, error_len) != 0) {
                 abort_registered_reservations(prepared_vm);
-                return -1;
+                goto out;
             }
         }
         prepared_vm->reservation_count++;
@@ -1078,7 +1097,13 @@ int wvm_coordinator_prepare(
     prepared_vm->candidate_manifest_record = options->candidate_manifest_bytes;
     prepared_vm->candidate_manifest_record_capacity =
         options->candidate_manifest_bytes_capacity;
-    return 0;
+    result = 0;
+out:
+    wvm_admission_snapshot_cleanup(&constrained_snapshot.admission);
+    if (result != 0) {
+        wvm_coordinator_prepared_vm_cleanup(prepared_vm);
+    }
+    return result;
 }
 
 int wvm_coordinator_decide_activation(
@@ -1201,7 +1226,7 @@ int wvm_coordinator_commit_local(
         if (reservation_registry_for(prepared_vm, reservation, &registry, error,
                                      error_len) != 0 ||
             (registry && wvm_local_reservation_commit(
-                             registry, reservation->reservation_id, activation,
+                             registry, reservation, activation,
                              NULL, error, error_len) != 0) ||
             commit_derived_reservation(reservation, activation, error,
                                        error_len) != 0 ||
@@ -1257,7 +1282,7 @@ int wvm_coordinator_decide_abort(
         options->decided_at, error, error_len);
 }
 
-int wvm_coordinator_abort_local(
+int wvm_coordinator_validate_abort(
     const struct wvm_coordinator_transaction *transaction,
     struct wvm_coordinator_prepared_vm *prepared_vm,
     const struct wvm_activation_record *activation, char *error,
@@ -1295,6 +1320,21 @@ int wvm_coordinator_abort_local(
             }
         }
     }
+    return 0;
+}
+
+int wvm_coordinator_abort_local(
+    const struct wvm_coordinator_transaction *transaction,
+    struct wvm_coordinator_prepared_vm *prepared_vm,
+    const struct wvm_activation_record *activation, char *error,
+    size_t error_len)
+{
+    size_t i;
+
+    if (wvm_coordinator_validate_abort(transaction, prepared_vm, activation,
+                                       error, error_len) != 0) {
+        return -1;
+    }
     for (i = 0; i < prepared_vm->reservation_count; i++) {
         struct wvm_resource_reservation *reservation =
             &prepared_vm->reservations[i];
@@ -1303,7 +1343,7 @@ int wvm_coordinator_abort_local(
         if (reservation_registry_for(prepared_vm, reservation, &registry, error,
                                      error_len) != 0 ||
             (registry && wvm_local_reservation_abort(
-                             registry, reservation->reservation_id, NULL, error,
+                             registry, reservation, NULL, error,
                              error_len) != 0) ||
             release_derived_reservation(reservation, error, error_len) != 0) {
             return -1;

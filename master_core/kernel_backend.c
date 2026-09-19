@@ -411,7 +411,42 @@ static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
         vfree(ctx->req_ctx);
 
     /* Clean up radix tree */
-    /* TODO: iterate and free all pages */
+    {
+        struct radix_tree_iter iter;
+        void **slot;
+        unsigned long indices_to_delete[256];
+        int count = 0;
+
+        spin_lock(&ctx->page_tree_lock);
+
+        /* First pass: collect all indices */
+        radix_tree_for_each_slot(slot, &ctx->page_tree, &iter, 0) {
+            page_meta_t *meta = radix_tree_deref_slot(slot);
+            if (meta && meta->page) {
+                put_page(meta->page);
+                kfree(meta);
+            }
+            indices_to_delete[count++] = iter.index;
+            if (count >= 256) {
+                /* Delete batch and reset */
+                int i;
+                for (i = 0; i < count; i++) {
+                    radix_tree_delete(&ctx->page_tree, indices_to_delete[i]);
+                }
+                count = 0;
+            }
+        }
+
+        /* Delete remaining items */
+        if (count > 0) {
+            int i;
+            for (i = 0; i < count; i++) {
+                radix_tree_delete(&ctx->page_tree, indices_to_delete[i]);
+            }
+        }
+
+        spin_unlock(&ctx->page_tree_lock);
+    }
 
     kfree(ctx);
 }

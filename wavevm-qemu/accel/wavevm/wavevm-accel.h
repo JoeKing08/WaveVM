@@ -39,6 +39,10 @@ typedef struct WaveVMAccelState {
     /* [FIX-F1] Block IO 持久连接：避免每次 IO 都 connect()+pthread_create() 导致线程爆炸 */
     int block_io_sock;               /* 持久 IPC 连接，-1 = 未初始化 */
     QemuMutex block_io_lock;         /* 序列化 Block IO 请求（同一时刻只允许一个 IO 在途） */
+
+    /* Typed block protocol state */
+    uint64_t next_block_operation_id;
+    QemuMutex block_operation_id_lock;
 } WaveVMAccelState;
 
 extern int g_wvm_local_split;

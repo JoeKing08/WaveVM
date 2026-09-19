@@ -133,7 +133,7 @@ struct wvm_admission_orchestrator_input {
     struct wvm_coordinator_prepared_route *prepared_route;
     const struct wvm_coordinator_prepare_options *prepare_options;
     struct wvm_coordinator_prepared_vm *prepared_vm;
-    const struct wvm_coordinator_activation_options *activation_options;
+    uint64_t coordinator_instance_id;
     struct wvm_activation_record *activation;
     struct wvm_route_transaction_record *route_transaction;
     struct wvm_route_snapshot_record *route_snapshot;
@@ -163,7 +163,6 @@ struct wvm_admission_recovery_input {
     struct wvm_control_plane *control_plane;
     const struct wvm_coordinator_transaction *transaction;
     struct wvm_coordinator_prepared_vm *prepared_vm;
-    const struct wvm_activation_record *activation;
     struct wvm_route_transaction_record *route_transaction;
     struct wvm_route_snapshot_record *route_snapshot;
     const struct wvm_admission_orchestrator_callbacks *callbacks;
@@ -173,9 +172,10 @@ struct wvm_admission_recovery_input {
 /*
  * Resume a durable transaction after process loss. The caller supplies
  * identity-validated in-memory projections reconstructed from the durable
- * candidate/runtime records; this function never invents a replacement
- * manifest or route. ACTIVATION_DECIDED is always resumed forward, while
- * ABORTING is cleaned up toward ABORTED.
+ * candidate/runtime records. The decision and route transaction are reloaded
+ * from the open, unfenced journal, never supplied by the caller. The candidate
+ * must match its durable digest before any callback runs. ACTIVATION_DECIDED
+ * is always resumed forward, while ABORTING is cleaned up toward ABORTED.
  */
 int wvm_admission_orchestrator_recover(
     const struct wvm_admission_recovery_input *input, char *error,

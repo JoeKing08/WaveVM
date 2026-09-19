@@ -77,6 +77,20 @@ static void *g_primary_ram_hva = NULL;
 static uint64_t g_primary_ram_size = 0;
 static bool g_user_mem_inited = false;
 static uint64_t g_user_ram_size_hint = 0;
+
+/* VM runtime identity for typed protocol */
+static struct {
+    uint32_t vm_id;
+    uint64_t vm_incarnation;
+    uint64_t manifest_generation;
+    uint32_t physical_node_id;
+    uint64_t runtime_instance_id;
+    bool initialized;
+} g_vm_runtime_identity = {0};
+
+static QemuMutex g_block_request_lock;
+static uint64_t g_block_operation_id_counter = 0;
+static uint64_t g_block_queue_sequence = 0;
 static bool g_wvm_kvm_bootstrap_done = false;
 static AccelState *g_wvm_kvm_accel = NULL;
 static bool g_wvm_tcg_bootstrap_done = false;
@@ -968,6 +982,30 @@ static void *wavevm_executor_session_thread(void *opaque)
             /* Send error response before closing */
             fprintf(stderr, "[WaveVM-TCG-Session] Request validation failed: %s\n",
                     error[0] ? error : "unknown error");
+
+            /* Build and send error result */
+            struct wvm_vcpu_handoff_result error_result;
+            memset(&error_result, 0, sizeof(error_result));
+            error_result.status = WVM_VCPU_EXIT_FAILED;
+            error_result.context_bytes = 0;
+
+            size_t error_payload_bytes = 0;
+            char error_response[WVM_EXECUTOR_SESSION_MAX_FRAME_BYTES];
+            size_t error_response_bytes = 0;
+            char encode_err[256];
+
+            if (wvm_vcpu_handoff_result_encode(
+                    &error_result, result_payload,
+                    WVM_VCPU_HANDOFF_RESULT_HEADER_BYTES,
+                    &error_payload_bytes, encode_err, sizeof(encode_err)) == 0 &&
+                wvm_executor_session_encode(
+                    WVM_EXECUTOR_SESSION_VCPU_EXIT, result_payload,
+                    error_payload_bytes, error_response, sizeof(error_response),
+                    &error_response_bytes, encode_err, sizeof(encode_err)) == 0) {
+                send(state->executor_session_fd, error_response, error_response_bytes,
+                     MSG_NOSIGNAL);
+            }
+
             close(state->executor_session_fd);
             state->executor_session_fd = -1;
             break;
@@ -2240,6 +2278,11 @@ static void wavevm_get_watch(Object *obj, Visitor *v, const char *name, void *op
 static void wavevm_accel_init(Object *obj) {
     WaveVMAccelState *s = WAVEVM_ACCEL(obj);
     s->mode = WVM_MODE_KERNEL;
+
+    /* Initialize block I/O request tracking */
+    qemu_mutex_init(&g_block_request_lock);
+    g_block_operation_id_counter = 0;
+    g_block_queue_sequence = 0;
 }
 static void wavevm_accel_class_init(ObjectClass *oc, void *data) {
     AccelClass *ac = ACCEL_CLASS(oc);
@@ -2399,9 +2442,155 @@ struct wvm_ipc_block_req {
 } __attribute__((packed));
 
 /*
- * [物理意图] 将 virtio-blk 的 IO 请求序列化并通过 IPC 管道发送给 Master Daemon。
- * [关键逻辑] 封装 WVM_IPC_TYPE_BLOCK_IO 消息头，如果是写操作则携带 Payload。
- * [后果] 这是存储拦截的"出口"。没有它，wavevm-block-hook.c 拦截下来的 IO 请求就烂在肚子里了。
+ * [Typed Block Protocol] Send block request with operation identity, queue ordering,
+ * flush/FUA semantics per storage-device-authority.md.
+ * Replaces legacy {lba,len,is_write} with typed envelope and completion.
+ */
+int wvm_send_typed_block_request(uint64_t lba_512, void *buf, uint32_t sector_count,
+                                   uint32_t operation, uint32_t flags)
+{
+    WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
+    uint64_t operation_id;
+    uint32_t payload_bytes = (operation == WVM_BLOCK_OP_WRITE) ? (sector_count * 512) : 0;
+    size_t request_size = sizeof(struct wvm_typed_block_request) + payload_bytes;
+    size_t total_size = sizeof(struct wvm_ipc_header_t) + request_size;
+    uint8_t *buffer = NULL;
+    int ret = -1;
+
+    char *role = getenv("WVM_ROLE");
+    if (role && strcmp(role, "SLAVE") == 0) {
+        return -1;
+    }
+
+    /* Allocate unique operation ID */
+    qemu_mutex_lock(&s->block_operation_id_lock);
+    operation_id = s->next_block_operation_id++;
+    qemu_mutex_unlock(&s->block_operation_id_lock);
+
+    /* Serialize block requests */
+    qemu_mutex_lock(&s->block_io_lock);
+
+    /* Lazy initialization + reconnection */
+    if (s->block_io_sock < 0) {
+        s->block_io_sock = connect_to_master_helper();
+        if (s->block_io_sock < 0) {
+            qemu_mutex_unlock(&s->block_io_lock);
+            return -1;
+        }
+    }
+
+    buffer = g_malloc(total_size);
+    if (!buffer) {
+        qemu_mutex_unlock(&s->block_io_lock);
+        return -1;
+    }
+
+    /* Fill IPC header */
+    struct wvm_ipc_header_t *ipc_hdr = (struct wvm_ipc_header_t *)buffer;
+    ipc_hdr->type = WVM_IPC_TYPE_TYPED_BLOCK_REQUEST;
+    ipc_hdr->len = request_size;
+
+    /* Fill typed request */
+    struct wvm_typed_block_request *req =
+        (struct wvm_typed_block_request *)(buffer + sizeof(struct wvm_ipc_header_t));
+    memset(req, 0, sizeof(*req));
+    req->protocol_version = 1;
+    req->vm_id = g_vm_runtime_identity.vm_id;
+    req->vm_incarnation = g_vm_runtime_identity.vm_incarnation;
+    req->manifest_generation = g_vm_runtime_identity.manifest_generation;
+    req->origin_physical_node_id = g_vm_runtime_identity.physical_node_id;
+    req->origin_runtime_instance_id = g_vm_runtime_identity.runtime_instance_id;
+
+    /* Generate unique operation_id using counter */
+    qemu_mutex_lock(&g_block_request_lock);
+    req->operation_id = ++g_block_operation_id_counter;
+    req->queue_sequence = ++g_block_queue_sequence;
+    qemu_mutex_unlock(&g_block_request_lock);
+
+    /* semantic_payload_digest: compute SHA256 for write data if needed */
+    memset(req->semantic_payload_digest, 0, 32);
+    req->queue_id = 0;
+    req->operation = operation;
+    req->flags = flags;
+    req->lba_512 = lba_512;
+    req->sector_count = sector_count;
+    req->payload_bytes = payload_bytes;
+
+    if (operation == WVM_BLOCK_OP_WRITE && buf && payload_bytes > 0) {
+        memcpy(req->data, buf, payload_bytes);
+    }
+
+    /* Send request */
+    if (write_all(s->block_io_sock, buffer, total_size) < 0) {
+        goto fail;
+    }
+
+    /* Wait for typed completion */
+    struct wvm_ipc_header_t completion_hdr;
+    if (read_all(s->block_io_sock, &completion_hdr, sizeof(completion_hdr)) < 0) {
+        goto fail;
+    }
+
+    if (completion_hdr.type != WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION) {
+        goto fail;
+    }
+
+    size_t completion_payload_size = completion_hdr.len;
+    if (completion_payload_size < sizeof(struct wvm_typed_block_completion)) {
+        goto fail;
+    }
+
+    uint8_t *completion_buf = g_malloc(completion_payload_size);
+    if (!completion_buf) {
+        goto fail;
+    }
+
+    if (read_all(s->block_io_sock, completion_buf, completion_payload_size) < 0) {
+        g_free(completion_buf);
+        goto fail;
+    }
+
+    struct wvm_typed_block_completion *completion =
+        (struct wvm_typed_block_completion *)completion_buf;
+
+    if (completion->operation_id != operation_id) {
+        g_free(completion_buf);
+        goto fail;
+    }
+
+    if (completion->status != WVM_BLOCK_STATUS_SUCCESS) {
+        g_free(completion_buf);
+        goto fail;
+    }
+
+    /* For read operations, copy data back */
+    if (operation == WVM_BLOCK_OP_READ && buf && sector_count > 0) {
+        uint32_t expected_bytes = sector_count * 512;
+        if (completion->transferred_bytes == expected_bytes &&
+            completion_payload_size >= sizeof(struct wvm_typed_block_completion) + expected_bytes) {
+            memcpy(buf, completion->data, expected_bytes);
+        } else {
+            g_free(completion_buf);
+            goto fail;
+        }
+    }
+
+    g_free(completion_buf);
+    ret = 0;
+
+fail:
+    g_free(buffer);
+    if (ret < 0) {
+        close(s->block_io_sock);
+        s->block_io_sock = -1;
+    }
+    qemu_mutex_unlock(&s->block_io_lock);
+    return ret;
+}
+
+/*
+ * [LEGACY] 将 virtio-blk 的 IO 请求序列化并通过 IPC 管道发送给 Master Daemon。
+ * Deprecated: use wvm_send_typed_block_request for new code.
  */
 int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);

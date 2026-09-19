@@ -26,6 +26,14 @@ struct wvm_admission_receiver_slot {
     const char *runtime_manifest_path;
     int has_prepared;
     int has_activated;
+    int has_activation_decision;
+    int has_aborted;
+    uint32_t vm_id;
+    uint64_t vm_incarnation;
+    uint64_t manifest_generation;
+    char *state_path;
+    int state_lock_fd;
+    int state_failed;
 };
 
 typedef int (*wvm_admission_receiver_resolve_slot_fn)(
@@ -73,6 +81,20 @@ struct wvm_admission_receiver {
 
 /* Call after configuring caller-owned storage in SLOT. */
 void wvm_admission_receiver_slot_init(struct wvm_admission_receiver_slot *slot);
+
+/* Open once before publishing SLOT through resolve_slot. The bounded state
+ * file retains the latest canonical stage, including abort tombstones. An
+ * activation recovered here is not runnable until delivery is retried.
+ * A failed/uncertain write requires close/open; callers must not recycle an
+ * identity or remove its state file to recover from an error. */
+int wvm_admission_receiver_slot_open(
+    struct wvm_admission_receiver *receiver,
+    struct wvm_admission_receiver_slot *slot, const char *state_path,
+    uint32_t vm_id, uint64_t vm_incarnation, uint64_t manifest_generation,
+    char *error, size_t error_len);
+
+/* Does not free caller-owned decode arrays or delete durable state. */
+void wvm_admission_receiver_slot_close(struct wvm_admission_receiver_slot *slot);
 
 int wvm_admission_receiver_init(
     struct wvm_admission_receiver *receiver,

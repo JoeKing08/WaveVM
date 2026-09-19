@@ -156,11 +156,11 @@ static int route_destination_validate(
     const struct wvm_runtime_route_destination *destination,
     uint16_t topology_kind, char *error, size_t error_len)
 {
-    if (!destination || !route_topology_valid(topology_kind) ||
-        destination->destination_vnode >= WVM_MAX_GATEWAYS) {
+    if (!destination || !route_topology_valid(topology_kind)) {
         set_error(error, error_len, "runtime route destination is invalid");
         return -1;
     }
+    /* Accept full u32 vnode space; reserved values (0, UINT32_MAX) checked elsewhere */
     if (topology_kind == WVM_ROUTE_TOPOLOGY_FLAT &&
         destination->destination_kind ==
             WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE &&
@@ -187,14 +187,19 @@ static int primary_destination_for_node(
 
     if (!node || !destination || !route_topology_valid(topology_kind) ||
         wvm_node_record_validate(node, error, error_len) != 0 ||
-        node->local_vnode_first >= WVM_MAX_GATEWAYS ||
         node->local_vnode_count == 0 ||
-        node->local_vnode_count >
-            WVM_MAX_GATEWAYS - node->local_vnode_first ||
         (topology_kind == WVM_ROUTE_TOPOLOGY_FRACTAL &&
          node->pod_id == 0)) {
         set_error(error, error_len,
                   "physical node %u has no representable route destination",
+                  physical_node_id);
+        return -1;
+    }
+    /* Check for overflow in the vnode range (local_vnode_first + count),
+     * but don't reject high sparse vnodes — u32 space is valid */
+    if (node->local_vnode_count > UINT32_MAX - node->local_vnode_first) {
+        set_error(error, error_len,
+                  "physical node %u vnode range overflows u32",
                   physical_node_id);
         return -1;
     }

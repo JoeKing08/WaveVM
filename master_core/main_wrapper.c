@@ -1328,6 +1328,138 @@ void* client_handler(void *socket_desc) {
                 handle_ipc_rpc_passthrough(qemu_fd, payload_buf, ipc_hdr.len);
                 break;
             }
+            case WVM_IPC_TYPE_TYPED_BLOCK_REQUEST: {
+                struct wvm_typed_block_request *req = (void*)payload_buf;
+                if (ipc_hdr.len < sizeof(*req)) {
+                    fprintf(stderr, "[IPC] malformed typed block request\n");
+                    break;
+                }
+
+                uint32_t target = wvm_get_storage_node_id(req->lba_512);
+                uint32_t payload_bytes = req->payload_bytes;
+
+                /* Validate request */
+                if ((req->operation == WVM_BLOCK_OP_WRITE && payload_bytes != req->sector_count * 512) ||
+                    (req->operation == WVM_BLOCK_OP_READ && payload_bytes != 0)) {
+                    struct wvm_typed_block_completion completion = {
+                        .operation_id = req->operation_id,
+                        .status = WVM_BLOCK_STATUS_INVALID_OPERATION,
+                        .transferred_bytes = 0,
+                    };
+                    struct wvm_ipc_header_t resp_hdr = {
+                        .type = WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION,
+                        .len = sizeof(completion),
+                    };
+                    write_exact(qemu_fd, &resp_hdr, sizeof(resp_hdr));
+                    write_exact(qemu_fd, &completion, sizeof(completion));
+                    break;
+                }
+
+                /* Allocate RX buffer for remote response */
+                size_t rx_buf_size = sizeof(struct wvm_header) + sizeof(struct wvm_block_payload) +
+                                     (req->operation == WVM_BLOCK_OP_READ ? req->sector_count * 512 : 0);
+                uint8_t *rx_buf = malloc(rx_buf_size);
+                uint64_t rid = u_ops.alloc_req_id(rx_buf, (uint32_t)rx_buf_size);
+
+                /* Build legacy network packet for executor */
+                size_t blk_size = sizeof(struct wvm_block_payload) +
+                                 (req->operation == WVM_BLOCK_OP_WRITE ? payload_bytes : 0);
+                size_t pkt_len = sizeof(struct wvm_header) + blk_size;
+                uint8_t *pkt = u_ops.alloc_packet(pkt_len, 0);
+
+                if (pkt && rid != (uint64_t)-1) {
+                    struct wvm_header *h = (struct wvm_header *)pkt;
+                    h->magic = htonl(WVM_MAGIC);
+
+                    /* Map typed operation to legacy MSG */
+                    if (req->operation == WVM_BLOCK_OP_FLUSH) {
+                        h->msg_type = htons(MSG_BLOCK_FLUSH);
+                    } else if (req->operation == WVM_BLOCK_OP_WRITE) {
+                        h->msg_type = htons(MSG_BLOCK_WRITE);
+                    } else {
+                        h->msg_type = htons(MSG_BLOCK_READ);
+                    }
+
+                    h->payload_len = htons(blk_size);
+                    h->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                    h->req_id = WVM_HTONLL(rid);
+                    h->qos_level = 1;
+
+                    struct wvm_block_payload *p = (void*)(pkt + sizeof(*h));
+                    p->lba = WVM_HTONLL(req->lba_512);
+                    p->count = htonl(req->sector_count);
+                    if (req->operation == WVM_BLOCK_OP_WRITE) {
+                        memcpy(p->data, req->data, payload_bytes);
+                    }
+
+                    h->crc32 = 0;
+                    h->crc32 = htonl(calculate_crc32(pkt, pkt_len));
+
+                    u_ops.send_packet(pkt, pkt_len, target);
+
+                    /* Wait for remote response */
+                    uint64_t t_start = u_ops.get_time_us();
+                    int success = 0;
+                    while (u_ops.time_diff_us(t_start) < 5000000) {
+                        if (u_ops.check_req_status(rid) == 1) {
+                            struct wvm_header *rx_hdr = (struct wvm_header *)rx_buf;
+                            if (rx_hdr->flags & WVM_FLAG_ERROR) {
+                                success = 0;
+                            } else {
+                                success = 1;
+                            }
+                            break;
+                        }
+                        usleep(100);
+                    }
+
+                    /* Send typed completion to QEMU */
+                    uint32_t response_data_size = (success && req->operation == WVM_BLOCK_OP_READ) ?
+                                                  req->sector_count * 512 : 0;
+                    size_t completion_size = sizeof(struct wvm_typed_block_completion) + response_data_size;
+                    uint8_t *completion_buf = malloc(completion_size);
+
+                    if (completion_buf) {
+                        struct wvm_typed_block_completion *completion = (void*)completion_buf;
+                        completion->operation_id = req->operation_id;
+                        completion->status = success ? WVM_BLOCK_STATUS_SUCCESS : WVM_BLOCK_STATUS_IO_ERROR;
+                        completion->transferred_bytes = success ?
+                            (req->operation == WVM_BLOCK_OP_READ ? req->sector_count * 512 : payload_bytes) : 0;
+
+                        if (success && req->operation == WVM_BLOCK_OP_READ) {
+                            struct wvm_block_payload *rx_p = (struct wvm_block_payload *)
+                                (rx_buf + sizeof(struct wvm_header));
+                            memcpy(completion->data, rx_p->data, response_data_size);
+                        }
+
+                        struct wvm_ipc_header_t resp_hdr = {
+                            .type = WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION,
+                            .len = completion_size,
+                        };
+                        write_exact(qemu_fd, &resp_hdr, sizeof(resp_hdr));
+                        write_exact(qemu_fd, completion_buf, completion_size);
+                        free(completion_buf);
+                    }
+                } else {
+                    /* Allocation failed, send error completion */
+                    struct wvm_typed_block_completion completion = {
+                        .operation_id = req->operation_id,
+                        .status = WVM_BLOCK_STATUS_IO_ERROR,
+                        .transferred_bytes = 0,
+                    };
+                    struct wvm_ipc_header_t resp_hdr = {
+                        .type = WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION,
+                        .len = sizeof(completion),
+                    };
+                    write_exact(qemu_fd, &resp_hdr, sizeof(resp_hdr));
+                    write_exact(qemu_fd, &completion, sizeof(completion));
+                }
+
+                if (pkt) u_ops.free_packet(pkt);
+                if (rid != (uint64_t)-1) u_ops.free_req_id(rid);
+                free(rx_buf);
+                break;
+            }
             case WVM_IPC_TYPE_BLOCK_IO: {
                 // 结构体必须与 QEMU 端严格对齐 (Packed 13 Bytes)
                 struct wvm_ipc_block_req {

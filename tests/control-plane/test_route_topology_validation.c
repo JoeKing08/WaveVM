@@ -145,7 +145,9 @@ int main(void) {
     printf("\nTest 4: Route topology contracts\n");
     printf("  FLAT topology: direct vnode addressing (16 vnodes)\n");
     printf("  FRACTAL topology: hierarchical pod addressing (pod_id=%lu)\n", (unsigned long)node.pod_id);
-    
-    printf("\n=== All topology validation tests PASS ===\n");
+
+    printf("\n=== Route compiler initialization and topology structure validation PASS ===\n");
+    printf("NOTE: This test validates compiler setup and topology metadata.\n");
+    printf("      It does not exercise compile/forward logic or KVM/TCG execution paths.\n");
     return 0;
 }

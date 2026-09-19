@@ -2,9 +2,11 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "wavevm_control_plane.h"
@@ -354,6 +356,265 @@ static int configure_owner(
     return 0;
 }
 
+struct typed_apply_context {
+    unsigned int calls;
+    uint16_t status;
+};
+
+/* Transport fixture only; no participant persistence is simulated here. */
+static int apply_typed_request(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *actor, struct wvm_control_result *result,
+    char *error, size_t error_len)
+{
+    struct typed_apply_context *context = opaque;
+
+    (void)actor;
+    (void)error;
+    (void)error_len;
+    context->calls++;
+    memset(result, 0, sizeof(*result));
+    result->status_code = context->status;
+    memcpy(result->in_reply_to_operation_id, request->operation_id,
+           sizeof(result->in_reply_to_operation_id));
+    memcpy(result->record_digest, request->semantic_payload_digest,
+           sizeof(result->record_digest));
+    result->vm_id = request->vm_id;
+    result->vm_incarnation = request->vm_incarnation;
+    result->manifest_generation = request->manifest_generation;
+    result->route_scope_id = request->route_scope_id;
+    return 0;
+}
+
+static void fill_stage_request(struct wvm_envelope *request, uint16_t type)
+{
+    static const uint8_t payload[] = {1, 2, 3};
+
+    make_register_request(request, payload, sizeof(payload), 7);
+    request->message_type = type;
+    if (type != WVM_ENVELOPE_MSG_CREATE_VM) {
+        request->vm_id = 256;
+        request->vm_incarnation = 2;
+        request->manifest_generation = 3;
+        request->route_scope_id = 4;
+        request->topology_revision = 5;
+        request->route_generation = 6;
+        memset(request->route_snapshot_digest, 0x27,
+               sizeof(request->route_snapshot_digest));
+    }
+    wvm_envelope_semantic_digest(payload, sizeof(payload),
+                                 request->semantic_payload_digest);
+}
+
+static int test_typed_exchange(void)
+{
+    const uint16_t types[] = {
+        WVM_ENVELOPE_MSG_CREATE_VM,
+        WVM_ENVELOPE_MSG_PREPARE_RESERVATION,
+        WVM_ENVELOPE_MSG_COMMIT_RESERVATION,
+        WVM_ENVELOPE_MSG_ABORT_RESERVATION,
+        WVM_ENVELOPE_MSG_PREPARE_MANIFEST,
+        WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST,
+        WVM_ENVELOPE_MSG_ABORT_MANIFEST,
+        WVM_ENVELOPE_MSG_ROUTE_PREPARE,
+        WVM_ENVELOPE_MSG_ROUTE_COMMIT,
+        WVM_ENVELOPE_MSG_ROUTE_ABORT,
+        WVM_ENVELOPE_MSG_ROUTE_RETIRE,
+    };
+    struct authentication_context authentication = {0};
+    struct typed_apply_context applied = {0};
+    struct wvm_control_transport_config config = {0};
+    struct wvm_control_stream transport;
+    struct wvm_envelope request;
+    struct wvm_control_result result;
+    struct serve_context server;
+    pthread_t thread;
+    int sockets[2];
+    int status = -1;
+    size_t i;
+    char error[256] = {0};
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
+        return -1;
+    }
+    config.stream_fd = sockets[0];
+    config.local_physical_node_id = 900;
+    config.local_runtime_instance_id = 901;
+    config.authenticate = authenticate_actor;
+    config.authenticate_opaque = &authentication;
+    config.control_apply = apply_typed_request;
+    config.control_apply_opaque = &applied;
+    if (wvm_control_transport_init(&transport, &config, error, sizeof(error))) {
+        goto out;
+    }
+    for (i = 0; i < sizeof(types) / sizeof(types[0]) + 3; i++) {
+        size_t count = sizeof(types) / sizeof(types[0]);
+        uint16_t expected_status = WVM_CONTROL_RESULT_SUCCESS;
+        unsigned int previous_calls = applied.calls;
+        int exchange_status;
+
+        fill_stage_request(&request, types[i < count ? i : 1]);
+        if (i == count) {
+            applied.status = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+            expected_status = applied.status;
+        } else if (i == count + 1) {
+            authentication.reject = 1;
+            expected_status = WVM_CONTROL_RESULT_UNAUTHORIZED_ROLE;
+        } else if (i == count + 2) {
+            authentication.reject = 0;
+            transport.config.control_apply = NULL;
+            transport.config.apply = wvm_control_plane_membership_apply;
+            expected_status = WVM_CONTROL_RESULT_UNSUPPORTED;
+        }
+        if (start_serve(&server, &thread, &transport) != 0) {
+            goto out;
+        }
+        exchange_status = wvm_control_transport_exchange(
+            sockets[1], 900, 901, &request, &result, error, sizeof(error));
+        if (exchange_status != 0) {
+            shutdown(sockets[1], SHUT_RDWR);
+        }
+        if (pthread_join(thread, NULL) != 0 ||
+            expect(exchange_status == 0 && server.result == 0 &&
+                       result.status_code == expected_status,
+                   "typed stream preserves stage reply or semantic rejection") ||
+            expect(applied.calls == previous_calls + (i <= count ? 1U : 0U),
+                   "unauthenticated or unsupported stages never reach apply")) {
+            goto out;
+        }
+    }
+    /* A completed apply must not kill the process if its client disconnects. */
+    transport.config.control_apply = apply_typed_request;
+    if (send_request(sockets[1], &request, error, sizeof(error)) != 0 ||
+        shutdown(sockets[1], SHUT_RD) != 0 ||
+        expect(wvm_control_transport_serve_once(&transport, error,
+                                                 sizeof(error)) == -EPIPE,
+               "reply to disconnected client returns EPIPE, not SIGPIPE")) {
+        goto out;
+    }
+    status = 0;
+out:
+    close(sockets[0]);
+    close(sockets[1]);
+    return status;
+}
+
+static int test_reply_validation(void)
+{
+    int variant;
+
+    for (variant = 0; variant < 13; variant++) {
+        struct wvm_envelope request;
+        struct wvm_envelope response = {0};
+        struct wvm_control_result result;
+        struct wvm_control_result untouched;
+        struct typed_apply_context context = {0};
+        uint8_t payload[WVM_CONTROL_RESULT_BYTES];
+        uint8_t frame[WVM_CONTROL_TRANSPORT_FRAME_PREFIX_BYTES +
+                      WVM_ENVELOPE_HEADER_BYTES + WVM_CONTROL_RESULT_BYTES];
+        size_t frame_bytes = 0;
+        size_t sent_bytes;
+        int sockets[2];
+        int status;
+        int expected = -EPROTO;
+        char error[256] = {0};
+
+        fill_stage_request(&request, WVM_ENVELOPE_MSG_PREPARE_RESERVATION);
+        apply_typed_request(&context, &request, NULL, &result, NULL, 0);
+        response.message_type = WVM_ENVELOPE_MSG_CTRL_RESULT;
+        response.origin_physical_node_id = 900;
+        response.origin_runtime_instance_id = 901;
+        response.delivery_attempt_id = request.delivery_attempt_id;
+        memcpy(response.operation_id, request.operation_id,
+               sizeof(response.operation_id));
+        switch (variant) {
+        case 0: response.origin_physical_node_id++; break;
+        case 1: response.origin_runtime_instance_id++; break;
+        case 2: response.operation_id[0]++; break;
+        case 3: response.delivery_attempt_id++; break;
+        case 4: result.in_reply_to_operation_id[0]++; break;
+        case 5: result.vm_id++; break;
+        case 6: result.vm_incarnation++; break;
+        case 7: result.manifest_generation++; break;
+        case 8: result.route_scope_id++; break;
+        case 9: result.record_digest[0]++; break;
+        }
+        if (wvm_control_result_encode(&result, payload) != 0) {
+            return -1;
+        }
+        response.payload = payload;
+        response.payload_bytes = sizeof(payload);
+        if (wvm_envelope_encode(&response, WVM_ENVELOPE_TRANSPORT_LOCAL,
+                                frame + 4, sizeof(frame) - 4, &frame_bytes,
+                                error, sizeof(error)) != 0 ||
+            socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
+            return -1;
+        }
+        write_be32(frame, (uint32_t)frame_bytes);
+        sent_bytes = frame_bytes + 4;
+        if (variant == 10) {
+            write_be32(frame, UINT32_MAX);
+            sent_bytes = 4;
+            expected = -EMSGSIZE;
+        } else if (variant == 11) {
+            sent_bytes--;
+        } else if (variant == 12) {
+            sent_bytes = 2;
+        }
+        if (send(sockets[0], frame, sent_bytes, MSG_NOSIGNAL) !=
+                (ssize_t)sent_bytes || shutdown(sockets[0], SHUT_WR) != 0) {
+            close(sockets[0]);
+            close(sockets[1]);
+            return -1;
+        }
+        memset(&result, 0xa5, sizeof(result));
+        untouched = result;
+        status = wvm_control_transport_exchange(
+            sockets[1], 900, 901, &request, &result, error, sizeof(error));
+        close(sockets[0]);
+        close(sockets[1]);
+        if (expect(status == expected &&
+                       memcmp(&result, &untouched, sizeof(result)) == 0,
+                   "reject mismatched, oversized or truncated reply unchanged")) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int test_exchange_io_failure(void)
+{
+    struct wvm_envelope request;
+    struct wvm_control_result result;
+    struct timeval timeout = {.tv_sec = 0, .tv_usec = 20000};
+    int sockets[2];
+    int status;
+
+    fill_stage_request(&request, WVM_ENVELOPE_MSG_PREPARE_MANIFEST);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
+        return -1;
+    }
+    if (setsockopt(sockets[1], SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                   sizeof(timeout)) != 0) {
+        close(sockets[0]);
+        close(sockets[1]);
+        return -1;
+    }
+    status = wvm_control_transport_exchange(sockets[1], 900, 901, &request,
+                                            &result, NULL, 0);
+    close(sockets[0]);
+    if (expect(status == -EAGAIN || status == -EWOULDBLOCK,
+               "request without reply fails at caller's socket timeout") ||
+        expect(wvm_control_transport_exchange(sockets[1], 900, 901, &request,
+                                               &result, NULL, 0) == -EPIPE,
+               "closed peer fails without SIGPIPE")) {
+        close(sockets[1]);
+        return -1;
+    }
+    close(sockets[1]);
+    return 0;
+}
+
 int main(void)
 {
     char membership_path[128];
@@ -382,6 +643,11 @@ int main(void)
     struct authorization_context authorization = {0};
     int result = 1;
 
+    signal(SIGPIPE, SIG_DFL);
+    if (test_typed_exchange() != 0 || test_reply_validation() != 0 ||
+        test_exchange_io_failure() != 0) {
+        return 1;
+    }
     memset(&plane, 0, sizeof(plane));
     memset(&transport, 0, sizeof(transport));
     if (snprintf(membership_path, sizeof(membership_path),

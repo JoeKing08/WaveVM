@@ -24,7 +24,7 @@ static int owner_config_valid(
         !config->membership_capture || !config->evidence_owner ||
         !config->plan_provider || !config->route_compiler ||
         !config->transport || !config->prepared_route ||
-        !config->prepared_vm || !config->activation_options ||
+        !config->prepared_vm ||
         !config->activation || !config->route_transaction ||
         !config->route_snapshot || !config->reset_workspace ||
         !config->membership_capture->nodes ||
@@ -64,8 +64,8 @@ static int owner_prepare_input(
     }
     if (
         owner->config.reset_workspace(
-            owner->config.workspace_context, owner->config.prepared_route,
-            owner->config.prepared_vm, owner->config.activation_options,
+            owner->config.workspace_context, request, owner->config.prepared_route,
+            owner->config.prepared_vm,
             owner->config.activation, owner->config.route_transaction,
             owner->config.route_snapshot, error, error_len) != 0) {
         if (error && error[0] == '\0') {
@@ -78,7 +78,8 @@ static int owner_prepare_input(
     input->membership_capture = owner->config.membership_capture;
     input->prepared_route = owner->config.prepared_route;
     input->prepared_vm = owner->config.prepared_vm;
-    input->activation_options = owner->config.activation_options;
+    input->coordinator_instance_id =
+        owner->config.transport->controller_instance_id;
     input->activation = owner->config.activation;
     input->route_transaction = owner->config.route_transaction;
     input->route_snapshot = owner->config.route_snapshot;

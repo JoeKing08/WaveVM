@@ -172,17 +172,41 @@ static int reserve_vm(struct wvm_resource_plan *plan,
                       size_t error_len)
 {
     struct wvm_resource_vm *vm = &plan->vms[request->vm_id];
-    uint32_t vm_cpu[WVM_MAX_SLAVES] = {0};
-    uint64_t vm_memory[WVM_MAX_SLAVES] = {0};
+    uint32_t *vm_cpu = NULL;
+    uint64_t *vm_memory = NULL;
     uint32_t remaining_cpu = request->vcpu_count;
     uint64_t remaining_memory = request->memory_mb;
     uint32_t i;
     uint32_t chunk = 0;
+    int ret = -1;
+
+    vm_cpu = calloc(plan->node_count, sizeof(*vm_cpu));
+    vm_memory = calloc(plan->node_count, sizeof(*vm_memory));
+    if (!vm_cpu || !vm_memory) {
+        set_error(error, error_len, "failed to allocate VM placement arrays");
+        free(vm_cpu);
+        free(vm_memory);
+        return -1;
+    }
 
     vm->vm_id = request->vm_id;
     vm->vcpu_count = request->vcpu_count;
     vm->memory_mb = request->memory_mb;
     vm->policy = request->policy;
+    vm->node_capacity = plan->node_count;
+    vm->vcpus_per_node = calloc(plan->node_count, sizeof(*vm->vcpus_per_node));
+    vm->memory_mb_per_node = calloc(plan->node_count, sizeof(*vm->memory_mb_per_node));
+    if (!vm->vcpus_per_node || !vm->memory_mb_per_node) {
+        set_error(error, error_len, "failed to allocate VM per-node arrays");
+        free(vm->vcpus_per_node);
+        free(vm->memory_mb_per_node);
+        vm->vcpus_per_node = NULL;
+        vm->memory_mb_per_node = NULL;
+        vm->node_capacity = 0;
+        free(vm_cpu);
+        free(vm_memory);
+        return -1;
+    }
 
     while (remaining_cpu > 0) {
         int node_index;
@@ -197,7 +221,7 @@ static int reserve_vm(struct wvm_resource_plan *plan,
             set_error(error, error_len,
                       "VM %u requests %u vCPUs, but cluster CPU capacity is exhausted",
                       request->vm_id, request->vcpu_count);
-            return -1;
+            goto out;
         }
 
         vm_cpu[node_index]++;
@@ -214,7 +238,7 @@ static int reserve_vm(struct wvm_resource_plan *plan,
             set_error(error, error_len,
                       "VM %u needs more than %u memory routing chunks",
                       request->vm_id, WVM_RESOURCE_MAX_MEMORY_CHUNKS);
-            return -1;
+            goto out;
         }
 
         if (request->policy == WVM_RESOURCE_POLICY_COMPACT) {
@@ -230,7 +254,7 @@ static int reserve_vm(struct wvm_resource_plan *plan,
                       "VM %u requests %llu MB, but cluster memory capacity is exhausted",
                       request->vm_id,
                       (unsigned long long)request->memory_mb);
-            return -1;
+            goto out;
         }
 
         vm_memory[node_index] += chunk_mb;
@@ -246,8 +270,14 @@ static int reserve_vm(struct wvm_resource_plan *plan,
     {
         uint32_t vcpu = 0;
         uint32_t memory_chunk = 0;
-        uint32_t ordered_indices[WVM_MAX_SLAVES];
+        uint32_t *ordered_indices = NULL;
         uint32_t ordered_count = 0;
+
+        ordered_indices = calloc(plan->node_count, sizeof(*ordered_indices));
+        if (!ordered_indices) {
+            set_error(error, error_len, "failed to allocate ordered index array");
+            goto out;
+        }
 
         for (i = 0; i < plan->node_count; i++) {
             uint32_t insert_at = ordered_count;
@@ -299,6 +329,8 @@ static int reserve_vm(struct wvm_resource_plan *plan,
                 break;
             }
         }
+
+        free(ordered_indices);
     }
 
     for (i = 0; i < plan->node_count; i++) {
@@ -310,44 +342,60 @@ static int reserve_vm(struct wvm_resource_plan *plan,
 
     plan->vm_present[request->vm_id] = 1;
     plan->vm_count++;
-    return 0;
+    ret = 0;
+
+out:
+    free(vm_cpu);
+    free(vm_memory);
+    return ret;
 }
 
 int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
                                char *error, size_t error_len)
 {
-    uint32_t used_cpu[WVM_MAX_SLAVES] = {0};
-    uint64_t used_memory[WVM_MAX_SLAVES] = {0};
+    uint32_t *used_cpu = NULL;
+    uint64_t *used_memory = NULL;
     uint32_t observed_vm_count = 0;
     uint32_t i;
+    int ret = -1;
 
-    if (!plan || plan->node_count == 0 ||
-        plan->node_count > WVM_MAX_SLAVES) {
+    if (!plan || plan->node_count == 0) {
         set_error(error, error_len, "resource plan has invalid node count");
         return -1;
+    }
+    if (plan->node_count > UINT32_MAX) {
+        set_error(error, error_len, "resource plan node count exceeds u32");
+        return -1;
+    }
+
+    used_cpu = calloc(plan->node_count, sizeof(*used_cpu));
+    used_memory = calloc(plan->node_count, sizeof(*used_memory));
+    if (!used_cpu || !used_memory) {
+        set_error(error, error_len, "failed to allocate validation arrays");
+        goto out;
     }
 
     for (i = 0; i < plan->node_count; i++) {
         const struct wvm_resource_node *node = &plan->nodes[i];
 
-        if (node->phys_id >= WVM_MAX_SLAVES || node->port == 0 ||
+        if (node->phys_id == UINT32_MAX || node->port == 0 ||
             node->cpu_capacity == 0 || node->memory_mb == 0 ||
             node->dht_slots == 0) {
             set_error(error, error_len,
                       "resource plan has invalid node at index %u", i);
-            return -1;
+            goto out;
         }
         if (node_index_by_id(plan, node->phys_id) != (int)i) {
             set_error(error, error_len,
                       "resource plan has duplicate node id %u", node->phys_id);
-            return -1;
+            goto out;
         }
     }
 
     for (i = 0; i < WVM_MAX_VMS; i++) {
         const struct wvm_resource_vm *vm;
-        uint32_t per_vm_cpu[WVM_MAX_SLAVES] = {0};
-        uint64_t per_vm_memory[WVM_MAX_SLAVES] = {0};
+        uint32_t *per_vm_cpu = NULL;
+        uint64_t *per_vm_memory = NULL;
         uint64_t assigned_memory = 0;
         uint32_t vcpu;
         uint32_t chunk;
@@ -356,7 +404,7 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
         if (plan->vm_present[i] != 0 && plan->vm_present[i] != 1) {
             set_error(error, error_len,
                       "resource plan has invalid VM presence flag at %u", i);
-            return -1;
+            goto out;
         }
         if (!plan->vm_present[i]) {
             continue;
@@ -372,13 +420,22 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
             (vm->policy != WVM_RESOURCE_POLICY_COMPACT &&
              vm->policy != WVM_RESOURCE_POLICY_SPREAD)) {
             set_error(error, error_len, "VM %u has invalid plan metadata", i);
-            return -1;
+            goto out;
         }
 
         host_index = node_index_by_id(plan, vm->host_phys_id);
         if (host_index < 0) {
             set_error(error, error_len, "VM %u has no valid host node", i);
-            return -1;
+            goto out;
+        }
+
+        per_vm_cpu = calloc(plan->node_count, sizeof(*per_vm_cpu));
+        per_vm_memory = calloc(plan->node_count, sizeof(*per_vm_memory));
+        if (!per_vm_cpu || !per_vm_memory) {
+            set_error(error, error_len, "failed to allocate per-VM validation arrays");
+            free(per_vm_cpu);
+            free(per_vm_memory);
+            goto out;
         }
 
         for (vcpu = 0; vcpu < vm->vcpu_count; vcpu++) {
@@ -394,14 +451,18 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
                 set_error(error, error_len,
                           "VM %u vCPU %u has no registered executor node",
                           i, vcpu);
-                return -1;
+                free(per_vm_cpu);
+                free(per_vm_memory);
+                goto out;
             }
             per_vm_cpu[node_index]++;
         }
         if (per_vm_cpu[host_index] == 0) {
             set_error(error, error_len,
                       "VM %u host node has no local vCPU assignment", i);
-            return -1;
+            free(per_vm_cpu);
+            free(per_vm_memory);
+            goto out;
         }
 
         for (chunk = 0; chunk < vm->memory_chunk_count; chunk++) {
@@ -414,7 +475,9 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
             if (chunk_mb == 0) {
                 set_error(error, error_len,
                           "VM %u has excess memory chunks", i);
-                return -1;
+                free(per_vm_cpu);
+                free(per_vm_memory);
+                goto out;
             }
             for (uint32_t n = 0; n < plan->node_count; n++) {
                 if (plan->nodes[n].vnode_start == vm->memory_nodes[chunk]) {
@@ -426,7 +489,9 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
                 set_error(error, error_len,
                           "VM %u memory chunk %u has no registered owner",
                           i, chunk);
-                return -1;
+                free(per_vm_cpu);
+                free(per_vm_memory);
+                goto out;
             }
             per_vm_memory[node_index] += chunk_mb;
             assigned_memory += chunk_mb;
@@ -436,7 +501,9 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
                       "VM %u memory chunks cover %llu MB, expected %llu MB",
                       i, (unsigned long long)assigned_memory,
                       (unsigned long long)vm->memory_mb);
-            return -1;
+            free(per_vm_cpu);
+            free(per_vm_memory);
+            goto out;
         }
 
         for (uint32_t n = 0; n < plan->node_count; n++) {
@@ -445,17 +512,22 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
                 set_error(error, error_len,
                           "VM %u per-node summary does not match assignments",
                           i);
-                return -1;
+                free(per_vm_cpu);
+                free(per_vm_memory);
+                goto out;
             }
             used_cpu[n] += per_vm_cpu[n];
             used_memory[n] += per_vm_memory[n];
         }
+
+        free(per_vm_cpu);
+        free(per_vm_memory);
     }
 
     if (observed_vm_count != plan->vm_count) {
         set_error(error, error_len,
                   "resource plan VM count does not match presence map");
-        return -1;
+        goto out;
     }
 
     for (i = 0; i < plan->node_count; i++) {
@@ -464,22 +536,28 @@ int wvm_resource_plan_validate(const struct wvm_resource_plan *plan,
             set_error(error, error_len,
                       "resource plan overcommits node %u",
                       plan->nodes[i].phys_id);
-            return -1;
+            goto out;
         }
     }
 
-    return 0;
+    ret = 0;
+
+out:
+    free(used_cpu);
+    free(used_memory);
+    return ret;
 }
 
 int wvm_resource_plan_load(const char *path, struct wvm_resource_plan *plan,
                            char *error, size_t error_len)
 {
     struct wvm_resource_vm_request requests[WVM_MAX_VMS];
-    uint32_t used_cpu[WVM_MAX_SLAVES] = {0};
-    uint64_t used_memory[WVM_MAX_SLAVES] = {0};
+    uint32_t *used_cpu = NULL;
+    uint64_t *used_memory = NULL;
     uint32_t request_count = 0;
     FILE *fp;
     char line[256];
+    int ret = -1;
 
     if (!path || !plan) {
         set_error(error, error_len, "resource planner received an invalid argument");
@@ -487,9 +565,18 @@ int wvm_resource_plan_load(const char *path, struct wvm_resource_plan *plan,
     }
 
     memset(plan, 0, sizeof(*plan));
+    plan->node_capacity = 64;
+    plan->nodes = calloc(plan->node_capacity, sizeof(*plan->nodes));
+    if (!plan->nodes) {
+        set_error(error, error_len, "failed to allocate initial node array");
+        return -1;
+    }
+
     fp = fopen(path, "r");
     if (!fp) {
         set_error(error, error_len, "cannot open %s: %s", path, strerror(errno));
+        free(plan->nodes);
+        plan->nodes = NULL;
         return -1;
     }
 
@@ -508,10 +595,26 @@ int wvm_resource_plan_load(const char *path, struct wvm_resource_plan *plan,
             unsigned int id, port, cores, memory_gib, dht_slots = 0;
             int fields;
 
-            if (plan->node_count >= WVM_MAX_SLAVES) {
-                set_error(error, error_len, "NODE count exceeds %lu",
-                          (unsigned long)WVM_MAX_SLAVES);
+            if (plan->node_count >= UINT32_MAX) {
+                set_error(error, error_len, "NODE count exceeds u32 maximum");
                 goto fail;
+            }
+
+            if (plan->node_count >= plan->node_capacity) {
+                uint32_t new_capacity = plan->node_capacity * 2;
+                struct wvm_resource_node *new_nodes;
+
+                if (new_capacity > UINT32_MAX / sizeof(*new_nodes)) {
+                    set_error(error, error_len, "NODE capacity allocation would overflow");
+                    goto fail;
+                }
+                new_nodes = realloc(plan->nodes, new_capacity * sizeof(*new_nodes));
+                if (!new_nodes) {
+                    set_error(error, error_len, "failed to grow NODE array");
+                    goto fail;
+                }
+                plan->nodes = new_nodes;
+                plan->node_capacity = new_capacity;
             }
 
             node = &plan->nodes[plan->node_count];
@@ -521,7 +624,7 @@ int wvm_resource_plan_load(const char *path, struct wvm_resource_plan *plan,
                 set_error(error, error_len, "invalid NODE line: %s", line);
                 goto fail;
             }
-            if (id >= WVM_MAX_SLAVES || port == 0 || port > UINT16_MAX ||
+            if (id == UINT32_MAX || port == 0 || port > UINT16_MAX ||
                 cores == 0 || memory_gib == 0) {
                 set_error(error, error_len, "invalid NODE capacity or identity: %s",
                           line);
@@ -538,9 +641,12 @@ int wvm_resource_plan_load(const char *path, struct wvm_resource_plan *plan,
                     dht_slots = 1;
                 }
             }
-            if (dht_slots == 0 ||
-                dht_slots > WVM_MAX_SLAVES - plan->total_vnodes) {
+            if (dht_slots == 0) {
                 set_error(error, error_len, "invalid DHT slot count for NODE %u", id);
+                goto fail;
+            }
+            if (plan->total_vnodes > UINT32_MAX - dht_slots) {
+                set_error(error, error_len, "total vnode count would overflow u32 for NODE %u", id);
                 goto fail;
             }
 
@@ -607,19 +713,37 @@ int wvm_resource_plan_load(const char *path, struct wvm_resource_plan *plan,
         return -1;
     }
 
+    used_cpu = calloc(plan->node_count, sizeof(*used_cpu));
+    used_memory = calloc(plan->node_count, sizeof(*used_memory));
+    if (!used_cpu || !used_memory) {
+        set_error(error, error_len, "failed to allocate placement arrays");
+        free(used_cpu);
+        free(used_memory);
+        return -1;
+    }
+
     memset(plan->vm_present, 0, sizeof(plan->vm_present));
     sort_vm_requests(requests, request_count);
     for (uint32_t i = 0; i < request_count; i++) {
         if (reserve_vm(plan, &requests[i], used_cpu, used_memory, error,
                        error_len) != 0) {
+            free(used_cpu);
+            free(used_memory);
             return -1;
         }
     }
 
-    return wvm_resource_plan_validate(plan, error, error_len);
+    ret = wvm_resource_plan_validate(plan, error, error_len);
+    free(used_cpu);
+    free(used_memory);
+    return ret;
 
 fail:
     fclose(fp);
+    free(plan->nodes);
+    plan->nodes = NULL;
+    plan->node_capacity = 0;
+    plan->node_count = 0;
     return -1;
 }
 

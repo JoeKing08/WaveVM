@@ -210,5 +210,7 @@ int main(void)
     }
     remove_vm_resources(&names_b, sockets_b, shm_b);
     puts("multi-vm-isolation tests: PASS");
+    puts("NOTE: This test validates local namespace/socket/shm naming and cleanup isolation.");
+    puts("      It does not load /dev/wavevm or drive dual kernel contexts.");
     return 0;
 }

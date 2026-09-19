@@ -498,6 +498,55 @@ struct wvm_block_payload {
     uint8_t  data[0];   // 变长数据
 } __attribute__((packed));
 
+/* Typed block request envelope (storage-device-authority.md compliant).
+ * Replaces legacy {lba,len,is_write} with operation identity, queue ordering,
+ * flush/FUA semantics, and typed completion. */
+#define WVM_BLOCK_OP_READ         1
+#define WVM_BLOCK_OP_WRITE        2
+#define WVM_BLOCK_OP_FLUSH        3
+#define WVM_BLOCK_OP_DISCARD      4
+#define WVM_BLOCK_OP_WRITE_ZEROES 5
+
+#define WVM_BLOCK_FLAG_FUA        0x01  /* Force Unit Access */
+#define WVM_BLOCK_FLAG_SYNC       0x02  /* Synchronous completion required */
+
+struct wvm_typed_block_request {
+    uint32_t protocol_version;
+    uint8_t vm_id;
+    uint8_t reserved1[3];
+    uint64_t vm_incarnation;
+    uint64_t manifest_generation;
+    uint32_t origin_physical_node_id;
+    uint32_t origin_runtime_instance_id;
+    uint64_t operation_id;
+    uint8_t semantic_payload_digest[32];
+    uint32_t queue_id;
+    uint32_t queue_sequence;
+    uint32_t operation;
+    uint32_t flags;
+    uint64_t lba_512;
+    uint32_t sector_count;
+    uint32_t payload_bytes;
+    uint8_t data[0];
+} __attribute__((packed));
+
+#define WVM_BLOCK_STATUS_SUCCESS           0
+#define WVM_BLOCK_STATUS_IO_ERROR          1
+#define WVM_BLOCK_STATUS_INVALID_OPERATION 2
+#define WVM_BLOCK_STATUS_OUT_OF_BOUNDS     3
+#define WVM_BLOCK_STATUS_DUPLICATE_ID      4
+
+struct wvm_typed_block_completion {
+    uint64_t operation_id;
+    uint32_t status;
+    uint32_t transferred_bytes;
+    uint8_t data[0];
+} __attribute__((packed));
+
+#define WVM_IPC_TYPE_TYPED_BLOCK_REQUEST   14
+#define WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION 15
+
+
 // 版本判定
 static inline int is_next_version(uint64_t local, uint64_t push) {
     uint32_t l_epoch = (uint32_t)(local >> 32);
