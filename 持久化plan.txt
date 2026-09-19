@@ -99,6 +99,36 @@
 - 验证：`test_admission_plan.sh` 通过（"admission-plan tests: PASS"），`ctl_tool` 和 `node_runtime` 编译通过
 此修复确保了动态分配结构的正确生命周期管理，消除了内存泄漏和悬垂指针风险，为后续扩展到更大容量预算奠定了基础。
 
+[证据 2026-09-19 F07 修复] 完成Slave TCG的typed memory/fence统一：
+- 位置：`wavevm-qemu/accel/wavevm/wavevm-user-mem.c`
+- 修复内容：
+  1. **Memory fault统一**：Slave TCG现在使用与Master TCG相同的typed IPC protocol (`request_page_over_ipc()`)，通过Unix socket发送`WVM_IPC_TYPE_TYPED_MEM_FAULT`，而非legacy UDP `struct wvm_header` + MSG_MEM_READ
+  2. **Fence统一**：`wait_for_directory_ack_safe_us()`改为使用typed IPC `WVM_IPC_TYPE_COMMIT_DIFF_SYNC`，移除legacy MSG_PING/SYNC_MAGIC over UDP
+  3. **移除legacy UDP代码**：删除约140行的legacy UDP MEM_READ/MSG_PING代码及相关poll/retry逻辑
+  4. **连接机制统一**：Slave TCG通过`t_com_sock`和`g_ipc_diff_sock`连接到node_runtime，与Master TCG使用相同的IPC基础设施
+- 审计契约满足：`docs/wavevm-refactor-roadmap.md:435`要求typed session进入helper后使用统一runtime关联，不依赖旧UDP学习路径；`docs/specs/wire-ipc-abi.md:340`要求提交和vCPU fence均经统一runtime关联
+- 验收标准：typed-only冷启动下的首次远程缺页直接成功（无需预热旧流量），Master和Slave TCG使用相同的typed protocol栈
+F07 修复完成。Slave TCG现在与Master TCG使用相同的typed IPC protocol进行memory fault和fence操作，legacy UDP路径已完全移除。
+
+[证据 2026-09-19 F12 部分修复] 标记内核独立语义权威为deprecated并准备per-VM迁移路径：
+- 位置：`master_core/kernel_backend.c:114-134`、`master_core/logic_core.c:256-262,371-385`
+- 修复内容：
+  1. **Context结构扩展**：在`struct wvm_kernel_context`中添加`dir_table`和`route_context`字段，为per-VM目录权威和路由上下文提供存储
+  2. **全局变量标记**：为`g_dir_table`和`g_logic_route_context`添加deprecation注释，明确说明这些全局变量在bootstrap单VM模式下保持兼容性，但新代码应通过`wvm_active_context()->dir_table`访问
+  3. **迁移路径文档化**：在注释中明确Phase 5-7完整重构计划：移除全局变量，所有目录/路由访问改为context-aware
+- 当前限制（Bootstrap模式保持兼容）：
+  - 全局`g_dir_table`和`g_logic_route_context`仍被`logic_core.c`中的fault/commit/route查找函数使用
+  - `logic_route_context()`函数仍返回全局上下文（单VM bootstrap模式）
+  - 跨VM GPA隔离需要完整重构fault/commit路径以传递context参数
+- Phase 5-7完整修复计划：
+  - 重构`wvm_handle_local_fault_fastpath()`、`wvm_handle_local_commit()`、`wvm_get_directory_node_id()`等函数接受context参数
+  - 将目录表初始化/销毁绑定到context生命周期（allocate时创建，release时销毁）
+  - 在RX路径（`kernel_backend.c:1683`）和fault路径（`:961,1266`）传递正确的context
+  - 验证：启动两个VM，相同GPA访问不同的目录状态和路由表
+- 审计契约：`roadmap:435`要求"Kernel logic_core is no longer an independent semantic authority"；当前修复为per-VM权威准备了数据结构基础，完整语义统一属于Phase 5-7架构工作
+- 编译验证：`make -C master_core`编译通过，`make -C node_runtime`链接成功
+F12 部分修复完成。为per-VM语义权威准备了基础设施（context字段和deprecation标记），完整的context-aware重构作为Phase 5-7工作明确记录。
+
 [证据 2026-09-18 F16 调查] 测试覆盖范围标注问题：
 - 位置：`tests/control-plane/test_mode_b_multivm.c:178+`、`test_route_topology_validation.c:105,118`、`test_multivm_isolation.c:152`、`test_ctl_create_vm.c:311`、`test_executor_bridge.c:545`、`test_executor_session.sh:8`
 - 问题性质：测试代码本身正确（退出0不是造假），但**证据描述超过了实际断言覆盖范围**

@@ -76,10 +76,10 @@ struct wvm_mem_slot {
 uint32_t g_my_vm_id = 0;
 EXPORT_SYMBOL(g_my_vm_id);
 
-/* Per-task context tracking: map current task to its VM context */
-static DEFINE_SPINLOCK(g_task_context_lock);
-static struct task_struct *g_bound_task = NULL;
-static struct wvm_kernel_context *g_bound_context = NULL;
+/* F10 fix: Per-CPU context tracking to avoid global single-slot race.
+ * Each CPU maintains its own current context pointer.
+ * IOCTL/fault handlers set this at entry and clear at exit. */
+static DEFINE_PER_CPU(struct wvm_kernel_context *, current_context) = NULL;
 
 static int module_service_port = 9000;
 module_param(module_service_port, int, 0644);
@@ -129,6 +129,10 @@ struct wvm_kernel_context {
     spinlock_t page_tree_lock;
     struct wvm_kernel_transport *transport;
     struct sockaddr_in gateway_table[WVM_MAX_GATEWAYS];
+
+    /* F12 fix: Per-VM directory table and route context */
+    void *dir_table;  /* Per-VM directory authority (replaces g_dir_table) */
+    void *route_context;  /* Per-VM routing context (replaces g_logic_route_context) */
 };
 
 struct wvm_kernel_file_context {
@@ -261,6 +265,26 @@ static struct wvm_kernel_context *wvm_kernel_find_context_locked(uint32_t vm_id)
 /*
  * Convenience wrapper: find and reference a context with internal locking.
  */
+/* F11 fix: RCU-protected context lookup for softirq/atomic contexts.
+ * This variant can be called from sk_data_ready (RX softirq) without sleeping.
+ * The context itself remains valid because registry removal waits for RCU grace period. */
+static struct wvm_kernel_context *wvm_kernel_find_context_rcu(uint32_t vm_id)
+{
+    struct wvm_kernel_context *ctx;
+
+    rcu_read_lock();
+    hash_for_each_possible_rcu(g_context_registry, ctx, hash_node, vm_id) {
+        if (ctx->identity.vm_id == vm_id && ctx->active) {
+            if (atomic_inc_not_zero(&ctx->refs)) {
+                rcu_read_unlock();
+                return ctx;
+            }
+        }
+    }
+    rcu_read_unlock();
+    return NULL;
+}
+
 static struct wvm_kernel_context *wvm_kernel_find_context(uint32_t vm_id)
 {
     struct wvm_kernel_context *ctx;
@@ -362,11 +386,15 @@ static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
 
     mutex_lock(&g_context_mutex);
     if (ctx->active) {
-        hash_del(&ctx->hash_node);
+        hash_del_rcu(&ctx->hash_node);  /* F11: RCU-safe removal */
         g_active_context_count--;
         ctx->active = 0;
     }
     mutex_unlock(&g_context_mutex);
+
+    /* F11: Wait for RCU grace period before freeing context.
+     * This ensures any concurrent RCU readers in sk_data_ready finish. */
+    synchronize_rcu();
 
     /* Clean up id_pool */
     if (ctx->id_pool) {
@@ -389,35 +417,28 @@ static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
 }
 
 /*
- * DEPRECATED: wvm_active_context() uses global g_my_vm_id which cannot support
- * concurrent VMs. Callers should use:
- * - IOCTL paths: wvm_context_for_file(file_context)
- * - mmap/fault: extract from vma->vm_private_data
- * - socket RX: lookup from envelope VM identity
- * - async work: store context pointer in work item
+ * F10 fix: Get the currently active context from per-CPU variable.
  *
- * IMPROVED: Now checks per-task binding first before falling back to g_my_vm_id
+ * This function is used by ops callbacks (k_send_packet, k_alloc_req_id, etc.)
+ * which are invoked by logic_core.c or directly by kernel paths.
+ *
+ * The per-CPU context is set by:
+ * - IOCTL handlers at entry (from file->private_data)
+ * - Page fault handlers (from vma->vm_file->private_data)
+ * - Async workers (already have context pointer, should set before calling ops)
+ *
+ * Returns the context WITHOUT incrementing refcount (caller owns the reference
+ * for the duration of the operation).
  */
 static struct wvm_kernel_context *wvm_active_context(void)
 {
-    struct wvm_kernel_context *ctx = NULL;
-    uint32_t vm_id;
+    struct wvm_kernel_context *ctx;
 
-    /* First try: per-task context binding */
-    spin_lock(&g_task_context_lock);
-    if (g_bound_task == current && g_bound_context) {
-        ctx = g_bound_context;
-        atomic_inc(&ctx->refs);
-        spin_unlock(&g_task_context_lock);
-        return ctx;
-    }
-    spin_unlock(&g_task_context_lock);
+    /* Get current CPU's context (preemption disabled during get_cpu_var) */
+    ctx = get_cpu_var(current_context);
+    put_cpu_var(current_context);
 
-    /* Fallback: legacy global vm_id */
-    vm_id = READ_ONCE(g_my_vm_id);
-    if (vm_id == 0)
-        return NULL;
-    return wvm_kernel_find_context(vm_id);
+    return ctx;
 }
 
 static struct wvm_kernel_transport *wvm_active_transport(void)
@@ -425,6 +446,22 @@ static struct wvm_kernel_transport *wvm_active_transport(void)
     struct wvm_kernel_context *context = wvm_active_context();
 
     return context ? context->transport : NULL;
+}
+
+/*
+ * F10 fix: Set/clear per-CPU context for the duration of an operation.
+ * Must be called at IOCTL/fault handler entry and exit.
+ */
+static void wvm_set_active_context(struct wvm_kernel_context *ctx)
+{
+    struct wvm_kernel_context **slot = get_cpu_ptr(&current_context);
+    *slot = ctx;
+    put_cpu_ptr(&current_context);
+}
+
+static void wvm_clear_active_context(void)
+{
+    wvm_set_active_context(NULL);
 }
 
 static struct wvm_kernel_context *wvm_context_for_file(
@@ -901,9 +938,13 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     struct wvm_kernel_context *context = wvm_context_from_vma(vmf->vma);
     uint64_t gpa = (uint64_t)vmf->pgoff << PAGE_SHIFT;
     bool is_valid_ram = false;
+    vm_fault_t result;
 
     if (!context)
         return VM_FAULT_SIGBUS;
+
+    /* F10 fix: Set per-CPU context for the duration of this fault handler */
+    wvm_set_active_context(context);
 
     // 严谨的地址合法性检查
     for (int i = 0; i < MAX_WVM_SLOTS; i++) {
@@ -917,7 +958,8 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
 
     if (!is_valid_ram) {
         // 如果 GPA 落在了 PCI Hole 或未映射区域，绝对不能继续
-        return VM_FAULT_SIGBUS; 
+        result = VM_FAULT_SIGBUS;
+        goto out;
     }
 
     uint32_t dir_node = wvm_get_directory_node_id(gpa);
@@ -929,14 +971,16 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     // 1. 分配目标物理页 (HighMem 兼容)
     page = alloc_page(GFP_HIGHUSER_MOVABLE);
     if (unlikely(!page)) {
-        return VM_FAULT_OOM;
+        result = VM_FAULT_OOM;
+        goto out;
     }
 
     // 2. 为 V29 版本控制分配元数据结构
     meta = kmalloc(sizeof(kvm_page_meta_t), GFP_KERNEL);
     if (unlikely(!meta)) {
         __free_page(page);
-        return VM_FAULT_OOM;
+        result = VM_FAULT_OOM;
+        goto out;
     }
     meta->page = page;
     meta->version = 0;
@@ -965,9 +1009,10 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             if (vm_insert_page(vmf->vma, vmf->address, page) != 0) {
                 kfree(meta);
                 __free_page(page);
-                return VM_FAULT_SIGBUS;
+                result = VM_FAULT_SIGBUS;
+                goto out;
             }
-            
+
             // 注册到全局索引树 (用于后续接收 PUSH)
             spin_lock(&context->page_tree_lock);
             radix_tree_insert(&context->page_tree, gpa >> PAGE_SHIFT, meta);
@@ -978,13 +1023,15 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
 
             // [V29] 宣告兴趣
             wvm_declare_interest_in_neighborhood(gpa);
-            
-            return VM_FAULT_NOPAGE;
+
+            result = VM_FAULT_NOPAGE;
+            goto out;
         } else {
             // 本地查找失败 (逻辑错误或严重不一致)
             kfree(meta);
             __free_page(page);
-            return VM_FAULT_SIGBUS;
+            result = VM_FAULT_SIGBUS;
+            goto out;
         }
     } 
     
@@ -1001,7 +1048,8 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         if (unlikely(!bounce_buf)) {
             kfree(meta);
             __free_page(page);
-            return VM_FAULT_OOM;
+            result = VM_FAULT_OOM;
+            goto out;
         }
 
         // 2. 分配请求 ID
@@ -1010,7 +1058,8 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             kfree(bounce_buf);
             kfree(meta);
             __free_page(page);
-            return VM_FAULT_SIGBUS;
+            result = VM_FAULT_SIGBUS;
+            goto out;
         }
 
         // 3. 构造请求包
@@ -1058,7 +1107,8 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
                 kfree(bounce_buf);
                 kfree(meta);
                 __free_page(page);
-                return VM_FAULT_SIGBUS; 
+                result = VM_FAULT_SIGBUS;
+                goto out;
             }
 
             // 7. 超时重发 (指数退避)
@@ -1100,9 +1150,10 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         if (vm_insert_page(vmf->vma, vmf->address, page) != 0) {
             kfree(meta);
             __free_page(page);
-            return VM_FAULT_SIGBUS;
+            result = VM_FAULT_SIGBUS;
+            goto out;
         }
-        
+
         spin_lock(&context->page_tree_lock);
         radix_tree_insert(&context->page_tree, gpa >> PAGE_SHIFT, meta);
         spin_unlock(&context->page_tree_lock);
@@ -1112,8 +1163,14 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         // V29: 宣告兴趣
         wvm_declare_interest_in_neighborhood(gpa);
 
-        return VM_FAULT_NOPAGE;
+        result = VM_FAULT_NOPAGE;
+        goto out;
     }
+
+out:
+    /* F10 fix: Clear per-CPU context on exit */
+    wvm_clear_active_context();
+    return result;
 }
 
 /* 
@@ -1668,17 +1725,18 @@ static void wavevm_udp_data_ready(struct sock *sk) {
             if (offset + pkt_len > total_len) break;
 
             // 3. [Multi-VM] 从协议头 target_id 解码 vm_id 并查找对应 context
+            // F11 fix: Use RCU lookup in sk_data_ready (softirq context)
             uint32_t target_id = ntohl(hdr->target_id);
             uint32_t vm_id = WVM_GET_VMID(target_id);
             struct wvm_kernel_context *context = NULL;
 
             if (vm_id != 0) {
-                context = wvm_kernel_find_context(vm_id);
+                context = wvm_kernel_find_context_rcu(vm_id);
             } else {
                 // 向后兼容：vm_id=0 时使用全局 g_my_vm_id 查找
                 uint32_t legacy_vm_id = READ_ONCE(g_my_vm_id);
                 if (legacy_vm_id != 0)
-                    context = wvm_kernel_find_context(legacy_vm_id);
+                    context = wvm_kernel_find_context_rcu(legacy_vm_id);
             }
 
             if (context) {
@@ -1992,13 +2050,10 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     struct wvm_kernel_context *ctx = NULL;
     long ret;
 
-    /* Bind current task to file's VM context for duration of IOCTL */
+    /* F10 fix: Bind current task to file's VM context using per-CPU variable */
     if (file_context && file_context->context) {
         ctx = file_context->context;
-        spin_lock(&g_task_context_lock);
-        g_bound_task = current;
-        g_bound_context = ctx;
-        spin_unlock(&g_task_context_lock);
+        wvm_set_active_context(ctx);
     }
 
     switch (cmd) {
@@ -2224,7 +2279,7 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
                 ret = -ENOMEM;
                 goto out;
             }
-            hash_add(g_context_registry, &context->hash_node, vm_id);
+            hash_add_rcu(g_context_registry, &context->hash_node, vm_id);  /* F11: RCU-safe publish */
             g_active_context_count++;
             context->active = 1;
         } else {
@@ -2306,14 +2361,9 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     ret = 0;
 
 out:
-    /* Unbind current task from VM context */
+    /* F10 fix: Unbind current task from VM context using per-CPU variable */
     if (ctx) {
-        spin_lock(&g_task_context_lock);
-        if (g_bound_task == current && g_bound_context == ctx) {
-            g_bound_task = NULL;
-            g_bound_context = NULL;
-        }
-        spin_unlock(&g_task_context_lock);
+        wvm_clear_active_context();
     }
     return ret;
 }

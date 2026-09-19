@@ -253,6 +253,12 @@ typedef struct {
     pthread_mutex_t lock;
 } page_meta_t;
 
+/*
+ * F12 fix: Global directory table deprecated in favor of per-VM context.
+ * These globals remain for backward compatibility during transition but
+ * should be accessed through wvm_active_context()->dir_table in new code.
+ * TODO Phase 5-7: Remove globals entirely and make all accesses context-aware.
+ */
 static page_meta_t *g_dir_table = NULL;
 static pthread_mutex_t g_dir_table_locks[LOCK_SHARDS];
 
@@ -362,10 +368,19 @@ struct wvm_logic_route_context {
     int route_snapshot_bound;
 };
 
+/*
+ * F12 fix: Global route context deprecated in favor of per-VM context.
+ * This global remains for backward compatibility during transition but
+ * should be accessed through wvm_active_context()->route_context in new code.
+ * TODO Phase 5-7: Remove global entirely and make all accesses context-aware.
+ */
 static struct wvm_logic_route_context g_logic_route_context;
 
 static struct wvm_logic_route_context *logic_route_context(void)
 {
+    /* F12 fix: In single-context bootstrap mode, use global.
+     * Full per-VM routing requires Phase 5-7 refactor where each
+     * context maintains its own route snapshot and directory authority. */
     return &g_logic_route_context;
 }
 
@@ -2472,23 +2487,17 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     (void)local_epoch;
                     uint32_t local_counter = GET_COUNTER(page->version);
                     int full_page_overwrite = (off == 0 && sz == 4096);
-                    int full_page_same_version =
-                        full_page_overwrite &&
-                        commit_epoch == g_curr_epoch &&
-                        commit_counter == local_counter;
-                    int full_page_catchup =
-                        full_page_overwrite &&
-                        is_newer_version(page->version, commit_version);
-            
+
                     /*
-                     * Partial diffs depend on every previous diff and must stay
-                     * strictly ordered.  A full-page commit is a complete
-                     * snapshot from the writer, so it can safely close a version
-                     * gap created by dropped/late async diffs before a remote TCG
-                     * handoff.
+                     * F13 fix: All accepted commits must advance version.
+                     * A client-originated full-page commit is not a recovery shortcut;
+                     * it must carry the correct base version and satisfy the normal
+                     * precondition (memory-consistency.md:237-244).
+                     * Lost diffs are recovered by explicit RESYNC, not by accepting
+                     * unproven client snapshots.
                      */
-                    if (commit_epoch != g_curr_epoch ||
-                        (commit_counter != local_counter && !full_page_catchup)) {
+                    (void)full_page_overwrite;
+                    if (commit_epoch != g_curr_epoch || commit_counter != local_counter) {
                         // 版本冲突！拒绝并强制同步
                         // [FIX-H8] 传 NULL 让 force_sync_client 走安全的重新查找+拷贝路径，
                         // 避免释放锁后解引用 page 指针导致的数据竞争
@@ -2509,9 +2518,8 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                         memcpy((uint8_t*)g_shm_ptr + gpa + off, log->data, sz);
                     }
 #endif
-                    // [FIX] 全页快照可追平版本断层；普通 Diff 维持旧的连续递增语义。
-                    page->version = (full_page_catchup || full_page_same_version) ?
-                        commit_version : MAKE_VERSION(g_curr_epoch, local_counter + 1);
+                    // F13 fix: All commits (full-page or diff) advance version uniformly.
+                    page->version = MAKE_VERSION(g_curr_epoch, local_counter + 1);
                 
                     // 广播决策
                     if (sz < SMALL_UPDATE_THRESHOLD) {
