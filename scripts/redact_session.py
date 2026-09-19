@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import sys
@@ -200,9 +201,11 @@ def parse_size(value: str) -> int:
 
 def split_archive(archive_path: Path, output_path: Path, part_size: int) -> tuple[Path, int]:
     """Split a verified archive and write a manifest beside its parts."""
+    if part_size <= 0 or archive_path.stat().st_size > part_size * 999:
+        raise ValueError("split size must be positive and produce at most 999 parts; increase --split-size")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    part_prefix = f"{output_path.name}.part-"
-    part_pattern = re.compile(re.escape(part_prefix) + r"\d{6}$")
+    part_prefix = f"{output_path.name}."
+    part_pattern = re.compile(re.escape(part_prefix) + r"(?:[0-9]{3}|part-[0-9]{6})$")
     old_parts = {
         path
         for path in output_path.parent.iterdir()
@@ -222,7 +225,9 @@ def split_archive(archive_path: Path, output_path: Path, part_size: int) -> tupl
                 digest.update(chunk)
                 total_bytes += len(chunk)
                 part_count += 1
-                final_path = output_path.parent / f"{part_prefix}{part_count:06d}"
+                if part_count > 999:
+                    raise ValueError("archive grew beyond 999 parts; increase --split-size")
+                final_path = output_path.parent / f"{part_prefix}{part_count:03d}"
                 fd, temporary_name = tempfile.mkstemp(
                     prefix=f".{final_path.name}.", suffix=".tmp", dir=output_path.parent
                 )
@@ -253,7 +258,10 @@ def split_archive(archive_path: Path, output_path: Path, part_size: int) -> tupl
             "part_size_bytes": part_size,
             "compressed_size_bytes": total_bytes,
             "sha256": digest.hexdigest(),
-            "restore": f"cat {part_prefix}* > {output_path.name}",
+            "restore": (
+                f"cat {shlex.quote(part_prefix)}[0-9][0-9][0-9] "
+                f"> {shlex.quote(output_path.name)}"
+            ),
         }
         fd, temporary_name = tempfile.mkstemp(
             prefix=f".{manifest_path.name}.", suffix=".tmp", dir=output_path.parent
@@ -370,7 +378,8 @@ def parse_args() -> argparse.Namespace:
         metavar="SIZE",
         help=(
             "after redaction, split the complete gzip archive into parts no larger "
-            "than SIZE and write a SHA-256 manifest (for example 45MiB)"
+            "than SIZE, named .gz.001 through .gz.999, and write a SHA-256 "
+            "manifest (for example 45MiB)"
         ),
     )
     args = parser.parse_args()
