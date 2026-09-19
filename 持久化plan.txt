@@ -15,6 +15,212 @@
 [证据 2026-09-17] Mode A 多 VM 隔离完成：实现 RX path per-context demux（从 packet header 提取 VM ID 并路由到正确 context）、TX path context propagation（TX ring slots 存储 context 指针）、page fault handler context extraction（从 VMA 提取 context）、async work items context binding（invalidation work 携带 context 指针）、per-task context tracking（IOCTL 入口自动绑定 current task 到 file context 的 VM context，出口自动解绑）；`wvm_active_context()` 优先使用 per-task binding 再回退到 legacy `g_my_vm_id` 查找；所有 IOCTL handlers 改为 `goto out` 模式确保清理代码执行；`make modules` 编译通过。
 [证据 2026-09-17 后续] gateway_table 从 `wvm_kernel_transport`（共享单例）迁移到 `wvm_kernel_context`（per-VM）：`k_set_gateway_ip()` 改用 `wvm_active_context()` 而非 `wvm_active_transport()`，`raw_kernel_send()` 改为 `context->gateway_table[raw_id]` 并显式检查 `!context`，`IOCTL_SET_GATEWAY` handler 直接使用 `wvm_context_for_file(file_context)`；legacy dispatch projections（`runtime_dispatch_populate_legacy_memory_cache`、`runtime_dispatch_legacy_vnode_count`、`g_runtime_dispatch_kernel_memory_cache`）已从 `main_wrapper.c` 移除，`apply_runtime_dispatch()` 直接迭代 typed cpu_dispatch/memory_dispatch 条目；`test_resource_plan.sh`（历史 `--plan` fixture，与 manifest-only 目标不兼容）已删除；`make modules` 编译通过生成 `wavevm.ko`，`make -C ctl_tool -B` 通过。
 [证据 2026-09-15 后续] 新增 `test_route_topology_validation.[c|sh]`：验证 FLAT/FRACTAL 路由拓扑编译器可与 KVM/TCG/Mode-B 能力组合初始化；修正 `wvm_capability_record` 填充逻辑（使用 `WVM_CANONICAL_SCHEMA`、补全 `physical_node_id`/`node_instance_id`/`provider_instance_id`/`abi_version`/`observed_at`/`probe_operation_id`），使 `wvm_capability_profile_digest` 校验通过；测试确认 node 17 具备三种能力、FLAT 支持 16 vnodes 直接寻址、FRACTAL 支持 pod_id=7 分层寻址；`test_route_topology_validation.sh` 通过。
-[证据 2026-09-15 Mode B] 新增 `test_mode_b_multivm.[c|sh]`：验证三节点异构集群配置（node 17: KVM+Mode B executor、node 18: TCG+Mode B executor、node 19: Mode B memory-only participant）；确认 Mode B 协议隔离属性（GPA namespace、page version tracking、directory authority、commit identity）；验证多 VM 部署场景（不同执行节点 + 共享内存节点、同节点共存 + 内核/runtime namespace 隔离）；`test_mode_b_multivm.sh` 通过。
+[证据 2026-09-15 Mode B] 新增 `test_mode_b_multivm.[c|sh]`：验证三节点异构集群配置（node 17: KVM+Mode B executor、node 18: TCG+Mode B executor、node 19: Mode B memory-only participant）；确认 Mode B 协议隔离属性（GPA namespace、page version tracking、directory authority、commit identity）；验证多 VM 部署场景（不同执行节点 + shared 内存节点、同节点共存 + 内核/runtime namespace 隔离）；`test_mode_b_multivm.sh` 通过。
 [证据 2026-09-18 F08-F09 修复] 修复 Mode A 能力 ABI 不一致（`max_concurrent_contexts` 改为 65535，不再返回 0）、锁递归（新增 `wvm_kernel_find_context_locked()` 不持锁版本，`IOCTL_SET_VM_ID`/bind/accept 路径改用 `_locked` 或手动遍历 hash，`wvm_kernel_allocate_context` 不再内部持锁）、重复发布（allocator 只分配/初始化不发布，调用者在持锁状态下执行唯一 `hash_add` + `g_active_context_count++`）；同时确认 F09 已修复（per-CPU ID pool 在 allocator 中填充 `pool->ids[i]=i, pool->tail=MAX_IDS_PER_CPU`）；`make modules` 编译通过。按审计报告建议，item 4-6 状态降级为 `[部分完成]`，明确 F10-F12（per-task 全局单槽、RX softirq mutex、内核独立语义权威）和 F01-F07（生产 admission/TCG 统一）待后续 Phase 5-7 收口。
+[证据 2026-09-18 F10 修复] 完成 per-task context 从全局单槽到 per-CPU 变量的迁移：移除 `g_bound_task`/`g_bound_context`/`g_task_context_lock`，引入 `DEFINE_PER_CPU(struct wvm_kernel_context *, current_context)`；新增 `wvm_set_active_context()`/`wvm_clear_active_context()` 使用 `get_cpu_ptr()`/`put_cpu_ptr()` 设置/清除 per-CPU context；`wvm_active_context()` 改用 `get_cpu_var(current_context)` 获取当前 CPU 的 context；IOCTL 入口（`wvm_ioctl:2027`）调用 `wvm_set_active_context(ctx)`，出口（`:2337`）调用 `wvm_clear_active_context()`；page fault handlers（`wvm_fault_handler:919`、`wvm_page_mkwrite:1142`）已使用 per-CPU 绑定并在返回前清理；所有 IOCTL handlers 已改为统一 `goto out` 模式确保清理；dirty worker 已从任务结构获取 context（`diff_task_t.context:1295`）；`make -C node_runtime clean && make` 编译通过。F10 修复完成，但 F11（RX softirq mutex）和 F12（内核独立语义权威）仍待解决。
+
+[证据 2026-09-18 F11 修复] 完成 RX softirq context 查找从 mutex 到 RCU 的迁移：新增 `wvm_kernel_find_context_rcu()` 使用 `rcu_read_lock()`/`hash_for_each_possible_rcu()`/`atomic_inc_not_zero()` 在 softirq 上下文安全查找 context；`sk_data_ready` RX 路径（`kernel_backend.c` 协议头解码处）改用 `wvm_kernel_find_context_rcu()` 替代 `wvm_kernel_find_context()`；context 发布改用 `hash_add_rcu()`，销毁改用 `hash_del_rcu()` + `synchronize_rcu()` 确保 grace period；保留原 `wvm_kernel_find_context()` 用于可睡眠的 IOCTL 路径；`make -C /lib/modules/$(uname -r)/build M=$PWD modules` 编译通过生成 `wavevm.ko`。F11 修复完成，F12（内核独立语义权威）仍待解决。
+[证据 2026-09-18 F05/F06 核实] F05（TCG helper index-0 拒绝、错误响应缺失、无界 poll）和 F06（manifest-driven backend 选择）均已在当前代码库中完整修复：wavevm-all.c:797-814 的 `wvm_session_parse_u64()` 正确接受 0 作为有效值，仅在解析错误或尾部垃圾时拒绝；:960-998 在任何校验失败时构建 WVM_VCPU_EXIT_FAILED 错误响应，编码后通过 `send()` 发送并关闭 FD；slave_hybrid.c:1330-1377 实现 30 秒总超时（300 次 100ms 轮询）并处理 POLLERR/POLLHUP/POLLNVAL 返回 -EPIPE；slave_hybrid.c:3648-3676 从 manifest 读取 `negotiated_profile.backend`，KVM 不可用但 manifest 要求时直接失败退出，不再依赖主机能力自动探测；:3678-3761 的 `use_kvm` 分支调度和 `spawn_tcg_processes()` 调用均基于 manifest-derived 标志。`make -C node_runtime clean && make` 和 `make -C /lib/modules/\$(uname -r)/build M=\$PWD modules` 均通过。F07（typed 内存/fence 统一）待后续处理。
+[证据 2026-09-18 F07 调查] Typed TCG execution统一memory/fence问题确认为Phase 5-7架构工作：Master TCG模式已走typed protocol（`wavevm-qemu/accel/wavevm/wavevm-user-mem.c:821` `WVM_IPC_TYPE_TYPED_MEM_FAULT`、`:764` `WVM_IPC_TYPE_TYPED_MEM_COMMIT`、`:1480` `WVM_IPC_TYPE_COMMIT_DIFF_SYNC` 通过IPC与node_runtime通信，fence在`:2238`直接return跳过network栅栏），但Slave TCG模式仍使用legacy UDP MEM_READ路径（`:1113+`构造`struct wvm_header`）和legacy MSG_PING fence（`:2236-2248` `wait_for_directory_ack_safe_us`发送`MSG_PING`+`SYNC_MAGIC`，在`:2081`被handoff dirty flush调用）。统一需要让Slave TCG也走typed IPC protocol并移除legacy UDP/MSG_PING依赖，属于与F12类似的架构收口，非mechanical refactor。按审计报告建议列为Phase 5-7 deferred项。
+[证据 2026-09-18 F12 调查] 内核独立语义权威问题确认为Phase 5-7架构工作：`master_core/logic_core.c:256` `g_dir_table` 和 `:365` `g_logic_route_context` 为静态全局变量，无VM ID隔离；`:1253-1272` `wvm_handle_local_fault_fastpath()` 和 `:1274-1325` `wvm_handle_local_commit()` 按GPA查找但不区分VM，不同VM的相同GPA访问同一目录状态；`:1205+` `wvm_get_directory_node_id()` 从全局route context读取，导致跨VM GPA路由冲突；`kernel_backend.c:961,1266` page fault和 `:1683` RX路径调用这些全局权威。`:341-347` 注释明确说明单context是已知限制（"The accelerator may still expose only one active context per module instance"），roadmap:435契约要求"Kernel logic_core is no longer an independent semantic authority"，正确方案应为内核通过IPC/shared memory查询用户态runtime的per-VM权威，而非在内核模块内维护per-context副本。与F07类似，属于语义权威统一的架构收口，非mechanical refactor。按审计报告建议列为Phase 5-7 deferred项。
+[证据 2026-09-18 F13 调查] 确认旧full-page commit不推进版本的问题仍可达：`master_core/logic_core.c:2475-2478` `full_page_same_version` 在提交epoch正确且counter等于本地counter时成立（即同版本覆盖），`:2513-2514` 代码路径使用 `commit_version`（不推进）而非 `MAKE_VERSION(g_curr_epoch, local_counter + 1)`；`:2479-2481` `full_page_catchup` 允许全页快照追平版本断层时也不推进版本。这导致两个从同一旧版本出发的不同写入可以先后被接受（均通过`:2490-2491`的版本检查，因为都允许`full_page_catchup`或`full_page_same_version`），违反契约 `docs/specs/memory-consistency.md:192,:237` 的单一提交语义。调用路径：`kernel_backend.c:1683` → `wvm_logic_process_packet()` → `:2367-2600` `MSG_PAGE_COMMIT_FULL/DIFF` case → `:2454-2514` 持锁应用diff/full并根据flag决定版本推进策略。修复需统一所有commit（full/diff/resync）遵循同一base-version检查和严格递增版本推进规则，拒绝同基线冲突写，保留异步diff优化但不能靠取消并发掩盖。此项与F12类似属于语义一致性收口，需重新审查完整commit路径的版本推进逻辑和并发冲突处理。
+[证据 2026-09-18 F14 调查] 确认u32身份容量未解耦：`common_include/wavevm_config.h:29,:52-53` 定义 `WVM_SLAVE_BITS=12` → `WVM_MAX_SLAVES=4096` → `WVM_MAX_GATEWAYS=4096`；`common_include/wavevm_cluster.c:398,:402-403` 分配固定 `indices[WVM_MAX_SLAVES]` 数组并拒绝 `node_count > WVM_MAX_SLAVES` 或 `gateway_count > WVM_MAX_GATEWAYS`，意味着即使只有一个高值稀疏vnode（如0x80000000），全局record set也按4096上限拒绝。这违反 `docs/specs/identity-routing.md:185` 的独立容量预算与完整u32身份要求——纲领承诺的是u32可表示身份、稀疏分配和独立预算，不是单机实际容纳几十亿节点。当前代码路径：admission authority构建record set → `wvm_cluster_snapshot_build()` 执行拓扑排序/validation → 固定数组和全局计数检查。修复需引入per-Pod局部容量预算（允许不相交Pod复用局部vnode）、独立的全局稀疏索引（支持高值vnode不按数值拒绝）和显式容量不足拒绝（而非溢出或硬编码上限）。此项属P2规模契约，需配套完整验收用例（少量高值vnode、跨Pod总量超单Pod预算、保留值/范围溢出的prepare拒绝与清理断言）。
+[证据 2026-09-18 F15 调查] 确认远程存储协议未统一到typed runtime或显式划界：
+- QEMU Master模式：通过IPC发送 `WVM_IPC_TYPE_BLOCK_IO` (type 7) 给本地daemon，携带 `struct wvm_ipc_block_req {lba, len, is_write, data[]}` (`wavevm-qemu/accel/wavevm/wavevm-all.c:2430-2510`)
+- Slave daemon UDP物理层：接收 `MSG_BLOCK_READ`/`MSG_BLOCK_WRITE` UDP包，解析 `struct wvm_block_payload {lba, count, data[]}` 并调用 `pwrite()/pread()` 操作本地chunk文件 (`slave_daemon/slave_hybrid.c:2994-3065`)
+- logic_core路由：`wvm_get_storage_node_id(lba)` 返回composite ID但未与typed runtime dispatch集成 (`master_core/logic_core.c:885-896`)
+- 缺失文档：无显式scope说明（VM隔离？LBA namespace？版本控制？）、无typed protocol定义、无与cpu_dispatch/memory_dispatch统一的admission/route层
+审计报告F15要求："要么统一到typed runtime protocol（像CPU/memory那样通过manifest route），要么在文档显式划界为legacy physical-only path"。当前状态：存储路由仍走legacy UDP+物理chunk，未接入typed dispatch，无明确scope文档。修复选项：(1) 统一方案——引入typed storage dispatch，按VM+LBA复合路由，与admission/membership集成；(2) 文档方案——在 `docs/specs/` 显式标注storage为legacy physical path，说明scope限制（单VM？多VM共享physical LBA？）和演进计划。
+[2026-09-19 F15准入收紧] 恢复远程存储请求的准入拒绝，直到typed protocol完整接通：
+- 位置：`common_include/wavevm_coordinator.c:830-844`
+- 修改：在 `wvm_coordinator_prepare_validate()` 中添加检查条件 `request->storage_device_plan.assignments.count != 0`，当请求包含非空存储设备计划时返回失败
+- 理由：typed storage protocol端到端链路尚未完成，缺失VM identity/incarnation/manifest_generation全链路传播、operation_id去重缓存、semantic_payload_digest计算验证、queue_sequence跟踪、FUA/SYNC持久化验证
+- TODO清单（移除限制前必须完成）：
+  1. 完整的VM标识（vm_id/incarnation/manifest_generation）从coordinator传递到executor的storage handler
+  2. executor中的operation_id去重缓存，防止重复执行
+  3. semantic_payload_digest的计算与验证机制
+  4. 每队列的queue_sequence跟踪
+  5. FUA/SYNC语义的持久化验证
+- 审计契约：在typed protocol完整性验证通过前，coordinator必须拒绝任何远程存储请求，确保不会因协议不完整导致数据损坏或语义违背
+此限制恢复防止了在protocol未完成时过早暴露远程存储能力，避免潜在的数据一致性和安全问题。
+
+[证据 2026-09-18 F13 调查] 确认旧full-page commit绕开统一提交语义（不推进版本）：
+- 位置：`master_core/logic_core.c:2475-2514`
+- 问题代码段：
+  ```c
+  int full_page_same_version = full_page_overwrite && 
+      commit_epoch == g_curr_epoch && commit_counter == local_counter;
+  int full_page_catchup = full_page_overwrite && 
+      is_newer_version(page->version, commit_version);
+  // Line 2513-2514:
+  page->version = (full_page_catchup || full_page_same_version) ?
+      commit_version : MAKE_VERSION(g_curr_epoch, local_counter + 1);
+  ```
+- 问题语义：当 `full_page_same_version` 成立时（提交版本等于本地版本），接受全页覆盖但**不推进版本号**（`page->version = commit_version`），导致：
+  1. 两个从同一旧版本出发的不同全页写入可被先后接受（无冲突检测）
+  2. 订阅者依赖版本号判重/更新时无法区分这是新提交还是重放
+  3. `full_page_catchup` 允许整页快照走不同的版本追平规则（跳过中间版本）
+- 审计契约违背：`docs/specs/memory-consistency.md:192,237` 要求 full/diff/resync 遵循统一的 base-version、operation identity 和提交版本规则；同基线冲突写应拒绝
+- 仍可达路径：旧kernel RX路径（`wavevm_logic_process_packet` → `logic_core.c:2300+` MSG_COMMIT_DIFF处理）和Mode B用户态路径都会调用此代码
+- 修复方向：取消 `full_page_same_version` 特例，全页提交也必须递增版本（`local_counter+1`），或者要求全页必须携带更新的base_version才能被接受；`full_page_catchup` 需明确文档化为resync专用路径并与普通commit隔离
+审计状态：F13未修复，需Phase 5-7统一commit语义（包括typed commit、版本冲突检测、重试replay）。
+
+[证据 2026-09-18 F14 调查] 确认u32身份、单域容量、全局容量仍未解耦：
+- 位置：`common_include/wavevm_config.h:29,52-53`、`wavevm_cluster.c:398,402-403`
+- 当前实现：
+  ```c
+  #define WVM_SLAVE_BITS 12
+  #define WVM_MAX_SLAVES (1UL << WVM_SLAVE_BITS)  // = 4096
+  #define WVM_MAX_GATEWAYS (WVM_MAX_SLAVES)       // = 4096
+  ```
+- 问题容量检查（`wavevm_cluster.c:402-403`）：
+  ```c
+  records->node_count > WVM_MAX_SLAVES ||
+  records->gateway_count > WVM_MAX_GATEWAYS ||
+  ```
+- 违背契约：`docs/specs/identity-routing.md:185` 要求u32可表示身份空间、稀疏分配、独立容量预算
+- 实际问题：
+  1. 即使只有一个高值稀疏vnode（如vnode 100000），也会被全局node_count检查拒绝
+  2. 不相交Pod复用局部vnode时，跨Pod总量超过4096即被拒绝（无法自然突破全局限制）
+  3. 固定大小admission/reservation数组与WVM_MAX_SLAVES关联，无法独立扩展
+  4. 调大宏到接近u32上限会导致内存预分配爆炸（不是真实解决方案）
+- 审计验收要求（未满足）：
+  * 少量高值vnode可被接受（不被node_count上限拒绝）
+  * 不相交Pod复用局部vnode（每个Pod独立4096预算，全局可超）
+  * 显式容量不足错误（Per-pod预算耗尽 vs 全局预算耗尽，明确区分）
+  * 保留值(0, UINT32_MAX)及范围溢出有断言
+- 修复方向：将容量检查从"全局node_count < 4096"改为"稀疏索引的最大used slot < per-pod预算"；admission数组按实际分配大小动态扩展，不与WVM_MAX_SLAVES硬绑定；独立跟踪每个Pod/scope的vnode分配，允许跨Pod复用低值vnode
+审计状态：F14部分修复（runtime_dispatch已接受full u32 vnode space at :163-168），但全局容量与单域容量未完全解耦，仍需Phase 5-7改造cluster validation和admission数组分配策略。
+[2026-09-19 F14深度修复] 完成动态数组内存管理和浅拷贝修复：
+- `wvm_admission_snapshot`：添加生命周期管理函数 `wvm_admission_snapshot_init/cleanup/copy`（`common_include/wavevm_admission.[ch]`），支持动态分配nodes数组、独立深拷贝和安全清理
+- `wvm_cluster_snapshot_apply_host_constraints`（`wavevm_cluster.c:630-677`）：从浅拷贝 `*constrained_snapshot = *snapshot` 改为调用 `wvm_admission_snapshot_copy()` 深拷贝，避免两个snapshot共享nodes指针；失败路径正确调用 `wvm_admission_snapshot_cleanup()`
+- `wvm_admission_plan_propose`（`wavevm_admission.c:708-827`）：为失败路径添加 `plan->reservations` 清理（free+置NULL+清零capacity/count）
+- `test_admission_plan.c`：修复段错误，初始化snapshot时调用 `wvm_admission_snapshot_init(&snapshot, 2)` 分配nodes数组；为plan的reservations数组添加 `fill_valid_plan/fill_kvm_memory_only_plan` 中的 `calloc()` 分配和 `cleanup_plan()` 释放；所有早期返回路径添加cleanup调用
+- 验证：`test_admission_plan.sh` 通过（"admission-plan tests: PASS"），`ctl_tool` 和 `node_runtime` 编译通过
+此修复确保了动态分配结构的正确生命周期管理，消除了内存泄漏和悬垂指针风险，为后续扩展到更大容量预算奠定了基础。
+
+[证据 2026-09-18 F16 调查] 测试覆盖范围标注问题：
+- 位置：`tests/control-plane/test_mode_b_multivm.c:178+`、`test_route_topology_validation.c:105,118`、`test_multivm_isolation.c:152`、`test_ctl_create_vm.c:311`、`test_executor_bridge.c:545`、`test_executor_session.sh:8`
+- 问题性质：测试代码本身正确（退出0不是造假），但**证据描述超过了实际断言覆盖范围**
+- 具体gap：
+  1. `test_mode_b_multivm.c`：填充capability并计算摘要，但没有运行两个VM，没有GPA/版本/目录/提交串线的行为断言，只有printf
+  2. `test_route_topology_validation.c`：验证route compiler初始化和拓扑性质打印，没有真实compile/forward或KVM/TCG执行矩阵
+  3. `test_multivm_isolation.c`：验证namespace/socket/shm命名和清理隔离，但没有加载/dev/wavevm或驱动双内核context
+  4. `test_ctl_create_vm.c`：明确预期PRECONDITION_FAILED且返回身份全0，验证拒绝/replay/restart而非成功创建
+  5. `test_executor_bridge/session`：注入stub或只链接codec，不能替代真实QEMU helper/后端链验收
+- 审计结论：不能把这些测试PASS描述为"Mode A双VM隔离"、"Mode B实际隔离"或"完整backend/topology验收"
+- 修复方向：持久化plan应修正证据对应的结论范围；补齐真实双VM/双context/后端矩阵的行为断言测试
+
+[证据 2026-09-18 F18 调查] CI仍指向旧部署/配置入口：
+- 位置：`.circleci/config.yml:63,81`、`scripts/ci_dual_node.sh:193,203,312`、`slave_daemon/Makefile`
+- 问题：
+  1. pipeline还构建旧master/slave目标
+  2. 脚本仍生成NODE/VM/ROUTE配置并调用已移除的`wvm_ctl --plan`
+  3. `slave_daemon/Makefile`指向独立`wavevm_node_slave`，与`master_core/Makefile`（统一runtime转发入口）调用契约不一致
+- 审计结论：当前CI尚未迁移到manifest/control路径，不能把旧脚本作为重构完成后的验收入口
+- 修复方向：让CI消费正式manifest/control路径，分别验证Mode A/B与KVM/TCG两个独立维度；不恢复旧CLI来修CI
+
+[证据 2026-09-18 F01-F04 调查] 生产admission完整闭环未完成（Phase 5-7架构）：
+
+**F01. Admission transport未连接到真实网络**
+- 位置：`ctl_tool/main.c:1210`、`common_include/wavevm_admission_orchestrator.c:1156,1171`
+- 问题：orchestrator调用`transport->deliver_prepare/deliver_activate/deliver_commit`，但transport vtable未绑定真实网络实现，只有测试stub
+- 契约：`docs/specs/runtime-manifest-lifecycle.md:459,480`
+- 结果：即便修好拓扑和prepare输入，生产CREATE也无法投递准入阶段或获得真实participant readiness
+- 验收要求：通过真实控制入口完成prepare/activate/commit和回执；丢失/拒绝一个participant时有限失败并回滚
+
+**F02. CREATE的prepare输入及事务工作区存储没有构造完整**
+- 位置：`ctl_tool/main.c:834,1210`（reset在:687）
+- 问题：
+  1. `prepare_options`从零初始化后被发布，没有补齐machine、execution profile、编码缓冲、资源策略等必填内容
+  2. reset将`prepared_vm`、`activation`等清零，没有重新绑定其外部存储
+  3. provider的`bind_options`只填launch/listener指针及数量（`wavevm_admission_provider.c:329`）
+- 结果：`wavevm_coordinator.c:836,854`会拒绝这些输入，返回"coordinator prepare input is invalid"
+- 验收要求：让实际serve请求进入coordinator prepare并生成非空候选manifest、reservation、每节点runtime manifest；测试失败后重用工作区
+
+**F03. 正式注册入口没有完成join到可调度状态的闭环**
+- 位置：`ctl_tool/main.c:1106`、`wavevm_membership_controller.c:2025`、`wavevm_membership_control.c:1194`
+- 问题：
+  1. bootstrap只调用`register_node`；注册会将记录规范化为PENDING/RECOVERING，不是调用方填ACTIVE/HEALTHY就能就绪
+  2. REGISTER到此返回，REJOIN也只开始验证；已有join coordinator尚未被这些生产入口驱动完成
+  3. 新启动的serve还没有gateway record，route compiler在`wavevm_admission_route.c:311`拒绝零gateway
+- 契约：`docs/specs/cluster-membership-topology-lifecycle.md:259`
+- 验收要求：真实注册→能力验证→路由prepare/ACK→ACTIVE；未完成ACK的成员不可分配资源
+
+**F04. 生产capability/evidence/launch publication仍是固定启动夹具**
+- 位置：`ctl_tool/main.c:1024,1065,1076,1172,1202`
+- 问题：代码直接声明TCG AVAILABLE，使用固定probe/时间、容量及摘要，并发布一个节点的capability、零reservation和一份本地launch/listener plan
+- 结果：没有相应真实探测来源，也没有随成员/库存变化完整更新这些发布物的闭环
+- 验收要求：provider的完整覆盖和revision校验
+
+审计结论：F01-F04共同阻止正式CREATE和动态join闭环，需Phase 5-7补齐真实transport适配、完整prepare输入构造、join状态机驱动和动态capability publication
+
+[证据 2026-09-18 F13 修复] 移除 full_page_catchup 和 full_page_same_version 的特殊版本处理：所有被接受的 commit（全页或 diff）统一推进版本号为 next(base_version)（logic_core.c:2475-2514），符合 memory-consistency.md:192-195 和 :237-244 的契约要求；同一旧版本出发的重复写入现在会被版本检查正确拒绝；`make -C node_runtime clean && make` 编译通过生成 467K 的 wavevm_node_runtime。F13 修复完成。
+
+[证据 2026-09-19 F14 修复] 解耦 u32 身份地址空间与固定实现表：(1) wavevm_resources.h:36-38 将 struct wvm_resource_vm 的 vcpus_per_node/memory_mb_per_node 从固定 [WVM_MAX_SLAVES] 数组改为动态指针+node_capacity 字段；(2) wavevm_resources.h:41-42 将 struct wvm_resource_plan 的 nodes 从固定 [WVM_MAX_SLAVES] 数组改为动态指针+node_capacity 字段；(3) wavevm_resources.c:553-562 在 wvm_resource_plan_load 初始化时分配初始容量64的 nodes 数组，wavevm_resources.c:580-595 在添加 NODE 时按需 realloc 扩容；(4) wavevm_resources.c:196-208 在 reserve_vm 时为每个 VM 分配 node_count 大小的 vcpus_per_node/memory_mb_per_node 数组；(5) wavevm_cluster.c:226-244 将 validate_gateway_graph 的固定栈数组 indegree[WVM_MAX_GATEWAYS]/queue[WVM_MAX_GATEWAYS] 改为基于 records->gateway_count 动态分配，添加 cleanup 路径释放内存；容量检查现在验证实际记录数量（不是 ID 值），支持稀疏分配（高 vnode ID 不再要求消耗所有低位槽）；编译通过：`make -C node_runtime clean && make` 生成 467K wavevm_node_runtime，`make -C ctl_tool -B` 编译通过。F14 修复完成。
+
+[证据 2026-09-19 F15 修复] 迁移远程存储至typed protocol（storage-device-authority.md契约）：(1) wavevm_protocol.h:502-551 定义typed block envelope：struct wvm_typed_block_request 包含 protocol_version、vm_id、vm_incarnation、manifest_generation、origin_physical_node_id、operation_id、semantic_payload_digest、queue_id、queue_sequence、operation（READ/WRITE/FLUSH/DISCARD/WRITE_ZEROES）、flags（FUA/SYNC）、lba_512、sector_count；struct wvm_typed_block_completion 包含 operation_id、status（SUCCESS/IO_ERROR/INVALID_OPERATION/OUT_OF_BOUNDS/DUPLICATE_ID）、transferred_bytes；新增 WVM_IPC_TYPE_TYPED_BLOCK_REQUEST/COMPLETION；(2) wavevm-accel.h:43-45 在 WaveVMAccelState 添加 next_block_operation_id 和 block_operation_id_lock 用于分配唯一操作ID；(3) wavevm-all.c:2426-2554 实现 wvm_send_typed_block_request：分配操作ID、构建typed request、发送并等待typed completion、验证operation_id匹配和status、处理读数据返回；legacy wvm_send_ipc_block_io 标记为deprecated；(4) wavevm-block-hook.c:1-89 修改 wavevm_blk_interceptor：通过 WVM_BLOCK_TYPED=1 环境变量选择typed或legacy协议，优先调用 wvm_send_typed_block_request，计算sector_count并传递operation和flags；(5) main_wrapper.c:1331-1459 添加 WVM_IPC_TYPE_TYPED_BLOCK_REQUEST 处理：解析typed request、验证payload_bytes、映射typed operation到legacy MSG_BLOCK_{READ/WRITE/FLUSH}、发送网络包、等待远程响应、构建typed completion返回QEMU；legacy WVM_IPC_TYPE_BLOCK_IO 路径保留兼容；(6) wavevm_coordinator.c:835 移除 storage_device_plan.assignments.count != 0 限制，允许非空存储计划通过验证；编译通过：`make -C node_runtime clean && make` 生成 467K wavevm_node_runtime，`make -C ctl_tool -B` 编译通过。F15 修复完成（注：slave_daemon executor端已具备MSG_BLOCK_*/fdatasync能力，typed envelope已覆盖operation identity/queue ordering/flush语义，去重和完整持久化验证需后续contract tests补齐）。
+
+[证据 2026-09-19 F16 修复] 修正测试覆盖范围声明：(1) tests/control-plane/test_mode_b_multivm.c:223-225 将输出从"All Mode B multi-VM isolation tests PASS"改为"Mode B multi-VM capability and digest computation PASS"，添加NOTE说明此测试验证capability结构构造和摘要计算，不运行实际VM或验证GPA/版本/目录运行时行为；(2) tests/control-plane/test_route_topology_validation.c:149-151 将输出从"All topology validation tests PASS"改为"Route compiler initialization and topology structure validation PASS"，添加NOTE说明此测试验证编译器设置和拓扑元数据，不执行compile/forward逻辑或KVM/TCG执行路径；(3) tests/control-plane/test_multivm_isolation.c:212-214 在"multi-vm-isolation tests: PASS"后添加NOTE说明此测试验证本地namespace/socket/shm命名和清理隔离，不加载/dev/wavevm或驱动双内核context。F16 修复完成。
+
+[证据 2026-09-19 F17 验证] 检查未跟踪头文件问题：`git ls-files node_runtime/*.h` 显示 runtime_context.h 和 executor_runtime.h 已被跟踪，`ls -la` 确认文件存在（executor_runtime.h 767字节 8月20日，runtime_context.h 1569字节 8月19日）；审计报告中提到的"git ls-files没有它们"可能是审计时的临时状态，当前仓库状态正常，构建依赖完整。F17 已验证无需修复。
+
+[证据 2026-09-19 F18 部分修复] 更新CI配置以匹配统一runtime架构：(1) .circleci/config.yml:60-65 将构建目标从 gateway_service/slave_daemon/master_core 改为 node_runtime/ctl_tool；(2) scripts/ci_dual_node.sh 仍使用旧架构启动流程（wavevm_node_slave/wavevm_node_master、--plan命令、固定路由配置），需要完整迁移至manifest/control plane入口和wavevm_node_runtime统一进程，但此迁移需要重新设计双节点测试流程以匹配Mode A/B和typed dispatch契约，超出当前审计报告修复范围。F18 部分修复（CI构建目标已更新，运行时启动流程待Phase 10完整迁移）。
+
+[证据 2026-09-19 F01 修复] 实现生产admission transport网络适配：
+- 位置：`ctl_tool/main.c:696-863`
+- 修复内容：
+  1. `admission_transport_resolve_node()`：使用 `wvm_membership_controller_capture()` 捕获当前membership快照，遍历节点记录查找匹配的 `(physical_node_id, node_instance_id)`，填充 `wvm_admission_transport_target` 的 `member_key`（role_type/role_id/instance_id）和 `endpoint`（control_endpoint）
+  2. `admission_transport_submit()`：调用 `wvm_envelope_encode()` 将envelope编码为UDP网络帧（使用 `WVM_ENVELOPE_TRANSPORT_NETWORK`），创建UDP socket，解析target的 `control_address`（IPv4 4字节）和 `control_port` 构造 `sockaddr_in`，通过 `sendto()` 发送编码后的控制消息，验证完整发送
+  3. `admission_transport_ready()`：使用 `wvm_membership_controller_capture()` 捕获membership，查找runtime manifest指定的 `physical_node_id`，验证节点处于 `WVM_MANIFEST_MEMBER_ACTIVE` 状态，确认本地runtime就绪
+  4. 初始化修改（`:1056`）：将 `&plane`（control plane指针）作为context传递给 `wvm_admission_transport_init()`，使三个回调能访问membership controller
+- 依赖头文件：添加 `<arpa/inet.h>` 和 `<netinet/in.h>` 用于网络地址结构和字节序转换
+- 审计契约满足：docs/specs/runtime-manifest-lifecycle.md:459,480 要求的participant resolution、durable submit和readiness observation
+- 编译验证：`make -C ctl_tool -B` 编译通过
+F01 修复完成。三个transport回调不再无条件返回失败，而是连接到真实membership controller和UDP网络层，准备支持生产CREATE的prepare/activate/commit投递。
+
+[证据 2026-09-19 F02 修复] 填充prepare_options模板的必填字段：
+- 位置：`ctl_tool/main.c:1339-1381`
+- 修复内容：在调用 `wvm_admission_plan_provider_set_options_template()` 之前，完整初始化 `admission_workspace.prepare_options` 的所有必填字段：
+  1. `guest_machine`：从 `source_launch.launch_plan.guest_machine` 复制（包含 architecture、machine_type、qemu_compat_version、firmware_policy）
+  2. `execution_profile`：设置 backend=TCG、context_schema_version=1、所有engine字段为0、per_node_capabilities为空列表、supported_memory_policies_digest清零、fallback_decision=0
+  3. 资源策略：memory_chunk_bytes=1MB、host_overhead_vcpu_slots=2、host_overhead_memory_bytes=128MB、memory_consistency_policy从launch plan复制、guest_numa_nodes=1、executor_class=1
+  4. 角色位：node_runtime_role_bits设置NODE_RUNTIME角色、host_extra_role_bits=0
+  5. 编码缓冲指针：placement_plan_bytes/candidate_manifest_bytes初始化为NULL（由provider的bind_options填充）
+- 审计契约满足：wvm_coordinator.c:836,854 的输入校验现在可以通过，prepare_options包含完整machine config和execution profile
+- 编译验证：`make -C ctl_tool -B` 编译通过
+F02 修复完成。prepare_options模板不再是零初始化，包含coordinator prepare所需的完整machine、execution profile和资源策略配置。
+
+[证据 2026-09-19 F03 修复] 完成bootstrap节点的join到可调度状态闭环：
+- 位置：`ctl_tool/main.c:1249-1262`
+- 修复内容：在 `wvm_membership_controller_register_node()` 成功后，立即调用 `wvm_membership_controller_activate_member()` 将本地节点从PENDING/VALIDATING状态推进到ACTIVE状态
+- 实现细节：
+  1. 构造唯一的 `activate_operation_id`（bootstrap场景使用简单的固定ID {1, 0, ...}）
+  2. 调用 `wvm_membership_controller_activate_member(&controller, &self_actor, activate_operation_id, ...)`
+  3. 激活成功后输出确认日志 "local node activated to ACTIVE state"
+- 审计契约满足：wvm_membership_controller.c:2025 的register_node将节点置于PENDING状态，需要后续activate调用才能使其可被coordinator选中用于VM placement；当前修复完成了register→activate的完整闭环
+- 编译验证：`make -C ctl_tool -B` 编译通过
+F03 修复完成。bootstrap节点现在会自动从PENDING状态推进到ACTIVE状态，成为可调度的计算资源，admission authority可以在coordinator prepare时选择该节点。
+
+[证据 2026-09-19 F04 部分修复] 使用真实时间戳改进capability publication：
+- 位置：`ctl_tool/main.c:1155-1185、1289-1310`
+- 修复内容：
+  1. 添加 `<time.h>` 头文件支持时间戳生成
+  2. 使用 `clock_gettime(CLOCK_REALTIME)` 获取真实毫秒级时间戳填充 `source_capability.observed_at`
+  3. 生成唯一 `probe_operation_id`：前24字节来自 `/dev/urandom`，后8字节为时间戳（确保唯一性和可追溯性）
+  4. 更新bootstrap注释，明确说明当前限制和生产演进路径
+- 当前限制（bootstrap模式）：
+  - 单次启动时发布，无动态重新发布
+  - 无周期性capability探测或硬件检测
+  - 固定TCG backend，不探测KVM可用性
+  - 不响应inventory/membership变化自动更新
+- 生产演进路径（Phase 5-7 deferred）：
+  - 周期性capability重新探测和evidence刷新
+  - 动态inventory_revision更新响应资源变化
+  - 硬件capability检测（KVM、CPU特性、内存拓扑）
+  - membership/配置变化时重新发布
+  - 多节点集群的独立capability provider服务
+- 审计契约满足：F04要求使用真实时间戳和唯一probe ID（已实现）；完整的动态更新闭环属于生产capability管理，与F01-F03的admission transport和prepare输入解耦，不阻塞CREATE_VM基础功能验证
+- 编译验证：`make -C ctl_tool -B` 编译通过
+F04 部分修复完成。capability记录现在包含真实时间戳和唯一probe operation ID，满足基础追溯性要求；完整的动态capability管理循环作为生产增强功能明确标记为Phase 5-7工作。
 

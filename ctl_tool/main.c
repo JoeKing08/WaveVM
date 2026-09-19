@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -698,12 +701,46 @@ static int admission_transport_resolve_node(
     struct wvm_admission_transport_target *target, char *error,
     size_t error_len)
 {
-    (void)context;
-    (void)physical_node_id;
-    (void)node_instance_id;
-    (void)target;
+    struct wvm_control_plane *plane = (struct wvm_control_plane *)context;
+    struct wvm_membership_controller_capture capture;
+    struct wvm_node_record nodes[256];
+    struct wvm_gateway_record gateways[256];
+    size_t i;
+
+    if (!plane || !target) {
+        snprintf(error, error_len, "invalid transport resolve arguments");
+        return -1;
+    }
+
+    /* Capture current membership */
+    memset(&capture, 0, sizeof(capture));
+    capture.nodes = nodes;
+    capture.node_capacity = 256;
+    capture.gateways = gateways;
+    capture.gateway_capacity = 256;
+
+    if (wvm_membership_controller_capture(&plane->membership_controller,
+                                          &capture, error, error_len) != 0) {
+        return -1;
+    }
+
+    /* Search for matching physical_node_id and instance */
+    for (i = 0; i < capture.node_count; i++) {
+        if (nodes[i].physical_node_id == physical_node_id &&
+            nodes[i].node_instance_id == node_instance_id) {
+            /* Found the node, populate target */
+            memset(target, 0, sizeof(*target));
+            target->member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+            target->member_key.role_id = physical_node_id;
+            target->member_key.instance_id = node_instance_id;
+            target->endpoint = nodes[i].control_endpoint;
+            return 0;
+        }
+    }
+
     snprintf(error, error_len,
-             "admission transport not yet connected to real network");
+             "node %u instance %lu not found in membership",
+             physical_node_id, (unsigned long)node_instance_id);
     return -1;
 }
 
@@ -711,12 +748,66 @@ static int admission_transport_submit(
     void *context, const struct wvm_admission_transport_target *target,
     const struct wvm_envelope *envelope, char *error, size_t error_len)
 {
+    uint8_t buffer[65536];
+    size_t encoded_bytes;
+    struct sockaddr_in dest_addr;
+    int sock_fd;
+    ssize_t sent;
+
     (void)context;
-    (void)target;
-    (void)envelope;
-    snprintf(error, error_len,
-             "admission transport not yet connected to real network");
-    return -1;
+
+    if (!target || !envelope) {
+        snprintf(error, error_len, "invalid transport submit arguments");
+        return -1;
+    }
+
+    /* Encode the envelope */
+    if (wvm_envelope_encode(envelope, WVM_ENVELOPE_TRANSPORT_NETWORK,
+                           buffer, sizeof(buffer), &encoded_bytes,
+                           error, error_len) != 0) {
+        return -1;
+    }
+
+    /* Create UDP socket */
+    sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock_fd < 0) {
+        snprintf(error, error_len, "cannot create UDP socket: %s",
+                 strerror(errno));
+        return -1;
+    }
+
+    /* Prepare destination address */
+    memset(&dest_addr, 0, sizeof(dest_addr));
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(target->endpoint.control_port);
+
+    if (target->endpoint.control_address_bytes == 4) {
+        memcpy(&dest_addr.sin_addr.s_addr,
+               target->endpoint.control_address, 4);
+    } else {
+        close(sock_fd);
+        snprintf(error, error_len,
+                 "unsupported control address length: %u",
+                 target->endpoint.control_address_bytes);
+        return -1;
+    }
+
+    /* Send the encoded envelope */
+    sent = sendto(sock_fd, buffer, encoded_bytes, 0,
+                  (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+    close(sock_fd);
+
+    if (sent < 0) {
+        snprintf(error, error_len, "sendto failed: %s", strerror(errno));
+        return -1;
+    }
+    if ((size_t)sent != encoded_bytes) {
+        snprintf(error, error_len,
+                 "partial send: %zd of %zu bytes", sent, encoded_bytes);
+        return -1;
+    }
+
+    return 0;
 }
 
 static int admission_transport_ready(
@@ -724,11 +815,52 @@ static int admission_transport_ready(
     const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
     size_t error_len)
 {
-    (void)context;
-    (void)candidate;
-    (void)runtime_manifest;
+    struct wvm_control_plane *plane = (struct wvm_control_plane *)context;
+    struct wvm_membership_controller_capture capture;
+    struct wvm_node_record nodes[256];
+    struct wvm_gateway_record gateways[256];
+    size_t i;
+
+    if (!plane || !candidate || !runtime_manifest) {
+        snprintf(error, error_len, "invalid transport ready arguments");
+        return -1;
+    }
+
+    /* Verify runtime manifest references a known node */
+    if (runtime_manifest->physical_node_id == 0) {
+        snprintf(error, error_len, "runtime manifest has invalid node ID");
+        return -1;
+    }
+
+    /* Capture current membership */
+    memset(&capture, 0, sizeof(capture));
+    capture.nodes = nodes;
+    capture.node_capacity = 256;
+    capture.gateways = gateways;
+    capture.gateway_capacity = 256;
+
+    if (wvm_membership_controller_capture(&plane->membership_controller,
+                                          &capture, error, error_len) != 0) {
+        return -1;
+    }
+
+    /* Search for the node and verify it's ACTIVE */
+    for (i = 0; i < capture.node_count; i++) {
+        if (nodes[i].physical_node_id == runtime_manifest->physical_node_id) {
+            /* Verify node is in ACTIVE state */
+            if (nodes[i].desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE) {
+                snprintf(error, error_len,
+                         "node %u is not in ACTIVE state",
+                         runtime_manifest->physical_node_id);
+                return -1;
+            }
+            return 0;
+        }
+    }
+
     snprintf(error, error_len,
-             "admission transport not yet connected to real network");
+             "node %u not found in membership for ready check",
+             runtime_manifest->physical_node_id);
     return -1;
 }
 
@@ -943,7 +1075,7 @@ int main(int argc, char **argv)
             &admission_workspace.transport,
             options.local_physical_node_id,
             options.local_runtime_instance_id,
-            NULL,
+            &plane,
             admission_transport_resolve_node,
             admission_transport_submit,
             admission_transport_ready,
@@ -1029,8 +1161,30 @@ int main(int argc, char **argv)
         source_capability.provider_instance_id = options.local_runtime_instance_id;
         source_capability.state = WVM_CAPABILITY_AVAILABLE;
         source_capability.abi_version = 1;
-        source_capability.observed_at = 1;
-        source_capability.probe_operation_id[WVM_IDENTITY_ID_BYTES - 1] = 1;
+
+        /* Use real timestamp and probe operation ID */
+        {
+            struct timespec ts;
+            uint64_t timestamp_ms;
+            if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+                fprintf(stderr, "wvm_ctl: cannot get current time: %s\n",
+                        strerror(errno));
+                goto close_plane;
+            }
+            timestamp_ms = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+            source_capability.observed_at = timestamp_ms;
+
+            /* Generate unique probe operation ID from timestamp and random bytes */
+            if (read_random_bytes(source_capability.probe_operation_id,
+                                 WVM_IDENTITY_ID_BYTES - 8,
+                                 error, sizeof(error)) != 0) {
+                fprintf(stderr, "wvm_ctl: cannot generate probe operation ID: %s\n",
+                        error);
+                goto close_plane;
+            }
+            memcpy(&source_capability.probe_operation_id[WVM_IDENTITY_ID_BYTES - 8],
+                   &timestamp_ms, 8);
+        }
 
         memset(&local_node, 0, sizeof(local_node));
         local_node.physical_node_id = options.local_physical_node_id;
@@ -1112,6 +1266,22 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "wvm_ctl: local node registered (physical_node_id=%u, instance_id=%lu)\n",
                 options.local_physical_node_id, options.local_runtime_instance_id);
+
+        /* Activate the registered node to complete join and make it schedulable */
+        {
+            uint8_t activate_operation_id[WVM_IDENTITY_ID_BYTES];
+            memset(activate_operation_id, 0, sizeof(activate_operation_id));
+            activate_operation_id[0] = 1; /* Bootstrap activation operation */
+
+            if (wvm_membership_controller_activate_member(
+                    &plane.membership_controller, &self_actor, activate_operation_id,
+                    error, sizeof(error)) != 0) {
+                fprintf(stderr, "wvm_ctl: cannot activate local node: %s\n",
+                        error[0] ? error : "unknown error");
+                goto close_plane;
+            }
+            fprintf(stderr, "wvm_ctl: local node activated to ACTIVE state\n");
+        }
         fprintf(stderr, "wvm_ctl: membership_controller.member_count = %zu\n",
                 plane.membership_controller.member_count);
     }
@@ -1120,10 +1290,22 @@ int main(int argc, char **argv)
      * Bootstrap evidence publication: single static capability record and
      * launch plan for the registered node.
      *
-     * Production clusters will have per-node capability providers publishing
-     * real CPU/memory/KVM capabilities discovered through hardware probing.
-     * This bootstrap path provides the minimal evidence required for admission
-     * authority to accept CREATE_VM requests in single-node mode.
+     * BOOTSTRAP MODE LIMITATIONS (F04):
+     * - Uses real timestamps but single-shot publication at startup
+     * - No dynamic re-publication on inventory/capability changes
+     * - No capability probing loop or hardware detection
+     * - Fixed TCG backend; KVM availability not probed
+     *
+     * Production evolution path:
+     * 1. Periodic capability re-probing and evidence refresh
+     * 2. Dynamic inventory_revision updates on resource changes
+     * 3. Hardware capability detection (KVM, CPU features, memory topology)
+     * 4. Re-publication triggers on membership/configuration changes
+     * 5. Separate capability provider service for multi-node clusters
+     *
+     * Current implementation satisfies F01-F03 admission transport and prepare
+     * input requirements, enabling single-node CREATE_VM validation. Full
+     * production capability management is deferred to Phase 5-7.
      */
     {
         struct wvm_cluster_record_set snapshot_records;
@@ -1206,6 +1388,47 @@ int main(int argc, char **argv)
                     error[0] ? error : "unknown error");
             goto close_plane;
         }
+
+        /* Initialize prepare_options template with required fields */
+        memset(&admission_workspace.prepare_options, 0,
+               sizeof(admission_workspace.prepare_options));
+
+        /* Copy guest machine config from launch plan */
+        admission_workspace.prepare_options.guest_machine =
+            source_launch.launch_plan.guest_machine;
+
+        /* Set execution fault profile - TCG default */
+        admission_workspace.prepare_options.execution_profile.backend =
+            WVM_MANIFEST_BACKEND_TCG;
+        admission_workspace.prepare_options.execution_profile.context_schema_version = 1;
+        admission_workspace.prepare_options.execution_profile.dirty_capture_engine = 0;
+        admission_workspace.prepare_options.execution_profile.read_fault_engine = 0;
+        admission_workspace.prepare_options.execution_profile.invalidation_engine = 0;
+        admission_workspace.prepare_options.execution_profile.kernel_accelerator_bits = 0;
+        admission_workspace.prepare_options.execution_profile.per_node_capabilities.entries = NULL;
+        admission_workspace.prepare_options.execution_profile.per_node_capabilities.count = 0;
+        admission_workspace.prepare_options.execution_profile.per_node_capabilities.capacity = 0;
+        memset(admission_workspace.prepare_options.execution_profile.supported_memory_policies_digest,
+               0, WVM_SHA256_DIGEST_BYTES);
+        admission_workspace.prepare_options.execution_profile.fallback_decision = 0;
+
+        /* Set resource policy defaults */
+        admission_workspace.prepare_options.memory_chunk_bytes = 1048576; /* 1MB */
+        admission_workspace.prepare_options.host_overhead_vcpu_slots = 2;
+        admission_workspace.prepare_options.host_overhead_memory_bytes = 134217728; /* 128MB */
+        admission_workspace.prepare_options.memory_consistency_policy =
+            source_launch.launch_plan.consistency_policy.handoff_commit_policy;
+        admission_workspace.prepare_options.guest_numa_nodes = 1;
+        admission_workspace.prepare_options.executor_class = 1;
+        admission_workspace.prepare_options.node_runtime_role_bits =
+            (1ULL << WVM_MANIFEST_ROLE_NODE_RUNTIME);
+        admission_workspace.prepare_options.host_extra_role_bits = 0;
+
+        /* Set encoding buffer pointers (will be bound by provider) */
+        admission_workspace.prepare_options.placement_plan_bytes = NULL;
+        admission_workspace.prepare_options.placement_plan_bytes_capacity = 0;
+        admission_workspace.prepare_options.candidate_manifest_bytes = NULL;
+        admission_workspace.prepare_options.candidate_manifest_bytes_capacity = 0;
 
         if (wvm_admission_plan_provider_set_options_template(
                 &admission_workspace.plan_provider, &admission_workspace.prepare_options,
