@@ -139,6 +139,8 @@ static int admission_request(uint16_t message_type)
 static int typed_request(uint16_t message_type)
 {
     return message_type == WVM_ENVELOPE_MSG_CREATE_VM ||
+           message_type == WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES ||
+           message_type == WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE ||
            admission_request(message_type);
 }
 

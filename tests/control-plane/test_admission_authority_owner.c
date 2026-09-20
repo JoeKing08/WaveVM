@@ -278,7 +278,9 @@ int main(void)
     if (expect(owner.authority.prepare_input(
                    owner.authority.context, &request, &transaction, &input,
                    error, sizeof(error)) != 0,
-               "fail closed before evidence publication")) {
+               "fail closed before evidence publication") ||
+        expect(workspace.resets == 1,
+               "refresh caller-owned workspace before publication validation")) {
         return 1;
     }
     unpublished_config = config;
@@ -316,7 +318,7 @@ int main(void)
     memset(&transaction, 0, sizeof(transaction));
     if (expect(owner.authority.prepare_input(
                    owner.authority.context, &request, &transaction, &input,
-                   error, sizeof(error)) == 0 && workspace.resets == 1 &&
+                   error, sizeof(error)) == 0 && workspace.resets == 2 &&
                    input.membership_controller == &membership_controller &&
                    input.membership_capture == &membership_capture &&
                    input.prepared_route == &prepared_route &&

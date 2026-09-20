@@ -23,7 +23,12 @@
 #include "../common_include/wavevm_admission_provider.h"
 #include "../common_include/wavevm_admission_route.h"
 #include "../common_include/wavevm_coordinator.h"
+#include "../common_include/wavevm_fault_engine.h"
+#include "../common_include/wavevm_runtime_gate.h"
+#include "../common_include/wavevm_sha256.h"
 #include "admission_workspace.h"
+#include "capability_publication.h"
+#include "runtime_profile_publication.h"
 
 /* Admission authority workspace owned by the control-plane service. */
 struct admission_workspace {
@@ -40,7 +45,11 @@ struct admission_workspace {
     struct wvm_route_snapshot_record route_snapshot;
     struct wvm_ctl_admission_buffers transaction_buffers;
     struct wvm_membership_controller *membership_controller;
-    struct wvm_capability_record *capabilities;
+    const char *state_directory;
+    struct wvm_ctl_capability_evidence capability_evidence;
+    struct wvm_ctl_runtime_profile_set runtime_profile_set;
+    struct wvm_capability_ref *profile_capabilities;
+    struct wvm_exclusive_lease *lease_storage;
     struct wvm_resource_reservation *reservations;
     struct wvm_coordinator_node_launch_plan *launch_plans;
     struct wvm_admission_node_listener_plan *listener_plans;
@@ -61,6 +70,7 @@ struct admission_workspace {
 
 struct control_context {
     struct wvm_control_plane *plane;
+    const char *state_directory;
     struct wvm_vm_namespace_allocator *namespace_allocator;
     size_t request_list_capacity;
     pthread_mutex_t lock;
@@ -381,6 +391,34 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
     return 0;
 }
 
+static int apply_control_request(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *actor, struct wvm_control_result *result,
+    char *error, size_t error_len)
+{
+    struct control_context *context = opaque;
+    int rc;
+
+    if (request->message_type == WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES ||
+        request->message_type == WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE) {
+        pthread_mutex_lock(&context->lock);
+        if (request->message_type == WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES) {
+            rc = wvm_ctl_publish_capabilities(
+                context->state_directory,
+                &context->plane->membership_controller, request, actor, result,
+                error, error_len);
+        } else {
+            rc = wvm_ctl_publish_runtime_profile(
+                context->state_directory,
+                &context->plane->membership_controller, request, actor, result,
+                error, error_len);
+        }
+        pthread_mutex_unlock(&context->lock);
+        return rc;
+    }
+    return apply_create_vm(opaque, request, actor, result, error, error_len);
+}
+
 static volatile sig_atomic_t shutdown_requested;
 
 static void print_usage(const char *program)
@@ -672,6 +710,186 @@ static int authenticate_local_peer(void *opaque, int stream_fd,
     return -1;
 }
 
+static int capability_ref_compare(const void *left_value,
+                                  const void *right_value)
+{
+    const struct wvm_capability_ref *left = left_value;
+    const struct wvm_capability_ref *right = right_value;
+
+    if (left->physical_node_id != right->physical_node_id) {
+        return left->physical_node_id < right->physical_node_id ? -1 : 1;
+    }
+    if (left->node_instance_id != right->node_instance_id) {
+        return left->node_instance_id < right->node_instance_id ? -1 : 1;
+    }
+    return 0;
+}
+
+static int capability_available_for_node(
+    const struct wvm_ctl_capability_evidence *evidence,
+    const struct wvm_node_record *node, uint16_t capability_id)
+{
+    size_t i;
+
+    for (i = 0; i < evidence->record_count; i++) {
+        const struct wvm_capability_record *record = &evidence->records[i];
+
+        if (record->physical_node_id == node->physical_node_id &&
+            record->node_instance_id == node->node_instance_id &&
+            record->capability_id == capability_id &&
+            record->state == WVM_CAPABILITY_AVAILABLE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint64_t current_unix_time_ms(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_REALTIME, &now) != 0 || now.tv_sec <= 0) {
+        return 0;
+    }
+    if ((uint64_t)now.tv_sec > (UINT64_MAX - (uint64_t)now.tv_nsec / 1000000U) /
+                                 1000U) {
+        return 0;
+    }
+    return (uint64_t)now.tv_sec * 1000U +
+           (uint64_t)now.tv_nsec / 1000000U;
+}
+
+static int admission_workspace_prepare_template(
+    struct admission_workspace *workspace,
+    const struct wvm_vm_request *request,
+    const struct wvm_ctl_capability_evidence *evidence,
+    char *error, size_t error_len)
+{
+    struct wvm_coordinator_prepare_options options;
+    uint64_t now;
+    int all_kvm = 1;
+    int all_tcg = 1;
+    int all_kernel = 1;
+    size_t i;
+
+    if (!workspace || !request || !evidence ||
+        !workspace->profile_capabilities ||
+        workspace->membership_capture.node_count == 0 ||
+        workspace->membership_capture.node_count > workspace->capacity) {
+        snprintf(error, error_len, "cannot build admission options template");
+        return -1;
+    }
+    for (i = 0; i < workspace->membership_capture.node_count; i++) {
+        const struct wvm_node_record *node =
+            &workspace->membership_capture.nodes[i];
+
+        workspace->profile_capabilities[i] = node->capability;
+        all_kvm = all_kvm && capability_available_for_node(
+                                  evidence, node,
+                                  WVM_CAPABILITY_ID_EXECUTION_KVM);
+        all_tcg = all_tcg && capability_available_for_node(
+                                  evidence, node,
+                                  WVM_CAPABILITY_ID_EXECUTION_TCG);
+        all_kernel = all_kernel && capability_available_for_node(
+                                      evidence, node,
+                                      WVM_CAPABILITY_ID_KERNEL_ACCELERATION);
+    }
+    qsort(workspace->profile_capabilities,
+          workspace->membership_capture.node_count,
+          sizeof(*workspace->profile_capabilities), capability_ref_compare);
+    for (i = 1; i < workspace->membership_capture.node_count; i++) {
+        if (workspace->profile_capabilities[i - 1].physical_node_id ==
+            workspace->profile_capabilities[i].physical_node_id) {
+            snprintf(error, error_len,
+                     "membership contains duplicate capability node IDs");
+            return -1;
+        }
+    }
+
+    memset(&options, 0, sizeof(options));
+    snprintf(options.guest_machine.architecture,
+             sizeof(options.guest_machine.architecture), "%s", "x86_64");
+    snprintf(options.guest_machine.machine_type,
+             sizeof(options.guest_machine.machine_type), "%s",
+             "pc-i440fx-5.2");
+    options.guest_machine.qemu_compat_version = 502;
+    options.guest_machine.firmware_policy = 1;
+    if (request->execution_backend_policy ==
+            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM ||
+        (request->execution_backend_policy == WVM_MANIFEST_BACKEND_POLICY_AUTO &&
+         all_kvm)) {
+        options.execution_profile.backend = WVM_MANIFEST_BACKEND_KVM;
+        options.execution_profile.dirty_capture_engine =
+            WVM_FAULT_ENGINE_KVM_DIRTY_LOG;
+        options.execution_profile.read_fault_engine =
+            WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC;
+        options.execution_profile.invalidation_engine =
+            WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC;
+    } else {
+        options.execution_profile.backend = WVM_MANIFEST_BACKEND_TCG;
+        options.execution_profile.dirty_capture_engine =
+            WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+        options.execution_profile.read_fault_engine =
+            WVM_FAULT_ENGINE_USERFAULTFD;
+        options.execution_profile.invalidation_engine =
+            WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+    }
+    if (request->execution_backend_policy ==
+            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG && !all_tcg) {
+        snprintf(error, error_len, "no complete TCG capability set is published");
+        return -1;
+    }
+    if (request->execution_backend_policy ==
+            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM && !all_kvm) {
+        snprintf(error, error_len, "no complete KVM capability set is published");
+        return -1;
+    }
+    if (request->accelerator_policy == WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL &&
+        !all_kernel) {
+        snprintf(error, error_len,
+                 "required kernel acceleration is unavailable on a member");
+        return -1;
+    }
+    if (request->accelerator_policy != WVM_MANIFEST_ACCELERATOR_DISABLED &&
+        all_kernel) {
+        options.execution_profile.kernel_accelerator_bits = 1;
+        options.execution_profile.invalidation_engine =
+            WVM_FAULT_ENGINE_KERNEL_ACCELERATION;
+        if (options.execution_profile.backend == WVM_MANIFEST_BACKEND_TCG) {
+            options.execution_profile.dirty_capture_engine =
+                WVM_FAULT_ENGINE_KERNEL_ACCELERATION;
+        }
+    }
+    options.execution_profile.context_schema_version = 1;
+    options.execution_profile.per_node_capabilities.entries =
+        workspace->profile_capabilities;
+    options.execution_profile.per_node_capabilities.count =
+        workspace->membership_capture.node_count;
+    options.execution_profile.per_node_capabilities.capacity = workspace->capacity;
+    wvm_sha256_digest("wavevm/memory-policy/1", sizeof("wavevm/memory-policy/1") - 1U,
+                      options.execution_profile.supported_memory_policies_digest);
+    options.execution_profile.fallback_decision = 1;
+    options.memory_chunk_bytes = request->requested_memory_bytes;
+    options.host_overhead_vcpu_slots = 1;
+    options.host_overhead_memory_bytes = WVM_MANIFEST_PAGE_BYTES;
+    options.memory_consistency_policy = 1;
+    options.guest_numa_nodes = workspace->membership_capture.node_count;
+    options.executor_class = 1;
+    options.node_runtime_role_bits =
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_NODE_RUNTIME);
+    options.candidate_created_at = now = current_unix_time_ms();
+    if (now == 0 || now > UINT64_MAX - 60000U) {
+        snprintf(error, error_len, "cannot obtain admission timestamp");
+        return -1;
+    }
+    options.prepared_reservation_expiry_unix_time_ms = now + 60000U;
+    if (wvm_admission_plan_provider_set_options_template(
+            &workspace->plan_provider, &options, error, error_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int admission_workspace_reset(
     void *context, const struct wvm_vm_request *request,
     struct wvm_coordinator_prepared_route *prepared_route,
@@ -683,9 +901,13 @@ static int admission_workspace_reset(
 {
     struct admission_workspace *workspace = context;
     struct wvm_membership_controller_capture *capture;
+    struct wvm_ctl_capability_evidence evidence = {0};
+    struct wvm_ctl_runtime_profile_set runtime_profiles = {0};
+    struct wvm_admission_evidence_owner evidence_owner;
 
     if (!workspace || !request || !prepared_route || !prepared_vm ||
-        !activation || !route_transaction || !route_snapshot) {
+        !activation || !route_transaction || !route_snapshot ||
+        !workspace->state_directory) {
         snprintf(error, error_len, "admission workspace is not configured");
         return -1;
     }
@@ -693,14 +915,40 @@ static int admission_workspace_reset(
     if (wvm_membership_controller_capture(workspace->membership_controller,
                                           capture, error, error_len) != 0 ||
         capture->node_count > SIZE_MAX - capture->gateway_count ||
+        wvm_ctl_load_capability_evidence(
+            workspace->state_directory, capture, &evidence, error,
+            error_len) != 0 ||
+        wvm_ctl_load_runtime_profile_set(
+            workspace->state_directory, capture, &runtime_profiles, error,
+            error_len) != 0 ||
+        admission_workspace_prepare_template(
+            workspace, request, &evidence, error, error_len) != 0 ||
+        wvm_admission_evidence_owner_init(
+            &evidence_owner, evidence.records, evidence.record_capacity,
+            workspace->reservations, workspace->capacity, error,
+            error_len) != 0 ||
+        wvm_admission_evidence_owner_publish(
+            &evidence_owner, evidence.records, evidence.record_count, NULL, 0,
+            evidence.inventory_revision, evidence.profile_generation, error,
+            error_len) != 0 ||
         wvm_ctl_admission_buffers_reset(
             &workspace->transaction_buffers, request->requested_vcpus,
             capture->node_count, capture->node_count + capture->gateway_count,
             WVM_CTL_ADMISSION_WORKSPACE_BYTES, prepared_vm,
             &workspace->plan_provider.options_template, activation, error,
-            error_len) != 0) {
+            error_len) != 0 ||
+        wvm_admission_plan_provider_publish_runtime_profiles(
+            &workspace->plan_provider, capture, runtime_profiles.profiles,
+            runtime_profiles.profile_count, error, error_len) != 0) {
+        wvm_ctl_capability_evidence_destroy(&evidence);
+        wvm_ctl_runtime_profile_set_destroy(&runtime_profiles);
         return -1;
     }
+    wvm_ctl_capability_evidence_destroy(&workspace->capability_evidence);
+    wvm_ctl_runtime_profile_set_destroy(&workspace->runtime_profile_set);
+    workspace->capability_evidence = evidence;
+    workspace->runtime_profile_set = runtime_profiles;
+    workspace->evidence_owner = evidence_owner;
     memset(prepared_route, 0, sizeof(*prepared_route));
     memset(route_transaction, 0, sizeof(*route_transaction));
     memset(route_snapshot, 0, sizeof(*route_snapshot));
@@ -854,6 +1102,12 @@ int main(int argc, char **argv)
     char error[256] = {0};
     int result = 1;
 
+    if (argc > 1 && strcmp(argv[1], "publish-capabilities") == 0) {
+        return wvm_ctl_capability_publish_command(argc, argv);
+    }
+    if (argc > 1 && strcmp(argv[1], "publish-runtime-profile") == 0) {
+        return wvm_ctl_runtime_profile_publish_command(argc, argv);
+    }
     if (parse_options(argc, argv, &options) != 0) {
         print_usage(argv[0]);
         return 2;
@@ -888,9 +1142,22 @@ int main(int argc, char **argv)
 
     /* Allocate admission authority workspace storage. */
     admission_workspace.capacity = options.capacity;
+    if (options.capacity > SIZE_MAX / 3U ||
+        options.capacity > SIZE_MAX / sizeof(*admission_workspace.profile_capabilities) ||
+        options.capacity > SIZE_MAX / sizeof(*admission_workspace.lease_storage)) {
+        fprintf(stderr, "wvm_ctl: admission capacity is too large\n");
+        goto out;
+    }
     admission_workspace.route_snapshot_bytes_capacity = options.capacity * 512;
     admission_workspace.route_ack_set_bytes_capacity = options.capacity * 64;
-    admission_workspace.capabilities = calloc(options.capacity, sizeof(*admission_workspace.capabilities));
+    admission_workspace.capability_evidence.records =
+        calloc(options.capacity,
+               sizeof(*admission_workspace.capability_evidence.records));
+    admission_workspace.capability_evidence.record_capacity = options.capacity;
+    admission_workspace.profile_capabilities = calloc(
+        options.capacity, sizeof(*admission_workspace.profile_capabilities));
+    admission_workspace.lease_storage = calloc(
+        options.capacity * 3U, sizeof(*admission_workspace.lease_storage));
     admission_workspace.reservations = calloc(options.capacity, sizeof(*admission_workspace.reservations));
     admission_workspace.launch_plans = calloc(options.capacity, sizeof(*admission_workspace.launch_plans));
     admission_workspace.listener_plans = calloc(options.capacity, sizeof(*admission_workspace.listener_plans));
@@ -906,7 +1173,10 @@ int main(int argc, char **argv)
 
     if (!entries || !route_entries || !runtime_entries || !namespace_records ||
         !members || !membership_routes || !dependencies || !operations ||
-        !admission_workspace.capabilities || !admission_workspace.reservations ||
+        !admission_workspace.capability_evidence.records ||
+        !admission_workspace.profile_capabilities ||
+        !admission_workspace.lease_storage ||
+        !admission_workspace.reservations ||
         !admission_workspace.launch_plans || !admission_workspace.listener_plans ||
         !admission_workspace.route_rules || !admission_workspace.route_ack_entries ||
         !admission_workspace.capture_nodes || !admission_workspace.capture_gateways ||
@@ -925,6 +1195,7 @@ int main(int argc, char **argv)
     wvm_vm_namespace_allocator_init(&namespace_allocator, namespace_records,
                                     options.capacity, 1);
     control_context.plane = &plane;
+    control_context.state_directory = options.state_directory;
     control_context.namespace_allocator = &namespace_allocator;
     control_context.request_list_capacity = options.capacity;
     if (pthread_mutex_init(&control_context.lock, NULL) != 0) {
@@ -949,18 +1220,21 @@ int main(int argc, char **argv)
     admission_workspace.membership_capture.gateway_child_ids = admission_workspace.capture_child_gateways;
     admission_workspace.membership_capture.gateway_child_id_capacity = admission_workspace.capacity;
     admission_workspace.membership_controller = &plane.membership_controller;
+    admission_workspace.state_directory = options.state_directory;
     if (wvm_admission_evidence_owner_init(
             &admission_workspace.evidence_owner,
-            admission_workspace.capabilities, admission_workspace.capacity,
+            admission_workspace.capability_evidence.records,
+            admission_workspace.capability_evidence.record_capacity,
             admission_workspace.reservations, admission_workspace.capacity,
             error, sizeof(error)) != 0) {
         fprintf(stderr, "wvm_ctl: cannot initialize evidence owner: %s\n", error);
         goto close_plane;
     }
-    if (wvm_admission_plan_provider_init(
+    if (wvm_admission_plan_provider_init_with_lease_storage(
             &admission_workspace.plan_provider,
             admission_workspace.launch_plans, admission_workspace.capacity,
             admission_workspace.listener_plans, admission_workspace.capacity,
+            admission_workspace.lease_storage, options.capacity * 3U,
             error, sizeof(error)) != 0) {
         fprintf(stderr, "wvm_ctl: cannot initialize plan provider: %s\n", error);
         goto close_plane;
@@ -1064,7 +1338,7 @@ int main(int argc, char **argv)
     service_config.local_runtime_instance_id = options.local_runtime_instance_id;
     service_config.authenticate = authenticate_local_peer;
     service_config.authenticate_opaque = &auth;
-    service_config.control_apply = apply_create_vm;
+    service_config.control_apply = apply_control_request;
     service_config.control_apply_opaque = &control_context;
     if (install_signal_handlers() != 0) {
         fprintf(stderr, "wvm_ctl: cannot install signal handlers: %s\n",
@@ -1115,7 +1389,11 @@ out:
     free(admission_workspace.listener_plans);
     free(admission_workspace.launch_plans);
     free(admission_workspace.reservations);
-    free(admission_workspace.capabilities);
+    free(admission_workspace.lease_storage);
+    free(admission_workspace.profile_capabilities);
+    wvm_ctl_runtime_profile_set_destroy(&admission_workspace.runtime_profile_set);
+    wvm_ctl_capability_evidence_destroy(
+        &admission_workspace.capability_evidence);
     free(operations);
     free(dependencies);
     free(membership_routes);

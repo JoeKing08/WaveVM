@@ -713,3 +713,159 @@ int wvm_capability_profile_digest(
     wvm_sha256_final(&sha, digest);
     return 0;
 }
+
+int wvm_capability_report_encode(
+    const struct wvm_capability_report *report, uint8_t *bytes, size_t capacity,
+    size_t *encoded_bytes, char *error, size_t error_len)
+{
+    struct wvm_canonical_builder builder;
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t *list;
+    size_t list_bytes = 4, offset = 4, i;
+
+    if (!report || !report->records || report->record_count == 0 ||
+        wvm_capability_profile_digest(
+            report->records[0].physical_node_id,
+            report->records[0].node_instance_id, report->profile_generation,
+            report->records, report->record_count, digest, error, error_len) != 0) {
+        return -1;
+    }
+    for (i = 0; i < report->record_count; i++) {
+        size_t size;
+        if (capability_record_size(&report->records[i], &size) != 0 ||
+            checked_add_size(&list_bytes, 4) != 0 ||
+            checked_add_size(&list_bytes, size) != 0 ||
+            list_bytes > WVM_CAPABILITY_REPORT_MAX_BYTES - 32U) {
+            set_error(error, error_len, "capability report exceeds byte budget");
+            return -1;
+        }
+    }
+    if (wvm_canonical_record_begin(&builder, bytes, capacity,
+                                   WVM_RECORD_CAPABILITY_REPORT) != 0 ||
+        wvm_canonical_field_append_u64(&builder, 1,
+                                       report->profile_generation) != 0 ||
+        wvm_canonical_field_reserve(&builder, 2, (uint32_t)list_bytes,
+                                    &list) != 0) {
+        return -1;
+    }
+    write_be32(list, (uint32_t)report->record_count);
+    for (i = 0; i < report->record_count; i++) {
+        size_t size;
+        if (wvm_capability_record_encode(&report->records[i], list + offset + 4,
+                                          list_bytes - offset - 4, &size,
+                                          error, error_len) != 0) {
+            return -1;
+        }
+        write_be32(list + offset, (uint32_t)size);
+        offset += 4 + size;
+    }
+    return wvm_canonical_record_finish(&builder, encoded_bytes);
+}
+
+void wvm_capability_report_destroy(struct wvm_capability_report *report)
+{
+    size_t i;
+    if (!report) {
+        return;
+    }
+    for (i = 0; i < report->record_count; i++) {
+        free(report->records[i].limits.entries);
+        free(report->records[i].constraints.entries);
+    }
+    free(report->records);
+    memset(report, 0, sizeof(*report));
+}
+
+int wvm_capability_report_decode(
+    const uint8_t *bytes, size_t byte_count, struct wvm_capability_report *report,
+    char *error, size_t error_len)
+{
+    struct wvm_canonical_field fields[2];
+    struct wvm_capability_report decoded = {0};
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+    const uint8_t *list;
+    size_t list_bytes, offset = 4, i;
+
+    if (!report || byte_count > WVM_CAPABILITY_REPORT_MAX_BYTES ||
+        parse_exact_fields(bytes, byte_count, WVM_RECORD_CAPABILITY_REPORT,
+                            fields, 2, error, error_len) != 0 ||
+        fields[0].value_bytes != 8 || fields[1].value_bytes < 4) {
+        return -1;
+    }
+    decoded.profile_generation = read_be64(fields[0].value);
+    list = fields[1].value;
+    list_bytes = fields[1].value_bytes;
+    decoded.record_count = read_be32(list);
+    /* Each record has 13 field headers, even before scalar/list contents. */
+    if (!decoded.record_count ||
+        decoded.record_count > (list_bytes - 4) / 116U) {
+        goto invalid;
+    }
+    decoded.records = calloc(decoded.record_count, sizeof(*decoded.records));
+    if (!decoded.records) {
+        decoded.record_count = 0;
+        goto invalid;
+    }
+    for (i = 0; i < decoded.record_count; i++) {
+        struct wvm_capability_record *record = &decoded.records[i];
+        struct wvm_canonical_field entry_fields[13];
+        size_t size, limits, constraints;
+
+        if (list_bytes - offset < 4) {
+            goto invalid;
+        }
+        size = read_be32(list + offset);
+        offset += 4;
+        if (size > list_bytes - offset ||
+            parse_exact_fields(list + offset, size, WVM_RECORD_CAPABILITY_RECORD,
+                                entry_fields, 13, error, error_len) != 0 ||
+            entry_fields[8].value_bytes < 4 ||
+            entry_fields[9].value_bytes < 4) {
+            goto invalid;
+        }
+        limits = read_be32(entry_fields[8].value);
+        constraints = read_be32(entry_fields[9].value);
+        if (limits > (entry_fields[8].value_bytes - 4U) / 38U ||
+            constraints > (entry_fields[9].value_bytes - 4U) / 40U) {
+            goto invalid;
+        }
+        if (limits) {
+            record->limits.entries = calloc(limits, sizeof(*record->limits.entries));
+            if (!record->limits.entries) {
+                goto invalid;
+            }
+            record->limits.capacity = limits;
+        }
+        if (constraints) {
+            record->constraints.entries = calloc(constraints, sizeof(*record->constraints.entries));
+            if (!record->constraints.entries) {
+                goto invalid;
+            }
+            record->constraints.capacity = constraints;
+        }
+        if (wvm_capability_record_decode(list + offset, size, record,
+                                          error, error_len) != 0) {
+            goto invalid;
+        }
+        offset += size;
+    }
+    if (offset != list_bytes ||
+        wvm_capability_profile_digest(
+            decoded.records[0].physical_node_id,
+            decoded.records[0].node_instance_id, decoded.profile_generation,
+            decoded.records, decoded.record_count, digest, error, error_len) != 0) {
+        goto invalid;
+    }
+    wvm_capability_report_destroy(report);
+    *report = decoded;
+    return 0;
+
+invalid:
+    /* record_count is set before allocation to validate the encoded count. */
+    if (!decoded.records) {
+        decoded.record_count = 0;
+    }
+    wvm_capability_report_destroy(&decoded);
+    set_error(error, error_len, "invalid or oversized capability report");
+    return -1;
+}

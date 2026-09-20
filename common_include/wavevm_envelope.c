@@ -214,6 +214,8 @@ static int message_type_known(uint16_t message_type)
     case WVM_ENVELOPE_MSG_REJOIN:
     case WVM_ENVELOPE_MSG_RECOVERY_REBIND:
     case WVM_ENVELOPE_MSG_CREATE_VM:
+    case WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES:
+    case WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE:
         return 1;
     default:
         return 0;
@@ -230,6 +232,8 @@ static int cluster_control_message(uint16_t message_type)
     case WVM_ENVELOPE_MSG_REJOIN:
     case WVM_ENVELOPE_MSG_RECOVERY_REBIND:
     case WVM_ENVELOPE_MSG_CREATE_VM:
+    case WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES:
+    case WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE:
         return 1;
     default:
         return 0;

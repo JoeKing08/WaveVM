@@ -141,6 +141,8 @@ The V1 enum registry is:
 | `0x102c` | `MemberCordonRequest` | `1:Record<MemberKey>:target_member_key`, `2:U64:expected_membership_revision`, `3:U64:expected_topology_revision`, `4:U64:expected_admission_eligibility_revision`, `5:U16:reason_code` |
 | `0x102d` | `AdmissionReservationStage` | `1:Record<CandidateVmManifest>:candidate`, `2:Record<ResourceReservation>:reservation`, `3:Record<ActivationRecord>:activation?`, `4:U16:abort_reason?` |
 | `0x102e` | `AdmissionParticipantStage` | `1:Record<CandidateVmManifest>:candidate`, `2:Record<NodeRuntimeManifest>:runtime_manifest`, `3:Record<ActivationRecord>:activation?`, `4:U16:abort_reason?` |
+| `0x102f` | `CapabilityReport` | `1:U64:profile_generation`, `2:List<CapabilityRecord, capability_id/provider_instance_id>:records` |
+| `0x1030` | `NodeRuntimeProfile` | `1:U32:physical_node_id`, `2:U64:node_instance_id`, `3:U64:inventory_revision`, `4:U64:capability_profile_generation`, `5:U64:runtime_profile_generation`, `6:U16:node_runtime_control_port`, `7:U16:local_executor_control_port`, `8:U32:executor_worker_count`, `9:U32:sync_batch_size`, `10:U32:vcpu_handoff_record_capacity`, `11:List<U16>:node_runtime_data_ports`, `12:List<U16>:local_executor_service_ports` |
 
 ## 3. Cross-Record Constraints
 

@@ -1,3 +1,4 @@
+[进行中 2026-09-20] CapabilityReport 已使用空闲 record type 0x102f，认证发布、原子持久化、双节点 durable reload、完整 evidence 聚合和 admission workspace 原子替换均已接通并通过定向测试。当前生产缺口转为 launch/listener publication：长期 publication 不能保存带 guest memory/machine/consistency 的完整 NodeRuntimeLaunchPlan，否则会把所有 VM 固定成一种规格并复用独占 listener。正在新增节点级 canonical NodeRuntimeProfile（静态 runtime 参数与节点声明的 listener 池），由节点认证发布/持久化；每次 admission 按当前 VM request 与事务身份合成完整 launch/listener plan，并拒绝与 durable 运行中 manifest 冲突。完成后编译及少量定向验证，再进入 participant transport。用户删除 CHANGES_SUMMARY.md，保留删除；未运行 guest/双节点测试。
 [当前事实 2026-09-19 原 AI 修复；优先于下方历史完成声明]
 [推进节奏 2026-09-19 用户确认] 优先接通生产主链路，按“完成一条生产路径 -> 编译和少量针对性验证 -> 下一条”推进。不得每补一个接口就继续扩展恢复边界/故障注入而挤占生产接线；大范围回归、穷举故障注入及最终 E2E 延后到对应主链路接通后。VM 身份隔离、未准入不得运行、失败不得误释放资源仍随实现检查；不为加快进度砍掉并行/多队列/异步 diff 优化。下一步集中生产准入接线，不再扩圈打磨恢复组件。
 [完成并验证] 移除 ctl_tool 虚构计算节点 bootstrap；空集群启动/重启、认证注册、PENDING/RECOVERING 持久化与 replay 通过。未接通的 admission transport/readiness 显式拒绝，未放松 route activation 检查。
@@ -268,3 +269,7 @@ F03 修复完成。bootstrap节点现在会自动从PENDING状态推进到ACTIVE
 - 审计契约满足：F04要求使用真实时间戳和唯一probe ID（已实现）；完整的动态更新闭环属于生产capability管理，与F01-F03的admission transport和prepare输入解耦，不阻塞CREATE_VM基础功能验证
 - 编译验证：`make -C ctl_tool -B` 编译通过
 F04 部分修复完成。capability记录现在包含真实时间戳和唯一probe operation ID，满足基础追溯性要求；完整的动态capability管理循环作为生产增强功能明确标记为Phase 5-7工作。
+
+[证据 2026-09-20 admission profile 接线] 完成生产准入的动态 runtime profile 输入边界：`wvm_admission_plan_provider` 新增 caller-owned lease storage 和完整 membership 覆盖校验；ctl workspace 每次 CREATE capture 当前 membership，原子加载与校验完整 capability evidence/runtime profile set，依据请求 backend/accelerator policy 构造合法 machine/execution/memory policy template，并按 admission transaction identity 为每个节点生成稳定的 data/service listener、worker/batch/handoff、guest memory、consistency policy 与 lease generation。旧静态 plan provider 仍只保留给已有单元测试，未恢复旧 NODE/ROUTE、gossip 或 workaround。
+- 验证：`make -C ctl_tool -B` 通过；新增 dynamic provider 定向测试通过；`tests/control-plane/*.sh` 串行 61/61 通过。
+- 边界：这完成了 CREATE 的 prepare-input/profile publication 接线，不等于完整生产闭环；真实 node runtime participant receiver、prepare/activate/commit ACK/readiness、跨节点认证控制连接和 Mode A/B、flat/fractal、KVM/TCG E2E 仍待后续接线和验收。未运行 guest 或双节点测试。

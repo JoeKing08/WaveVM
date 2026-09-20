@@ -3326,6 +3326,10 @@ int wvm_membership_controller_member_status(
     status->endpoint = entry->kind == WVM_MEMBERSHIP_COMPUTE
                            ? entry->node.control_endpoint
                            : entry->gateway.endpoint;
+    if (entry->kind == WVM_MEMBERSHIP_COMPUTE) {
+        status->capability = entry->node.capability;
+        status->inventory_revision = entry->node.inventory.inventory_revision;
+    }
     status->desired_membership_state = entry_state(entry);
     status->observed_health_state = entry_health(entry);
     status->active_dependency_count = entry->active_dependency_count;

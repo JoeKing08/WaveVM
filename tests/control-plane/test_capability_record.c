@@ -21,6 +21,9 @@ int main(void)
     struct wvm_capability_limit decoded_limits[2];
     struct wvm_capability_constraint decoded_constraints[1];
     struct wvm_capability_record decoded;
+    struct wvm_capability_report report;
+    struct wvm_capability_report decoded_report;
+    struct wvm_canonical_record canonical;
     uint8_t bytes[4096];
     uint8_t profile_digest[WVM_SHA256_DIGEST_BYTES];
     uint8_t repeated_profile_digest[WVM_SHA256_DIGEST_BYTES];
@@ -90,6 +93,38 @@ int main(void)
                "derive stable capability profile digest")) {
         return 1;
     }
+
+    memset(&report, 0, sizeof(report));
+    report.profile_generation = 7;
+    report.records = &record;
+    report.record_count = 1;
+    if (expect(wvm_capability_report_encode(
+                   &report, bytes, sizeof(bytes), &encoded_bytes, error,
+                   sizeof(error)) == 0,
+               "encode capability report") ||
+        expect(wvm_canonical_record_parse(bytes, encoded_bytes, &canonical) ==
+                   0 &&
+                   canonical.record_type == WVM_RECORD_CAPABILITY_REPORT,
+               "use the registered capability-report record type")) {
+        return 1;
+    }
+    memset(&decoded_report, 0, sizeof(decoded_report));
+    if (expect(wvm_capability_report_decode(
+                   bytes, encoded_bytes, &decoded_report, error,
+                   sizeof(error)) == 0,
+               "decode capability report") ||
+        expect(decoded_report.profile_generation == 7 &&
+                   decoded_report.record_count == 1 &&
+                   decoded_report.records[0].physical_node_id == 17 &&
+                   decoded_report.records[0].node_instance_id == 101 &&
+                   decoded_report.records[0].limits.count == 2 &&
+                   decoded_report.records[0].limits.entries[1].value == 128 &&
+                   decoded_report.records[0].constraints.count == 1,
+               "round trip owned capability-report records")) {
+        wvm_capability_report_destroy(&decoded_report);
+        return 1;
+    }
+    wvm_capability_report_destroy(&decoded_report);
 
     limits[1].limit_kind = limits[0].limit_kind;
     if (expect(wvm_capability_record_validate(&record, error, sizeof(error)) !=

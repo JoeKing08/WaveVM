@@ -9,6 +9,8 @@
 #define WVM_RECORD_CAPABILITY_LIMIT 0x1021U
 #define WVM_RECORD_CAPABILITY_CONSTRAINT 0x1022U
 #define WVM_RECORD_CAPABILITY_RECORD 0x1023U
+#define WVM_RECORD_CAPABILITY_REPORT 0x102fU
+#define WVM_CAPABILITY_REPORT_MAX_BYTES (1024U * 1024U)
 
 #define WVM_CAPABILITY_CONSTRAINT_DETAIL_MAX_BYTES 255U
 
@@ -75,6 +77,22 @@ struct wvm_capability_record {
     uint8_t probe_operation_id[WVM_IDENTITY_ID_BYTES];
     uint16_t reason_code;
 };
+
+/* One complete profile, emitted by the registered node's probe provider. */
+struct wvm_capability_report {
+    uint64_t profile_generation;
+    struct wvm_capability_record *records;
+    size_t record_count;
+};
+
+int wvm_capability_report_encode(
+    const struct wvm_capability_report *report, uint8_t *bytes, size_t capacity,
+    size_t *encoded_bytes, char *error, size_t error_len);
+/* Decode owns nested storage. Initialize output to zero; free with destroy. */
+int wvm_capability_report_decode(
+    const uint8_t *bytes, size_t byte_count, struct wvm_capability_report *report,
+    char *error, size_t error_len);
+void wvm_capability_report_destroy(struct wvm_capability_report *report);
 
 int wvm_capability_limit_validate(const struct wvm_capability_limit *limit,
                                   char *error, size_t error_len);

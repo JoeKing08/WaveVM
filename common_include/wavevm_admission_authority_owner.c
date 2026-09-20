@@ -53,24 +53,23 @@ static int owner_prepare_input(
     struct wvm_admission_authority_owner *owner = context;
 
     if (!owner || !owner->initialized || !request || !transaction || !input ||
-        owner_config_valid(&owner->config, error, error_len) != 0 ||
+        owner_config_valid(&owner->config, error, error_len) != 0) {
+        set_error(error, error_len,
+                  "admission authority owner is not configured");
+        return -1;
+    }
+    if (owner->config.reset_workspace(
+            owner->config.workspace_context, request, owner->config.prepared_route,
+            owner->config.prepared_vm,
+            owner->config.activation, owner->config.route_transaction,
+            owner->config.route_snapshot, error, error_len) != 0 ||
         !owner->config.plan_provider->published ||
         !owner->config.plan_provider->options_template_published ||
         wvm_admission_evidence_owner_validate(owner->config.evidence_owner,
                                               error, error_len) != 0) {
-        set_error(error, error_len,
-                  "admission authority has no complete published input");
-        return -1;
-    }
-    if (
-        owner->config.reset_workspace(
-            owner->config.workspace_context, request, owner->config.prepared_route,
-            owner->config.prepared_vm,
-            owner->config.activation, owner->config.route_transaction,
-            owner->config.route_snapshot, error, error_len) != 0) {
         if (error && error[0] == '\0') {
             set_error(error, error_len,
-                      "admission authority owner cannot reset transaction workspace");
+                      "admission authority has no complete published input");
         }
         return -1;
     }
