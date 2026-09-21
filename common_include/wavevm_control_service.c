@@ -52,6 +52,8 @@ int wvm_control_service_init(
     owner_config.apply_opaque = config->plane;
     owner_config.control_apply = config->control_apply;
     owner_config.control_apply_opaque = config->control_apply_opaque;
+    owner_config.admission_apply = config->admission_apply;
+    owner_config.admission_apply_opaque = config->admission_apply_opaque;
     if (wvm_control_owner_init(&service->owner, &owner_config, error,
                                error_len) != 0) {
         memset(service, 0, sizeof(*service));

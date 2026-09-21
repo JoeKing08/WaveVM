@@ -280,7 +280,8 @@ int wvm_control_transport_init(
     if (!transport || !config || config->stream_fd < 0 ||
         config->local_physical_node_id == 0 ||
         config->local_runtime_instance_id == 0 || !config->authenticate ||
-        (!config->apply && !config->control_apply && !config->dispatch)) {
+        (!config->apply && !config->control_apply &&
+         !config->admission_apply && !config->dispatch)) {
         set_error(error, error_len, "control transport configuration is invalid");
         return -EINVAL;
     }
@@ -485,7 +486,7 @@ int wvm_control_transport_serve_once(
     if (!transport || transport->config.stream_fd < 0 ||
         !transport->config.authenticate ||
         (!transport->config.apply && !transport->config.control_apply &&
-         !transport->config.dispatch)) {
+         !transport->config.admission_apply && !transport->config.dispatch)) {
         set_error(error, error_len, "control transport is not initialized");
         return -EINVAL;
     }
@@ -561,6 +562,29 @@ int wvm_control_transport_serve_once(
         }
         free(frame);
         return response_result;
+    }
+    if (admission_request(request.message_type)) {
+        struct wvm_control_result result;
+
+        memset(&result, 0, sizeof(result));
+        if (!transport->config.admission_apply) {
+            result.status_code = WVM_CONTROL_RESULT_UNSUPPORTED;
+            memcpy(result.in_reply_to_operation_id, request.operation_id,
+                   sizeof(result.in_reply_to_operation_id));
+            dispatch_result = send_control_result(transport, &request, &result,
+                                                   error, error_len);
+        } else {
+            dispatch_result = transport->config.admission_apply(
+                transport->config.admission_apply_opaque, &request, &actor,
+                &result, error, error_len);
+            if (dispatch_result == 0) {
+                dispatch_result = send_control_result(transport, &request,
+                                                      &result, error, error_len);
+            }
+        }
+        free(frame);
+        return dispatch_result == 0 ? WVM_CONTROL_TRANSPORT_ACCEPTED
+                                    : dispatch_result;
     }
     if (typed_request(request.message_type)) {
         struct wvm_control_result result;

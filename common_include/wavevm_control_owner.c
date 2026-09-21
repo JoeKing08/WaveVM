@@ -93,6 +93,9 @@ static void *owner_client_main(void *opaque)
     transport_config.apply_opaque = owner->config.apply_opaque;
     transport_config.control_apply = owner->config.control_apply;
     transport_config.control_apply_opaque = owner->config.control_apply_opaque;
+    transport_config.admission_apply = owner->config.admission_apply;
+    transport_config.admission_apply_opaque =
+        owner->config.admission_apply_opaque;
     transport_config.dispatch = owner->config.dispatch;
     transport_config.dispatch_opaque = owner->config.dispatch_opaque;
 
@@ -253,7 +256,8 @@ int wvm_control_owner_init(struct wvm_control_owner *owner,
         config->socket_path[0] == '\0' || config->socket_mode == 0 ||
         config->listen_backlog <= 0 || config->local_physical_node_id == 0 ||
         config->local_runtime_instance_id == 0 || !config->authenticate ||
-        (!config->apply && !config->control_apply && !config->dispatch)) {
+        (!config->apply && !config->control_apply &&
+         !config->admission_apply && !config->dispatch)) {
         set_error(error, error_len, "control owner configuration is invalid");
         return -EINVAL;
     }

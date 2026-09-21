@@ -76,6 +76,12 @@ typedef int (*wvm_control_transport_control_apply_fn)(
     const struct wvm_member_key *authenticated_actor,
     struct wvm_control_result *result, char *error, size_t error_len);
 
+/* Admission stages have a separate owner from ordinary control requests. */
+typedef int (*wvm_control_transport_admission_apply_fn)(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    struct wvm_control_result *result, char *error, size_t error_len);
+
 struct wvm_control_transport_config {
     int stream_fd;
     size_t max_frame_bytes;
@@ -87,6 +93,8 @@ struct wvm_control_transport_config {
     void *apply_opaque;
     wvm_control_transport_control_apply_fn control_apply;
     void *control_apply_opaque;
+    wvm_control_transport_admission_apply_fn admission_apply;
+    void *admission_apply_opaque;
     wvm_control_transport_dispatch_fn dispatch;
     void *dispatch_opaque;
 };

@@ -386,6 +386,75 @@ static int apply_typed_request(
     return 0;
 }
 
+static void fill_stage_request(struct wvm_envelope *request, uint16_t type);
+
+static int test_admission_dispatch_owner(void)
+{
+    struct authentication_context authentication = {0};
+    struct typed_apply_context ordinary = {0};
+    struct typed_apply_context admission = {0};
+    struct wvm_control_transport_config config = {0};
+    struct wvm_control_stream transport;
+    struct wvm_envelope request;
+    struct wvm_control_result result;
+    struct serve_context server;
+    pthread_t thread;
+    int sockets[2] = {-1, -1};
+    char error[256] = {0};
+    int status = -1;
+
+    authentication.actor.role_type = WVM_MANIFEST_ROLE_EXECUTOR;
+    authentication.actor.role_id = 41;
+    authentication.actor.instance_id = 42;
+    admission.status = WVM_CONTROL_RESULT_SUCCESS;
+    ordinary.status = WVM_CONTROL_RESULT_SUCCESS;
+    fill_stage_request(&request, WVM_ENVELOPE_MSG_PREPARE_MANIFEST);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
+        return -1;
+    }
+    config.stream_fd = sockets[0];
+    config.local_physical_node_id = 900;
+    config.local_runtime_instance_id = 901;
+    config.authenticate = authenticate_actor;
+    config.authenticate_opaque = &authentication;
+    config.control_apply = apply_typed_request;
+    config.control_apply_opaque = &ordinary;
+    config.admission_apply = apply_typed_request;
+    config.admission_apply_opaque = &admission;
+    if (wvm_control_transport_init(&transport, &config, error,
+                                   sizeof(error)) != 0 ||
+        start_serve(&server, &thread, &transport) != 0 ||
+        wvm_control_transport_exchange(sockets[1], 900, 901, &request,
+                                       &result, error, sizeof(error)) != 0 ||
+        pthread_join(thread, NULL) != 0 ||
+        expect(result.status_code == WVM_CONTROL_RESULT_SUCCESS,
+               "admission stage returns receiver result") ||
+        expect(admission.calls == 1 && ordinary.calls == 0,
+               "admission stage uses its dedicated owner")) {
+        goto out;
+    }
+    transport.config.admission_apply = NULL;
+    if (start_serve(&server, &thread, &transport) != 0 ||
+        wvm_control_transport_exchange(sockets[1], 900, 901, &request,
+                                       &result, error, sizeof(error)) != 0 ||
+        pthread_join(thread, NULL) != 0 ||
+        expect(result.status_code == WVM_CONTROL_RESULT_UNSUPPORTED,
+               "missing admission owner fails closed") ||
+        expect(admission.calls == 1 && ordinary.calls == 0,
+               "missing admission owner does not fall through")) {
+        goto out;
+    }
+    status = 0;
+out:
+    wvm_control_transport_destroy(&transport);
+    close(sockets[0]);
+    close(sockets[1]);
+    if (status != 0 && error[0] != '\0') {
+        fprintf(stderr, "control transport test: %s\n", error);
+    }
+    return status;
+}
+
 static void fill_stage_request(struct wvm_envelope *request, uint16_t type)
 {
     static const uint8_t payload[] = {1, 2, 3};
@@ -444,6 +513,8 @@ static int test_typed_exchange(void)
     config.authenticate_opaque = &authentication;
     config.control_apply = apply_typed_request;
     config.control_apply_opaque = &applied;
+    config.admission_apply = apply_typed_request;
+    config.admission_apply_opaque = &applied;
     if (wvm_control_transport_init(&transport, &config, error, sizeof(error))) {
         goto out;
     }
@@ -463,6 +534,7 @@ static int test_typed_exchange(void)
         } else if (i == count + 2) {
             authentication.reject = 0;
             transport.config.control_apply = NULL;
+            transport.config.admission_apply = NULL;
             transport.config.apply = wvm_control_plane_membership_apply;
             expected_status = WVM_CONTROL_RESULT_UNSUPPORTED;
         }
@@ -485,6 +557,7 @@ static int test_typed_exchange(void)
     }
     /* A completed apply must not kill the process if its client disconnects. */
     transport.config.control_apply = apply_typed_request;
+    transport.config.admission_apply = apply_typed_request;
     if (send_request(sockets[1], &request, error, sizeof(error)) != 0 ||
         shutdown(sockets[1], SHUT_RD) != 0 ||
         expect(wvm_control_transport_serve_once(&transport, error,
@@ -644,7 +717,8 @@ int main(void)
     int result = 1;
 
     signal(SIGPIPE, SIG_DFL);
-    if (test_typed_exchange() != 0 || test_reply_validation() != 0 ||
+    if (test_admission_dispatch_owner() != 0 ||
+        test_typed_exchange() != 0 || test_reply_validation() != 0 ||
         test_exchange_io_failure() != 0) {
         return 1;
     }

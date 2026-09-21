@@ -25,6 +25,7 @@ SRCS = main.c admission_workspace.c capability_publication.c \
 	$(COMMON_DIR)/wavevm_admission_authority_owner.c \
 	$(COMMON_DIR)/wavevm_admission_stage.c \
 	$(COMMON_DIR)/wavevm_admission_transport.c \
+	$(COMMON_DIR)/wavevm_admission_stream_transport.c \
 	$(COMMON_DIR)/wavevm_admission_route.c \
 	$(COMMON_DIR)/wavevm_membership_coordinator.c \
 	$(COMMON_DIR)/wavevm_admission_orchestrator.c \
@@ -33,6 +34,7 @@ SRCS = main.c admission_workspace.c capability_publication.c \
 	$(COMMON_DIR)/wavevm_membership_controller.c \
 	$(COMMON_DIR)/wavevm_membership_control.c \
 	$(COMMON_DIR)/wavevm_control_transport.c \
+	$(COMMON_DIR)/wavevm_control_client.c \
 	$(COMMON_DIR)/wavevm_control_owner.c \
 	$(COMMON_DIR)/wavevm_control_service.c
 

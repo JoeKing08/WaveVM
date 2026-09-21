@@ -27,6 +27,8 @@ struct wvm_control_service_config {
     void *authenticate_opaque;
     wvm_control_transport_control_apply_fn control_apply;
     void *control_apply_opaque;
+    wvm_control_transport_admission_apply_fn admission_apply;
+    void *admission_apply_opaque;
 };
 
 struct wvm_control_service {

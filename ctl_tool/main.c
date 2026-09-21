@@ -1340,6 +1340,10 @@ int main(int argc, char **argv)
     service_config.authenticate_opaque = &auth;
     service_config.control_apply = apply_control_request;
     service_config.control_apply_opaque = &control_context;
+    /* Node-runtime admission is a separate owner; ctl_tool must not accept
+     * participant stages as ordinary CREATE_VM control requests. */
+    service_config.admission_apply = NULL;
+    service_config.admission_apply_opaque = NULL;
     if (install_signal_handlers() != 0) {
         fprintf(stderr, "wvm_ctl: cannot install signal handlers: %s\n",
                 strerror(errno));
