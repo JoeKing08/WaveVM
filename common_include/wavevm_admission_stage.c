@@ -169,6 +169,12 @@ static int participant_stage_validate(
             return 0;
         }
         break;
+    case WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY:
+        if (stage->runtime_manifest->has_activation_fence &&
+            !stage->activation && stage->abort_reason == 0) {
+            return 0;
+        }
+        break;
     case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
         if (!stage->runtime_manifest->has_activation_fence &&
             !stage->activation && stage->abort_reason != 0) {
@@ -354,6 +360,12 @@ int wvm_admission_participant_stage_encode(
                             stage->runtime_manifest, encode_runtime_manifest,
                             stage->activation, 0, bytes, capacity,
                             encoded_bytes, error, error_len);
+    case WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY:
+        return stage_encode(WVM_RECORD_ADMISSION_PARTICIPANT_STAGE,
+                            stage->candidate, encode_candidate,
+                            stage->runtime_manifest, encode_runtime_manifest,
+                            NULL, 0, bytes, capacity, encoded_bytes, error,
+                            error_len);
     case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
         return stage_encode(WVM_RECORD_ADMISSION_PARTICIPANT_STAGE,
                             stage->candidate, encode_candidate,

@@ -28,32 +28,32 @@ typedef int (*wvm_admission_transport_submit_fn)(
     void *context, const struct wvm_admission_transport_target *target,
     const struct wvm_envelope *envelope, char *error, size_t error_len);
 
-/* Readiness is distinct from activation: it observes real local runtime state. */
-typedef int (*wvm_admission_transport_ready_fn)(
-    void *context, const struct wvm_candidate_vm_manifest *candidate,
-    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
-    size_t error_len);
-
 struct wvm_admission_transport {
     uint32_t controller_physical_node_id;
     uint64_t controller_instance_id;
     void *context;
     wvm_admission_transport_resolve_node_fn resolve_node;
     wvm_admission_transport_submit_fn submit;
-    wvm_admission_transport_ready_fn ready;
 };
 
 int wvm_admission_transport_init(
     struct wvm_admission_transport *transport,
     uint32_t controller_physical_node_id, uint64_t controller_instance_id,
     void *context, wvm_admission_transport_resolve_node_fn resolve_node,
-    wvm_admission_transport_submit_fn submit,
-    wvm_admission_transport_ready_fn ready, char *error, size_t error_len);
+    wvm_admission_transport_submit_fn submit, char *error,
+    size_t error_len);
 
 /* Populate the exact orchestrator stage callback set. */
 int wvm_admission_transport_callbacks(
     struct wvm_admission_transport *transport,
     struct wvm_admission_orchestrator_callbacks *callbacks, char *error,
+    size_t error_len);
+
+/* Query the exact participant after it has activated and published readiness. */
+int wvm_admission_transport_query_runtime_ready(
+    struct wvm_admission_transport *transport,
+    const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
     size_t error_len);
 
 #endif /* WAVEVM_ADMISSION_TRANSPORT_H */

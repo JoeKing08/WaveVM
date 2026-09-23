@@ -3539,11 +3539,14 @@ int wvm_control_plane_record_activation(
     return 0;
 }
 
-int wvm_control_plane_start_if_ready(
+static int control_plane_start_after_readiness(
     struct wvm_control_plane *plane,
     const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_candidate_vm_manifest *candidate,
     const struct wvm_node_runtime_manifest *runtime_manifests,
-    size_t runtime_manifest_count, char *error, size_t error_len)
+    size_t runtime_manifest_count,
+    wvm_control_plane_readiness_observer_fn observe_ready,
+    void *observer_context, char *error, size_t error_len)
 {
     struct wvm_control_plane_entry *entry;
     size_t durable_count = 0;
@@ -3605,6 +3608,19 @@ int wvm_control_plane_start_if_ready(
                       "runtime readiness manifest identity mismatch");
             return -1;
         }
+        if (candidate &&
+            (candidate->vm_id != manifest->vm_id ||
+             candidate->vm_incarnation != manifest->vm_incarnation ||
+             candidate->manifest_generation != manifest->manifest_generation ||
+             memcmp(candidate->manifest_digest,
+                    manifest->candidate_manifest_digest,
+                    sizeof(candidate->manifest_digest)) != 0 ||
+             memcmp(candidate->admission_tx_id, manifest->admission_tx_id,
+                    sizeof(candidate->admission_tx_id)) != 0)) {
+            set_error(error, error_len,
+                      "runtime readiness candidate does not match participant");
+            return -1;
+        }
         for (j = 0; j < i; j++) {
             if (runtime_manifests[j].physical_node_id ==
                 manifest->physical_node_id) {
@@ -3614,9 +3630,13 @@ int wvm_control_plane_start_if_ready(
             }
         }
         {
-            int ready_result = wvm_runtime_ready_validate(
-                manifest, manifest->expected_node_instance_id, error,
-                error_len);
+            int ready_result = observe_ready
+                                   ? observe_ready(observer_context, candidate,
+                                                   manifest, error, error_len)
+                                   : wvm_runtime_ready_validate(
+                                         manifest,
+                                         manifest->expected_node_instance_id,
+                                         error, error_len);
 
             if (ready_result != 0) {
                 return ready_result == -EAGAIN ? -EAGAIN : -1;
@@ -3632,4 +3652,36 @@ int wvm_control_plane_start_if_ready(
         return -1;
     }
     return 0;
+}
+
+int wvm_control_plane_start_if_ready(
+    struct wvm_control_plane *plane,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_node_runtime_manifest *runtime_manifests,
+    size_t runtime_manifest_count, char *error, size_t error_len)
+{
+    return control_plane_start_after_readiness(
+        plane, transaction, NULL, runtime_manifests, runtime_manifest_count,
+        NULL, NULL, error, error_len);
+}
+
+int wvm_control_plane_start_if_participants_ready(
+    struct wvm_control_plane *plane,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifests,
+    size_t runtime_manifest_count,
+    wvm_control_plane_readiness_observer_fn observe_ready,
+    void *observer_context, char *error, size_t error_len)
+{
+    if (!candidate || !observe_ready ||
+        wvm_candidate_vm_manifest_validate(candidate, error, error_len) != 0) {
+        set_error(error, error_len,
+                  "participant readiness observer input is invalid");
+        return -1;
+    }
+    return control_plane_start_after_readiness(
+        plane, transaction, candidate, runtime_manifests,
+        runtime_manifest_count, observe_ready, observer_context, error,
+        error_len);
 }

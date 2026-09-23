@@ -21,6 +21,7 @@
 
 #define WVM_ENDPOINT_ADDRESS_MAX_BYTES 16U
 #define WVM_ENDPOINT_SERVER_NAME_MAX_BYTES 253U
+#define WVM_ENDPOINT_CONTROL_SOCKET_PATH_MAX_BYTES 107U
 
 enum wvm_data_transport {
     WVM_DATA_TRANSPORT_UDP = 1,
@@ -61,6 +62,8 @@ struct wvm_endpoint {
     uint16_t control_port;
     int has_server_name;
     char server_name[WVM_ENDPOINT_SERVER_NAME_MAX_BYTES + 1U];
+    int has_control_socket_path;
+    char control_socket_path[WVM_ENDPOINT_CONTROL_SOCKET_PATH_MAX_BYTES + 1U];
 };
 
 struct wvm_required_ack_entry {

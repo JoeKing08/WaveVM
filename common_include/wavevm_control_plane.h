@@ -331,10 +331,25 @@ int wvm_control_plane_record_activation(
  * presents identity-bound readiness evidence. Missing evidence returns
  * -EAGAIN and leaves the durable lifecycle state unchanged.
  */
+typedef int (*wvm_control_plane_readiness_observer_fn)(
+    void *context, const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len);
+
 int wvm_control_plane_start_if_ready(
     struct wvm_control_plane *plane,
     const struct wvm_coordinator_transaction *transaction,
     const struct wvm_node_runtime_manifest *runtime_manifests,
     size_t runtime_manifest_count, char *error, size_t error_len);
+
+/* Production path: every participant observes its own identity-bound readiness. */
+int wvm_control_plane_start_if_participants_ready(
+    struct wvm_control_plane *plane,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifests,
+    size_t runtime_manifest_count,
+    wvm_control_plane_readiness_observer_fn observe_ready,
+    void *observer_context, char *error, size_t error_len);
 
 #endif /* WAVEVM_CONTROL_PLANE_H */

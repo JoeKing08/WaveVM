@@ -95,7 +95,7 @@ The V1 enum registry is:
 
 | Type | Record | Fields |
 | --- | --- | --- |
-| `0x1001` | `Endpoint` | `1:U16:data_transport`, `2:Addr:data_address`, `3:U16:data_port`, `4:U16:control_transport`, `5:Addr:control_address?`, `6:U16:control_port`, `7:Text<253>:server_name?` |
+| `0x1001` | `Endpoint` | `1:U16:data_transport`, `2:Addr:data_address`, `3:U16:data_port`, `4:U16:control_transport`, `5:Addr:control_address?`, `6:U16:control_port`, `7:Text<253>:server_name?`, `8:Text<107>:control_socket_path?` |
 | `0x1002` | `MemberKey` | `1:U16:role_type`, `2:U32:role_id`, `3:U64:instance_id` |
 | `0x1003` | `VmRouteScopeKey` | `1:U32:vm_id`, `2:U64:vm_incarnation`, `3:U64:route_scope_id` |
 | `0x1004` | `RouteSnapshotKey` | `1:Record<VmRouteScopeKey>:scope_key`, `2:U64:topology_revision`, `3:U64:route_generation`, `4:Digest32:snapshot_digest` |
@@ -150,6 +150,10 @@ The V1 enum registry is:
   selected from the transport registry. `data_port` and `control_port` are
   nonzero. `control_address` defaults only to the already present
   `data_address`; it may not default to an unrelated hostname or source address.
+  `UNIX_STREAM` endpoints require an absolute `control_socket_path` and reject
+  that field for network stream transports. The path is a filesystem Unix
+  socket path limited to 107 UTF-8 bytes; it is not a substitute for
+  `server_name` and does not make a remote node locally reachable.
 - `RequiredAckSet.entries_digest` is SHA-256 over the complete entries list
   value. When the set is embedded by a `RouteSnapshot`, any entry whose
   expected key identifies that enclosing snapshot is normalized by zeroing its

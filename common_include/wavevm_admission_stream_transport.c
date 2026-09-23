@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "wavevm_lifecycle.h"
+
 static void set_error(char *error, size_t error_len, const char *message)
 {
     if (error && error_len != 0) {
@@ -66,6 +68,12 @@ int wvm_admission_stream_transport_submit(
                            result.status_code);
         }
         return -EACCES;
+    }
+    if (envelope->message_type == WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY &&
+        result.recorded_state != WVM_LIFECYCLE_COMMITTED) {
+        set_error(error, error_len,
+                  "runtime readiness reply does not report COMMITTED state");
+        return -EPROTO;
     }
     return 0;
 }

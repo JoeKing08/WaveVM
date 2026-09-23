@@ -48,8 +48,12 @@ static int endpoint_equal(const struct wvm_endpoint *left,
                     left->control_address_bytes) == 0)) &&
            left->control_port == right->control_port &&
            left->has_server_name == right->has_server_name &&
+           left->has_control_socket_path == right->has_control_socket_path &&
            (!left->has_server_name ||
-            strcmp(left->server_name, right->server_name) == 0);
+            strcmp(left->server_name, right->server_name) == 0) &&
+           (!left->has_control_socket_path ||
+            strcmp(left->control_socket_path,
+                   right->control_socket_path) == 0);
 }
 
 static const struct wvm_node_record *

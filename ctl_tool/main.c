@@ -26,9 +26,13 @@
 #include "../common_include/wavevm_fault_engine.h"
 #include "../common_include/wavevm_runtime_gate.h"
 #include "../common_include/wavevm_sha256.h"
+#include "../common_include/wavevm_admission_stream_transport.h"
+#include "../common_include/wavevm_unix_control_connector.h"
 #include "admission_workspace.h"
 #include "capability_publication.h"
 #include "runtime_profile_publication.h"
+
+struct local_authentication;
 
 /* Admission authority workspace owned by the control-plane service. */
 struct admission_workspace {
@@ -36,6 +40,9 @@ struct admission_workspace {
     struct wvm_admission_plan_provider plan_provider;
     struct wvm_admission_route_compiler route_compiler;
     struct wvm_admission_transport transport;
+    struct wvm_unix_control_connector unix_connector;
+    struct wvm_control_stream_connector control_connector;
+    struct wvm_admission_stream_transport stream_transport;
     struct wvm_admission_authority_owner authority_owner;
     struct wvm_membership_controller_capture membership_capture;
     struct wvm_coordinator_prepared_route prepared_route;
@@ -45,6 +52,8 @@ struct admission_workspace {
     struct wvm_route_snapshot_record route_snapshot;
     struct wvm_ctl_admission_buffers transaction_buffers;
     struct wvm_membership_controller *membership_controller;
+    uint32_t local_physical_node_id;
+    uint64_t local_runtime_instance_id;
     const char *state_directory;
     struct wvm_ctl_capability_evidence capability_evidence;
     struct wvm_ctl_runtime_profile_set runtime_profile_set;
@@ -582,6 +591,31 @@ static int member_key_equal(const struct wvm_member_key *left,
            left->instance_id == right->instance_id;
 }
 
+static int authorize_unix_control_peer(
+    void *opaque, const struct wvm_member_key *expected_peer,
+    const struct wvm_unix_peer_credentials *credentials, char *error,
+    size_t error_len)
+{
+    const struct local_authentication *auth = opaque;
+    size_t i;
+
+    if (!auth || !expected_peer || !credentials || credentials->process_id <= 0) {
+        snprintf(error, error_len, "Unix control peer credentials are invalid");
+        return -1;
+    }
+    for (i = 0; i < auth->count; i++) {
+        if (member_key_equal(&auth->principals[i].member_key, expected_peer)) {
+            if (auth->principals[i].uid == credentials->user_id) {
+                return 0;
+            }
+            break;
+        }
+    }
+    snprintf(error, error_len,
+             "Unix peer UID is not bound to the expected member identity");
+    return -EACCES;
+}
+
 static int load_principals(const char *path, struct local_authentication *auth,
                            char *error, size_t error_len)
 {
@@ -960,7 +994,7 @@ static int admission_transport_resolve_node(
     struct wvm_admission_transport_target *target, char *error,
     size_t error_len)
 {
-    struct wvm_control_plane *plane = context;
+    struct admission_workspace *workspace = context;
     struct wvm_membership_controller_member_status status;
     struct wvm_member_key key = {
         .role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME,
@@ -968,12 +1002,12 @@ static int admission_transport_resolve_node(
         .instance_id = node_instance_id,
     };
 
-    if (!plane || !target) {
+    if (!workspace || !workspace->membership_controller || !target) {
         snprintf(error, error_len, "invalid transport resolve arguments");
         return -1;
     }
 
-    if (wvm_membership_controller_member_status(&plane->membership_controller,
+    if (wvm_membership_controller_member_status(workspace->membership_controller,
                                                 &key, &status, error,
                                                 error_len) != 0) {
         return -1;
@@ -988,26 +1022,29 @@ static int admission_transport_submit(
     void *context, const struct wvm_admission_transport_target *target,
     const struct wvm_envelope *envelope, char *error, size_t error_len)
 {
-    (void)context;
-    (void)target;
-    (void)envelope;
-    /* A send is not proof that the participant durably accepted this stage. */
-    snprintf(error, error_len,
-             "authenticated admission request/result transport is not configured");
-    return -1;
-}
+    struct admission_workspace *workspace = context;
 
-static int admission_transport_ready(
-    void *context, const struct wvm_candidate_vm_manifest *candidate,
-    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
-    size_t error_len)
-{
-    (void)context;
-    (void)candidate;
-    (void)runtime_manifest;
-    /* Membership ACTIVE does not establish readiness of a particular VM. */
-    snprintf(error, error_len, "per-VM runtime readiness observer is not configured");
-    return -1;
+    if (!workspace || !target || !envelope ||
+        !workspace->stream_transport.initialized) {
+        snprintf(error, error_len,
+                 "authenticated admission stream is not initialized");
+        return -EINVAL;
+    }
+    if (target->member_key.role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME ||
+        target->member_key.role_id != workspace->local_physical_node_id ||
+        target->member_key.instance_id !=
+            workspace->local_runtime_instance_id) {
+        snprintf(error, error_len,
+                 "Unix admission transport requires the exact local runtime instance");
+        return -EXDEV;
+    }
+    if (target->endpoint.control_transport != WVM_CONTROL_TRANSPORT_UNIX_STREAM) {
+        snprintf(error, error_len,
+                 "TLS/TCP and QUIC admission connectors are not configured");
+        return -EOPNOTSUPP;
+    }
+    return wvm_admission_stream_transport_submit(
+        &workspace->stream_transport, target, envelope, error, error_len);
 }
 
 static int authorize_self_registration(
@@ -1252,14 +1289,28 @@ int main(int argc, char **argv)
         fprintf(stderr, "wvm_ctl: cannot initialize route compiler: %s\n", error);
         goto close_plane;
     }
+    admission_workspace.local_physical_node_id = options.local_physical_node_id;
+    admission_workspace.local_runtime_instance_id =
+        options.local_runtime_instance_id;
+    if (wvm_unix_control_connector_bind(
+            &admission_workspace.unix_connector, authorize_unix_control_peer,
+            &auth, 10000U, &admission_workspace.control_connector,
+            error, sizeof(error)) != 0 ||
+        wvm_admission_stream_transport_init(
+            &admission_workspace.stream_transport,
+            &admission_workspace.control_connector,
+            error, sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: cannot initialize Unix admission connector: %s\n",
+                error);
+        goto close_plane;
+    }
     if (wvm_admission_transport_init(
             &admission_workspace.transport,
             options.local_physical_node_id,
             options.local_runtime_instance_id,
-            &plane,
+            &admission_workspace,
             admission_transport_resolve_node,
             admission_transport_submit,
-            admission_transport_ready,
             error, sizeof(error)) != 0) {
         fprintf(stderr, "wvm_ctl: cannot initialize admission transport: %s\n", error);
         goto close_plane;
@@ -1375,6 +1426,8 @@ int main(int argc, char **argv)
 close_plane:
     wvm_control_plane_close(&plane);
 out:
+    wvm_admission_stream_transport_destroy(
+        &admission_workspace.stream_transport);
     if (control_context.lock_initialized) {
         pthread_mutex_destroy(&control_context.lock);
     }

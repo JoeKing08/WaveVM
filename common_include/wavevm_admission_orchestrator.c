@@ -535,13 +535,13 @@ int wvm_admission_orchestrator_run(
             WVM_LIFECYCLE_COMMITTED, error, error_len) != 0) {
         return -1;
     }
-    if (callback_participants(input, input->callbacks->participant_ready,
-                              error, error_len) != 0 ||
-        wvm_control_plane_start_if_ready(
+    if (wvm_control_plane_start_if_participants_ready(
             input->control_plane, transaction,
+            &input->prepared_vm->candidate,
             input->prepared_vm->node_runtime_manifests,
-            input->prepared_vm->node_runtime_manifest_count, error,
-            error_len) != 0) {
+            input->prepared_vm->node_runtime_manifest_count,
+            input->callbacks->participant_ready, input->callback_context,
+            error, error_len) != 0) {
         return -1;
     }
     return 0;

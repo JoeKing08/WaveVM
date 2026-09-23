@@ -495,7 +495,15 @@ int wvm_endpoint_validate(const struct wvm_endpoint *endpoint, char *error,
         (endpoint->has_server_name != 0 && endpoint->has_server_name != 1) ||
         (endpoint->has_server_name &&
          !valid_utf8_text(endpoint->server_name,
-                          WVM_ENDPOINT_SERVER_NAME_MAX_BYTES))) {
+                          WVM_ENDPOINT_SERVER_NAME_MAX_BYTES)) ||
+        (endpoint->has_control_socket_path != 0 &&
+         endpoint->has_control_socket_path != 1) ||
+        (endpoint->has_control_socket_path &&
+         (!valid_utf8_text(endpoint->control_socket_path,
+                           WVM_ENDPOINT_CONTROL_SOCKET_PATH_MAX_BYTES) ||
+          endpoint->control_socket_path[0] != '/')) ||
+        ((endpoint->control_transport == WVM_CONTROL_TRANSPORT_UNIX_STREAM) !=
+         endpoint->has_control_socket_path)) {
         set_error(error, error_len, "endpoint is invalid");
         return -1;
     }
@@ -505,7 +513,7 @@ int wvm_endpoint_validate(const struct wvm_endpoint *endpoint, char *error,
 static int endpoint_size(const struct wvm_endpoint *endpoint,
                          size_t *encoded_size)
 {
-    size_t fields[7];
+    size_t fields[8];
     size_t field_count = 0;
 
     if (wvm_endpoint_validate(endpoint, NULL, 0) != 0) {
@@ -521,6 +529,9 @@ static int endpoint_size(const struct wvm_endpoint *endpoint,
     fields[field_count++] = 2;
     if (endpoint->has_server_name) {
         fields[field_count++] = strlen(endpoint->server_name);
+    }
+    if (endpoint->has_control_socket_path) {
+        fields[field_count++] = strlen(endpoint->control_socket_path);
     }
     return canonical_record_size(fields, field_count, encoded_size);
 }
@@ -551,6 +562,11 @@ int wvm_endpoint_encode(const struct wvm_endpoint *endpoint, uint8_t *bytes,
          wvm_canonical_field_append(&builder, 7, endpoint->server_name,
                                     (uint32_t)strlen(endpoint->server_name)) !=
              0) ||
+        (endpoint->has_control_socket_path &&
+         wvm_canonical_field_append(&builder, 8,
+                                    endpoint->control_socket_path,
+                                    (uint32_t)strlen(
+                                        endpoint->control_socket_path)) != 0) ||
         wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
         set_error(error, error_len, "cannot encode endpoint");
         return -1;
@@ -562,12 +578,12 @@ int wvm_endpoint_decode(const uint8_t *bytes, size_t encoded_bytes,
                         struct wvm_endpoint *endpoint, char *error,
                         size_t error_len)
 {
-    struct wvm_canonical_field fields[8];
-    unsigned char present[8];
+    struct wvm_canonical_field fields[9];
+    unsigned char present[9];
 
     if (!endpoint ||
         parse_record_fields(bytes, encoded_bytes, WVM_RECORD_ENDPOINT, fields,
-                            present, 7, error, error_len) != 0 ||
+                            present, 8, error, error_len) != 0 ||
         !present[1] || !present[2] || !present[3] || !present[4] ||
         !present[6] || fields[1].value_bytes != 2 ||
         !valid_address_bytes((uint8_t)fields[2].value_bytes) ||
@@ -577,7 +593,11 @@ int wvm_endpoint_decode(const uint8_t *bytes, size_t encoded_bytes,
         (present[7] &&
          (fields[7].value_bytes == 0 ||
           fields[7].value_bytes > WVM_ENDPOINT_SERVER_NAME_MAX_BYTES ||
-          memchr(fields[7].value, '\0', fields[7].value_bytes) != NULL))) {
+          memchr(fields[7].value, '\0', fields[7].value_bytes) != NULL)) ||
+        (present[8] &&
+         (fields[8].value_bytes == 0 ||
+          fields[8].value_bytes > WVM_ENDPOINT_CONTROL_SOCKET_PATH_MAX_BYTES ||
+          memchr(fields[8].value, '\0', fields[8].value_bytes) != NULL))) {
         set_error(error, error_len, "endpoint has invalid fields");
         return -1;
     }
@@ -599,6 +619,11 @@ int wvm_endpoint_decode(const uint8_t *bytes, size_t encoded_bytes,
     endpoint->has_server_name = present[7];
     if (endpoint->has_server_name) {
         memcpy(endpoint->server_name, fields[7].value, fields[7].value_bytes);
+    }
+    endpoint->has_control_socket_path = present[8];
+    if (endpoint->has_control_socket_path) {
+        memcpy(endpoint->control_socket_path, fields[8].value,
+               fields[8].value_bytes);
     }
     return wvm_endpoint_validate(endpoint, error, error_len);
 }
@@ -2580,6 +2605,7 @@ static int route_snapshot_endpoint_equal(const struct wvm_endpoint *left,
         left->has_control_address != right->has_control_address ||
         left->control_port != right->control_port ||
         left->has_server_name != right->has_server_name ||
+        left->has_control_socket_path != right->has_control_socket_path ||
         memcmp(left->data_address, right->data_address,
                left->data_address_bytes) != 0) {
         return 0;
@@ -2590,8 +2616,11 @@ static int route_snapshot_endpoint_equal(const struct wvm_endpoint *left,
                 left->control_address_bytes) != 0)) {
         return 0;
     }
-    return !left->has_server_name ||
-           strcmp(left->server_name, right->server_name) == 0;
+    return (!left->has_server_name ||
+            strcmp(left->server_name, right->server_name) == 0) &&
+           (!left->has_control_socket_path ||
+            strcmp(left->control_socket_path,
+                   right->control_socket_path) == 0);
 }
 
 static int route_snapshot_ack_sets_equal(

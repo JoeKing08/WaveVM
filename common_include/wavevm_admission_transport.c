@@ -54,7 +54,7 @@ static int transport_validate(const struct wvm_admission_transport *transport,
 {
     if (!transport || transport->controller_physical_node_id == 0 ||
         transport->controller_instance_id == 0 || !transport->resolve_node ||
-        !transport->submit || !transport->ready) {
+        !transport->submit) {
         set_error(error, error_len,
                   "admission transport requires registered control providers");
         return -1;
@@ -583,25 +583,47 @@ static int transport_participant_ready(
 {
     struct wvm_admission_transport *transport = context;
 
+    return wvm_admission_transport_query_runtime_ready(
+        transport, candidate, runtime_manifest, error, error_len);
+}
+
+int wvm_admission_transport_query_runtime_ready(
+    struct wvm_admission_transport *transport,
+    const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len)
+{
+    struct wvm_admission_transport_target target;
+    struct wvm_admission_participant_stage stage;
+
     if (candidate_matches_runtime(candidate, runtime_manifest, error,
                                   error_len) != 0 ||
-        transport_validate(transport, error, error_len) != 0 ||
-        transport->ready(transport->context, candidate, runtime_manifest, error,
-                         error_len) != 0) {
-        if (error && error[0] == '\0') {
-            set_error(error, error_len, "runtime readiness was not observed");
-        }
+        !runtime_manifest->has_activation_fence ||
+        resolve_node_target(transport, runtime_manifest->physical_node_id,
+                            runtime_manifest->expected_node_instance_id,
+                            &target, error, error_len) != 0) {
+        set_error(error, error_len,
+                  "runtime readiness query does not bind an activated participant");
         return -1;
     }
-    return 0;
+    memset(&stage, 0, sizeof(stage));
+    stage.message_type = WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY;
+    stage.candidate = candidate;
+    stage.runtime_manifest = runtime_manifest;
+    return submit_record(transport, &target,
+                         WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY,
+                         candidate->admission_tx_id, candidate->vm_id,
+                         candidate->vm_incarnation,
+                         candidate->manifest_generation,
+                         &runtime_manifest->required_route_snapshot_key,
+                         encode_participant_stage, &stage, error, error_len);
 }
 
 int wvm_admission_transport_init(
     struct wvm_admission_transport *transport,
     uint32_t controller_physical_node_id, uint64_t controller_instance_id,
     void *context, wvm_admission_transport_resolve_node_fn resolve_node,
-    wvm_admission_transport_submit_fn submit,
-    wvm_admission_transport_ready_fn ready, char *error, size_t error_len)
+    wvm_admission_transport_submit_fn submit, char *error, size_t error_len)
 {
     if (!transport) {
         set_error(error, error_len, "admission transport storage is missing");
@@ -613,7 +635,6 @@ int wvm_admission_transport_init(
     transport->context = context;
     transport->resolve_node = resolve_node;
     transport->submit = submit;
-    transport->ready = ready;
     return transport_validate(transport, error, error_len);
 }
 

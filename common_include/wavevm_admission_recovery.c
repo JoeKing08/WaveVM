@@ -256,13 +256,13 @@ static int recover_activation(
             input->control_plane, input->transaction,
             WVM_LIFECYCLE_ACTIVATION_DECIDED, WVM_LIFECYCLE_COMMITTED, error,
             error_len) != 0 ||
-        recover_participants(input, input->callbacks->participant_ready, error,
-                             error_len) != 0 ||
-        wvm_control_plane_start_if_ready(
+        wvm_control_plane_start_if_participants_ready(
             input->control_plane, input->transaction,
+            &input->prepared_vm->candidate,
             input->prepared_vm->node_runtime_manifests,
-            input->prepared_vm->node_runtime_manifest_count, error,
-            error_len) != 0) {
+            input->prepared_vm->node_runtime_manifest_count,
+            input->callbacks->participant_ready, input->callback_context,
+            error, error_len) != 0) {
         return -1;
     }
     return 0;
@@ -343,16 +343,16 @@ int wvm_admission_orchestrator_recover(
     }
     if (entry->transaction.state == WVM_LIFECYCLE_COMMITTED) {
         if (wvm_coordinator_commit_local(input->transaction, input->prepared_vm,
-                                         &activation, error, error_len) != 0 ||
-            recover_participants(input, input->callbacks->participant_ready,
-                                 error, error_len) != 0) {
+                                         &activation, error, error_len) != 0) {
             return -1;
         }
-        return wvm_control_plane_start_if_ready(
+        return wvm_control_plane_start_if_participants_ready(
             input->control_plane, input->transaction,
+            &input->prepared_vm->candidate,
             input->prepared_vm->node_runtime_manifests,
-            input->prepared_vm->node_runtime_manifest_count, error,
-            error_len);
+            input->prepared_vm->node_runtime_manifest_count,
+            input->callbacks->participant_ready, input->callback_context,
+            error, error_len);
     }
     if (entry->transaction.state == WVM_LIFECYCLE_ACTIVATION_DECIDED) {
         return recover_activation(input, &activation, error, error_len);

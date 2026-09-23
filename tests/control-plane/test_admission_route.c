@@ -66,19 +66,6 @@ static int submit_route_stage(
     return 0;
 }
 
-static int observe_ready(void *opaque,
-                         const struct wvm_candidate_vm_manifest *candidate,
-                         const struct wvm_node_runtime_manifest *runtime,
-                         char *error, size_t error_len)
-{
-    (void)opaque;
-    (void)candidate;
-    (void)runtime;
-    (void)error;
-    (void)error_len;
-    return 0;
-}
-
 static void fill_endpoint(struct wvm_endpoint *endpoint, uint8_t host,
                           uint16_t data_port, uint16_t control_port)
 {
@@ -263,7 +250,7 @@ int main(void)
     memset(&capture, 0, sizeof(capture));
     if (expect(wvm_admission_transport_init(
                    &transport, 17, 500, &capture, resolve_node,
-                   submit_route_stage, observe_ready, error, sizeof(error)) ==
+                   submit_route_stage, error, sizeof(error)) ==
                    0,
                "initialize route control transport") ||
         expect(wvm_admission_transport_callbacks(

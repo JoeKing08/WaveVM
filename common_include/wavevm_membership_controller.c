@@ -820,8 +820,13 @@ static int endpoint_matches_entry(
                     endpoint->control_address_bytes) == 0)) &&
            endpoint->control_port == ack->endpoint.control_port &&
            endpoint->has_server_name == ack->endpoint.has_server_name &&
+           endpoint->has_control_socket_path ==
+               ack->endpoint.has_control_socket_path &&
            (!endpoint->has_server_name ||
-            strcmp(endpoint->server_name, ack->endpoint.server_name) == 0);
+            strcmp(endpoint->server_name, ack->endpoint.server_name) == 0) &&
+           (!endpoint->has_control_socket_path ||
+            strcmp(endpoint->control_socket_path,
+                   ack->endpoint.control_socket_path) == 0);
 }
 
 static int required_ack_entry_equal(const struct wvm_required_ack_entry *left,
@@ -850,9 +855,14 @@ static int required_ack_entry_equal(const struct wvm_required_ack_entry *left,
                     left->endpoint.control_address_bytes) == 0)) &&
            left->endpoint.control_port == right->endpoint.control_port &&
            left->endpoint.has_server_name == right->endpoint.has_server_name &&
+           left->endpoint.has_control_socket_path ==
+               right->endpoint.has_control_socket_path &&
            (!left->endpoint.has_server_name ||
             strcmp(left->endpoint.server_name, right->endpoint.server_name) ==
-                0);
+                0) &&
+           (!left->endpoint.has_control_socket_path ||
+            strcmp(left->endpoint.control_socket_path,
+                   right->endpoint.control_socket_path) == 0);
 }
 
 static int required_ack_set_equal(const struct wvm_required_ack_set *left,

@@ -70,19 +70,6 @@ static int submit(void *context,
     return -1;
 }
 
-static int ready(void *context,
-                 const struct wvm_candidate_vm_manifest *candidate,
-                 const struct wvm_node_runtime_manifest *runtime_manifest,
-                 char *error, size_t error_len)
-{
-    (void)context;
-    (void)candidate;
-    (void)runtime_manifest;
-    (void)error;
-    (void)error_len;
-    return -1;
-}
-
 static void fill_machine(struct wvm_machine_config *machine)
 {
     memset(machine, 0, sizeof(*machine));
@@ -224,7 +211,7 @@ int main(void)
                        &plan_provider, &options, error, sizeof(error)) == 0,
                "publish immutable evidence and complete launch plan") ||
         expect(wvm_admission_transport_init(
-                   &transport, 17, 500, NULL, resolve_node, submit, ready,
+                   &transport, 17, 500, NULL, resolve_node, submit,
                    error, sizeof(error)) == 0,
                "initialize caller-owned admission transport")) {
         return 1;
