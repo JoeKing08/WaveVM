@@ -1,11 +1,17 @@
+#define _GNU_SOURCE
+
 #include "wavevm_runtime_names.h"
 
 #include <stdarg.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
@@ -67,6 +73,142 @@ static int read_ready_bytes(int fd, void *bytes, size_t byte_count)
     return 0;
 }
 
+static int read_boot_id(char boot_id[37])
+{
+    char line[64];
+    FILE *file = fopen("/proc/sys/kernel/random/boot_id", "r");
+    int result = -1;
+
+    if (file && fgets(line, sizeof(line), file) &&
+        strlen(line) >= 36 && (line[36] == '\n' || line[36] == '\0')) {
+        memcpy(boot_id, line, 36);
+        boot_id[36] = '\0';
+        result = 0;
+    }
+    if (file) {
+        fclose(file);
+    }
+    return result;
+}
+
+static int read_task_start_time(uint64_t pid, uint64_t tid,
+                                uint64_t *start_time)
+{
+    char path[96], line[4096];
+    char *cursor, *end, *next;
+    unsigned field;
+    FILE *file;
+
+    if (!pid || !tid || pid > INT_MAX || tid > INT_MAX ||
+        snprintf(path, sizeof(path), "/proc/%llu/task/%llu/stat",
+                 (unsigned long long)pid, (unsigned long long)tid) >=
+            (int)sizeof(path)) {
+        return -1;
+    }
+    file = fopen(path, "r");
+    if (!file) {
+        return -1;
+    }
+    cursor = fgets(line, sizeof(line), file);
+    fclose(file);
+    end = cursor ? strrchr(cursor, ')') : NULL;
+    if (!end || end[1] != ' ' || end[3] != ' ' ||
+        end[2] == 'Z' || end[2] == 'X') {
+        return -1;
+    }
+    /* Field 2 (comm) is parenthesized and may contain spaces. Field 22 is
+     * the task start time; PID/TID alone can be reused after a crash. */
+    cursor = end + 4;
+    for (field = 4; field < 22; field++) {
+        cursor = strchr(cursor, ' ');
+        if (!cursor) {
+            return -1;
+        }
+        while (*cursor == ' ') {
+            cursor++;
+        }
+    }
+    errno = 0;
+    *start_time = strtoull(cursor, &next, 10);
+    return errno == 0 && next != cursor &&
+                   (*next == ' ' || *next == '\n' || *next == '\0') &&
+                   *start_time != 0
+               ? 0
+               : -1;
+}
+
+static int ready_owner_alive(const struct wvm_runtime_ready_record *record)
+{
+    char boot_id[37];
+    uint64_t start_time;
+
+    return record->owner_boot_id[36] == '\0' &&
+           read_boot_id(boot_id) == 0 &&
+           memcmp(record->owner_boot_id, boot_id, sizeof(boot_id)) == 0 &&
+           read_task_start_time(record->owner_pid, record->owner_tid,
+                                &start_time) == 0 &&
+           start_time == record->owner_start_time_ticks;
+}
+
+static int read_ready_record(const char *path,
+                             struct wvm_runtime_ready_record *record)
+{
+    struct stat info;
+    uint8_t extra;
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    int result;
+
+    if (fd < 0) {
+        return -1;
+    }
+    result = fstat(fd, &info) == 0 && S_ISREG(info.st_mode) &&
+             info.st_size == (off_t)sizeof(*record) &&
+             read_ready_bytes(fd, record, sizeof(*record)) == 0 &&
+             read(fd, &extra, sizeof(extra)) == 0
+                 ? 0
+                 : -1;
+    close(fd);
+    if (result != 0) {
+        errno = EINVAL;
+    }
+    return result;
+}
+
+static int lock_ready_namespace(const char *ready_path)
+{
+    char path[WVM_RUNTIME_PATH_MAX + 6];
+    struct stat info;
+    int fd;
+
+    if (snprintf(path, sizeof(path), "%s.lock", ready_path) >=
+        (int)sizeof(path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        return -1;
+    }
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        flock(fd, LOCK_EX) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int ready_identity_matches(const struct wvm_runtime_ready_record *actual,
+                                  const struct wvm_runtime_ready_record *expected)
+{
+    struct wvm_runtime_ready_record identity = *actual;
+
+    identity.owner_pid = 0;
+    identity.owner_tid = 0;
+    identity.owner_start_time_ticks = 0;
+    memset(identity.owner_boot_id, 0, sizeof(identity.owner_boot_id));
+    return memcmp(&identity, expected, sizeof(identity)) == 0;
+}
+
 static int runtime_ready_record_fill(
     const struct wvm_node_runtime_manifest *manifest,
     uint64_t node_instance_id, struct wvm_runtime_ready_record *record,
@@ -91,6 +233,8 @@ static int runtime_ready_record_fill(
     memcpy(record->candidate_manifest_digest,
            manifest->candidate_manifest_digest,
            sizeof(record->candidate_manifest_digest));
+    memcpy(record->activation_fence, manifest->activation_fence,
+           sizeof(record->activation_fence));
     return 0;
 }
 
@@ -186,9 +330,9 @@ int wvm_runtime_ready_publish(
 {
     struct wvm_runtime_name_set names;
     struct wvm_runtime_ready_record record;
-    char temporary_path[WVM_RUNTIME_PATH_MAX];
-    int fd = -1;
-    int written;
+    char temporary_path[WVM_RUNTIME_PATH_MAX + 12];
+    struct wvm_runtime_ready_record existing, expected;
+    int fd = -1, lock_fd = -1, result = -1;
 
     if (wvm_runtime_name_set_derive(
             manifest ? &manifest->local_names : NULL, &names, error,
@@ -197,47 +341,75 @@ int wvm_runtime_ready_publish(
                                    error_len) != 0) {
         return -1;
     }
-    written = snprintf(temporary_path, sizeof(temporary_path), "%s.tmp.%ld",
-                       names.ready_file, (long)getpid());
-    if (written < 0 || (size_t)written >= sizeof(temporary_path)) {
+    record.owner_pid = (uint64_t)getpid();
+    record.owner_tid = (uint64_t)syscall(SYS_gettid);
+    if (read_boot_id(record.owner_boot_id) != 0 ||
+        read_task_start_time(record.owner_pid, record.owner_tid,
+                             &record.owner_start_time_ticks) != 0) {
+        set_error(error, error_len, "cannot identify live runtime task");
+        return -1;
+    }
+    if (snprintf(temporary_path, sizeof(temporary_path), "%s.tmp.XXXXXX",
+                 names.ready_file) >= (int)sizeof(temporary_path)) {
         set_error(error, error_len, "runtime readiness temporary path is too long");
         return -1;
     }
-    unlink(temporary_path);
-    fd = open(temporary_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-    if (fd < 0 || write_ready_bytes(fd, &record, sizeof(record)) != 0 ||
-        fsync(fd) != 0) {
+    lock_fd = lock_ready_namespace(names.ready_file);
+    if (lock_fd < 0) {
+        set_error(error, error_len, "cannot lock runtime readiness: %s",
+                  strerror(errno));
+        return -1;
+    }
+    fd = mkstemp(temporary_path);
+    if (fd < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) != 0 ||
+        write_ready_bytes(fd, &record, sizeof(record)) != 0 || fsync(fd) != 0) {
         set_error(error, error_len, "cannot write runtime readiness: %s",
                   strerror(errno));
-        if (fd >= 0) {
-            close(fd);
-        }
-        unlink(temporary_path);
-        return -1;
+        goto out;
     }
-    close(fd);
     if (link(temporary_path, names.ready_file) != 0) {
-        int saved_errno = errno;
-
-        unlink(temporary_path);
-        if (saved_errno == EEXIST &&
-            wvm_runtime_ready_validate(manifest, node_instance_id, error,
-                                       error_len) == 0) {
-            return 0;
+        if (errno != EEXIST ||
+            read_ready_record(names.ready_file, &existing) != 0) {
+            set_error(error, error_len, "cannot inspect existing runtime readiness");
+            goto out;
         }
-        set_error(error, error_len,
-                  "cannot claim runtime readiness: %s",
-                  strerror(saved_errno));
-        return -1;
+        expected = record;
+        expected.owner_pid = 0;
+        expected.owner_tid = 0;
+        expected.owner_start_time_ticks = 0;
+        memset(expected.owner_boot_id, 0, sizeof(expected.owner_boot_id));
+        if (!ready_identity_matches(&existing, &expected)) {
+            set_error(error, error_len, "runtime readiness belongs to another manifest");
+            goto out;
+        }
+        if (ready_owner_alive(&existing)) {
+            if (memcmp(&existing, &record, sizeof(record)) == 0) {
+                result = 0;
+            } else {
+                set_error(error, error_len, "runtime readiness is owned by another live task");
+            }
+            goto out;
+        }
+        if (unlink(names.ready_file) != 0 ||
+            link(temporary_path, names.ready_file) != 0) {
+            set_error(error, error_len, "cannot replace stale runtime readiness: %s",
+                      strerror(errno));
+            goto out;
+        }
     }
-    if (unlink(temporary_path) != 0 && errno != ENOENT) {
+    result = 0;
+out:
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (fd >= 0 && unlink(temporary_path) != 0 && errno != ENOENT) {
         set_error(error, error_len,
                   "cannot remove runtime readiness temporary file: %s",
                   strerror(errno));
-        unlink(temporary_path);
-        return -1;
+        result = -1;
     }
-    return 0;
+    close(lock_fd);
+    return result;
 }
 
 int wvm_runtime_ready_validate(
@@ -247,8 +419,6 @@ int wvm_runtime_ready_validate(
     struct wvm_runtime_name_set names;
     struct wvm_runtime_ready_record expected;
     struct wvm_runtime_ready_record actual;
-    int fd;
-    uint8_t extra;
 
     if (wvm_runtime_name_set_derive(
             manifest ? &manifest->local_names : NULL, &names, error,
@@ -257,21 +427,20 @@ int wvm_runtime_ready_validate(
                                    error_len) != 0) {
         return -1;
     }
-    fd = open(names.ready_file, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
+    if (read_ready_record(names.ready_file, &actual) != 0) {
         set_error(error, error_len, "runtime readiness is unavailable: %s",
                   strerror(errno));
-        return -EAGAIN;
+        return errno == ENOENT ? -EAGAIN : -1;
     }
-    if (read_ready_bytes(fd, &actual, sizeof(actual)) != 0 ||
-        read(fd, &extra, sizeof(extra)) != 0 ||
-        memcmp(&actual, &expected, sizeof(actual)) != 0) {
-        close(fd);
+    if (!ready_identity_matches(&actual, &expected)) {
         set_error(error, error_len,
                   "runtime readiness does not match admitted manifest");
         return -1;
     }
-    close(fd);
+    if (!ready_owner_alive(&actual)) {
+        set_error(error, error_len, "runtime readiness owner is not alive");
+        return -EAGAIN;
+    }
     return 0;
 }
 
@@ -280,29 +449,50 @@ int wvm_runtime_ready_remove(
     size_t error_len)
 {
     struct wvm_runtime_name_set names;
+    struct wvm_runtime_ready_record actual, expected;
+    int lock_fd, result = 0;
 
     if (wvm_runtime_name_set_derive(
             manifest ? &manifest->local_names : NULL, &names, error,
             error_len) != 0) {
         return -1;
     }
-    if (access(names.ready_file, F_OK) == 0) {
-        if (wvm_runtime_ready_validate(
-                manifest, manifest->expected_node_instance_id, error,
-                error_len) != 0) {
+    lock_fd = lock_ready_namespace(names.ready_file);
+    if (lock_fd < 0) {
+        set_error(error, error_len, "cannot lock runtime readiness: %s",
+                  strerror(errno));
+        return -1;
+    }
+    if (read_ready_record(names.ready_file, &actual) == 0) {
+        if (runtime_ready_record_fill(manifest,
+                                      manifest->expected_node_instance_id,
+                                      &expected, error, error_len) != 0 ||
+            !ready_identity_matches(&actual, &expected)) {
             set_error(error, error_len,
                       "runtime readiness is owned by another manifest");
-            return -1;
+            result = -1;
+            goto out;
+        }
+        if (ready_owner_alive(&actual) &&
+            (actual.owner_pid != (uint64_t)getpid() ||
+             actual.owner_tid != (uint64_t)syscall(SYS_gettid))) {
+            set_error(error, error_len,
+                      "runtime readiness is owned by another live task");
+            result = -1;
+            goto out;
         }
     } else if (errno != ENOENT) {
         set_error(error, error_len, "cannot inspect runtime readiness: %s",
                   strerror(errno));
-        return -1;
+        result = -1;
+        goto out;
     }
     if (unlink(names.ready_file) != 0 && errno != ENOENT) {
         set_error(error, error_len, "cannot remove runtime readiness: %s",
                   strerror(errno));
-        return -1;
+        result = -1;
     }
-    return 0;
+out:
+    close(lock_fd);
+    return result;
 }

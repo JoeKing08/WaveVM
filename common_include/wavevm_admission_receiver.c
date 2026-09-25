@@ -670,6 +670,7 @@ static int activate_delivery(struct wvm_admission_receiver *receiver,
                              const struct wvm_candidate_vm_manifest *candidate,
                              const struct wvm_node_runtime_manifest *runtime_manifest,
                              const struct wvm_activation_record *activation,
+                             const struct wvm_runtime_dispatch_projection *projection,
                              char *error, size_t error_len)
 {
     const struct wvm_cluster_record_set *records;
@@ -679,7 +680,7 @@ static int activate_delivery(struct wvm_admission_receiver *receiver,
         receiver->config.delivery_inputs(receiver->config.context, candidate,
                                          runtime_manifest, activation, &records,
                                          &route_snapshot, error, error_len) != 0 ||
-        !records || !route_snapshot ||
+        (!records && !projection) || !route_snapshot ||
         !route_key_equal(&route_snapshot->route_snapshot_key,
                          &runtime_manifest->required_route_snapshot_key)) {
         set_error(error, error_len, "runtime delivery inputs do not bind activation");
@@ -690,6 +691,7 @@ static int activate_delivery(struct wvm_admission_receiver *receiver,
     delivery.runtime_manifest = runtime_manifest;
     delivery.cluster_records = records;
     delivery.route_snapshot = route_snapshot;
+    delivery.dispatch_projection = projection;
     delivery.runtime_manifest_path = slot->runtime_manifest_path;
     return wvm_runtime_delivery_publish(&delivery, error, error_len);
 }
@@ -809,6 +811,7 @@ static int apply_participant_stage(
         }
         if (activate_delivery(receiver, slot, scratch.candidate,
                                scratch.runtime_manifest, scratch.activation,
+                               scratch.dispatch_projection,
                                error, error_len) != 0 ||
             wvm_runtime_gate_activate(&slot->gate,
                                       scratch.activation->activation_fence,

@@ -7,7 +7,7 @@ TARGET = ../wavevm_node_runtime
 
 MASTER_OBJS = master_logic.o master_user.o master_main.o
 SLAVE_OBJS = slave_hybrid.o slave_vfio.o
-COMMON_OBJS = resources.o sha256.o canonical.o identity.o runtime_names.o manifest.o lifecycle.o runtime_gate.o runtime_dispatch.o executor_abi.o executor_session.o envelope.o memory.o vcpu_handoff.o vcpu_handoff_cache.o x86_context.o local_memory.o route_runtime.o executor_bridge.o vcpu_coordinator.o vcpu_service.o memory_service.o ingress.o directory_store.o kvm_page_cache.o control.o route_delivery.o
+COMMON_OBJS = resources.o sha256.o canonical.o identity.o runtime_names.o manifest.o lifecycle.o runtime_gate.o runtime_dispatch.o executor_abi.o executor_session.o envelope.o memory.o vcpu_handoff.o vcpu_handoff_cache.o x86_context.o local_memory.o route_runtime.o executor_bridge.o vcpu_coordinator.o vcpu_service.o memory_service.o ingress.o directory_store.o kvm_page_cache.o control.o route_delivery.o runtime_delivery.o membership_control.o membership_controller.o reservation_runtime.o admission_stage.o admission_receiver.o route_control.o control_transport.o control_owner.o admission_node_service.o admission_slot_registry.o admission_runtime_agent.o
 
 all: $(TARGET)
 
@@ -111,6 +111,42 @@ control.o: ../common_include/wavevm_control.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 route_delivery.o: ../common_include/wavevm_route_delivery.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+runtime_delivery.o: ../common_include/wavevm_runtime_delivery.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+membership_control.o: ../common_include/wavevm_membership_control.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+membership_controller.o: ../common_include/wavevm_membership_controller.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+reservation_runtime.o: ../common_include/wavevm_reservation_runtime.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+admission_stage.o: ../common_include/wavevm_admission_stage.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+admission_receiver.o: ../common_include/wavevm_admission_receiver.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+route_control.o: ../common_include/wavevm_route_control.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+control_transport.o: ../common_include/wavevm_control_transport.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+control_owner.o: ../common_include/wavevm_control_owner.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+admission_node_service.o: ../common_include/wavevm_admission_node_service.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+admission_slot_registry.o: ../common_include/wavevm_admission_slot_registry.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+admission_runtime_agent.o: ../common_include/wavevm_admission_runtime_agent.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 clean:

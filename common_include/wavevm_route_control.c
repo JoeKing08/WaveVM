@@ -30,12 +30,6 @@ struct wvm_route_control_operation {
     struct wvm_route_control_result result;
 };
 
-struct route_snapshot_storage {
-    struct wvm_route_snapshot_record snapshot;
-    struct wvm_route_rule_record *rules;
-    struct wvm_required_ack_entry *ack_entries;
-};
-
 struct route_transaction_storage {
     struct wvm_route_transaction_record transaction;
     struct wvm_required_ack_entry *required_ack_entries;
@@ -249,7 +243,7 @@ out:
     return result;
 }
 
-static void route_snapshot_storage_free(struct route_snapshot_storage *storage)
+void wvm_route_control_snapshot_free(struct wvm_route_control_snapshot *storage)
 {
     if (!storage) {
         return;
@@ -466,7 +460,7 @@ static int route_snapshot_list_counts(const uint8_t *bytes, size_t byte_count,
 }
 
 static int route_snapshot_decode_alloc(const uint8_t *bytes, size_t byte_count,
-                                       struct route_snapshot_storage *storage,
+                                       struct wvm_route_control_snapshot *storage,
                                        char *error, size_t error_len)
 {
     size_t rule_count;
@@ -482,7 +476,7 @@ static int route_snapshot_decode_alloc(const uint8_t *bytes, size_t byte_count,
     storage->ack_entries = calloc(ack_count, sizeof(*storage->ack_entries));
     if (!storage->rules || !storage->ack_entries) {
         set_error(error, error_len, "cannot allocate route snapshot lists");
-        route_snapshot_storage_free(storage);
+        wvm_route_control_snapshot_free(storage);
         return -1;
     }
     storage->snapshot.next_hop_rules.entries = storage->rules;
@@ -491,7 +485,7 @@ static int route_snapshot_decode_alloc(const uint8_t *bytes, size_t byte_count,
     storage->snapshot.required_ack_set.entries.capacity = ack_count;
     if (wvm_route_snapshot_record_decode(bytes, byte_count, &storage->snapshot,
                                          error, error_len) != 0) {
-        route_snapshot_storage_free(storage);
+        wvm_route_control_snapshot_free(storage);
         return -1;
     }
     return 0;
@@ -617,7 +611,7 @@ static int apply_unlogged(struct wvm_route_control *control,
                           size_t error_len,
                           struct wvm_route_control_result *result_out)
 {
-    struct route_snapshot_storage storage;
+    struct wvm_route_control_snapshot storage;
     struct route_transaction_storage transaction_storage;
     struct wvm_route_snapshot_key key;
     int result;
@@ -634,7 +628,7 @@ static int apply_unlogged(struct wvm_route_control *control,
             request_matches_route_key(request,
                                       &storage.snapshot.route_snapshot_key,
                                       error, error_len) != 0) {
-            route_snapshot_storage_free(&storage);
+            wvm_route_control_snapshot_free(&storage);
             return -1;
         }
         result = wvm_route_runtime_prepare(control->runtime, &storage.snapshot,
@@ -647,13 +641,13 @@ static int apply_unlogged(struct wvm_route_control *control,
                     &storage.snapshot.required_ack_set,
                     result_out->required_ack_set_digest, error,
                     error_len) != 0) {
-                route_snapshot_storage_free(&storage);
+                wvm_route_control_snapshot_free(&storage);
                 return -1;
             }
             result_out->operation_retention_horizon_ms =
                 storage.snapshot.operation_retention_horizon_ms;
         }
-        route_snapshot_storage_free(&storage);
+        wvm_route_control_snapshot_free(&storage);
         return result;
     }
     if (request->message_type == WVM_ENVELOPE_MSG_ROUTE_ABORT) {
@@ -916,6 +910,96 @@ void wvm_route_control_close(struct wvm_route_control *control)
     }
     memset(control, 0, sizeof(*control));
     control->journal_fd = -1;
+}
+
+int wvm_route_control_snapshot_load(
+    struct wvm_route_control *control, const struct wvm_route_snapshot_key *key,
+    struct wvm_route_control_snapshot *output, char *error, size_t error_len)
+{
+    struct wvm_route_snapshot_key active_key;
+    off_t original_offset;
+    uint64_t expected_sequence = 1;
+    int result = -1;
+
+    if (!control || control->journal_fd < 0 || !control->runtime || !key ||
+        !output || output->rules || output->ack_entries) {
+        set_error(error, error_len, "route snapshot load input is invalid");
+        return -1;
+    }
+    pthread_mutex_lock(&control->lock);
+    if (!wvm_route_runtime_has_prepared_snapshot(control->runtime, key) &&
+        (wvm_route_runtime_current_key(control->runtime, &key->scope_key,
+                                       &active_key) != 0 ||
+         !route_key_equal(&active_key, key))) {
+        set_error(error, error_len, "route snapshot is not prepared or active");
+        pthread_mutex_unlock(&control->lock);
+        return -1;
+    }
+    if ((original_offset = lseek(control->journal_fd, 0, SEEK_CUR)) < 0 ||
+        lseek(control->journal_fd, 0, SEEK_SET) < 0) {
+        set_error(error, error_len, "cannot seek route snapshot journal");
+        pthread_mutex_unlock(&control->lock);
+        return -1;
+    }
+    for (;;) {
+        uint8_t header[WVM_ROUTE_CONTROL_JOURNAL_HEADER_BYTES];
+        uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+        uint8_t *frame = NULL;
+        uint32_t frame_bytes;
+        struct wvm_envelope request;
+        struct wvm_route_control_snapshot decoded = {0};
+        int read_result = read_full(control->journal_fd, header, sizeof(header));
+
+        if (read_result == 0) {
+            set_error(error, error_len, "active route snapshot is absent from journal");
+            break;
+        }
+        if (read_result < 0 ||
+            memcmp(header, route_control_journal_magic,
+                   sizeof(route_control_journal_magic)) != 0 ||
+            read_be16(header + 8) != WVM_ROUTE_CONTROL_JOURNAL_VERSION ||
+            read_be16(header + 10) != 0 ||
+            read_be64(header + 12) != expected_sequence ||
+            (frame_bytes = read_be32(header + 20)) == 0 ||
+            frame_bytes > WVM_ROUTE_CONTROL_MAX_FRAME_BYTES ||
+            !(frame = malloc(frame_bytes)) ||
+            read_full(control->journal_fd, frame, frame_bytes) != 1) {
+            set_error(error, error_len, "route snapshot journal is unreadable");
+            free(frame);
+            break;
+        }
+        expected_sequence++;
+        wvm_sha256_digest(frame, frame_bytes, digest);
+        if (memcmp(digest, header + 24, sizeof(digest)) != 0 ||
+            wvm_envelope_decode(frame, frame_bytes,
+                                WVM_ENVELOPE_TRANSPORT_LOCAL, &request,
+                                error, error_len) != 0) {
+            set_error(error, error_len, "route snapshot journal frame is invalid");
+            free(frame);
+            break;
+        }
+        if (request.message_type == WVM_ENVELOPE_MSG_ROUTE_PREPARE &&
+            route_snapshot_decode_alloc(request.payload, request.payload_bytes,
+                                        &decoded, error, error_len) != 0) {
+            free(frame);
+            break;
+        }
+        free(frame);
+        if (decoded.rules &&
+            route_key_equal(&decoded.snapshot.route_snapshot_key, key)) {
+            *output = decoded;
+            result = 0;
+            break;
+        }
+        wvm_route_control_snapshot_free(&decoded);
+    }
+    if (lseek(control->journal_fd, original_offset, SEEK_SET) < 0) {
+        wvm_route_control_snapshot_free(output);
+        set_error(error, error_len, "cannot restore route journal position");
+        result = -1;
+    }
+    pthread_mutex_unlock(&control->lock);
+    return result;
 }
 
 int wvm_route_control_apply(struct wvm_route_control *control,

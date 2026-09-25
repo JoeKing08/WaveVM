@@ -1183,6 +1183,8 @@ struct participant_decode_buffers {
     struct wvm_capability_ref execution_capabilities[4];
     struct wvm_capability_ref runtime_capabilities[4];
     struct wvm_route_snapshot_key activation_routes[4];
+    struct wvm_runtime_cpu_dispatch dispatch_cpu[4];
+    struct wvm_runtime_memory_dispatch dispatch_memory[4];
 };
 
 static void participant_storage_init(
@@ -1210,6 +1212,10 @@ static void participant_storage_init(
     storage->runtime_dependency_capacity = 4;
     storage->activation_route_snapshot_keys = buffers->activation_routes;
     storage->activation_route_snapshot_key_capacity = 4;
+    storage->dispatch_cpu_entries = buffers->dispatch_cpu;
+    storage->dispatch_cpu_capacity = 4;
+    storage->dispatch_memory_entries = buffers->dispatch_memory;
+    storage->dispatch_memory_capacity = 4;
 }
 
 struct participant_receiver_context {
@@ -1256,6 +1262,10 @@ static int participant_stage(struct wvm_admission_receiver *receiver,
     uint8_t bytes[16384];
     size_t count;
 
+    if (error && error_len != 0) {
+        error[0] = '\0';
+    }
+
     if (wvm_admission_participant_stage_encode(stage, bytes, sizeof(bytes),
                                                &count, error, error_len) != 0) {
         return -1;
@@ -1296,6 +1306,9 @@ static int test_participant_receiver(
     struct wvm_admission_participant_stage stage = {0};
     struct wvm_activation_record conflicting_activation = *activation;
     struct wvm_node_runtime_manifest active = prepared->node_runtime_manifests[0];
+    struct wvm_runtime_dispatch_projection dispatch = {0};
+    struct wvm_runtime_cpu_dispatch dispatch_cpu[4];
+    struct wvm_runtime_memory_dispatch dispatch_memory[4];
     const struct wvm_candidate_vm_manifest *candidate = &prepared->candidate;
     const struct wvm_resource_reservation *reservation = &prepared->reservations[0];
     enum wvm_reservation_runtime_result reservation_result;
@@ -1383,9 +1396,19 @@ static int test_participant_receiver(
     }
     active.has_activation_fence = 1;
     memcpy(active.activation_fence, activation->activation_fence, WVM_IDENTITY_ID_BYTES);
+    dispatch.cpu_dispatch.entries = dispatch_cpu;
+    dispatch.cpu_dispatch.capacity = 4;
+    dispatch.memory_dispatch.entries = dispatch_memory;
+    dispatch.memory_dispatch.capacity = 4;
+    if (wvm_runtime_dispatch_projection_build(
+            candidate, &active, records, route, &dispatch, error,
+            sizeof(error)) != 0) {
+        goto out;
+    }
     stage.message_type = WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST;
     stage.runtime_manifest = &active;
     stage.activation = activation;
+    stage.dispatch_projection = &dispatch;
     if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
                            error, sizeof(error)) != 0 || slot->has_activation_decision ||
         wvm_local_reservation_commit(&registry, reservation, activation, &reservation_result,
@@ -1394,6 +1417,7 @@ static int test_participant_receiver(
     }
     conflicting_activation.activation_fence[0] ^= 1;
     memcpy(active.activation_fence, conflicting_activation.activation_fence, WVM_IDENTITY_ID_BYTES);
+    memcpy(dispatch.activation_fence, conflicting_activation.activation_fence, WVM_IDENTITY_ID_BYTES);
     stage.activation = &conflicting_activation;
     if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
                            error, sizeof(error)) != 0 || slot->has_activation_decision) {
@@ -1401,6 +1425,7 @@ static int test_participant_receiver(
     }
     stage.activation = activation;
     memcpy(active.activation_fence, activation->activation_fence, WVM_IDENTITY_ID_BYTES);
+    memcpy(dispatch.activation_fence, activation->activation_fence, WVM_IDENTITY_ID_BYTES);
     if (scenario == 3 || scenario == 4) {
         /* Fail either the snapshot fsync or the directory fsync after rename. */
         fail_fsync_after = (int)scenario - 3;
@@ -1424,6 +1449,7 @@ static int test_participant_receiver(
     }
     stage.message_type = WVM_ENVELOPE_MSG_ABORT_MANIFEST;
     stage.activation = NULL;
+    stage.dispatch_projection = NULL;
     stage.runtime_manifest = &prepared->node_runtime_manifests[0];
     stage.abort_reason = WVM_ADMISSION_ABORT_REASON_PRE_ACTIVATION_FAILURE;
     if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
@@ -1432,6 +1458,7 @@ static int test_participant_receiver(
     }
     stage.message_type = WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST;
     stage.activation = activation;
+    stage.dispatch_projection = &dispatch;
     stage.runtime_manifest = &active;
     stage.abort_reason = 0;
     owner.reject_delivery = 0;

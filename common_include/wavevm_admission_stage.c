@@ -160,12 +160,30 @@ static int participant_stage_validate(
         break;
     case WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST:
         if (stage->runtime_manifest->has_activation_fence &&
+            stage->dispatch_projection &&
             stage->abort_reason == 0 &&
             activation_matches_candidate(stage->activation, stage->candidate,
                                          error, error_len) == 0 &&
             memcmp(stage->runtime_manifest->activation_fence,
                    stage->activation->activation_fence,
-                   WVM_IDENTITY_ID_BYTES) == 0) {
+                   WVM_IDENTITY_ID_BYTES) == 0 &&
+            stage->dispatch_projection->vm_id == stage->candidate->vm_id &&
+            stage->dispatch_projection->vm_incarnation ==
+                stage->candidate->vm_incarnation &&
+            stage->dispatch_projection->manifest_generation ==
+                stage->candidate->manifest_generation &&
+            stage->dispatch_projection->physical_node_id ==
+                stage->runtime_manifest->physical_node_id &&
+            stage->dispatch_projection->expected_node_instance_id ==
+                stage->runtime_manifest->expected_node_instance_id &&
+            memcmp(stage->dispatch_projection->candidate_manifest_digest,
+                   stage->candidate->manifest_digest,
+                   WVM_SHA256_DIGEST_BYTES) == 0 &&
+            memcmp(stage->dispatch_projection->activation_fence,
+                   stage->activation->activation_fence,
+                   WVM_IDENTITY_ID_BYTES) == 0 &&
+            wvm_runtime_dispatch_projection_validate(
+                stage->dispatch_projection, error, error_len) == 0) {
             return 0;
         }
         break;
@@ -184,7 +202,10 @@ static int participant_stage_validate(
     default:
         break;
     }
-    set_error(error, error_len, "participant stage does not match its transition");
+    if (!error || error[0] == '\0') {
+        set_error(error, error_len,
+                  "participant stage does not match its transition");
+    }
     return -1;
 }
 
@@ -221,6 +242,14 @@ static int encode_activation(const void *record, uint8_t *bytes,
 {
     return wvm_activation_record_encode(record, bytes, capacity, encoded_bytes,
                                         error, error_len);
+}
+
+static int encode_dispatch_projection(const void *record, uint8_t *bytes,
+                                      size_t capacity, size_t *encoded_bytes,
+                                      char *error, size_t error_len)
+{
+    return wvm_runtime_dispatch_projection_encode(
+        record, bytes, capacity, encoded_bytes, error, error_len);
 }
 
 static int encode_nested_alloc(stage_nested_encode_fn encode, const void *record,
@@ -266,6 +295,7 @@ static int stage_encode(uint16_t record_type, const void *first_record,
                         const void *second_record,
                         stage_nested_encode_fn second_encode,
                         const struct wvm_activation_record *activation,
+                        const struct wvm_runtime_dispatch_projection *projection,
                         uint16_t abort_reason, uint8_t *bytes, size_t capacity,
                         size_t *encoded_bytes, char *error, size_t error_len)
 {
@@ -273,9 +303,11 @@ static int stage_encode(uint16_t record_type, const void *first_record,
     uint8_t *first_bytes = NULL;
     uint8_t *second_bytes = NULL;
     uint8_t *activation_bytes = NULL;
+    uint8_t *projection_bytes = NULL;
     size_t first_byte_count = 0;
     size_t second_byte_count = 0;
     size_t activation_byte_count = 0;
+    size_t projection_byte_count = 0;
     int result = -1;
 
     if (!bytes || !encoded_bytes ||
@@ -286,6 +318,10 @@ static int stage_encode(uint16_t record_type, const void *first_record,
         (activation &&
          encode_nested_alloc(encode_activation, activation, &activation_bytes,
                              &activation_byte_count, error, error_len) != 0) ||
+        (projection &&
+         encode_nested_alloc(encode_dispatch_projection, projection,
+                             &projection_bytes, &projection_byte_count, error,
+                             error_len) != 0) ||
         wvm_canonical_record_begin(&builder, bytes, capacity, record_type) != 0 ||
         wvm_canonical_field_append(&builder, 1, first_bytes,
                                    (uint32_t)first_byte_count) != 0 ||
@@ -296,12 +332,16 @@ static int stage_encode(uint16_t record_type, const void *first_record,
                                     (uint32_t)activation_byte_count) != 0) ||
         (abort_reason != 0 &&
          wvm_canonical_field_append_u16(&builder, 4, abort_reason) != 0) ||
+        (projection &&
+         wvm_canonical_field_append(&builder, 5, projection_bytes,
+                                    (uint32_t)projection_byte_count) != 0) ||
         wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
         set_error(error, error_len, "cannot encode admission stage carrier");
         goto out;
     }
     result = 0;
 out:
+    free(projection_bytes);
     free(activation_bytes);
     free(second_bytes);
     free(first_bytes);
@@ -319,19 +359,19 @@ int wvm_admission_reservation_stage_encode(
     case WVM_ENVELOPE_MSG_PREPARE_RESERVATION:
         return stage_encode(WVM_RECORD_ADMISSION_RESERVATION_STAGE,
                             stage->candidate, encode_candidate,
-                            stage->reservation, encode_reservation, NULL, 0,
+                            stage->reservation, encode_reservation, NULL, NULL, 0,
                             bytes, capacity, encoded_bytes, error, error_len);
     case WVM_ENVELOPE_MSG_COMMIT_RESERVATION:
         return stage_encode(WVM_RECORD_ADMISSION_RESERVATION_STAGE,
                             stage->candidate, encode_candidate,
                             stage->reservation, encode_reservation,
-                            stage->activation, 0, bytes, capacity,
+                            stage->activation, NULL, 0, bytes, capacity,
                             encoded_bytes, error, error_len);
     case WVM_ENVELOPE_MSG_ABORT_RESERVATION:
         return stage_encode(WVM_RECORD_ADMISSION_RESERVATION_STAGE,
                             stage->candidate, encode_candidate,
                             stage->reservation, encode_reservation, NULL,
-                            stage->abort_reason, bytes, capacity, encoded_bytes,
+                            NULL, stage->abort_reason, bytes, capacity, encoded_bytes,
                             error, error_len);
     default:
         break;
@@ -352,25 +392,26 @@ int wvm_admission_participant_stage_encode(
         return stage_encode(WVM_RECORD_ADMISSION_PARTICIPANT_STAGE,
                             stage->candidate, encode_candidate,
                             stage->runtime_manifest, encode_runtime_manifest,
-                            NULL, 0, bytes, capacity, encoded_bytes, error,
+                            NULL, NULL, 0, bytes, capacity, encoded_bytes, error,
                             error_len);
     case WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST:
         return stage_encode(WVM_RECORD_ADMISSION_PARTICIPANT_STAGE,
                             stage->candidate, encode_candidate,
                             stage->runtime_manifest, encode_runtime_manifest,
-                            stage->activation, 0, bytes, capacity,
+                            stage->activation, stage->dispatch_projection, 0,
+                            bytes, capacity,
                             encoded_bytes, error, error_len);
     case WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY:
         return stage_encode(WVM_RECORD_ADMISSION_PARTICIPANT_STAGE,
                             stage->candidate, encode_candidate,
                             stage->runtime_manifest, encode_runtime_manifest,
-                            NULL, 0, bytes, capacity, encoded_bytes, error,
+                            NULL, NULL, 0, bytes, capacity, encoded_bytes, error,
                             error_len);
     case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
         return stage_encode(WVM_RECORD_ADMISSION_PARTICIPANT_STAGE,
                             stage->candidate, encode_candidate,
                             stage->runtime_manifest, encode_runtime_manifest,
-                            NULL, stage->abort_reason, bytes, capacity,
+                            NULL, NULL, stage->abort_reason, bytes, capacity,
                             encoded_bytes, error, error_len);
     default:
         break;
@@ -381,8 +422,8 @@ int wvm_admission_participant_stage_encode(
 
 static int parse_stage_fields(const uint8_t *bytes, size_t encoded_bytes,
                               uint16_t record_type,
-                              struct wvm_canonical_field fields[5],
-                              unsigned char present[5], char *error,
+                              struct wvm_canonical_field fields[6],
+                              unsigned char present[6], char *error,
                               size_t error_len)
 {
     struct wvm_canonical_record record;
@@ -397,10 +438,10 @@ static int parse_stage_fields(const uint8_t *bytes, size_t encoded_bytes,
         set_error(error, error_len, "admission stage carrier type is invalid");
         return -1;
     }
-    memset(fields, 0, 5U * sizeof(*fields));
-    memset(present, 0, 5U);
+    memset(fields, 0, 6U * sizeof(*fields));
+    memset(present, 0, 6U);
     while ((next = wvm_canonical_record_next(&record, &offset, &field)) == 1) {
-        if (field.tag == 0 || field.tag > 4 || field.tag <= last_tag ||
+        if (field.tag == 0 || field.tag > 5 || field.tag <= last_tag ||
             present[field.tag]) {
             set_error(error, error_len, "admission stage carrier fields are invalid");
             return -1;
@@ -541,8 +582,8 @@ int wvm_admission_reservation_stage_decode(
     struct wvm_admission_reservation_stage *stage, char *error,
     size_t error_len)
 {
-    struct wvm_canonical_field fields[5];
-    unsigned char present[5];
+    struct wvm_canonical_field fields[6];
+    unsigned char present[6];
 
     if (!storage || !stage ||
         parse_stage_fields(bytes, encoded_bytes,
@@ -592,8 +633,8 @@ int wvm_admission_participant_stage_decode(
     struct wvm_admission_participant_stage *stage, char *error,
     size_t error_len)
 {
-    struct wvm_canonical_field fields[5];
-    unsigned char present[5];
+    struct wvm_canonical_field fields[6];
+    unsigned char present[6];
 
     if (!storage || !stage ||
         parse_stage_fields(bytes, encoded_bytes,
@@ -617,7 +658,11 @@ int wvm_admission_participant_stage_decode(
           wvm_activation_record_decode(fields[3].value, fields[3].value_bytes,
                                        &storage->activation, error,
                                        error_len) != 0)) ||
-        (present[4] && fields[4].value_bytes != 2)) {
+        (present[4] && fields[4].value_bytes != 2) ||
+        (present[5] &&
+         ((storage->dispatch_cpu_capacity && !storage->dispatch_cpu_entries) ||
+          (storage->dispatch_memory_capacity &&
+           !storage->dispatch_memory_entries)))) {
         return -1;
     }
     memset(stage, 0, sizeof(*stage));
@@ -625,6 +670,24 @@ int wvm_admission_participant_stage_decode(
     stage->candidate = &storage->candidate;
     stage->runtime_manifest = &storage->runtime_manifest;
     stage->activation = present[3] ? &storage->activation : NULL;
+    if (present[5]) {
+        storage->dispatch_projection.cpu_dispatch.entries =
+            storage->dispatch_cpu_entries;
+        storage->dispatch_projection.cpu_dispatch.capacity =
+            storage->dispatch_cpu_capacity;
+        storage->dispatch_projection.memory_dispatch.entries =
+            storage->dispatch_memory_entries;
+        storage->dispatch_projection.memory_dispatch.capacity =
+            storage->dispatch_memory_capacity;
+        if (wvm_runtime_dispatch_projection_decode(
+                fields[5].value, fields[5].value_bytes,
+                &storage->dispatch_projection, error, error_len) != 0) {
+            return -1;
+        }
+        stage->dispatch_projection = &storage->dispatch_projection;
+    } else {
+        stage->dispatch_projection = NULL;
+    }
     stage->abort_reason = present[4] ? read_be16(fields[4].value) : 0;
     return participant_stage_validate(stage, error, error_len);
 }

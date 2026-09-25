@@ -12,6 +12,8 @@ SRCS = main.c admission_workspace.c capability_publication.c \
 	$(COMMON_DIR)/wavevm_runtime_names.c \
 	$(COMMON_DIR)/wavevm_manifest.c \
 	$(COMMON_DIR)/wavevm_control.c \
+	$(COMMON_DIR)/wavevm_route_delivery.c \
+	$(COMMON_DIR)/wavevm_runtime_dispatch.c \
 	$(COMMON_DIR)/wavevm_capability.c \
 	$(COMMON_DIR)/wavevm_runtime_profile.c \
 	$(COMMON_DIR)/wavevm_lifecycle.c \

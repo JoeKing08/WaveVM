@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "wavevm_lifecycle.h"
+#include "wavevm_runtime_dispatch.h"
 
 #define WVM_RECORD_ADMISSION_RESERVATION_STAGE 0x102dU
 #define WVM_RECORD_ADMISSION_PARTICIPANT_STAGE 0x102eU
@@ -33,6 +34,7 @@ struct wvm_admission_participant_stage {
     const struct wvm_candidate_vm_manifest *candidate;
     const struct wvm_node_runtime_manifest *runtime_manifest;
     const struct wvm_activation_record *activation;
+    const struct wvm_runtime_dispatch_projection *dispatch_projection;
     uint16_t abort_reason;
 };
 
@@ -77,6 +79,11 @@ struct wvm_admission_participant_stage_storage {
     struct wvm_candidate_vm_manifest candidate;
     struct wvm_node_runtime_manifest runtime_manifest;
     struct wvm_activation_record activation;
+    struct wvm_runtime_dispatch_projection dispatch_projection;
+    struct wvm_runtime_cpu_dispatch *dispatch_cpu_entries;
+    size_t dispatch_cpu_capacity;
+    struct wvm_runtime_memory_dispatch *dispatch_memory_entries;
+    size_t dispatch_memory_capacity;
     struct wvm_vcpu_assignment *runtime_vcpu_assignments;
     size_t runtime_vcpu_assignment_capacity;
     struct wvm_memory_chunk_assignment *runtime_memory_assignments;

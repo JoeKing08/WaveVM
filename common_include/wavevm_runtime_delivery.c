@@ -148,6 +148,66 @@ static int manifest_equal(const struct wvm_node_runtime_manifest *left,
     return -1;
 }
 
+static int dispatch_matches_activation(
+    const struct wvm_runtime_dispatch_projection *dispatch,
+    const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifest,
+    const struct wvm_route_snapshot_record *route_snapshot,
+    char *error, size_t error_len)
+{
+    size_t i;
+
+    if (!dispatch || !candidate || !runtime_manifest || !route_snapshot ||
+        wvm_runtime_dispatch_projection_validate(dispatch, error, error_len) !=
+            0 ||
+        dispatch->vm_id != candidate->vm_id ||
+        dispatch->vm_incarnation != candidate->vm_incarnation ||
+        dispatch->manifest_generation != candidate->manifest_generation ||
+        dispatch->physical_node_id != runtime_manifest->physical_node_id ||
+        dispatch->expected_node_instance_id !=
+            runtime_manifest->expected_node_instance_id ||
+        memcmp(dispatch->candidate_manifest_digest, candidate->manifest_digest,
+               WVM_SHA256_DIGEST_BYTES) != 0 ||
+        memcmp(dispatch->activation_fence, runtime_manifest->activation_fence,
+               WVM_IDENTITY_ID_BYTES) != 0 ||
+        !route_key_equal(&dispatch->required_route_snapshot_key,
+                         &runtime_manifest->required_route_snapshot_key) ||
+        !route_key_equal(&dispatch->required_route_snapshot_key,
+                         &route_snapshot->route_snapshot_key) ||
+        dispatch->cpu_dispatch.count != candidate->vcpu_placements.count ||
+        dispatch->memory_dispatch.count !=
+            candidate->memory_placements.count) {
+        set_error(error, error_len,
+                  "runtime dispatch does not bind activated participant");
+        return -1;
+    }
+    for (i = 0; i < candidate->vcpu_placements.count; i++) {
+        if (dispatch->cpu_dispatch.entries[i].guest_vcpu_index !=
+            candidate->vcpu_placements.entries[i].guest_vcpu_index) {
+            set_error(error, error_len,
+                      "runtime dispatch vCPU set differs from candidate");
+            return -1;
+        }
+    }
+    for (i = 0; i < candidate->memory_placements.count; i++) {
+        const struct wvm_memory_chunk_assignment *assignment =
+            &candidate->memory_placements.entries[i];
+        const struct wvm_runtime_memory_dispatch *entry =
+            &dispatch->memory_dispatch.entries[i];
+
+        if (entry->gpa_start != assignment->gpa_start ||
+            entry->bytes != assignment->bytes ||
+            entry->directory_physical_node_id !=
+                assignment->directory_physical_node_id ||
+            entry->consistency_policy != assignment->consistency_policy) {
+            set_error(error, error_len,
+                      "runtime dispatch memory set differs from candidate");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int existing_bundle_matches(
     const char *manifest_path, const char *route_path, const char *dispatch_path,
     const struct wvm_node_runtime_manifest *runtime_manifest,
@@ -210,7 +270,8 @@ int wvm_runtime_delivery_publish(
     int existing;
 
     if (!request || !request->candidate || !request->runtime_manifest ||
-        !request->cluster_records || !request->route_snapshot ||
+        (!request->dispatch_projection && !request->cluster_records) ||
+        !request->route_snapshot ||
         !request->runtime_manifest_path ||
         request->runtime_manifest_path[0] == '\0' ||
         manifest_matches_candidate(request->candidate, request->runtime_manifest,
@@ -227,24 +288,36 @@ int wvm_runtime_delivery_publish(
     }
 
     memset(&dispatch, 0, sizeof(dispatch));
-    dispatch.cpu_dispatch.entries = calloc(
-        request->candidate->vcpu_placements.count
-            ? request->candidate->vcpu_placements.count
-            : 1U,
-        sizeof(*dispatch.cpu_dispatch.entries));
-    dispatch.memory_dispatch.entries = calloc(
-        request->candidate->memory_placements.count
-            ? request->candidate->memory_placements.count
-            : 1U,
-        sizeof(*dispatch.memory_dispatch.entries));
-    dispatch.cpu_dispatch.capacity = request->candidate->vcpu_placements.count;
-    dispatch.memory_dispatch.capacity =
-        request->candidate->memory_placements.count;
-    if (!dispatch.cpu_dispatch.entries || !dispatch.memory_dispatch.entries ||
-        wvm_runtime_dispatch_projection_build(
-            request->candidate, request->runtime_manifest,
-            request->cluster_records, request->route_snapshot, &dispatch, error,
-            error_len) != 0 ||
+    if (request->dispatch_projection) {
+        dispatch = *request->dispatch_projection;
+        if (dispatch_matches_activation(&dispatch, request->candidate,
+                                        request->runtime_manifest,
+                                        request->route_snapshot, error,
+                                        error_len) != 0) {
+            return -1;
+        }
+    } else {
+        dispatch.cpu_dispatch.entries = calloc(
+            request->candidate->vcpu_placements.count
+                ? request->candidate->vcpu_placements.count
+                : 1U,
+            sizeof(*dispatch.cpu_dispatch.entries));
+        dispatch.memory_dispatch.entries = calloc(
+            request->candidate->memory_placements.count
+                ? request->candidate->memory_placements.count
+                : 1U,
+            sizeof(*dispatch.memory_dispatch.entries));
+        dispatch.cpu_dispatch.capacity =
+            request->candidate->vcpu_placements.count;
+        dispatch.memory_dispatch.capacity =
+            request->candidate->memory_placements.count;
+    }
+    if ((!request->dispatch_projection &&
+         (!dispatch.cpu_dispatch.entries || !dispatch.memory_dispatch.entries ||
+          wvm_runtime_dispatch_projection_build(
+              request->candidate, request->runtime_manifest,
+              request->cluster_records, request->route_snapshot, &dispatch,
+              error, error_len) != 0)) ||
         wvm_route_snapshot_path_from_manifest(
             request->runtime_manifest_path, route_path, sizeof(route_path),
             error, error_len) != 0 ||
@@ -254,8 +327,10 @@ int wvm_runtime_delivery_publish(
         if (!error || error[0] == '\0') {
             set_error(error, error_len, "cannot derive runtime delivery bundle");
         }
-        free(dispatch.cpu_dispatch.entries);
-        free(dispatch.memory_dispatch.entries);
+        if (!request->dispatch_projection) {
+            free(dispatch.cpu_dispatch.entries);
+            free(dispatch.memory_dispatch.entries);
+        }
         return -1;
     }
 
@@ -264,8 +339,10 @@ int wvm_runtime_delivery_publish(
         request->runtime_manifest, request->route_snapshot, &dispatch, error,
         error_len);
     if (existing < 0) {
-        free(dispatch.cpu_dispatch.entries);
-        free(dispatch.memory_dispatch.entries);
+        if (!request->dispatch_projection) {
+            free(dispatch.cpu_dispatch.entries);
+            free(dispatch.memory_dispatch.entries);
+        }
         return -1;
     }
     if (existing == 0 &&
@@ -281,7 +358,9 @@ int wvm_runtime_delivery_publish(
         return -1;
     }
 
-    free(dispatch.cpu_dispatch.entries);
-    free(dispatch.memory_dispatch.entries);
+    if (!request->dispatch_projection) {
+        free(dispatch.cpu_dispatch.entries);
+        free(dispatch.memory_dispatch.entries);
+    }
     return 0;
 }

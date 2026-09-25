@@ -1,6 +1,8 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "wavevm_runtime_gate.h"
@@ -160,6 +162,19 @@ int main(void)
             wvm_runtime_ready_remove(&manifest, NULL, 0);
             return 1;
         }
+        conflicting_manifest = manifest;
+        conflicting_manifest.activation_fence[0] ^= 0xffU;
+        if (expect(wvm_runtime_ready_validate(
+                       &conflicting_manifest,
+                       conflicting_manifest.expected_node_instance_id,
+                       error, sizeof(error)) != 0,
+                   "reject readiness from a different activation fence") ||
+            expect(wvm_runtime_ready_remove(&conflicting_manifest, error,
+                                            sizeof(error)) != 0,
+                   "do not remove another activation's readiness")) {
+            wvm_runtime_ready_remove(&manifest, NULL, 0);
+            return 1;
+        }
     }
     if (expect(wvm_runtime_ready_remove(&manifest, error, sizeof(error)) == 0,
                "release runtime readiness") ||
@@ -169,6 +184,89 @@ int main(void)
                "reject readiness after release")) {
         wvm_runtime_ready_remove(&manifest, NULL, 0);
         return 1;
+    }
+    {
+        pid_t child = fork();
+        int child_status = 0;
+
+        if (child == 0) {
+            _exit(wvm_runtime_ready_publish(
+                      &manifest, manifest.expected_node_instance_id,
+                      error, sizeof(error)) == 0
+                      ? 0
+                      : 1);
+        }
+        if (expect(child > 0 && waitpid(child, &child_status, 0) == child &&
+                       WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0,
+                   "child publishes readiness before exiting") ||
+            expect(wvm_runtime_ready_validate(
+                       &manifest, manifest.expected_node_instance_id,
+                       error, sizeof(error)) == -EAGAIN,
+                   "dead runtime cannot satisfy readiness") ||
+            expect(wvm_runtime_ready_publish(
+                       &manifest, manifest.expected_node_instance_id,
+                       error, sizeof(error)) == 0 &&
+                       wvm_runtime_ready_validate(
+                           &manifest, manifest.expected_node_instance_id,
+                           error, sizeof(error)) == 0,
+                   "live runtime reclaims identity-matched stale readiness") ||
+            expect(wvm_runtime_ready_remove(&manifest, error,
+                                            sizeof(error)) == 0,
+                   "remove reclaimed readiness")) {
+            return 1;
+        }
+    }
+    {
+        int child_ready[2], child_exit[2], child_status;
+        pid_t child;
+        char signal_byte;
+
+        if (pipe(child_ready) != 0 || pipe(child_exit) != 0) {
+            return 1;
+        }
+        child = fork();
+        if (child == 0) {
+            close(child_ready[0]);
+            close(child_exit[1]);
+            signal_byte = wvm_runtime_ready_publish(
+                              &manifest, manifest.expected_node_instance_id,
+                              error, sizeof(error)) == 0
+                              ? '1'
+                              : '0';
+            if (write(child_ready[1], &signal_byte, 1) != 1) {
+                _exit(1);
+            }
+            if (read(child_exit[0], &signal_byte, 1) != 1) {
+                _exit(1);
+            }
+            _exit(0);
+        }
+        close(child_ready[1]);
+        close(child_exit[0]);
+        if (child <= 0 || read(child_ready[0], &signal_byte, 1) != 1 ||
+            signal_byte != '1') {
+            return 1;
+        }
+        if (expect(wvm_runtime_ready_publish(
+                       &manifest, manifest.expected_node_instance_id,
+                       error, sizeof(error)) != 0,
+                   "cannot overwrite another live runtime") ||
+            expect(wvm_runtime_ready_remove(&manifest, error,
+                                            sizeof(error)) != 0,
+                   "cannot remove another live runtime")) {
+            return 1;
+        }
+        signal_byte = 'x';
+        if (write(child_exit[1], &signal_byte, 1) != 1 ||
+            waitpid(child, &child_status, 0) != child ||
+            !WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0 ||
+            expect(wvm_runtime_ready_remove(&manifest, error,
+                                            sizeof(error)) == 0,
+                   "remove identity-matched readiness after owner exits")) {
+            return 1;
+        }
+        close(child_ready[0]);
+        close(child_exit[1]);
     }
 
     manifest_fd = mkstemp(manifest_path);
@@ -344,6 +442,15 @@ int main(void)
         }
     }
 
+    {
+        char lock_path[WVM_RUNTIME_PATH_MAX + 6];
+
+        if (snprintf(lock_path, sizeof(lock_path), "%s.lock",
+                     runtime_names.ready_file) >= (int)sizeof(lock_path) ||
+            unlink(lock_path) != 0) {
+            return 1;
+        }
+    }
     puts("runtime-gate tests: PASS");
     return 0;
 }

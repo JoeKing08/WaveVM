@@ -7,6 +7,7 @@
 #include "wavevm_admission_orchestrator.h"
 #include "wavevm_control.h"
 #include "wavevm_envelope.h"
+#include "wavevm_runtime_dispatch.h"
 
 /* One authenticated control destination selected from a captured record set. */
 struct wvm_admission_transport_target {
@@ -32,6 +33,9 @@ struct wvm_admission_transport {
     uint32_t controller_physical_node_id;
     uint64_t controller_instance_id;
     void *context;
+    /* Borrowed only for the duration of one synchronous orchestration run. */
+    const struct wvm_cluster_record_set *delivery_records;
+    const struct wvm_route_snapshot_record *delivery_route_snapshot;
     wvm_admission_transport_resolve_node_fn resolve_node;
     wvm_admission_transport_submit_fn submit;
 };

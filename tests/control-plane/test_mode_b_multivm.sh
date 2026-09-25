@@ -18,6 +18,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_cluster.c" \
     "$repo_root/common_include/wavevm_envelope.c" \
     "$repo_root/common_include/wavevm_admission_stage.c" \
+    "$repo_root/common_include/wavevm_runtime_dispatch.c" \
     "$repo_root/common_include/wavevm_admission_transport.c" \
     "$repo_root/common_include/wavevm_admission_route.c" \
     "$repo_root/tests/control-plane/test_mode_b_multivm.c" \

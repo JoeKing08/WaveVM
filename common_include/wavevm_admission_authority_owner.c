@@ -58,6 +58,8 @@ static int owner_prepare_input(
                   "admission authority owner is not configured");
         return -1;
     }
+    owner->config.transport->delivery_records = NULL;
+    owner->config.transport->delivery_route_snapshot = NULL;
     if (owner->config.reset_workspace(
             owner->config.workspace_context, request, owner->config.prepared_route,
             owner->config.prepared_vm,
@@ -132,6 +134,9 @@ static int owner_route_plan(
         }
         return -1;
     }
+    owner->captured_records = *records;
+    owner->config.transport->delivery_records = &owner->captured_records;
+    owner->config.transport->delivery_route_snapshot = owner->config.route_snapshot;
     return 0;
 }
 

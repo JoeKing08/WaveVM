@@ -491,11 +491,16 @@ static int transport_reservation_abort(
 static int transport_participant_stage(
     void *context, const struct wvm_candidate_vm_manifest *candidate,
     const struct wvm_node_runtime_manifest *runtime_manifest,
-    uint16_t message_type, char *error, size_t error_len)
+    const struct wvm_activation_record *activation, uint16_t message_type,
+    char *error, size_t error_len)
 {
     struct wvm_admission_transport *transport = context;
     struct wvm_admission_transport_target target;
     struct wvm_admission_participant_stage stage;
+    struct wvm_runtime_dispatch_projection projection;
+    struct wvm_runtime_cpu_dispatch *cpu_entries = NULL;
+    struct wvm_runtime_memory_dispatch *memory_entries = NULL;
+    int result;
 
     if (candidate_matches_runtime(candidate, runtime_manifest, error,
                                   error_len) != 0 ||
@@ -508,15 +513,61 @@ static int transport_participant_stage(
     stage.message_type = message_type;
     stage.candidate = candidate;
     stage.runtime_manifest = runtime_manifest;
+    stage.activation = activation;
+    if (message_type == WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST) {
+        if (!transport->delivery_records ||
+            !transport->delivery_route_snapshot ||
+            candidate->vcpu_placements.count >
+                SIZE_MAX / sizeof(*cpu_entries) ||
+            candidate->memory_placements.count >
+                SIZE_MAX / sizeof(*memory_entries)) {
+            set_error(error, error_len,
+                      "activation has no captured dispatch authorities");
+            return -1;
+        }
+        cpu_entries = calloc(candidate->vcpu_placements.count
+                                 ? candidate->vcpu_placements.count
+                                 : 1U,
+                             sizeof(*cpu_entries));
+        memory_entries = calloc(candidate->memory_placements.count
+                                    ? candidate->memory_placements.count
+                                    : 1U,
+                                sizeof(*memory_entries));
+        if (!cpu_entries || !memory_entries) {
+            free(memory_entries);
+            free(cpu_entries);
+            set_error(error, error_len,
+                      "cannot allocate participant dispatch projection");
+            return -1;
+        }
+        memset(&projection, 0, sizeof(projection));
+        projection.cpu_dispatch.entries = cpu_entries;
+        projection.cpu_dispatch.capacity = candidate->vcpu_placements.count;
+        projection.memory_dispatch.entries = memory_entries;
+        projection.memory_dispatch.capacity =
+            candidate->memory_placements.count;
+        if (wvm_runtime_dispatch_projection_build(
+                candidate, runtime_manifest, transport->delivery_records,
+                transport->delivery_route_snapshot, &projection, error,
+                error_len) != 0) {
+            free(memory_entries);
+            free(cpu_entries);
+            return -1;
+        }
+        stage.dispatch_projection = &projection;
+    }
     if (message_type == WVM_ENVELOPE_MSG_ABORT_MANIFEST) {
         stage.abort_reason = WVM_ADMISSION_ABORT_REASON_PRE_ACTIVATION_FAILURE;
     }
-    return submit_record(transport, &target, message_type,
-                         candidate->admission_tx_id, candidate->vm_id,
-                         candidate->vm_incarnation,
-                         candidate->manifest_generation,
-                         &runtime_manifest->required_route_snapshot_key,
-                         encode_participant_stage, &stage, error, error_len);
+    result = submit_record(transport, &target, message_type,
+                           candidate->admission_tx_id, candidate->vm_id,
+                           candidate->vm_incarnation,
+                           candidate->manifest_generation,
+                           &runtime_manifest->required_route_snapshot_key,
+                           encode_participant_stage, &stage, error, error_len);
+    free(memory_entries);
+    free(cpu_entries);
+    return result;
 }
 
 static int transport_participant_prepare(
@@ -525,7 +576,7 @@ static int transport_participant_prepare(
     size_t error_len)
 {
     return transport_participant_stage(context, candidate, runtime_manifest,
-                                       WVM_ENVELOPE_MSG_PREPARE_MANIFEST,
+                                       NULL, WVM_ENVELOPE_MSG_PREPARE_MANIFEST,
                                        error, error_len);
 }
 
@@ -535,35 +586,19 @@ static int transport_participant_commit(
     const struct wvm_activation_record *activation, char *error,
     size_t error_len)
 {
-    struct wvm_admission_transport *transport = context;
-    struct wvm_admission_transport_target target;
-    struct wvm_admission_participant_stage stage;
-
     if (!activation || !activation->has_activation_fence ||
         !runtime_manifest->has_activation_fence ||
         memcmp(activation->activation_fence, runtime_manifest->activation_fence,
                WVM_IDENTITY_ID_BYTES) != 0 ||
         candidate_matches_runtime(candidate, runtime_manifest, error,
-                                  error_len) != 0 ||
-        resolve_node_target(transport, runtime_manifest->physical_node_id,
-                            runtime_manifest->expected_node_instance_id, &target,
-                            error, error_len) != 0) {
+                                  error_len) != 0) {
         set_error(error, error_len,
                   "participant activation does not bind durable activation fence");
         return -1;
     }
-    memset(&stage, 0, sizeof(stage));
-    stage.message_type = WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST;
-    stage.candidate = candidate;
-    stage.runtime_manifest = runtime_manifest;
-    stage.activation = activation;
-    return submit_record(transport, &target,
-                         WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST,
-                         candidate->admission_tx_id, candidate->vm_id,
-                         candidate->vm_incarnation,
-                         candidate->manifest_generation,
-                         &runtime_manifest->required_route_snapshot_key,
-                         encode_participant_stage, &stage, error, error_len);
+    return transport_participant_stage(context, candidate, runtime_manifest,
+                                       activation, WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST,
+                                       error, error_len);
 }
 
 static int transport_participant_abort(
@@ -572,7 +607,7 @@ static int transport_participant_abort(
     size_t error_len)
 {
     return transport_participant_stage(context, candidate, runtime_manifest,
-                                       WVM_ENVELOPE_MSG_ABORT_MANIFEST,
+                                       NULL, WVM_ENVELOPE_MSG_ABORT_MANIFEST,
                                        error, error_len);
 }
 

@@ -6,7 +6,7 @@ tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/wavevm-ctl-create.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
 
 make -C "$repo_root/ctl_tool" >/dev/null
-gcc -Wall -Wextra -Werror -std=c11 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
+gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     -I"$repo_root/common_include" \
     "$repo_root/common_include/wavevm_sha256.c" \
     "$repo_root/common_include/wavevm_canonical.c" \

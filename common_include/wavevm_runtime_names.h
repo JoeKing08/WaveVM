@@ -7,7 +7,7 @@
 
 #define WVM_RUNTIME_PATH_MAX 256U
 #define WVM_RUNTIME_READY_MAGIC UINT32_C(0x57564d52)
-#define WVM_RUNTIME_READY_VERSION 1U
+#define WVM_RUNTIME_READY_VERSION 2U
 
 /*
  * All names owned by one admitted VM/node runtime are derived from the same
@@ -36,6 +36,11 @@ struct wvm_runtime_ready_record {
     uint64_t manifest_generation;
     uint64_t node_instance_id;
     uint8_t candidate_manifest_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t activation_fence[WVM_IDENTITY_ID_BYTES];
+    uint64_t owner_pid;
+    uint64_t owner_tid;
+    uint64_t owner_start_time_ticks;
+    char owner_boot_id[37];
 };
 
 int wvm_runtime_name_set_derive(

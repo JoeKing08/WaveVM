@@ -19,6 +19,12 @@
 
 struct wvm_route_control_operation;
 
+struct wvm_route_control_snapshot {
+    struct wvm_route_snapshot_record snapshot;
+    struct wvm_route_rule_record *rules;
+    struct wvm_required_ack_entry *ack_entries;
+};
+
 struct wvm_route_control_result {
     uint16_t recorded_state;
     struct wvm_route_snapshot_key route_snapshot_key;
@@ -47,6 +53,16 @@ int wvm_route_control_open(struct wvm_route_control *control,
                            size_t error_len);
 
 void wvm_route_control_close(struct wvm_route_control *control);
+
+/* Recover the full prepared or active canonical snapshot, not only the routing
+ * cache. ACTIVATE_MANIFEST precedes ROUTE_COMMIT in the admission transaction.
+ * The caller owns OUTPUT and releases it with wvm_route_control_snapshot_free.
+ * A retired or mismatched key is never a delivery input. OUTPUT starts empty. */
+int wvm_route_control_snapshot_load(
+    struct wvm_route_control *control, const struct wvm_route_snapshot_key *key,
+    struct wvm_route_control_snapshot *output, char *error, size_t error_len);
+
+void wvm_route_control_snapshot_free(struct wvm_route_control_snapshot *snapshot);
 
 /*
  * Applies exactly one decoded local-control frame. Only ROUTE_PREPARE,

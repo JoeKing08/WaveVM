@@ -17,6 +17,7 @@ struct wvm_runtime_delivery_request {
     const struct wvm_node_runtime_manifest *runtime_manifest;
     const struct wvm_cluster_record_set *cluster_records;
     const struct wvm_route_snapshot_record *route_snapshot;
+    const struct wvm_runtime_dispatch_projection *dispatch_projection;
     const char *runtime_manifest_path;
 };
 

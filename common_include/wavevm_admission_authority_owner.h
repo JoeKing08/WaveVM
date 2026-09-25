@@ -57,6 +57,7 @@ struct wvm_admission_authority_owner_config {
 struct wvm_admission_authority_owner {
     struct wvm_admission_authority_owner_config config;
     struct wvm_admission_authority authority;
+    struct wvm_cluster_record_set captured_records;
     int initialized;
 };
 

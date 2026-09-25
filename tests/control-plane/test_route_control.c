@@ -190,6 +190,7 @@ int main(void)
     struct wvm_envelope request;
     struct wvm_envelope lookup;
     struct wvm_route_runtime_next_hop next_hop;
+    struct wvm_route_control_snapshot loaded_snapshot = {0};
     uint8_t snapshot_bytes[8192];
     uint8_t key_bytes[8192];
     size_t snapshot_byte_count;
@@ -231,6 +232,12 @@ int main(void)
     if (expect(wvm_route_control_apply(&first_control, &request, NULL, error,
                                        sizeof(error)) == 0,
                "persist and prepare first snapshot") ||
+        expect(wvm_route_control_snapshot_load(
+                   &first_control, &first_snapshot.route_snapshot_key,
+                   &loaded_snapshot, error, sizeof(error)) == 0 &&
+                   loaded_snapshot.snapshot.next_hop_rules.count == 1 &&
+                   loaded_snapshot.rules[0].next_hop_endpoint.data_port == 19001,
+               "prepared snapshot can feed pre-route-commit activation") ||
         expect(wvm_route_control_apply(&first_control, &request, NULL, error,
                                        sizeof(error)) == 0,
                "replay duplicate route prepare") ||
@@ -243,6 +250,7 @@ int main(void)
         unlink(journal);
         return 1;
     }
+    wvm_route_control_snapshot_free(&loaded_snapshot);
     make_request(&request, WVM_ENVELOPE_MSG_ROUTE_COMMIT, 2, key_bytes,
                  key_byte_count);
     if (expect(wvm_route_control_apply(&first_control, &request, NULL, error,
@@ -408,6 +416,30 @@ int main(void)
                                         &next_hop, error, sizeof(error)) == 0 &&
                    next_hop.next_hop_endpoint.data_port == 19003,
                "recovered successor remains active")) {
+        wvm_route_control_close(&recovered_control);
+        wvm_route_runtime_destroy(&recovered_runtime);
+        unlink(journal);
+        return 1;
+    }
+    if (expect(wvm_route_control_snapshot_load(
+                   &recovered_control, &successor_snapshot.route_snapshot_key,
+                   &loaded_snapshot, error, sizeof(error)) == 0 &&
+                   loaded_snapshot.snapshot.membership_revision ==
+                       successor_snapshot.membership_revision &&
+                   loaded_snapshot.snapshot.next_hop_rules.count == 1 &&
+                   loaded_snapshot.rules[0].next_hop_endpoint.data_port == 19003,
+               "recover full active route snapshot for runtime delivery")) {
+        wvm_route_control_snapshot_free(&loaded_snapshot);
+        wvm_route_control_close(&recovered_control);
+        wvm_route_runtime_destroy(&recovered_runtime);
+        unlink(journal);
+        return 1;
+    }
+    wvm_route_control_snapshot_free(&loaded_snapshot);
+    if (expect(wvm_route_control_snapshot_load(
+                   &recovered_control, &first_snapshot.route_snapshot_key,
+                   &loaded_snapshot, error, sizeof(error)) != 0,
+               "retired snapshot cannot feed runtime delivery")) {
         wvm_route_control_close(&recovered_control);
         wvm_route_runtime_destroy(&recovered_runtime);
         unlink(journal);
