@@ -3,9 +3,15 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <pthread.h>
+#include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+extern char **environ;
 
 struct agent_slot_storage {
     struct wvm_admission_participant_stage_storage prepared;
@@ -26,6 +32,7 @@ struct agent_owned_storage {
     struct wvm_exclusive_lease *reservation_requirement_leases;
     struct wvm_exclusive_lease *reservation_leases;
     struct wvm_route_snapshot_key *reservation_routes;
+    pid_t *runtime_pids;
 };
 
 static void set_error(char *error, size_t error_len, const char *message)
@@ -178,6 +185,143 @@ static int resolve_slot(void *context, uint32_t vm_id,
         manifest_generation, slot_out, error, error_len);
 }
 
+static int start_runtime(
+    void *context, const struct wvm_admission_receiver_slot *slot,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len)
+{
+    struct wvm_admission_runtime_agent *agent = context;
+    struct agent_owned_storage *owned;
+    posix_spawnattr_t attributes;
+    sigset_t empty_signals;
+    char parent_pid[32];
+    char node_instance[32];
+    char *argv[9];
+    pid_t pid;
+    size_t index;
+    int status;
+
+    if (!agent || !agent->runtime_executable || !slot ||
+        !slot->runtime_manifest_path || !runtime_manifest ||
+        runtime_manifest->expected_node_instance_id == 0) {
+        set_error(error, error_len, "admitted runtime launch is unavailable");
+        return -EINVAL;
+    }
+    owned = agent->owned_storage;
+    for (index = 0; index < agent->slot_capacity; index++) {
+        if (&agent->slots[index] == slot) {
+            break;
+        }
+    }
+    if (index == agent->slot_capacity || !owned || !owned->runtime_pids) {
+        set_error(error, error_len, "admitted runtime slot is not owned by agent");
+        return -EINVAL;
+    }
+    pid = owned->runtime_pids[index];
+    if (pid > 0) {
+        pid_t waited = waitpid(pid, &status, WNOHANG);
+
+        if (waited == 0) {
+            return 0;
+        }
+        if (waited < 0 && errno != ECHILD) {
+            set_error(error, error_len, "cannot inspect admitted runtime child");
+            return -errno;
+        }
+        owned->runtime_pids[index] = 0;
+    }
+    (void)snprintf(parent_pid, sizeof(parent_pid), "%ld", (long)getpid());
+    (void)snprintf(node_instance, sizeof(node_instance), "%" PRIu64,
+                   runtime_manifest->expected_node_instance_id);
+    argv[0] = agent->runtime_executable;
+    argv[1] = "child";
+    argv[2] = "--parent-pid";
+    argv[3] = parent_pid;
+    argv[4] = "--manifest";
+    argv[5] = (char *)slot->runtime_manifest_path;
+    argv[6] = "--node-instance";
+    argv[7] = node_instance;
+    argv[8] = NULL;
+    status = posix_spawnattr_init(&attributes);
+    if (status == 0) {
+        status = sigemptyset(&empty_signals);
+        if (status == 0) {
+            status = posix_spawnattr_setsigmask(&attributes, &empty_signals);
+        }
+        if (status == 0) {
+            status = posix_spawnattr_setflags(&attributes,
+                                              POSIX_SPAWN_SETSIGMASK);
+        }
+        if (status == 0) {
+            status = posix_spawn(&pid, agent->runtime_executable, NULL,
+                                 &attributes, argv, environ);
+        }
+        posix_spawnattr_destroy(&attributes);
+    }
+    if (status != 0) {
+        if (error && error_len != 0) {
+            (void)snprintf(error, error_len, "cannot start admitted runtime: %s",
+                           strerror(status));
+        }
+        return -status;
+    }
+    owned->runtime_pids[index] = pid;
+    return 0;
+}
+
+static void reap_runtime_children(struct wvm_admission_runtime_agent *agent)
+{
+    struct agent_owned_storage *owned = agent ? agent->owned_storage : NULL;
+    size_t i;
+
+    if (!owned || !owned->runtime_pids) {
+        return;
+    }
+    for (i = 0; i < agent->slot_capacity; i++) {
+        int status;
+        pid_t pid = owned->runtime_pids[i];
+
+        if (pid > 0 && waitpid(pid, &status, WNOHANG) == pid) {
+            owned->runtime_pids[i] = 0;
+        }
+    }
+}
+
+void wvm_admission_runtime_agent_reap(struct wvm_admission_runtime_agent *agent)
+{
+    if (!agent || !agent->node_service_initialized) {
+        return;
+    }
+    pthread_mutex_lock(&agent->node_service.receiver.lock);
+    reap_runtime_children(agent);
+    pthread_mutex_unlock(&agent->node_service.receiver.lock);
+}
+
+static void stop_runtime_children(struct wvm_admission_runtime_agent *agent)
+{
+    struct agent_owned_storage *owned = agent ? agent->owned_storage : NULL;
+    size_t i;
+
+    if (!owned || !owned->runtime_pids) {
+        return;
+    }
+    for (i = 0; i < agent->slot_capacity; i++) {
+        if (owned->runtime_pids[i] > 0) {
+            (void)kill(owned->runtime_pids[i], SIGKILL);
+        }
+    }
+    for (i = 0; i < agent->slot_capacity; i++) {
+        if (owned->runtime_pids[i] > 0) {
+            int status;
+
+            while (waitpid(owned->runtime_pids[i], &status, 0) < 0 &&
+                   errno == EINTR) {
+            }
+            owned->runtime_pids[i] = 0;
+        }
+    }
+}
+
 static int agent_storage_init(
     struct wvm_admission_runtime_agent *agent,
     const struct wvm_admission_runtime_agent_config *config, char *error,
@@ -199,10 +343,12 @@ static int agent_storage_init(
                                  sizeof(*owned->slot_storage));
     owned->reservation_records = calloc(
         config->slot_capacity, sizeof(*owned->reservation_records));
+    owned->runtime_pids = calloc(config->slot_capacity,
+                                 sizeof(*owned->runtime_pids));
     agent->owned_storage = owned;
     agent->slot_capacity = config->slot_capacity;
     if (!owned->slots || !owned->slot_storage ||
-        !owned->reservation_records) {
+        !owned->reservation_records || !owned->runtime_pids) {
         set_error(error, error_len, "cannot allocate admission agent slots");
         return -ENOMEM;
     }
@@ -337,7 +483,9 @@ int wvm_admission_runtime_agent_init(
     struct wvm_admission_receiver_config receiver_config;
     struct agent_owned_storage *owned;
 
-    if (!agent || !config || !config->socket_path || !config->state_directory ||
+    if (!agent || !config || !config->runtime_executable ||
+        config->runtime_executable[0] != '/' || !config->socket_path ||
+        !config->state_directory ||
         !config->runtime_directory || !config->route_journal_path ||
         !config->reservation_journal_path || config->slot_capacity == 0 ||
         config->max_vcpus == 0 || config->max_memory_chunks == 0 ||
@@ -350,6 +498,11 @@ int wvm_admission_runtime_agent_init(
         return -EINVAL;
     }
     memset(agent, 0, sizeof(*agent));
+    agent->runtime_executable = strdup(config->runtime_executable);
+    if (!agent->runtime_executable) {
+        set_error(error, error_len, "cannot copy runtime executable path");
+        return -ENOMEM;
+    }
     if (agent_storage_init(agent, config, error, error_len) != 0) {
         wvm_admission_runtime_agent_destroy(agent);
         return -1;
@@ -383,6 +536,7 @@ int wvm_admission_runtime_agent_init(
     receiver_config.context = agent;
     receiver_config.resolve_slot = resolve_slot;
     receiver_config.delivery_inputs = delivery_inputs;
+    receiver_config.start_runtime = start_runtime;
     memset(&service_config, 0, sizeof(service_config));
     service_config.socket_path = config->socket_path;
     service_config.socket_mode = config->socket_mode;
@@ -435,8 +589,12 @@ int wvm_admission_runtime_agent_stop(
         set_error(error, error_len, "admission runtime agent is not initialized");
         return -EINVAL;
     }
-    return wvm_admission_node_service_stop(&agent->node_service, error,
-                                           error_len);
+    if (wvm_admission_node_service_stop(&agent->node_service, error,
+                                        error_len) != 0) {
+        return -1;
+    }
+    stop_runtime_children(agent);
+    return 0;
 }
 
 void wvm_admission_runtime_agent_destroy(
@@ -448,6 +606,10 @@ void wvm_admission_runtime_agent_destroy(
     if (!agent) {
         return;
     }
+    if (agent->node_service_initialized) {
+        (void)wvm_admission_node_service_stop(&agent->node_service, NULL, 0);
+    }
+    stop_runtime_children(agent);
     if (agent->slot_registry_initialized) {
         wvm_admission_slot_registry_destroy(&agent->slot_registry);
     }
@@ -482,6 +644,7 @@ void wvm_admission_runtime_agent_destroy(
         free(owned->reservation_requirement_leases);
         free(owned->reservation_leases);
         free(owned->reservation_routes);
+        free(owned->runtime_pids);
         free(owned->slots);
         free(owned->slot_storage);
         free(owned);
@@ -492,5 +655,6 @@ void wvm_admission_runtime_agent_destroy(
         wvm_route_control_snapshot_free(agent->delivery_snapshot);
         free(agent->delivery_snapshot);
     }
+    free(agent->runtime_executable);
     memset(agent, 0, sizeof(*agent));
 }

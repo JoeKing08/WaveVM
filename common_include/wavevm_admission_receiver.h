@@ -54,6 +54,11 @@ typedef int (*wvm_admission_receiver_delivery_inputs_fn)(
     const struct wvm_route_snapshot_record **route_snapshot_out, char *error,
     size_t error_len);
 
+typedef int (*wvm_admission_receiver_start_runtime_fn)(
+    void *context, const struct wvm_admission_receiver_slot *slot,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len);
+
 struct wvm_admission_receiver_config {
     struct wvm_member_key controller_member_key;
     uint32_t controller_physical_node_id;
@@ -71,6 +76,7 @@ struct wvm_admission_receiver_config {
     void *context;
     wvm_admission_receiver_resolve_slot_fn resolve_slot;
     wvm_admission_receiver_delivery_inputs_fn delivery_inputs;
+    wvm_admission_receiver_start_runtime_fn start_runtime;
 };
 
 struct wvm_admission_receiver {

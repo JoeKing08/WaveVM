@@ -29,6 +29,7 @@
 #include "../common_include/wavevm_admission_stream_transport.h"
 #include "../common_include/wavevm_unix_control_connector.h"
 #include "admission_workspace.h"
+#include "admission_readiness.h"
 #include "capability_publication.h"
 #include "runtime_profile_publication.h"
 
@@ -358,6 +359,16 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         wvm_admission_orchestrator_run(&admission_input, error, error_len);
     entry =
         wvm_control_plane_find_request(context->plane, vm_request.request_id);
+    if (admission_result == 0 &&
+        request_disposition == WVM_CONTROL_PLANE_REQUEST_REPLAY &&
+        entry && entry->transaction.state == WVM_LIFECYCLE_COMMITTED &&
+        admission_authority) {
+        admission_result = wvm_ctl_resume_runtime_readiness(
+            context->plane, &transaction, list_capacity,
+            vm_request.requested_vcpus,
+            admission_authority->callbacks.participant_ready,
+            admission_authority->context, error, error_len);
+    }
     if (!entry && context->plane->entry_count == context->plane->entry_capacity) {
         pthread_mutex_unlock(&context->lock);
         result->status_code = WVM_CONTROL_RESULT_BACKPRESSURE;
@@ -372,16 +383,20 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         free(constraints);
         return -EIO;
     }
-    if (admission_result != 0 ||
-        entry->transaction.state != WVM_LIFECYCLE_RUNNING) {
+    if (entry->transaction.state == WVM_LIFECYCLE_COMMITTED &&
+        admission_result == -EAGAIN) {
+        result->status_code = WVM_CONTROL_RESULT_IN_PROGRESS;
+    } else if (admission_result != 0 ||
+               entry->transaction.state != WVM_LIFECYCLE_RUNNING) {
         pthread_mutex_unlock(&context->lock);
         result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
         free(storage_assignments);
         free(constraints);
         return 0;
     }
-    pthread_mutex_unlock(&context->lock);
-    result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+    if (result->status_code != WVM_CONTROL_RESULT_IN_PROGRESS) {
+        result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+    }
     result->recorded_state = (uint16_t)entry->transaction.state;
     result->applied_revision = entry->transaction.transaction_sequence;
     result->vm_id = transaction.vm_id;
@@ -394,6 +409,7 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
     memcpy(result->manifest_id, transaction.manifest_id,
            sizeof(result->manifest_id));
     result->route_scope_id = transaction.route_scope_key.route_scope_id;
+    pthread_mutex_unlock(&context->lock);
     (void)submit_result;
     free(storage_assignments);
     free(constraints);

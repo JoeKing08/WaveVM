@@ -718,6 +718,7 @@ static int apply_participant_stage(
     result_bind_candidate(result, scratch.candidate);
     if (request->message_type == WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY) {
         struct wvm_admission_participant_stage committed_stage = scratch;
+        int ready_status;
 
         committed_stage.activation = &slot->prepared_storage.activation;
         if (!slot->has_activation_decision || slot->has_aborted ||
@@ -735,13 +736,20 @@ static int apply_participant_stage(
                    scratch.runtime_manifest->activation_fence,
                    WVM_IDENTITY_ID_BYTES) != 0 ||
             !local_reservation_matches_stage(
-                receiver, &committed_stage, WVM_RESERVATION_COMMITTED) ||
-            wvm_runtime_ready_validate(
-                scratch.runtime_manifest,
-                receiver->config.local_node_instance_id, error,
-                error_len) != 0) {
+                receiver, &committed_stage, WVM_RESERVATION_COMMITTED)) {
             set_error(error, error_len,
                       "participant has not reached identity-bound runtime readiness");
+            return -1;
+        }
+        ready_status = wvm_runtime_ready_validate(
+            scratch.runtime_manifest, receiver->config.local_node_instance_id,
+            error, error_len);
+        if (ready_status == -EAGAIN) {
+            result->status_code = WVM_CONTROL_RESULT_NOT_READY;
+            result->recorded_state = WVM_LIFECYCLE_COMMITTED;
+            return 0;
+        }
+        if (ready_status != 0) {
             return -1;
         }
         result->recorded_state = WVM_LIFECYCLE_COMMITTED;
@@ -815,7 +823,11 @@ static int apply_participant_stage(
                                error, error_len) != 0 ||
             wvm_runtime_gate_activate(&slot->gate,
                                       scratch.activation->activation_fence,
-                                      error, error_len) != 0) {
+                                      error, error_len) != 0 ||
+            (receiver->config.start_runtime &&
+             receiver->config.start_runtime(receiver->config.context, slot,
+                                            scratch.runtime_manifest, error,
+                                            error_len) != 0)) {
             return -1;
         }
         slot->has_activated = 1;

@@ -41,6 +41,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L "${extra_flags[@]}"
     "$repo_root/common_include/wavevm_membership_control.c" \
     "$repo_root/common_include/wavevm_envelope.c" \
     "$repo_root/ctl_tool/admission_workspace.c" \
+    "$repo_root/ctl_tool/admission_readiness.c" \
     "$repo_root/tests/control-plane/test_coordinator.c" \
     -pthread -Wl,--wrap=fsync -Wl,--wrap=write -o "$tmpdir/test_coordinator"
 "$tmpdir/test_coordinator"

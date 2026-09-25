@@ -35,4 +35,4 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_admission_node_service.c" \
     "$repo_root/tests/control-plane/test_admission_node_service.c" \
     -pthread -o "$tmpdir/test_admission_node_service"
-"$tmpdir/test_admission_node_service"
+"$tmpdir/test_admission_node_service" "$@"

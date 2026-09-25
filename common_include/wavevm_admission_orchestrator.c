@@ -1,5 +1,6 @@
 #include "wavevm_admission_orchestrator.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -535,14 +536,18 @@ int wvm_admission_orchestrator_run(
             WVM_LIFECYCLE_COMMITTED, error, error_len) != 0) {
         return -1;
     }
-    if (wvm_control_plane_start_if_participants_ready(
+    {
+        int ready_status = wvm_control_plane_start_if_participants_ready(
             input->control_plane, transaction,
             &input->prepared_vm->candidate,
             input->prepared_vm->node_runtime_manifests,
             input->prepared_vm->node_runtime_manifest_count,
             input->callbacks->participant_ready, input->callback_context,
-            error, error_len) != 0) {
-        return -1;
+            error, error_len);
+
+        if (ready_status != 0) {
+            return ready_status == -EAGAIN ? -EAGAIN : -1;
+        }
     }
     return 0;
 }

@@ -61,6 +61,12 @@ int wvm_admission_stream_transport_submit(
             return status;
         }
     }
+    if (envelope->message_type == WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY &&
+        result.status_code == WVM_CONTROL_RESULT_NOT_READY &&
+        result.recorded_state == WVM_LIFECYCLE_COMMITTED) {
+        set_error(error, error_len, "admitted runtime is starting");
+        return -EAGAIN;
+    }
     if (result.status_code != WVM_CONTROL_RESULT_SUCCESS) {
         if (error && error_len != 0) {
             (void)snprintf(error, error_len,

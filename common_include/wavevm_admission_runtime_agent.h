@@ -12,6 +12,7 @@
 #include "wavevm_route_control.h"
 
 struct wvm_admission_runtime_agent_config {
+    const char *runtime_executable;
     const char *socket_path;
     const char *state_directory;
     const char *runtime_directory;
@@ -48,6 +49,7 @@ struct wvm_admission_runtime_agent {
     struct wvm_admission_reservation_stage_storage reservation_scratch;
     void *owned_storage;
     struct wvm_route_control_snapshot *delivery_snapshot;
+    char *runtime_executable;
     size_t slot_capacity;
     int route_runtime_initialized;
     int route_control_initialized;
@@ -69,6 +71,10 @@ int wvm_admission_runtime_agent_stop(
     struct wvm_admission_runtime_agent *agent, char *error, size_t error_len);
 
 void wvm_admission_runtime_agent_destroy(
+    struct wvm_admission_runtime_agent *agent);
+
+/* Reap exited per-VM children after SIGCHLD; safe between control requests. */
+void wvm_admission_runtime_agent_reap(
     struct wvm_admission_runtime_agent *agent);
 
 #endif

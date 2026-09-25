@@ -32,6 +32,8 @@ enum wvm_control_result_status {
     WVM_CONTROL_RESULT_BACKPRESSURE = 10,
     WVM_CONTROL_RESULT_UNSUPPORTED = 11,
     WVM_CONTROL_RESULT_INTERNAL_FAILURE = 12,
+    WVM_CONTROL_RESULT_NOT_READY = 13,
+    WVM_CONTROL_RESULT_IN_PROGRESS = 14,
 };
 
 /* Common result for control operations that may allocate a VM namespace. */

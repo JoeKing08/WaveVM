@@ -14,6 +14,7 @@
 #include "wavevm_membership.h"
 #include "wavevm_reservation_runtime.h"
 #include "wavevm_runtime_names.h"
+#include "../../ctl_tool/admission_readiness.h"
 
 #define MIB (1024ULL * 1024ULL)
 
@@ -679,6 +680,7 @@ struct orchestrator_test_hooks {
     unsigned participant_commits;
     unsigned participant_aborts;
     unsigned participant_readies;
+    int defer_ready;
 };
 
 static int orchestrator_route_plan(
@@ -883,6 +885,9 @@ static int orchestrator_participant_ready(
 
     (void)candidate;
     hooks->participant_readies++;
+    if (hooks->defer_ready) {
+        return -EAGAIN;
+    }
     return wvm_runtime_ready_publish(manifest,
                                       manifest->expected_node_instance_id,
                                       error, error_len);
@@ -1223,7 +1228,27 @@ struct participant_receiver_context {
     const struct wvm_cluster_record_set *records;
     const struct wvm_route_snapshot_record *route;
     int reject_delivery;
+    int reject_start;
+    unsigned start_calls;
 };
+
+static int participant_start_runtime(
+    void *context, const struct wvm_admission_receiver_slot *slot,
+    const struct wvm_node_runtime_manifest *runtime, char *error,
+    size_t error_len)
+{
+    struct participant_receiver_context *owner = context;
+
+    if (!owner || !slot || !slot->runtime_manifest_path || !runtime ||
+        owner->reject_start) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "participant runtime launch rejected");
+        }
+        return -1;
+    }
+    owner->start_calls++;
+    return 0;
+}
 
 static int participant_slot(void *context, uint32_t vm_id, uint64_t incarnation,
                              uint64_t generation,
@@ -1344,6 +1369,7 @@ static int test_participant_receiver(
     config.reservation_registry = &registry;
     config.resolve_slot = participant_slot;
     config.delivery_inputs = participant_delivery_inputs;
+    config.start_runtime = participant_start_runtime;
     config.context = &owner;
     owner.records = records;
     owner.route = route;
@@ -1442,7 +1468,7 @@ static int test_participant_receiver(
     owner.reject_delivery = 1;
     if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
                            error, sizeof(error)) != 0 ||
-        !slot->has_activation_decision || slot->has_activated ||
+        !slot->has_activation_decision || slot->has_activated || owner.start_calls != 0 ||
         participant_reopen(&receiver, slot, state_path, candidate, error, sizeof(error)) != 0 ||
         !slot->has_activation_decision || slot->gate.state != WVM_RUNTIME_GATE_PREPARED) {
         goto out;
@@ -1462,11 +1488,36 @@ static int test_participant_receiver(
     stage.runtime_manifest = &active;
     stage.abort_reason = 0;
     owner.reject_delivery = 0;
+    owner.reject_start = 1;
+    if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_PRECONDITION_FAILED,
+                           error, sizeof(error)) != 0 ||
+        slot->has_activated || owner.start_calls != 0 ||
+        slot->gate.state != WVM_RUNTIME_GATE_ACTIVE) {
+        goto out;
+    }
+    owner.reject_start = 0;
     if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
-        !slot->has_activated || slot->gate.state != WVM_RUNTIME_GATE_ACTIVE ||
+        !slot->has_activated || owner.start_calls != 1 ||
+        slot->gate.state != WVM_RUNTIME_GATE_ACTIVE ||
         access(runtime_path, F_OK) != 0) {
         goto out;
     }
+    stage.message_type = WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY;
+    stage.activation = NULL;
+    stage.dispatch_projection = NULL;
+    if (wvm_runtime_ready_remove(&active, error, sizeof(error)) != 0 ||
+        participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_NOT_READY,
+                          error, sizeof(error)) != 0 ||
+        wvm_runtime_ready_publish(&active, active.expected_node_instance_id,
+                                  error, sizeof(error)) != 0 ||
+        participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS,
+                          error, sizeof(error)) != 0 ||
+        wvm_runtime_ready_remove(&active, error, sizeof(error)) != 0) {
+        goto out;
+    }
+    stage.message_type = WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST;
+    stage.activation = activation;
+    stage.dispatch_projection = &dispatch;
     slot->gate.next_connection_id = 123;
     if (participant_stage(&receiver, &stage, WVM_CONTROL_RESULT_SUCCESS, error, sizeof(error)) != 0 ||
         slot->gate.next_connection_id != 123 ||
@@ -2402,8 +2453,9 @@ int main(void)
         orchestrator_input.prepare_input = orchestrator_prepare_input;
         orchestrator_input.transaction_out = &orchestrator_transaction;
         orchestrator_input.submit_result_out = &orchestrator_submit_result;
+        hooks.defer_ready = 1;
         if (expect(wvm_admission_orchestrator_run(
-                       &orchestrator_input, error, sizeof(error)) == 0 &&
+                       &orchestrator_input, error, sizeof(error)) == -EAGAIN &&
                        orchestrator_submit_result ==
                            WVM_CONTROL_PLANE_SUBMIT_NEW &&
                        orchestrator_activation.has_activation_fence,
@@ -2413,12 +2465,31 @@ int main(void)
                        hooks.reservation_commits == 2 &&
                        hooks.participant_prepares == 2 &&
                        hooks.participant_commits == 2 &&
-                       hooks.participant_readies == 2,
+                       hooks.participant_readies == 1,
                    "orchestrator executes every prepare and commit stage") ||
             expect(wvm_control_plane_find_request(
                        &control_plane, orchestrator_request.request_id)
-                           ->transaction.state == WVM_LIFECYCLE_RUNNING,
-                   "orchestrator reaches RUNNING only after readiness") ||
+                           ->transaction.state == WVM_LIFECYCLE_COMMITTED,
+                   "orchestrator retains COMMITTED while runtime starts") ||
+            expect(wvm_ctl_resume_runtime_readiness(
+                       &control_plane, &orchestrator_transaction, 4,
+                       orchestrator_request.requested_vcpus,
+                       orchestrator_participant_ready, &hooks, error,
+                       sizeof(error)) == -EAGAIN &&
+                       hooks.participant_commits == 2,
+                   "durable replay leaves unready runtime pending")) {
+            return 1;
+        }
+        hooks.defer_ready = 0;
+        if (expect(wvm_ctl_resume_runtime_readiness(
+                       &control_plane, &orchestrator_transaction, 4,
+                       orchestrator_request.requested_vcpus,
+                       orchestrator_participant_ready, &hooks, error,
+                       sizeof(error)) == 0 &&
+                       wvm_control_plane_find_request(
+                           &control_plane, orchestrator_request.request_id)
+                               ->transaction.state == WVM_LIFECYCLE_RUNNING,
+                   "durable replay enters RUNNING after participant readiness") ||
             expect(wvm_admission_orchestrator_run(
                        &orchestrator_input, error, sizeof(error)) == 0 &&
                        orchestrator_submit_result ==

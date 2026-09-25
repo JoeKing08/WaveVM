@@ -11,10 +11,13 @@ COMMON_OBJS = resources.o sha256.o canonical.o identity.o runtime_names.o manife
 
 all: $(TARGET)
 
-$(TARGET): main.o $(MASTER_OBJS) $(SLAVE_OBJS) $(COMMON_OBJS)
+$(TARGET): main.o admission_main.o $(MASTER_OBJS) $(SLAVE_OBJS) $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDFLAGS)
 
 main.o: main.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+admission_main.o: admission_main.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 master_logic.o: ../master_core/logic_core.c

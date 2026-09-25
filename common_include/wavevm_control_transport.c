@@ -321,7 +321,7 @@ int wvm_control_result_encode(const struct wvm_control_result *result,
                               uint8_t bytes[WVM_CONTROL_RESULT_BYTES])
 {
     if (!result || !bytes || result->result_flags != 0 ||
-        result->status_code > WVM_CONTROL_RESULT_INTERNAL_FAILURE) {
+        result->status_code > WVM_CONTROL_RESULT_IN_PROGRESS) {
         return -1;
     }
     bytes[0] = (uint8_t)(result->status_code >> 8);
@@ -348,7 +348,7 @@ int wvm_control_result_decode(const uint8_t bytes[WVM_CONTROL_RESULT_BYTES],
 {
     if (!bytes || !result ||
         ((((uint16_t)bytes[0] << 8) | bytes[1]) >
-         WVM_CONTROL_RESULT_INTERNAL_FAILURE) ||
+         WVM_CONTROL_RESULT_IN_PROGRESS) ||
         read_be32(bytes + 4) != 0) {
         return -1;
     }
@@ -453,14 +453,20 @@ int wvm_control_transport_exchange(
         set_error(error, error_len, "control reply does not match request or peer");
         return -EPROTO;
     }
-    if (admission_request(request->message_type) &&
-        decoded.status_code == WVM_CONTROL_RESULT_SUCCESS) {
+    if ((admission_request(request->message_type) &&
+         decoded.status_code == WVM_CONTROL_RESULT_SUCCESS) ||
+        (request->message_type == WVM_ENVELOPE_MSG_CREATE_VM &&
+         decoded.status_code == WVM_CONTROL_RESULT_IN_PROGRESS)) {
         wvm_envelope_semantic_digest(request->payload, request->payload_bytes,
                                      digest);
-        if (decoded.vm_id != request->vm_id ||
+        if ((request->message_type == WVM_ENVELOPE_MSG_CREATE_VM &&
+             (decoded.vm_id < 256 || decoded.vm_incarnation == 0 ||
+              decoded.manifest_generation == 0)) ||
+            (request->message_type != WVM_ENVELOPE_MSG_CREATE_VM &&
+             (decoded.vm_id != request->vm_id ||
             decoded.vm_incarnation != request->vm_incarnation ||
             decoded.manifest_generation != request->manifest_generation ||
-            decoded.route_scope_id != request->route_scope_id ||
+            decoded.route_scope_id != request->route_scope_id)) ||
             memcmp(decoded.record_digest, digest, sizeof(digest)) != 0) {
             set_error(error, error_len, "admission reply does not bind request");
             return -EPROTO;

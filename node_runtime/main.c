@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/prctl.h>
 #include <sys/un.h>
 #include <string.h>
 #include <unistd.h>
@@ -34,6 +35,7 @@ int wavevm_master_runtime_main(
 int wavevm_executor_runtime_main(
     const struct wvm_node_runtime_context *runtime);
 extern volatile sig_atomic_t g_shutdown_requested;
+int wavevm_admission_agent_main(int argc, char **argv);
 
 struct role_launch {
     const struct wvm_node_runtime_context *runtime;
@@ -642,7 +644,7 @@ static void print_launch_environment(void)
  * Invocation:
  *   wavevm_node_runtime --manifest FILE --node-instance N
  */
-int main(int argc, char **argv)
+static int run_runtime_main(int argc, char **argv)
 {
     const char *manifest_path = NULL;
     uint64_t node_instance_id = 0;
@@ -1106,4 +1108,33 @@ int main(int argc, char **argv)
     wvm_runtime_dispatch_storage_free(&dispatch_storage);
     wvm_route_runtime_destroy(&route_runtime);
     return (int)(intptr_t)master_result;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && strcmp(argv[1], "agent") == 0) {
+        return wavevm_admission_agent_main(argc, argv);
+    }
+    if (argc > 1 && strcmp(argv[1], "child") == 0) {
+        uint64_t parent_pid;
+        char *runtime_argv[6];
+
+        if (argc != 8 || strcmp(argv[2], "--parent-pid") != 0 ||
+            strcmp(argv[4], "--manifest") != 0 ||
+            strcmp(argv[6], "--node-instance") != 0 ||
+            parse_u64(argv[3], &parent_pid) != 0 ||
+            prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 ||
+            (uint64_t)getppid() != parent_pid) {
+            fprintf(stderr, "[node-runtime] child is not bound to its agent\n");
+            return 2;
+        }
+        runtime_argv[0] = argv[0];
+        runtime_argv[1] = argv[4];
+        runtime_argv[2] = argv[5];
+        runtime_argv[3] = argv[6];
+        runtime_argv[4] = argv[7];
+        runtime_argv[5] = NULL;
+        return run_runtime_main(5, runtime_argv);
+    }
+    return run_runtime_main(argc, argv);
 }
