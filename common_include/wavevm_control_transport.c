@@ -52,8 +52,41 @@ static uint64_t read_be64(const uint8_t *bytes)
            ((uint64_t)bytes[6] << 8) | (uint64_t)bytes[7];
 }
 
-static int read_full(int fd, uint8_t *bytes, size_t byte_count,
-                     size_t *bytes_read, char *error, size_t error_len)
+static ssize_t io_read(const struct wvm_control_io *io, int fd, void *buffer,
+                       size_t bytes)
+{
+    if (io && io->read) {
+        return io->read(io->opaque, buffer, bytes);
+    }
+    return read(fd, buffer, bytes);
+}
+
+static ssize_t io_write(const struct wvm_control_io *io, int fd,
+                        const void *buffer, size_t bytes)
+{
+    if (io && io->write) {
+        return io->write(io->opaque, buffer, bytes);
+    }
+    return send(fd, buffer, bytes, MSG_NOSIGNAL);
+}
+
+static ssize_t fd_read(void *opaque, void *buffer, size_t bytes)
+{
+    int fd = (int)(intptr_t)opaque;
+
+    return read(fd, buffer, bytes);
+}
+
+static ssize_t fd_write(void *opaque, const void *buffer, size_t bytes)
+{
+    int fd = (int)(intptr_t)opaque;
+
+    return send(fd, buffer, bytes, MSG_NOSIGNAL);
+}
+
+static int read_full(const struct wvm_control_io *io, int fd, uint8_t *bytes,
+                     size_t byte_count, size_t *bytes_read, char *error,
+                     size_t error_len)
 {
     size_t offset = 0;
 
@@ -61,7 +94,7 @@ static int read_full(int fd, uint8_t *bytes, size_t byte_count,
         *bytes_read = 0;
     }
     while (offset < byte_count) {
-        ssize_t result = read(fd, bytes + offset, byte_count - offset);
+        ssize_t result = io_read(io, fd, bytes + offset, byte_count - offset);
 
         if (result > 0) {
             offset += (size_t)result;
@@ -88,14 +121,14 @@ static int read_full(int fd, uint8_t *bytes, size_t byte_count,
     return 0;
 }
 
-static int write_full(int fd, const uint8_t *bytes, size_t byte_count,
-                      char *error, size_t error_len)
+static int write_full(const struct wvm_control_io *io, int fd,
+                      const uint8_t *bytes, size_t byte_count, char *error,
+                      size_t error_len)
 {
     size_t offset = 0;
 
     while (offset < byte_count) {
-        ssize_t result = send(fd, bytes + offset, byte_count - offset,
-                              MSG_NOSIGNAL);
+        ssize_t result = io_write(io, fd, bytes + offset, byte_count - offset);
 
         if (result > 0) {
             offset += (size_t)result;
@@ -227,11 +260,13 @@ static int send_payload_result(struct wvm_control_stream *transport,
     }
     write_be32(prefix, (uint32_t)frame_bytes);
     {
-        int result = write_full(transport->config.stream_fd, prefix,
+        int result = write_full(&transport->config.io,
+                                transport->config.stream_fd, prefix,
                                 sizeof(prefix), error, error_len);
         if (result == 0) {
-            result = write_full(transport->config.stream_fd, frame, frame_bytes,
-                                error, error_len);
+            result = write_full(&transport->config.io,
+                                transport->config.stream_fd, frame,
+                                frame_bytes, error, error_len);
         }
         if (result != 0) {
             return result;
@@ -278,9 +313,11 @@ int wvm_control_transport_init(
 {
     size_t max_frame_bytes;
 
-    if (!transport || !config || config->stream_fd < 0 ||
+    if (!transport || !config ||
+        (config->stream_fd < 0 && (!config->io.read || !config->io.write)) ||
         config->local_physical_node_id == 0 ||
-        config->local_runtime_instance_id == 0 || !config->authenticate ||
+        config->local_runtime_instance_id == 0 ||
+        (!config->authenticate && !config->authenticate_io) ||
         (!config->apply && !config->control_apply &&
          !config->admission_apply && !config->dispatch)) {
         set_error(error, error_len, "control transport configuration is invalid");
@@ -370,8 +407,8 @@ int wvm_control_result_decode(const uint8_t bytes[WVM_CONTROL_RESULT_BYTES],
     return 0;
 }
 
-int wvm_control_transport_exchange(
-    int stream_fd, uint32_t peer_physical_node_id,
+int wvm_control_transport_exchange_io(
+    const struct wvm_control_io *io, uint32_t peer_physical_node_id,
     uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
     struct wvm_control_result *result, char *error, size_t error_len)
 {
@@ -385,7 +422,7 @@ int wvm_control_transport_exchange(
     size_t capacity;
     int status;
 
-    if (stream_fd < 0 || peer_physical_node_id == 0 ||
+    if ((!io || !io->read || !io->write) || peer_physical_node_id == 0 ||
         peer_runtime_instance_id == 0 || !result ||
         !request_metadata_valid(request) ||
         !typed_request(request->message_type) ||
@@ -407,15 +444,15 @@ int wvm_control_transport_exchange(
         return -EPROTO;
     }
     write_be32(prefix, (uint32_t)frame_bytes);
-    status = write_full(stream_fd, prefix, sizeof(prefix), error, error_len);
+    status = write_full(io, -1, prefix, sizeof(prefix), error, error_len);
     if (status == 0) {
-        status = write_full(stream_fd, frame, frame_bytes, error, error_len);
+        status = write_full(io, -1, frame, frame_bytes, error, error_len);
     }
     free(frame);
     if (status != 0) {
         return status;
     }
-    status = read_full(stream_fd, prefix, sizeof(prefix), NULL, error, error_len);
+    status = read_full(io, -1, prefix, sizeof(prefix), NULL, error, error_len);
     if (status != 0) {
         if (status == 1) {
             set_error(error, error_len, "control reply prefix is truncated");
@@ -428,7 +465,7 @@ int wvm_control_transport_exchange(
         set_error(error, error_len, "control reply length is invalid");
         return -EMSGSIZE;
     }
-    status = read_full(stream_fd, reply, frame_bytes, NULL, error, error_len);
+    status = read_full(io, -1, reply, frame_bytes, NULL, error, error_len);
     if (status != 0) {
         if (status == 1) {
             set_error(error, error_len, "control reply is truncated");
@@ -476,6 +513,26 @@ int wvm_control_transport_exchange(
     return 0;
 }
 
+int wvm_control_transport_exchange(
+    int stream_fd, uint32_t peer_physical_node_id,
+    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
+    struct wvm_control_result *result, char *error, size_t error_len)
+{
+    struct wvm_control_io io;
+
+    if (stream_fd < 0) {
+        set_error(error, error_len, "control exchange stream is invalid");
+        return -EINVAL;
+    }
+    io.opaque = (void *)(intptr_t)stream_fd;
+    io.read = fd_read;
+    io.write = fd_write;
+    return wvm_control_transport_exchange_io(
+        &io,
+        peer_physical_node_id, peer_runtime_instance_id, request, result, error,
+        error_len);
+}
+
 int wvm_control_transport_serve_once(
     struct wvm_control_stream *transport, char *error, size_t error_len)
 {
@@ -491,15 +548,16 @@ int wvm_control_transport_serve_once(
     int authenticate_result;
 
     if (!transport || transport->config.stream_fd < 0 ||
-        !transport->config.authenticate ||
+        (!transport->config.authenticate && !transport->config.authenticate_io) ||
         (!transport->config.apply && !transport->config.control_apply &&
          !transport->config.admission_apply && !transport->config.dispatch)) {
         set_error(error, error_len, "control transport is not initialized");
         return -EINVAL;
     }
     transport->response_sent = 0;
-    read_result = read_full(transport->config.stream_fd, prefix, sizeof(prefix),
-                            &prefix_bytes, error, error_len);
+    read_result = read_full(&transport->config.io, transport->config.stream_fd,
+                            prefix, sizeof(prefix), &prefix_bytes, error,
+                            error_len);
     if (read_result == 1) {
         if (prefix_bytes == 0) {
             return WVM_CONTROL_TRANSPORT_EOF;
@@ -522,8 +580,8 @@ int wvm_control_transport_serve_once(
         set_error(error, error_len, "control stream frame allocation failed");
         return -ENOMEM;
     }
-    read_result = read_full(transport->config.stream_fd, frame, frame_bytes,
-                            NULL, error, error_len);
+    read_result = read_full(&transport->config.io, transport->config.stream_fd,
+                            frame, frame_bytes, NULL, error, error_len);
     if (read_result != 0) {
         free(frame);
         if (read_result == 1) {
@@ -542,9 +600,16 @@ int wvm_control_transport_serve_once(
         return -EPROTO;
     }
     memset(&actor, 0, sizeof(actor));
-    authenticate_result = transport->config.authenticate(
-        transport->config.authenticate_opaque, transport->config.stream_fd,
-        &actor, error, error_len);
+    if (transport->config.authenticate_io) {
+        authenticate_result = transport->config.authenticate_io(
+            transport->config.authenticate_opaque,
+            transport->config.stream_fd, &transport->config.io, &actor, error,
+            error_len);
+    } else {
+        authenticate_result = transport->config.authenticate(
+            transport->config.authenticate_opaque, transport->config.stream_fd,
+            &actor, error, error_len);
+    }
     if (authenticate_result != 0) {
         int response_result;
 

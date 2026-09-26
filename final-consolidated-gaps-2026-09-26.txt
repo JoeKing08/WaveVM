@@ -1,0 +1,112 @@
+最终汇总：两轮交叉审计后已确认的实现缺口，以及尚待验证的事项
+日期：2026-09-26
+
+背景：新AI基于当前代码独立审计（3个只读子agent覆盖CREATE_VM生产路径/Mode A&B隔离/动态成员操作/flat-fractal真实guest验证），
+写成 independent-audit-gaps-for-new-ai-2026-09-26.txt 后，与原AI自己写的 remaining-roadmap-gaps-for-new-ai-2026-09-26.txt 交叉对照，
+原AI逐条核对代码给出回应，双方结论收敛为下面这份最终清单。
+阅读边界：1-3、5-9和15是已确认的生产实现/接线缺口；4只涉及旧控制路径，不能据此推断typed生产路径有同一缺陷；
+10-11是测试空白而非已确认代码缺陷；12-14仍待核实。CREATE_VM的合法双节点全链尚未验收，不能把未验收推断为
+participant ACK或runtime启动代码必然缺失。
+
+================================================================
+一、协议/接线层面缺口（逻辑本身可能是对的，但没有生产入口/没有被真实调用）
+================================================================
+
+1. 【原AI本轮核对后确认】远端成员注册/激活的生产入口未接通
+   TLS数据传输本身是真的（mTLS connector、node/gateway监听服务已存在并通过定向测试）。
+   但真正的缺口是：全新双节点集群不能只靠现有启动命令自然进入可准入状态。ctl_tool目前只启动Unix控制面监听，
+   node/gateway没有向它提交REGISTER_MEMBER的生产入口；即便手工注册，成员仍从PENDING/RECOVERING开始，负责路由ACK后
+   激活成员的wvm_membership_coordinator_join也没有生产调用者。admission要求成员ACTIVE/HEALTHY。
+   相关位置：ctl_tool/main.c:1467、common_include/wavevm_membership_coordinator.c:115。
+
+2. drain / gateway换血逻辑写完但零生产调用者
+   - wvm_membership_controller_begin_drain / _remove（wavevm_membership_controller.c 3250-3309）
+   - wvm_membership_coordinator_drain_gateway（wavevm_membership_coordinator.c 346-434）
+   begin_drain/remove有coordinator内部调用，但整个coordinator没有生产调用者；drain_gateway只在测试中调用，
+   master_core/node_runtime/slave_daemon/gateway_service/ctl_tool 下没有入口。
+   ctl_tool/main.c 的CLI分发（~1212-1219）只支持 serve/publish-capabilities/publish-runtime-profile，没有drain/remove子命令。
+   wire协议层 wvm_membership_control_membership_action 枚举只有 CORDON=1，没有DRAIN/REMOVE。
+
+3. drain的依赖检查在生产环境形同摆设
+   全仓库grep "wvm_membership_controller_dependency" 在 master_core/node_runtime/slave_daemon/gateway_service/ctl_tool 下0命中——
+   没有任何真实VM admission/reservation-commit代码调用dependency_acquire，导致"有VM依赖就拒绝drain"这条安全检查在生产里永远看到
+   active_dependency_count==0，是摆设不是真实生效的保护。
+
+4. gateway_service/aggregator.c 的legacy ROUTE/op_code路径没有DEL_ROUTE处理
+   这仅限旧控制路径；typed route-control已经接受ROUTE_RETIRE，不能据此声称所有路由都无法撤回。
+   typed retire在VM/gateway销毁时是否有生产调用者，仍需单独核实。
+
+5. ctl_tool的执行者管理授权策略仍不完整
+   authorize_executor_gateway_management / authorize_executor_membership_management（ctl_tool/main.c ~1135-1165）
+   Unix入口先用SO_PEERCRED/配置文件将UID绑定为member identity，并非允许请求者任意自称EXECUTOR；
+   但管理授权回调只检查已认证actor的角色是EXECUTOR，没有进一步的操作范围/目标身份授权策略。
+
+================================================================
+二、真实代码缺陷（不是缺测试，是逻辑本身有问题，已被原AI核对确认）
+================================================================
+
+6. 【原AI核对后确认，并补充细节】Mode A内核per-CPU current_context 跨睡眠点竞争
+   master_core/kernel_backend.c:82（DEFINE_PER_CPU声明）、~982/~1207（fault handler设置/清除）、
+   ~2089-2092/~2399-2403（IOCTL设置/清除）；睡眠点在 ~1125-1170（远程fault重试）和 ~2192-2196（IOCTL_WAIT_IRQ）。
+   原AI补充：get_cpu_ptr() 只在读写per-CPU槽的瞬间禁止抢占，跨wait_event的整个操作并未固定CPU，睡眠后任务迁移到别的CPU
+   一样会读错/读空context。独占lease机制目前只是暂时阻止了"两个Mode A VM同时准入"这种触发场景，但代码缺陷本身没有被消除。
+   （master_core/kernel_backend.c:490）
+   影响：单VM运行时也可能在睡眠后迁移到其他CPU而读空/读错context；解除独占lease后还有跨VM状态污染风险。
+
+7. 【原AI本轮主动承认，之前漏查】内核语义权威没有完全收归per-VM context
+   logic_route_context() 仍直接返回全局 g_logic_route_context，目录表仍是全局 g_dir_table，fault/commit/route路径
+   尚未全部改成per-VM context-aware语义。这是实现缺口，不是单纯缺测试。
+   （master_core/logic_core.c:379）
+
+8. QEMU侧 g_vm_runtime_identity 从未被赋值
+   wavevm-qemu/accel/wavevm/wavevm-all.c:81-89（声明，全零初始化）、:2498-2502（被读取填充typed block请求的
+   vm_id/vm_incarnation/manifest_generation等）。全仓库grep确认这些字段从未在任何地方被赋值——每个VM的block-I/O
+   请求身份字段全是零。同文件里 wavevm_session_authorize_request（~830-853）已有可用的真实赋值模式，只是block-I/O
+   路径没接上。
+
+9. radix-tree清理迭代器误用
+   master_core/kernel_backend.c:413-449（wvm_kernel_destroy_context）。对radix_tree_for_each_slot遍历中的slot
+   直接调用裸radix_tree_delete()，而非内核要求的radix_tree_iter_delete()；kfree(meta)还发生在batch真正摘除节点之前，
+   短暂留下悬空指针。目前因destroy只在refcount归零时跑还不是并发竞争，但是真实API误用缺陷，unbind/rebind时有
+   腐败/崩溃风险。
+
+================================================================
+三、验收/验证空白（不是已确认的实现缺口，单列以免误认为"代码缺失"）
+================================================================
+
+10. 端到端guest验证完全是占位
+    tests/e2e/test_guest_smoke.sh 全部内容：
+      printf '%s\n' 'SKIP: guest boot, SSH, remote vCPU and remote memory checks are not implemented.' >&2
+      exit 77
+    没有任何自动化机制证明分布式guest真的能启动/登录/远程vCPU/远程内存工作。
+    人工手跑旁证（artifacts/flat-tcg-test/master0.log）显示底层远程内存机制在工作（真实跨节点page fault记录），
+    但同次运行vm-serial.log为空（无guest console/登录证据），QEMU被SIGTERM而非正常关机，且这些都不是自动化断言捕获的。
+
+11. tests/mode-b/ 目录完全不存在
+    命名/资源冲突层（wavevm_runtime_names.c）本身完整，但"两个Mode B VM同机运行隔离"从未有真实双进程测试覆盖，
+    也没有假测试——就是没有。
+
+================================================================
+四、仍是怀疑、未被任一方彻底证实的（需要后续确认）
+================================================================
+
+12. fractal真实多层行为尚未验收
+    旧artifacts/fract-kvm-test配置使用flat语法手动串接gateway，但当前typed协议已有FRACTAL_VNODE、destination_scope、
+    pod和prefix路由规则。不能据旧脚本断言"fractal只是flat手动串联"；需要验证现行typed路径的多层转发和扩容边界。
+
+13. master_core/user_backend.c:1675 硬编码gateway默认端口htons(9000)（loopback）
+    是否会在同机双Mode B VM场景造成冲突未验证——是否总在真实传输发生前被manifest驱动配置覆盖掉，没查清。
+
+14. fault-engine插件化状态本轮未完整核实，需要后续专门审计。
+
+15. CI双节点脚本未迁移到manifest/control-plane（已复核）
+    scripts/ci_dual_node.sh仍启动旧master/slave并调用ctl_tool/wvm_ctl --plan。它是Phase 10实现缺口，
+    不应只归为"未经核实的怀疑"。
+
+================================================================
+以下条目此前被怀疑为缺口，经复核证明是假警报，不需要处理：
+================================================================
+- wvm_runtime_ready_publish "无调用点"：假警报。真实调用点在 master_core/main_wrapper.c:1854，在QEMU对接的Unix
+  socket bind+listen成功后才发布readiness，逻辑正确、错误处理正确（发布失败会关listener并返回失败）。
+- "跨节点认证transport连接器未实现"：原AI自己承认这是过时判断，mTLS connector、node/gateway监听服务已经存在
+  并通过定向测试（真实缺口收窄为上面第1条：注册/激活生产入口未接通，而非连接器本身未实现）。

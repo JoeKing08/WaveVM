@@ -10,9 +10,13 @@
 
 struct transport_capture {
     unsigned call_count;
-    uint16_t message_types[3];
-    uint8_t operation_ids[3][WVM_IDENTITY_ID_BYTES];
+    unsigned resolve_count;
+    uint16_t message_types[6];
+    uint8_t operation_ids[6][WVM_IDENTITY_ID_BYTES];
 };
+
+static void fill_endpoint(struct wvm_endpoint *endpoint, uint8_t host,
+                          uint16_t data_port, uint16_t control_port);
 
 static int expect(int condition, const char *message)
 {
@@ -23,17 +27,29 @@ static int expect(int condition, const char *message)
     return 0;
 }
 
-static int resolve_node(void *opaque, uint32_t node_id, uint64_t instance_id,
+static int resolve_member(void *opaque, const struct wvm_member_key *member_key,
                         struct wvm_admission_transport_target *target,
                         char *error, size_t error_len)
 {
-    (void)opaque;
-    (void)node_id;
-    (void)instance_id;
-    (void)target;
-    (void)error;
-    (void)error_len;
-    return -1;
+    if (!member_key || !target ||
+        (member_key->role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+         member_key->role_type != WVM_MANIFEST_ROLE_GATEWAY) ||
+        (member_key->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+         (member_key->role_id != 17 || member_key->instance_id != 101)) ||
+        (member_key->role_type == WVM_MANIFEST_ROLE_GATEWAY &&
+         (member_key->role_id != 3 || member_key->instance_id != 301))) {
+        snprintf(error, error_len, "unexpected route ACK member");
+        return -1;
+    }
+    memset(target, 0, sizeof(*target));
+    ((struct transport_capture *)opaque)->resolve_count++;
+    target->member_key = *member_key;
+    fill_endpoint(&target->endpoint, 17,
+                  member_key->role_type == WVM_MANIFEST_ROLE_GATEWAY ? 9400
+                                                                       : 9000,
+                  member_key->role_type == WVM_MANIFEST_ROLE_GATEWAY ? 9401
+                                                                       : 9100);
+    return 0;
 }
 
 static int submit_route_stage(
@@ -45,8 +61,9 @@ static int submit_route_stage(
     uint8_t frame[65536];
     size_t frame_bytes = 0;
 
-    if (!capture || !target || !envelope || capture->call_count >= 3 ||
-        target->member_key.role_type != WVM_MANIFEST_ROLE_GATEWAY ||
+    if (!capture || !target || !envelope || capture->call_count >= 6 ||
+        (target->member_key.role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+         target->member_key.role_type != WVM_MANIFEST_ROLE_GATEWAY) ||
         wvm_envelope_encode(envelope, WVM_ENVELOPE_TRANSPORT_LOCAL, frame,
                             sizeof(frame), &frame_bytes, error, error_len) !=
             0 ||
@@ -203,7 +220,7 @@ int main(void)
     struct wvm_route_transaction_record route_transaction;
     struct wvm_route_snapshot_record route_snapshot;
     struct wvm_route_rule_record route_rules[16];
-    struct wvm_required_ack_entry ack_entries[1];
+    struct wvm_required_ack_entry ack_entries[2];
     uint8_t snapshot_bytes[65536];
     uint8_t ack_set_bytes[4096];
     struct wvm_admission_transport transport;
@@ -216,7 +233,7 @@ int main(void)
                "build canonical route inputs") ||
         expect(wvm_admission_route_compiler_init(
                    &compiler, WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1, route_rules,
-                   16, ack_entries, 1, snapshot_bytes, sizeof(snapshot_bytes),
+                   16, ack_entries, 2, snapshot_bytes, sizeof(snapshot_bytes),
                    ack_set_bytes, sizeof(ack_set_bytes), error,
                    sizeof(error)) == 0,
                "initialize flat route compiler")) {
@@ -234,6 +251,13 @@ int main(void)
         expect(compiler.route_rule_count == 16 &&
                    route_snapshot.topology_kind == WVM_ROUTE_TOPOLOGY_FLAT,
                "compile every active flat vnode") ||
+        expect(route_snapshot.required_ack_set.entries.count == 2 &&
+                   route_snapshot.required_ack_set.entries.entries[0]
+                           .member_key.role_type ==
+                       WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+                   route_snapshot.required_ack_set.entries.entries[1]
+                           .member_key.role_type == WVM_MANIFEST_ROLE_GATEWAY,
+               "include node and gateway route consumers in ACK set") ||
         expect(wvm_route_snapshot_record_validate(&route_snapshot, error,
                                                   sizeof(error)) == 0 &&
                    wvm_route_transaction_record_validate(&route_transaction,
@@ -249,7 +273,7 @@ int main(void)
 
     memset(&capture, 0, sizeof(capture));
     if (expect(wvm_admission_transport_init(
-                   &transport, 17, 500, &capture, resolve_node,
+                   &transport, 17, 500, &capture, resolve_member,
                    submit_route_stage, error, sizeof(error)) ==
                    0,
                "initialize route control transport") ||
@@ -274,21 +298,37 @@ int main(void)
         fprintf(stderr, "admission-route test: route abort: %s\n", error);
         return 1;
     }
-    if (expect(capture.call_count == 3 &&
+    if (expect(capture.call_count == 6 &&
+                   capture.resolve_count == 6 &&
                    capture.message_types[0] == WVM_ENVELOPE_MSG_ROUTE_PREPARE &&
-                   capture.message_types[1] == WVM_ENVELOPE_MSG_ROUTE_COMMIT &&
-                   capture.message_types[2] == WVM_ENVELOPE_MSG_ROUTE_ABORT &&
+                   capture.message_types[2] == WVM_ENVELOPE_MSG_ROUTE_COMMIT &&
+                   capture.message_types[4] == WVM_ENVELOPE_MSG_ROUTE_ABORT &&
                    memcmp(capture.operation_ids[0], capture.operation_ids[1],
                           WVM_IDENTITY_ID_BYTES) != 0 &&
-                   memcmp(capture.operation_ids[1], capture.operation_ids[2],
+                   memcmp(capture.operation_ids[2], capture.operation_ids[3],
+                          WVM_IDENTITY_ID_BYTES) != 0 &&
+                   memcmp(capture.operation_ids[4], capture.operation_ids[5],
                           WVM_IDENTITY_ID_BYTES) != 0,
                "use distinct idempotent operation IDs for route stages")) {
         return 1;
     }
 
+    /* Route ACK endpoints are a membership snapshot contract, not a second
+     * source of truth carried by the compiled route record. */
+    route_snapshot.required_ack_set.entries.entries[0].endpoint.control_port++;
+    if (expect(callbacks.route_prepare(&transport, &transaction,
+                                       &route_transaction, &route_snapshot,
+                                       error, sizeof(error)) != 0,
+               "reject a route ACK endpoint that disagrees with membership") ||
+        expect(capture.call_count == 6,
+               "do not submit a route stage after endpoint mismatch")) {
+        return 1;
+    }
+    route_snapshot.required_ack_set.entries.entries[0].endpoint.control_port--;
+
     if (expect(wvm_admission_route_compiler_init(
                    &compiler, WVM_ROUTE_TOPOLOGY_FRACTAL, 1, 6000, 1,
-                   route_rules, 16, ack_entries, 1, snapshot_bytes,
+                   route_rules, 16, ack_entries, 2, snapshot_bytes,
                    sizeof(snapshot_bytes), ack_set_bytes, sizeof(ack_set_bytes),
                    error, sizeof(error)) == 0,
                "initialize fractal route compiler") ||

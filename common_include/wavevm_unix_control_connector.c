@@ -120,6 +120,8 @@ int wvm_unix_control_connector_bind(
     connector->opaque = unix_connector;
     connector->open_unix_stream = open_unix_stream;
     connector->authenticate_peer = authenticate_unix_peer;
+    connector->authenticate_unix = authenticate_unix_peer;
+    connector->authenticate_unix_opaque = unix_connector;
     connector->timeout_ms = timeout_ms;
     return 0;
 }

@@ -39,6 +39,8 @@
 #include "../common_include/wavevm_protocol.h"
 #include "../common_include/wavevm_route_runtime.h"
 #include "../common_include/wavevm_route_control.h"
+#include "../common_include/wavevm_control_owner.h"
+#include "../common_include/wavevm_tls_control_connector.h"
 #include "../common_include/wavevm_runtime_gate.h"
 #include "uthash.h"
 
@@ -71,6 +73,17 @@ static int g_route_control_ready = 0;
 static char g_route_control_socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static uint32_t g_route_control_physical_node_id = 0;
 static uint64_t g_route_control_instance_id = 0;
+static struct wvm_control_owner g_route_control_owner;
+static struct wvm_endpoint g_route_control_network_endpoint;
+
+struct gateway_control_authentication {
+    uid_t local_uid;
+    struct wvm_member_key controller;
+    uint32_t controller_physical_node_id;
+    uint64_t controller_runtime_instance_id;
+};
+
+static struct gateway_control_authentication g_route_control_authentication;
 #define BATCH_SIZE 64
 #define WVM_BIG_PKT_THRESHOLD 200
 #define WVM_RXQ_DROP_HEARTBEAT (512 * 1024)
@@ -973,20 +986,243 @@ static int init_route_runtime_from_environment(void)
     return 0;
 }
 
+static int gateway_parse_role(const char *text,
+                              enum wvm_manifest_role_type *role)
+{
+    if (!text || !role) {
+        return -1;
+    }
+    if (strcmp(text, "node-runtime") == 0) {
+        *role = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    } else if (strcmp(text, "gateway") == 0) {
+        *role = WVM_MANIFEST_ROLE_GATEWAY;
+    } else if (strcmp(text, "executor") == 0) {
+        *role = WVM_MANIFEST_ROLE_EXECUTOR;
+    } else {
+        return -1;
+    }
+    return 0;
+}
+
+static int gateway_member_equal(const struct wvm_member_key *left,
+                                const struct wvm_member_key *right)
+{
+    return left && right && left->role_type == right->role_type &&
+           left->role_id == right->role_id &&
+           left->instance_id == right->instance_id;
+}
+
+static int gateway_parse_u64(const char *text, uint64_t *value)
+{
+    char *end = NULL;
+    unsigned long long parsed;
+
+    if (!text || !*text || !value) {
+        return -1;
+    }
+    errno = 0;
+    parsed = strtoull(text, &end, 10);
+    if (errno != 0 || !end || *end != '\0' || parsed == 0) {
+        return -1;
+    }
+    *value = (uint64_t)parsed;
+    return 0;
+}
+
+static uint16_t control_status_from_error(const char *error);
+
+static int gateway_authenticate_unix(
+    void *opaque, int stream_fd, struct wvm_member_key *actor, char *error,
+    size_t error_len)
+{
+    const struct gateway_control_authentication *authentication = opaque;
+    struct ucred credentials;
+    socklen_t credentials_bytes = sizeof(credentials);
+
+    if (!authentication || !actor || stream_fd < 0 ||
+        getsockopt(stream_fd, SOL_SOCKET, SO_PEERCRED, &credentials,
+                   &credentials_bytes) != 0 ||
+        credentials_bytes != sizeof(credentials) ||
+        credentials.uid != authentication->local_uid) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "gateway Unix control peer is not authorized");
+        }
+        return -EACCES;
+    }
+    *actor = authentication->controller;
+    return 0;
+}
+
+static int gateway_authenticate_tls(
+    void *opaque, int stream_fd, const struct wvm_control_io *io,
+    struct wvm_member_key *actor, char *error, size_t error_len)
+{
+    const struct gateway_control_authentication *authentication = opaque;
+    struct wvm_member_key peer;
+
+    (void)stream_fd;
+    if (!authentication || !actor ||
+        wvm_tls_control_peer_identity(io, &peer, error, error_len) != 0 ||
+        !gateway_member_equal(&peer, &authentication->controller)) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "gateway TLS control peer is not the configured controller");
+        }
+        return -EACCES;
+    }
+    *actor = peer;
+    return 0;
+}
+
+static void gateway_result_init(struct wvm_control_result *result,
+                                const struct wvm_envelope *request)
+{
+    memset(result, 0, sizeof(*result));
+    memcpy(result->in_reply_to_operation_id, request->operation_id,
+           sizeof(result->in_reply_to_operation_id));
+    memcpy(result->record_digest, request->semantic_payload_digest,
+           sizeof(result->record_digest));
+    result->vm_id = request->vm_id;
+    result->vm_incarnation = request->vm_incarnation;
+    result->manifest_generation = request->manifest_generation;
+    result->route_scope_id = request->route_scope_id;
+}
+
+static int gateway_route_key_matches_request(
+    const struct wvm_envelope *request,
+    const struct wvm_route_snapshot_key *key)
+{
+    return request && key &&
+           request->route_scope_id == key->scope_key.route_scope_id &&
+           request->topology_revision == key->topology_revision &&
+           request->route_generation == key->route_generation &&
+           memcmp(request->route_snapshot_digest, key->snapshot_digest,
+                  sizeof(key->snapshot_digest)) == 0;
+}
+
+static int gateway_route_control_apply(
+    void *context, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    struct wvm_control_result *result, char *error, size_t error_len)
+{
+    struct wvm_route_control_result route_result;
+
+    (void)context;
+    if (!request || !result) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "gateway route control request is invalid");
+        }
+        return -EINVAL;
+    }
+    gateway_result_init(result, request);
+    if (!gateway_member_equal(authenticated_actor,
+                              &g_route_control_authentication.controller) ||
+        request->origin_physical_node_id !=
+            g_route_control_authentication.controller_physical_node_id ||
+        request->origin_runtime_instance_id !=
+            g_route_control_authentication.controller_runtime_instance_id) {
+        result->status_code = WVM_CONTROL_RESULT_UNAUTHORIZED_ROLE;
+        return 0;
+    }
+    if (request->message_type != WVM_ENVELOPE_MSG_ROUTE_PREPARE &&
+        request->message_type != WVM_ENVELOPE_MSG_ROUTE_COMMIT &&
+        request->message_type != WVM_ENVELOPE_MSG_ROUTE_ABORT &&
+        request->message_type != WVM_ENVELOPE_MSG_ROUTE_RETIRE) {
+        result->status_code = WVM_CONTROL_RESULT_UNSUPPORTED;
+        return 0;
+    }
+    memset(&route_result, 0, sizeof(route_result));
+    if (wvm_route_control_apply(&g_route_control, request, &route_result,
+                                error, error_len) != 0) {
+        result->status_code = control_status_from_error(error);
+        return 0;
+    }
+    if (!gateway_route_key_matches_request(
+            request, &route_result.route_snapshot_key)) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "gateway route result does not match request snapshot");
+        }
+        result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+        return 0;
+    }
+    result->recorded_state = route_result.recorded_state;
+    result->applied_revision = route_result.route_snapshot_key.route_generation;
+    result->expiry_or_retention_deadline =
+        route_result.operation_retention_horizon_ms;
+    result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+    return 0;
+}
+
+static int gateway_parse_control_endpoint(
+    struct wvm_endpoint *endpoint, char *error, size_t error_len)
+{
+    const char *address_text = getenv("WVM_GATEWAY_CONTROL_ADDRESS");
+    const char *port_text = getenv("WVM_GATEWAY_CONTROL_PORT");
+    const char *data_address_text = getenv("WVM_GATEWAY_DATA_ADDRESS");
+    struct in_addr address;
+    uint64_t control_port;
+    const char *data_address = data_address_text && data_address_text[0]
+                                   ? data_address_text
+                                   : address_text;
+
+    if (!endpoint || !address_text || !port_text || !data_address ||
+        inet_pton(AF_INET, address_text, &address) != 1 ||
+        inet_pton(AF_INET, data_address, &address) != 1 ||
+        gateway_parse_u64(port_text, &control_port) != 0 ||
+        control_port > UINT16_MAX || g_local_port <= 0 ||
+        g_local_port > UINT16_MAX) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "gateway TLS control endpoint configuration is invalid");
+        }
+        return -EINVAL;
+    }
+    memset(endpoint, 0, sizeof(*endpoint));
+    endpoint->data_transport = WVM_DATA_TRANSPORT_UDP;
+    endpoint->data_address_bytes = 4;
+    endpoint->data_port = (uint16_t)g_local_port;
+    if (inet_pton(AF_INET, data_address, endpoint->data_address) != 1 ||
+        inet_pton(AF_INET, address_text, endpoint->control_address) != 1) {
+        return -EINVAL;
+    }
+    endpoint->control_transport = WVM_CONTROL_TRANSPORT_TLS_TCP;
+    endpoint->has_control_address = 1;
+    endpoint->control_address_bytes = 4;
+    endpoint->control_port = (uint16_t)control_port;
+    return 0;
+}
+
 static int init_route_control_from_environment(void)
 {
     const char *journal_path = getenv("WVM_GATEWAY_ROUTE_JOURNAL_PATH");
     const char *socket_path = getenv("WVM_GATEWAY_CONTROL_SOCKET");
+    const char *controller_role = getenv("WVM_GATEWAY_CONTROLLER_ROLE");
+    const char *controller_id = getenv("WVM_GATEWAY_CONTROLLER_ID");
+    const char *controller_instance =
+        getenv("WVM_GATEWAY_CONTROLLER_INSTANCE_ID");
+    const char *controller_physical_node =
+        getenv("WVM_GATEWAY_CONTROLLER_PHYSICAL_NODE_ID");
+    const char *controller_runtime_instance =
+        getenv("WVM_GATEWAY_CONTROLLER_RUNTIME_INSTANCE_ID");
+    const char *tls_ca = getenv("WVM_GATEWAY_CONTROL_CA_FILE");
+    const char *tls_certificate = getenv("WVM_GATEWAY_CONTROL_CERTIFICATE_FILE");
+    const char *tls_private_key = getenv("WVM_GATEWAY_CONTROL_PRIVATE_KEY_FILE");
     uint64_t parsed_physical_node_id;
+    uint64_t parsed_controller_id;
+    uint64_t parsed_controller_instance;
+    uint64_t parsed_controller_physical_node;
+    uint64_t parsed_controller_runtime_instance;
+    enum wvm_manifest_role_type parsed_controller_role;
+    struct wvm_control_owner_config owner_config;
+    char error[256] = {0};
+    int tls_configuration_count;
 
-    if ((!journal_path || journal_path[0] == '\0') &&
-        (!socket_path || socket_path[0] == '\0')) {
-        return 0;
-    }
-    if (!journal_path || journal_path[0] == '\0') {
+    if (!journal_path || journal_path[0] == '\0' ||
+        !socket_path || socket_path[0] == '\0') {
         fprintf(stderr,
-                "[Gateway] V1 control socket requires "
-                "WVM_GATEWAY_ROUTE_JOURNAL_PATH\n");
+                "[Gateway] active route control requires a journal and socket\n");
         return -EINVAL;
     }
     if (!g_route_runtime_ready) {
@@ -1004,14 +1240,10 @@ static int init_route_control_from_environment(void)
         }
     }
     g_route_control_ready = 1;
-    if (!socket_path || socket_path[0] == '\0') {
-        return 0;
-    }
     if (strlen(socket_path) >= sizeof(g_route_control_socket_path) ||
-        parse_u64_env("WVM_RUNTIME_PHYSICAL_NODE_ID",
-                      &parsed_physical_node_id) != 0 ||
+        parse_u64_env("WVM_GATEWAY_ID", &parsed_physical_node_id) != 0 ||
         parsed_physical_node_id > UINT32_MAX ||
-        parse_u64_env("WVM_NODE_INSTANCE_ID",
+        parse_u64_env("WVM_GATEWAY_INSTANCE_ID",
                       &g_route_control_instance_id) != 0) {
         fprintf(stderr,
                 "[Gateway] V1 control listener identity or socket path is "
@@ -1023,6 +1255,75 @@ static int init_route_control_from_environment(void)
     g_route_control_physical_node_id = (uint32_t)parsed_physical_node_id;
     snprintf(g_route_control_socket_path, sizeof(g_route_control_socket_path),
              "%s", socket_path);
+
+    tls_configuration_count = (tls_ca && tls_ca[0] != '\0') +
+                              (tls_certificate && tls_certificate[0] != '\0') +
+                              (tls_private_key && tls_private_key[0] != '\0');
+    if (!controller_role || !controller_id || !controller_instance ||
+        !controller_physical_node || !controller_runtime_instance ||
+        gateway_parse_role(controller_role, &parsed_controller_role) != 0 ||
+        gateway_parse_u64(controller_id, &parsed_controller_id) != 0 ||
+        parsed_controller_id > UINT32_MAX ||
+        gateway_parse_u64(controller_instance, &parsed_controller_instance) != 0 ||
+        gateway_parse_u64(controller_physical_node,
+                          &parsed_controller_physical_node) != 0 ||
+        parsed_controller_physical_node > UINT32_MAX ||
+        gateway_parse_u64(controller_runtime_instance,
+                          &parsed_controller_runtime_instance) != 0 ||
+        tls_configuration_count != 3 ||
+        gateway_parse_control_endpoint(&g_route_control_network_endpoint,
+                                       error, sizeof(error)) != 0) {
+        fprintf(stderr,
+                "[Gateway] active route control requires a complete "
+                "authenticated TLS/controller configuration: %s\n",
+                error[0] ? error : "invalid controller identity");
+        wvm_route_control_close(&g_route_control);
+        g_route_control_ready = 0;
+        return -EINVAL;
+    }
+    memset(&g_route_control_authentication, 0,
+           sizeof(g_route_control_authentication));
+    g_route_control_authentication.local_uid = geteuid();
+    g_route_control_authentication.controller.role_type = parsed_controller_role;
+    g_route_control_authentication.controller.role_id =
+        (uint32_t)parsed_controller_id;
+    g_route_control_authentication.controller.instance_id =
+        parsed_controller_instance;
+    g_route_control_authentication.controller_physical_node_id =
+        (uint32_t)parsed_controller_physical_node;
+    g_route_control_authentication.controller_runtime_instance_id =
+        parsed_controller_runtime_instance;
+    memset(&owner_config, 0, sizeof(owner_config));
+    owner_config.socket_path = g_route_control_socket_path;
+    owner_config.network_endpoint = &g_route_control_network_endpoint;
+    owner_config.tls_ca_file = tls_ca;
+    owner_config.tls_certificate_file = tls_certificate;
+    owner_config.tls_private_key_file = tls_private_key;
+    owner_config.socket_mode = S_IRUSR | S_IWUSR;
+    owner_config.listen_backlog = 16;
+    owner_config.local_physical_node_id = g_route_control_physical_node_id;
+    owner_config.local_runtime_instance_id = g_route_control_instance_id;
+    owner_config.max_frame_bytes = WVM_CONTROL_TRANSPORT_DEFAULT_MAX_FRAME_BYTES;
+    owner_config.authenticate = gateway_authenticate_unix;
+    owner_config.authenticate_io = gateway_authenticate_tls;
+    owner_config.authenticate_opaque = &g_route_control_authentication;
+    owner_config.admission_apply = gateway_route_control_apply;
+    owner_config.admission_apply_opaque = &g_route_control;
+    if (wvm_control_owner_init(&g_route_control_owner, &owner_config, error,
+                               sizeof(error)) != 0 ||
+        wvm_control_owner_start(&g_route_control_owner, error,
+                                sizeof(error)) != 0) {
+        fprintf(stderr, "[Gateway] route control owner failed: %s\n",
+                error[0] ? error : "cannot start authenticated listener");
+        wvm_control_owner_destroy(&g_route_control_owner);
+        wvm_route_control_close(&g_route_control);
+        g_route_control_ready = 0;
+        return -EINVAL;
+    }
+    fprintf(stderr,
+            "[Gateway] authenticated route control socket=%s port=%u\n",
+            g_route_control_socket_path,
+            (unsigned)g_route_control_network_endpoint.control_port);
     return 0;
 }
 
@@ -1651,183 +1952,22 @@ static void* control_plane_thread(void *arg) {
     return NULL;
 }
 
-static void control_write_be16(uint8_t *bytes, uint16_t value)
-{
-    bytes[0] = (uint8_t)(value >> 8);
-    bytes[1] = (uint8_t)value;
-}
-
-static void control_write_be64(uint8_t *bytes, uint64_t value)
-{
-    size_t i;
-
-    for (i = 0; i < 8; i++) {
-        bytes[7U - i] = (uint8_t)(value >> (i * 8U));
-    }
-}
-
 static uint16_t control_status_from_error(const char *error)
 {
     if (!error || error[0] == '\0') {
-        return 12; /* INTERNAL_FAILURE */
+        return WVM_CONTROL_RESULT_INTERNAL_FAILURE;
     }
     if (strstr(error, "unsupported") || strstr(error, "unknown")) {
-        return 11; /* UNSUPPORTED */
+        return WVM_CONTROL_RESULT_UNSUPPORTED;
     }
     if (strstr(error, "payload") || strstr(error, "record") ||
         strstr(error, "envelope")) {
-        return 2; /* INVALID_RECORD */
+        return WVM_CONTROL_RESULT_INVALID_REQUEST;
     }
     if (strstr(error, "conflict")) {
-        return 7; /* OPERATION_ID_CONFLICT */
+        return WVM_CONTROL_RESULT_OPERATION_ID_CONFLICT;
     }
-    return 6; /* PRECONDITION_FAILED */
-}
-
-static void send_route_control_result(
-    int client_fd, const struct wvm_envelope *request,
-    const struct wvm_route_control_result *result, uint16_t status_code)
-{
-    uint8_t payload[72];
-    uint8_t frame[WVM_ENVELOPE_HEADER_BYTES + sizeof(payload)];
-    struct wvm_envelope response;
-    size_t frame_bytes = 0;
-    char error[128] = {0};
-
-    if (!request || g_route_control_physical_node_id == 0 ||
-        g_route_control_instance_id == 0) {
-        return;
-    }
-    memset(payload, 0, sizeof(payload));
-    control_write_be16(payload + 0, status_code);
-    if (status_code == 0 && result) {
-        control_write_be16(payload + 2, result->recorded_state);
-        memcpy(payload + 8, request->operation_id,
-               sizeof(request->operation_id));
-        memcpy(payload + 24, result->route_snapshot_key.snapshot_digest,
-               sizeof(result->route_snapshot_key.snapshot_digest));
-        control_write_be64(payload + 56,
-                           result->route_snapshot_key.route_generation);
-        /*
-         * The fixed result field is an absolute expiry/deadline. A participant
-         * stores a retention horizon, not a clock-domain-specific deadline,
-         * so V1 returns zero rather than inventing one.
-         */
-        control_write_be64(payload + 64, 0);
-    } else {
-        memcpy(payload + 8, request->operation_id,
-               sizeof(request->operation_id));
-    }
-    memset(&response, 0, sizeof(response));
-    response.message_type = WVM_ENVELOPE_MSG_CTRL_RESULT;
-    response.vm_id = request->vm_id;
-    response.vm_incarnation = request->vm_incarnation;
-    response.manifest_generation = request->manifest_generation;
-    response.origin_physical_node_id = g_route_control_physical_node_id;
-    response.origin_runtime_instance_id = g_route_control_instance_id;
-    memcpy(response.operation_id, request->operation_id,
-           sizeof(response.operation_id));
-    response.delivery_attempt_id = 1;
-    response.payload = payload;
-    response.payload_bytes = sizeof(payload);
-    if (wvm_envelope_encode(&response, WVM_ENVELOPE_TRANSPORT_LOCAL,
-                               frame, sizeof(frame), &frame_bytes, error,
-                               sizeof(error)) == 0) {
-        (void)send(client_fd, frame, frame_bytes, MSG_NOSIGNAL);
-    }
-}
-
-static void handle_route_control_client(int client_fd)
-{
-    struct ucred credentials;
-    socklen_t credentials_bytes = sizeof(credentials);
-    struct msghdr message;
-    struct iovec iovec;
-    struct wvm_envelope request;
-    struct wvm_route_control_result result;
-    uint8_t *frame;
-    ssize_t received;
-    char error[256] = {0};
-    int apply_result;
-
-    if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &credentials,
-                   &credentials_bytes) != 0 ||
-        credentials_bytes != sizeof(credentials) ||
-        credentials.uid != geteuid()) {
-        return;
-    }
-    frame = malloc(WVM_ROUTE_CONTROL_MAX_FRAME_BYTES);
-    if (!frame) {
-        return;
-    }
-    memset(&message, 0, sizeof(message));
-    iovec.iov_base = frame;
-    iovec.iov_len = WVM_ROUTE_CONTROL_MAX_FRAME_BYTES;
-    message.msg_iov = &iovec;
-    message.msg_iovlen = 1;
-    received = recvmsg(client_fd, &message, 0);
-    if (received <= 0 || (message.msg_flags & MSG_TRUNC) != 0 ||
-        wvm_envelope_decode(frame, (size_t)received,
-                               WVM_ENVELOPE_TRANSPORT_LOCAL, &request,
-                               error, sizeof(error)) != 0) {
-        free(frame);
-        return;
-    }
-    memset(&result, 0, sizeof(result));
-    apply_result = wvm_route_control_apply(&g_route_control, &request, &result,
-                                           error, sizeof(error));
-    send_route_control_result(client_fd, &request,
-                              apply_result == 0 ? &result : NULL,
-                              apply_result == 0 ? 0
-                                                : control_status_from_error(
-                                                      error));
-    free(frame);
-}
-
-static void *route_control_thread(void *arg)
-{
-    struct sockaddr_un address;
-    int server_fd;
-
-    (void)arg;
-    if (!g_route_control_ready || g_route_control_socket_path[0] == '\0') {
-        return NULL;
-    }
-    server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-    if (server_fd < 0) {
-        perror("[Gateway] V1 control socket");
-        return NULL;
-    }
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    snprintf(address.sun_path, sizeof(address.sun_path), "%s",
-             g_route_control_socket_path);
-    unlink(g_route_control_socket_path);
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-        chmod(g_route_control_socket_path, S_IRUSR | S_IWUSR) != 0 ||
-        listen(server_fd, 16) != 0) {
-        perror("[Gateway] V1 control bind/listen");
-        close(server_fd);
-        unlink(g_route_control_socket_path);
-        return NULL;
-    }
-    fprintf(stderr, "[Gateway] V1 route control socket=%s\n",
-            g_route_control_socket_path);
-    for (;;) {
-        int client_fd = accept(server_fd, NULL, NULL);
-
-        if (client_fd < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            break;
-        }
-        handle_route_control_client(client_fd);
-        close(client_fd);
-    }
-    close(server_fd);
-    unlink(g_route_control_socket_path);
-    return NULL;
+    return WVM_CONTROL_RESULT_PRECONDITION_FAILED;
 }
 
 int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, const char *config_path) {
@@ -1925,13 +2065,8 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     detect_cpu_env();
     
     pthread_t ctrl_tid;
-    if (g_route_authority_active) {
-        if (g_route_control_ready && g_route_control_socket_path[0] != '\0' &&
-            pthread_create(&ctrl_tid, NULL, route_control_thread, NULL) == 0) {
-            pthread_detach(ctrl_tid);
-        }
-    } else if (pthread_create(&ctrl_tid, NULL, control_plane_thread, NULL) ==
-               0) {
+    if (!g_route_authority_active &&
+        pthread_create(&ctrl_tid, NULL, control_plane_thread, NULL) == 0) {
         pthread_detach(ctrl_tid);
     }
 

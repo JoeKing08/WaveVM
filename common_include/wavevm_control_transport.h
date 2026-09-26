@@ -9,6 +9,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "wavevm_membership_control.h"
 
@@ -62,6 +63,12 @@ typedef int (*wvm_control_transport_authenticate_fn)(
     void *opaque, int stream_fd, struct wvm_member_key *actor, char *error,
     size_t error_len);
 
+struct wvm_control_io;
+
+typedef int (*wvm_control_transport_authenticate_io_fn)(
+    void *opaque, int stream_fd, const struct wvm_control_io *io,
+    struct wvm_member_key *actor, char *error, size_t error_len);
+
 typedef int (*wvm_control_transport_dispatch_fn)(
     void *opaque, const struct wvm_envelope *request,
     const struct wvm_member_key *authenticated_actor, char *error,
@@ -84,12 +91,30 @@ typedef int (*wvm_control_transport_admission_apply_fn)(
     const struct wvm_member_key *authenticated_actor,
     struct wvm_control_result *result, char *error, size_t error_len);
 
+/*
+ * Framing is independent from the underlying authenticated stream. Unix
+ * sockets use the fd adapter; TLS connectors provide these callbacks so the
+ * framing layer never reads encrypted bytes as if they were plaintext.
+ */
+typedef ssize_t (*wvm_control_io_read_fn)(
+    void *opaque, void *buffer, size_t bytes);
+typedef ssize_t (*wvm_control_io_write_fn)(
+    void *opaque, const void *buffer, size_t bytes);
+
+struct wvm_control_io {
+    void *opaque;
+    wvm_control_io_read_fn read;
+    wvm_control_io_write_fn write;
+};
+
 struct wvm_control_transport_config {
     int stream_fd;
+    struct wvm_control_io io;
     size_t max_frame_bytes;
     uint32_t local_physical_node_id;
     uint64_t local_runtime_instance_id;
     wvm_control_transport_authenticate_fn authenticate;
+    wvm_control_transport_authenticate_io_fn authenticate_io;
     void *authenticate_opaque;
     wvm_control_transport_apply_fn apply;
     void *apply_opaque;
@@ -132,6 +157,11 @@ int wvm_control_transport_serve_once(
  */
 int wvm_control_transport_exchange(
     int stream_fd, uint32_t peer_physical_node_id,
+    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
+    struct wvm_control_result *result, char *error, size_t error_len);
+
+int wvm_control_transport_exchange_io(
+    const struct wvm_control_io *io, uint32_t peer_physical_node_id,
     uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
     struct wvm_control_result *result, char *error, size_t error_len);
 

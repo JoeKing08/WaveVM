@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <arpa/inet.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
@@ -14,6 +15,7 @@
 #include <unistd.h>
 
 #include "../common_include/wavevm_admission_runtime_agent.h"
+#include "../common_include/wavevm_tls_control_connector.h"
 
 enum agent_option {
     OPT_STATE_DIR = 1000,
@@ -33,6 +35,11 @@ enum agent_option {
     OPT_MAX_STORAGE,
     OPT_MAX_MEMBERS,
     OPT_MAX_LEASES,
+    OPT_CONTROL_ADDRESS,
+    OPT_CONTROL_PORT,
+    OPT_TLS_CA,
+    OPT_TLS_CERT,
+    OPT_TLS_KEY,
 };
 
 struct agent_options {
@@ -53,6 +60,11 @@ struct agent_options {
     uint64_t max_storage;
     uint64_t max_members;
     uint64_t max_leases;
+    const char *control_address;
+    uint64_t control_port;
+    const char *tls_ca_file;
+    const char *tls_certificate_file;
+    const char *tls_private_key_file;
 };
 
 struct agent_authentication {
@@ -110,6 +122,11 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
         {"max-storage", required_argument, NULL, OPT_MAX_STORAGE},
         {"max-members", required_argument, NULL, OPT_MAX_MEMBERS},
         {"max-leases", required_argument, NULL, OPT_MAX_LEASES},
+        {"control-address", required_argument, NULL, OPT_CONTROL_ADDRESS},
+        {"control-port", required_argument, NULL, OPT_CONTROL_PORT},
+        {"tls-ca", required_argument, NULL, OPT_TLS_CA},
+        {"tls-cert", required_argument, NULL, OPT_TLS_CERT},
+        {"tls-key", required_argument, NULL, OPT_TLS_KEY},
         {0, 0, 0, 0},
     };
     unsigned int seen = 0;
@@ -122,7 +139,7 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
         uint64_t *number = NULL;
         unsigned int bit;
 
-        if (option < OPT_STATE_DIR || option > OPT_MAX_LEASES) {
+        if (option < OPT_STATE_DIR || option > OPT_TLS_KEY) {
             return -1;
         }
         bit = 1U << (option - OPT_STATE_DIR);
@@ -148,13 +165,28 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
         case OPT_MAX_STORAGE: number = &options->max_storage; break;
         case OPT_MAX_MEMBERS: number = &options->max_members; break;
         case OPT_MAX_LEASES: number = &options->max_leases; break;
+        case OPT_CONTROL_ADDRESS: options->control_address = optarg; break;
+        case OPT_CONTROL_PORT: number = &options->control_port; break;
+        case OPT_TLS_CA: options->tls_ca_file = optarg; break;
+        case OPT_TLS_CERT: options->tls_certificate_file = optarg; break;
+        case OPT_TLS_KEY: options->tls_private_key_file = optarg; break;
         default: return -1;
         }
         if ((number && parse_number(optarg, number) != 0) || !*optarg) {
             return -1;
         }
     }
-    return optind == argc && seen == ((1U << (OPT_MAX_LEASES - OPT_STATE_DIR + 1)) - 1U) &&
+    if ((options->control_address || options->control_port ||
+         options->tls_ca_file || options->tls_certificate_file ||
+         options->tls_private_key_file) &&
+        (!options->control_address || options->control_port == 0 ||
+         !options->tls_ca_file || !options->tls_certificate_file ||
+         !options->tls_private_key_file)) {
+        return -1;
+    }
+    return optind == argc &&
+           (seen & ((1U << (OPT_MAX_LEASES - OPT_STATE_DIR + 1)) - 1U)) ==
+               ((1U << (OPT_MAX_LEASES - OPT_STATE_DIR + 1)) - 1U) &&
            options->node_id > 0 && options->node_id <= UINT32_MAX &&
            options->instance_id > 0 && options->inventory_revision > 0 &&
            options->vcpu_slots > 0 && options->vcpu_slots <= UINT32_MAX &&
@@ -168,7 +200,10 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
            options->max_memory_chunks > 0 && options->max_memory_chunks <= SIZE_MAX &&
            options->max_storage <= SIZE_MAX &&
            options->max_members > 0 && options->max_members <= SIZE_MAX &&
-           options->max_leases > 0 && options->max_leases <= SIZE_MAX ? 0 : -1;
+           options->max_leases > 0 && options->max_leases <= SIZE_MAX &&
+           (!options->control_address || options->control_port <= UINT16_MAX)
+               ? 0
+               : -1;
 }
 
 static int authenticate_controller(void *opaque, int stream_fd,
@@ -192,6 +227,35 @@ static int authenticate_controller(void *opaque, int stream_fd,
     return 0;
 }
 
+static int member_key_equal(const struct wvm_member_key *left,
+                            const struct wvm_member_key *right)
+{
+    return left && right && left->role_type == right->role_type &&
+           left->role_id == right->role_id &&
+           left->instance_id == right->instance_id;
+}
+
+static int authenticate_controller_io(
+    void *opaque, int stream_fd, const struct wvm_control_io *io,
+    struct wvm_member_key *actor, char *error, size_t error_len)
+{
+    const struct agent_authentication *authentication = opaque;
+    struct wvm_member_key peer;
+
+    (void)stream_fd;
+    if (!authentication || !actor ||
+        wvm_tls_control_peer_identity(io, &peer, error, error_len) != 0 ||
+        !member_key_equal(&peer, &authentication->controller)) {
+        if (error && error_len != 0) {
+            (void)snprintf(error, error_len,
+                           "TLS peer is not the configured controller identity");
+        }
+        return -EACCES;
+    }
+    *actor = peer;
+    return 0;
+}
+
 int wavevm_admission_agent_main(int argc, char **argv)
 {
     struct agent_options options;
@@ -205,6 +269,8 @@ int wavevm_admission_agent_main(int argc, char **argv)
     char route_journal[WVM_ADMISSION_SLOT_PATH_MAX];
     char reservation_journal[WVM_ADMISSION_SLOT_PATH_MAX];
     char runtime_executable[PATH_MAX];
+    struct wvm_endpoint network_endpoint;
+    const struct wvm_endpoint *network_endpoint_ptr = NULL;
     char error[256] = {0};
     int result = 1;
 
@@ -214,7 +280,9 @@ int wavevm_admission_agent_main(int argc, char **argv)
                 "--vcpu-slots N --memory-bytes N --controller-node-id N "
                 "--controller-instance-id N --controller-uid UID --slots N "
                 "--max-vcpus N --max-memory-chunks N --max-storage N "
-                "--max-members N --max-leases N\n", argv[0]);
+                "--max-members N --max-leases N "
+                "[--control-address ADDR --control-port PORT "
+                "--tls-ca FILE --tls-cert FILE --tls-key FILE]\n", argv[0]);
         return 2;
     }
     {
@@ -237,6 +305,39 @@ int wavevm_admission_agent_main(int argc, char **argv)
         fprintf(stderr, "[node-runtime] agent state path is too long\n");
         return 2;
     }
+    if (options.control_address) {
+        struct in_addr ipv4;
+        struct in6_addr ipv6;
+
+        memset(&network_endpoint, 0, sizeof(network_endpoint));
+        network_endpoint.data_transport = WVM_DATA_TRANSPORT_UDP;
+        network_endpoint.data_port = 1;
+        network_endpoint.control_transport = WVM_CONTROL_TRANSPORT_TLS_TCP;
+        network_endpoint.has_control_address = 1;
+        network_endpoint.control_port = (uint16_t)options.control_port;
+        if (inet_pton(AF_INET, options.control_address, &ipv4) == 1) {
+            network_endpoint.data_address_bytes = 4;
+            network_endpoint.control_address_bytes = 4;
+            memcpy(network_endpoint.data_address, &ipv4, 4);
+            memcpy(network_endpoint.control_address, &ipv4, 4);
+        } else if (inet_pton(AF_INET6, options.control_address, &ipv6) == 1) {
+            network_endpoint.data_address_bytes = 16;
+            network_endpoint.control_address_bytes = 16;
+            memcpy(network_endpoint.data_address, &ipv6, 16);
+            memcpy(network_endpoint.control_address, &ipv6, 16);
+        } else if (wvm_endpoint_validate(&network_endpoint, error,
+                                         sizeof(error)) != 0) {
+            fprintf(stderr, "[node-runtime] invalid TLS control address: %s\n",
+                    options.control_address);
+            return 2;
+        }
+        if (wvm_endpoint_validate(&network_endpoint, error, sizeof(error)) != 0) {
+            fprintf(stderr, "[node-runtime] invalid TLS control endpoint: %s\n",
+                    error);
+            return 2;
+        }
+        network_endpoint_ptr = &network_endpoint;
+    }
     memset(&authentication, 0, sizeof(authentication));
     authentication.controller_uid = (uid_t)options.controller_uid;
     authentication.controller.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
@@ -245,6 +346,10 @@ int wavevm_admission_agent_main(int argc, char **argv)
     memset(&config, 0, sizeof(config));
     config.runtime_executable = runtime_executable;
     config.socket_path = options.socket_path;
+    config.network_endpoint = network_endpoint_ptr;
+    config.tls_ca_file = options.tls_ca_file;
+    config.tls_certificate_file = options.tls_certificate_file;
+    config.tls_private_key_file = options.tls_private_key_file;
     config.state_directory = options.state_dir;
     config.runtime_directory = options.runtime_dir;
     config.route_journal_path = route_journal;
@@ -267,6 +372,7 @@ int wavevm_admission_agent_main(int argc, char **argv)
     config.controller_physical_node_id = (uint32_t)options.controller_node_id;
     config.controller_runtime_instance_id = options.controller_instance_id;
     config.authenticate = authenticate_controller;
+    config.authenticate_io = authenticate_controller_io;
     config.authenticate_opaque = &authentication;
     if (sigemptyset(&action.sa_mask) != 0 ||
         sigaction(SIGINT, &action, NULL) != 0 ||

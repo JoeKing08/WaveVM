@@ -21,12 +21,27 @@ typedef int (*wvm_control_stream_authenticate_peer_fn)(
     void *opaque, int stream_fd, const struct wvm_member_key *expected_peer,
     char *error, size_t error_len);
 
+typedef int (*wvm_control_stream_exchange_fn)(
+    void *opaque, const struct wvm_member_key *expected_peer,
+    const struct wvm_endpoint *endpoint, const struct wvm_envelope *request,
+    struct wvm_control_result *result, char *error, size_t error_len);
+
 struct wvm_control_stream_connector {
     void *opaque;
     wvm_control_stream_open_fn open_unix_stream;
     wvm_control_stream_open_fn open_tls_tcp;
     wvm_control_stream_open_fn open_quic_stream;
     wvm_control_stream_authenticate_peer_fn authenticate_peer;
+    wvm_control_stream_authenticate_peer_fn authenticate_unix;
+    wvm_control_stream_authenticate_peer_fn authenticate_tls;
+    wvm_control_stream_authenticate_peer_fn authenticate_quic;
+    void *authenticate_unix_opaque;
+    void *authenticate_tls_opaque;
+    void *authenticate_quic_opaque;
+    wvm_control_stream_exchange_fn exchange_tls_tcp;
+    wvm_control_stream_exchange_fn exchange_quic_stream;
+    void *exchange_tls_opaque;
+    void *exchange_quic_opaque;
     uint32_t timeout_ms;
 };
 

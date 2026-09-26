@@ -29,5 +29,5 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_control_owner.c" \
     "$repo_root/common_include/wavevm_control_service.c" \
     "$repo_root/tests/control-plane/test_control_service.c" \
-    -pthread -o "$tmpdir/test_control_service"
+    -pthread -lssl -lcrypto -o "$tmpdir/test_control_service"
 "$tmpdir/test_control_service"

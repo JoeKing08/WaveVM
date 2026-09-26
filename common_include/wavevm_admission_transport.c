@@ -49,11 +49,39 @@ static int target_validate(const struct wvm_admission_transport_target *target,
     return 0;
 }
 
+static int endpoint_equal(const struct wvm_endpoint *left,
+                          const struct wvm_endpoint *right)
+{
+    if (!left || !right || left->data_transport != right->data_transport ||
+        left->data_address_bytes != right->data_address_bytes ||
+        left->data_port != right->data_port ||
+        left->control_transport != right->control_transport ||
+        left->has_control_address != right->has_control_address ||
+        left->control_port != right->control_port ||
+        left->has_server_name != right->has_server_name ||
+        left->has_control_socket_path != right->has_control_socket_path ||
+        memcmp(left->data_address, right->data_address,
+               left->data_address_bytes) != 0) {
+        return 0;
+    }
+    if (left->has_control_address &&
+        (left->control_address_bytes != right->control_address_bytes ||
+         memcmp(left->control_address, right->control_address,
+                left->control_address_bytes) != 0)) {
+        return 0;
+    }
+    return (!left->has_server_name ||
+            strcmp(left->server_name, right->server_name) == 0) &&
+           (!left->has_control_socket_path ||
+            strcmp(left->control_socket_path,
+                   right->control_socket_path) == 0);
+}
+
 static int transport_validate(const struct wvm_admission_transport *transport,
                               char *error, size_t error_len)
 {
     if (!transport || transport->controller_physical_node_id == 0 ||
-        transport->controller_instance_id == 0 || !transport->resolve_node ||
+        transport->controller_instance_id == 0 || !transport->resolve_member ||
         !transport->submit) {
         set_error(error, error_len,
                   "admission transport requires registered control providers");
@@ -169,26 +197,45 @@ static int candidate_matches_runtime(
     return 0;
 }
 
+static int resolve_member_target(
+    struct wvm_admission_transport *transport,
+    const struct wvm_member_key *expected_member,
+    const struct wvm_endpoint *expected_endpoint,
+    struct wvm_admission_transport_target *target, char *error,
+    size_t error_len)
+{
+    if (transport_validate(transport, error, error_len) != 0 || !expected_member ||
+        wvm_member_key_validate(expected_member, error, error_len) != 0 ||
+        !target ||
+        transport->resolve_member(transport->context, expected_member, target,
+                                  error, error_len) != 0 ||
+        target_validate(target, error, error_len) != 0 ||
+        target->member_key.role_type != expected_member->role_type ||
+        target->member_key.role_id != expected_member->role_id ||
+        target->member_key.instance_id != expected_member->instance_id ||
+        (expected_endpoint && !endpoint_equal(&target->endpoint,
+                                              expected_endpoint))) {
+        set_error(error, error_len,
+                  "control target does not match the membership snapshot");
+        return -1;
+    }
+    return 0;
+}
+
 static int resolve_node_target(struct wvm_admission_transport *transport,
                                uint32_t physical_node_id,
                                uint64_t node_instance_id,
                                struct wvm_admission_transport_target *target,
                                char *error, size_t error_len)
 {
-    if (transport_validate(transport, error, error_len) != 0 ||
-        physical_node_id == 0 || node_instance_id == 0 || !target ||
-        transport->resolve_node(transport->context, physical_node_id,
-                                node_instance_id, target, error, error_len) !=
-            0 ||
-        target_validate(target, error, error_len) != 0 ||
-        target->member_key.role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME ||
-        target->member_key.role_id != physical_node_id ||
-        target->member_key.instance_id != node_instance_id) {
-        set_error(error, error_len,
-                  "node control target does not match reservation identity");
-        return -1;
-    }
-    return 0;
+    struct wvm_member_key member = {
+        .role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME,
+        .role_id = physical_node_id,
+        .instance_id = node_instance_id,
+    };
+
+    return resolve_member_target(transport, &member, NULL, target, error,
+                                 error_len);
 }
 
 static int submit_record(struct wvm_admission_transport *transport,
@@ -328,8 +375,10 @@ static int route_stage(struct wvm_admission_transport *transport,
         struct wvm_admission_transport_target target;
 
         memset(&target, 0, sizeof(target));
-        target.member_key = ack->member_key;
-        target.endpoint = ack->endpoint;
+        if (resolve_member_target(transport, &ack->member_key, &ack->endpoint,
+                                  &target, error, error_len) != 0) {
+            return -1;
+        }
         if (submit_record(transport, &target, message_type,
                           transaction->operation_id, coordinator->vm_id,
                           coordinator->vm_incarnation,
@@ -657,7 +706,7 @@ int wvm_admission_transport_query_runtime_ready(
 int wvm_admission_transport_init(
     struct wvm_admission_transport *transport,
     uint32_t controller_physical_node_id, uint64_t controller_instance_id,
-    void *context, wvm_admission_transport_resolve_node_fn resolve_node,
+    void *context, wvm_admission_transport_resolve_member_fn resolve_member,
     wvm_admission_transport_submit_fn submit, char *error, size_t error_len)
 {
     if (!transport) {
@@ -668,7 +717,7 @@ int wvm_admission_transport_init(
     transport->controller_physical_node_id = controller_physical_node_id;
     transport->controller_instance_id = controller_instance_id;
     transport->context = context;
-    transport->resolve_node = resolve_node;
+    transport->resolve_member = resolve_member;
     transport->submit = submit;
     return transport_validate(transport, error, error_len);
 }

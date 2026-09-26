@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "wavevm_cluster.h"
@@ -64,6 +65,14 @@ static int member_key_compare(const struct wvm_member_key *left,
         return left->instance_id < right->instance_id ? -1 : 1;
     }
     return 0;
+}
+
+static int required_ack_compare(const void *left_value, const void *right_value)
+{
+    const struct wvm_required_ack_entry *left = left_value;
+    const struct wvm_required_ack_entry *right = right_value;
+
+    return member_key_compare(&left->member_key, &right->member_key);
 }
 
 static int valid_topology(enum wvm_route_topology_kind topology_kind)
@@ -179,6 +188,28 @@ static int append_route_rule(
     }
     compiler->route_rules[insert_at] = *rule;
     compiler->route_rule_count++;
+    return 0;
+}
+
+static int append_required_ack(
+    struct wvm_admission_route_compiler *compiler,
+    const struct wvm_member_key *member_key,
+    const struct wvm_endpoint *endpoint,
+    enum wvm_manifest_role_type role_type, char *error, size_t error_len)
+{
+    struct wvm_required_ack_entry *entry;
+
+    if (!compiler || !member_key || !endpoint ||
+        compiler->ack_entry_count == compiler->ack_entry_capacity) {
+        set_error(error, error_len,
+                  "admission route compiler ACK storage is exhausted");
+        return -1;
+    }
+    entry = &compiler->ack_entries[compiler->ack_entry_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->member_key = *member_key;
+    entry->endpoint = *endpoint;
+    entry->role_type = role_type;
     return 0;
 }
 
@@ -351,22 +382,53 @@ int wvm_admission_route_compile(
     route_snapshot->next_hop_rules.entries = compiler->route_rules;
     route_snapshot->next_hop_rules.count = rule_count;
     route_snapshot->next_hop_rules.capacity = compiler->route_rule_capacity;
-    route_snapshot->required_ack_set.entries.entries = compiler->ack_entries;
-    route_snapshot->required_ack_set.entries.count = 1;
-    route_snapshot->required_ack_set.entries.capacity =
-        compiler->ack_entry_capacity;
     route_snapshot->operation_retention_horizon_ms =
         compiler->operation_retention_horizon_ms;
     route_snapshot->retirement_policy = compiler->retirement_policy;
     memset(compiler->ack_entries, 0,
            compiler->ack_entry_capacity * sizeof(*compiler->ack_entries));
-    compiler->ack_entries[0].member_key.role_type = WVM_MANIFEST_ROLE_GATEWAY;
-    compiler->ack_entries[0].member_key.role_id = gateway->gateway_id;
-    compiler->ack_entries[0].member_key.instance_id = gateway->gateway_instance_id;
-    compiler->ack_entries[0].endpoint = gateway->endpoint;
-    compiler->ack_entries[0].role_type = WVM_MANIFEST_ROLE_GATEWAY;
-    compiler->ack_entries[0].expected_snapshot_key =
-        route_snapshot->route_snapshot_key;
+    compiler->ack_entry_count = 0;
+    for (i = 0; i < records->node_count; i++) {
+        const struct wvm_node_record *node = &records->nodes[i];
+        struct wvm_member_key member_key;
+
+        if (node->desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
+            node->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
+            continue;
+        }
+        memset(&member_key, 0, sizeof(member_key));
+        member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+        member_key.role_id = node->physical_node_id;
+        member_key.instance_id = node->node_instance_id;
+        if (append_required_ack(compiler, &member_key, &node->control_endpoint,
+                                WVM_MANIFEST_ROLE_NODE_RUNTIME, error,
+                                error_len) != 0) {
+            return -1;
+        }
+    }
+    {
+        struct wvm_member_key member_key;
+
+        memset(&member_key, 0, sizeof(member_key));
+        member_key.role_type = WVM_MANIFEST_ROLE_GATEWAY;
+        member_key.role_id = gateway->gateway_id;
+        member_key.instance_id = gateway->gateway_instance_id;
+        if (append_required_ack(compiler, &member_key, &gateway->endpoint,
+                                WVM_MANIFEST_ROLE_GATEWAY, error,
+                                error_len) != 0) {
+            return -1;
+        }
+    }
+    qsort(compiler->ack_entries, compiler->ack_entry_count,
+          sizeof(*compiler->ack_entries), required_ack_compare);
+    route_snapshot->required_ack_set.entries.entries = compiler->ack_entries;
+    route_snapshot->required_ack_set.entries.count = compiler->ack_entry_count;
+    route_snapshot->required_ack_set.entries.capacity =
+        compiler->ack_entry_capacity;
+    for (i = 0; i < compiler->ack_entry_count; i++) {
+        compiler->ack_entries[i].expected_snapshot_key =
+            route_snapshot->route_snapshot_key;
+    }
     if (wvm_route_snapshot_record_encode(
             route_snapshot, compiler->snapshot_bytes,
             compiler->snapshot_byte_capacity, &encoded_bytes, snapshot_digest,

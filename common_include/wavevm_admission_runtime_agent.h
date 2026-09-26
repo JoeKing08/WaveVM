@@ -16,6 +16,10 @@ struct wvm_admission_runtime_agent_config {
     const char *socket_path;
     const char *state_directory;
     const char *runtime_directory;
+    const struct wvm_endpoint *network_endpoint;
+    const char *tls_ca_file;
+    const char *tls_certificate_file;
+    const char *tls_private_key_file;
     const char *route_journal_path;
     const char *reservation_journal_path;
     mode_t socket_mode;
@@ -36,6 +40,7 @@ struct wvm_admission_runtime_agent_config {
     uint32_t controller_physical_node_id;
     uint64_t controller_runtime_instance_id;
     wvm_control_transport_authenticate_fn authenticate;
+    wvm_control_transport_authenticate_io_fn authenticate_io;
     void *authenticate_opaque;
 };
 

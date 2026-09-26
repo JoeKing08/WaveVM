@@ -23,6 +23,7 @@ struct wvm_admission_route_compiler {
     size_t route_rule_count;
     struct wvm_required_ack_entry *ack_entries;
     size_t ack_entry_capacity;
+    size_t ack_entry_count;
     uint8_t *snapshot_bytes;
     size_t snapshot_byte_capacity;
     uint8_t *ack_set_bytes;

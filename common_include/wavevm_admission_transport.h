@@ -15,9 +15,9 @@ struct wvm_admission_transport_target {
     struct wvm_endpoint endpoint;
 };
 
-/* Resolve a selected physical node to its registered control endpoint. */
-typedef int (*wvm_admission_transport_resolve_node_fn)(
-    void *context, uint32_t physical_node_id, uint64_t node_instance_id,
+/* Resolve an exact registered member to its current control endpoint. */
+typedef int (*wvm_admission_transport_resolve_member_fn)(
+    void *context, const struct wvm_member_key *member_key,
     struct wvm_admission_transport_target *target, char *error,
     size_t error_len);
 
@@ -36,14 +36,14 @@ struct wvm_admission_transport {
     /* Borrowed only for the duration of one synchronous orchestration run. */
     const struct wvm_cluster_record_set *delivery_records;
     const struct wvm_route_snapshot_record *delivery_route_snapshot;
-    wvm_admission_transport_resolve_node_fn resolve_node;
+    wvm_admission_transport_resolve_member_fn resolve_member;
     wvm_admission_transport_submit_fn submit;
 };
 
 int wvm_admission_transport_init(
     struct wvm_admission_transport *transport,
     uint32_t controller_physical_node_id, uint64_t controller_instance_id,
-    void *context, wvm_admission_transport_resolve_node_fn resolve_node,
+    void *context, wvm_admission_transport_resolve_member_fn resolve_member,
     wvm_admission_transport_submit_fn submit, char *error,
     size_t error_len);
 

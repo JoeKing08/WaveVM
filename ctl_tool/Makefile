@@ -38,13 +38,14 @@ SRCS = main.c admission_workspace.c admission_readiness.c capability_publication
 	$(COMMON_DIR)/wavevm_control_transport.c \
 	$(COMMON_DIR)/wavevm_control_client.c \
 	$(COMMON_DIR)/wavevm_unix_control_connector.c \
+	$(COMMON_DIR)/wavevm_tls_control_connector.c \
 	$(COMMON_DIR)/wavevm_control_owner.c \
 	$(COMMON_DIR)/wavevm_control_service.c
 
 all: $(TARGET)
 
 $(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) -I$(COMMON_DIR) $(SRCS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) -I$(COMMON_DIR) $(SRCS) $(LDFLAGS) -lssl -lcrypto -o $@
 
 clean:
 	rm -f $(TARGET)

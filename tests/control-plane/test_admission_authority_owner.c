@@ -43,14 +43,12 @@ static int reset_workspace(
     return 0;
 }
 
-static int resolve_node(void *context, uint32_t physical_node_id,
-                        uint64_t node_instance_id,
+static int resolve_member(void *context, const struct wvm_member_key *member_key,
                         struct wvm_admission_transport_target *target,
                         char *error, size_t error_len)
 {
     (void)context;
-    (void)physical_node_id;
-    (void)node_instance_id;
+    (void)member_key;
     (void)target;
     (void)error;
     (void)error_len;
@@ -164,7 +162,7 @@ int main(void)
     struct wvm_route_transaction_record route_transaction;
     struct wvm_route_snapshot_record route_snapshot;
     struct wvm_route_rule_record route_rules[16];
-    struct wvm_required_ack_entry route_ack_entries[1];
+    struct wvm_required_ack_entry route_ack_entries[2];
     uint8_t route_snapshot_bytes[65536];
     uint8_t route_ack_set_bytes[4096];
     struct wvm_vm_request request;
@@ -211,14 +209,14 @@ int main(void)
                        &plan_provider, &options, error, sizeof(error)) == 0,
                "publish immutable evidence and complete launch plan") ||
         expect(wvm_admission_transport_init(
-                   &transport, 17, 500, NULL, resolve_node, submit,
+                   &transport, 17, 500, NULL, resolve_member, submit,
                    error, sizeof(error)) == 0,
                "initialize caller-owned admission transport")) {
         return 1;
     }
     if (expect(wvm_admission_route_compiler_init(
                    &route_compiler, WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1,
-                   route_rules, 16, route_ack_entries, 1,
+                   route_rules, 16, route_ack_entries, 2,
                    route_snapshot_bytes, sizeof(route_snapshot_bytes),
                    route_ack_set_bytes, sizeof(route_ack_set_bytes), error,
                    sizeof(error)) == 0,

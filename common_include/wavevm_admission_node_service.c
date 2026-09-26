@@ -34,12 +34,17 @@ int wvm_admission_node_service_init(
 
     memset(&owner_config, 0, sizeof(owner_config));
     owner_config.socket_path = config->socket_path;
+    owner_config.network_endpoint = config->network_endpoint;
+    owner_config.tls_ca_file = config->tls_ca_file;
+    owner_config.tls_certificate_file = config->tls_certificate_file;
+    owner_config.tls_private_key_file = config->tls_private_key_file;
     owner_config.socket_mode = config->socket_mode;
     owner_config.listen_backlog = config->listen_backlog;
     owner_config.local_physical_node_id = config->local_physical_node_id;
     owner_config.local_runtime_instance_id = config->local_runtime_instance_id;
     owner_config.max_frame_bytes = config->max_frame_bytes;
     owner_config.authenticate = config->authenticate;
+    owner_config.authenticate_io = config->authenticate_io;
     owner_config.authenticate_opaque = config->authenticate_opaque;
     owner_config.admission_apply = wvm_admission_receiver_apply;
     owner_config.admission_apply_opaque = &service->receiver;

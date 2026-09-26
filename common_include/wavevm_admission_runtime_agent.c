@@ -539,12 +539,17 @@ int wvm_admission_runtime_agent_init(
     receiver_config.start_runtime = start_runtime;
     memset(&service_config, 0, sizeof(service_config));
     service_config.socket_path = config->socket_path;
+    service_config.network_endpoint = config->network_endpoint;
+    service_config.tls_ca_file = config->tls_ca_file;
+    service_config.tls_certificate_file = config->tls_certificate_file;
+    service_config.tls_private_key_file = config->tls_private_key_file;
     service_config.socket_mode = config->socket_mode;
     service_config.listen_backlog = config->listen_backlog;
     service_config.local_physical_node_id = config->local_physical_node_id;
     service_config.local_runtime_instance_id = config->local_node_instance_id;
     service_config.max_frame_bytes = config->max_frame_bytes;
     service_config.authenticate = config->authenticate;
+    service_config.authenticate_io = config->authenticate_io;
     service_config.authenticate_opaque = config->authenticate_opaque;
     service_config.receiver = receiver_config;
     if (wvm_admission_node_service_init(&agent->node_service, &service_config,

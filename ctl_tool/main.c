@@ -28,6 +28,7 @@
 #include "../common_include/wavevm_sha256.h"
 #include "../common_include/wavevm_admission_stream_transport.h"
 #include "../common_include/wavevm_unix_control_connector.h"
+#include "../common_include/wavevm_tls_control_connector.h"
 #include "admission_workspace.h"
 #include "admission_readiness.h"
 #include "capability_publication.h"
@@ -42,6 +43,7 @@ struct admission_workspace {
     struct wvm_admission_route_compiler route_compiler;
     struct wvm_admission_transport transport;
     struct wvm_unix_control_connector unix_connector;
+    struct wvm_tls_control_connector tls_connector;
     struct wvm_control_stream_connector control_connector;
     struct wvm_admission_stream_transport stream_transport;
     struct wvm_admission_authority_owner authority_owner;
@@ -75,6 +77,7 @@ struct admission_workspace {
     size_t capacity;
     size_t route_snapshot_bytes_capacity;
     size_t route_ack_set_bytes_capacity;
+    size_t route_ack_capacity;
     int initialized;
 };
 
@@ -101,6 +104,9 @@ struct service_options {
     const char *state_directory;
     const char *socket_path;
     const char *principal_file;
+    const char *control_ca_file;
+    const char *control_certificate_file;
+    const char *control_private_key_file;
     uint32_t local_physical_node_id;
     uint64_t local_runtime_instance_id;
     size_t capacity;
@@ -451,7 +457,8 @@ static void print_usage(const char *program)
     fprintf(stderr,
             "Usage:\n"
             "  %s serve --state-dir DIR --socket PATH --local-node-id N "
-            "--local-instance-id N --principals FILE --capacity N\n\n"
+            "--local-instance-id N --principals FILE --capacity N "
+            "[--control-ca FILE --control-cert FILE --control-key FILE]\n\n"
             "FILE contains one local authenticated principal per line:\n"
             "  UID ROLE ROLE_ID INSTANCE_ID\n"
             "ROLE is node-runtime, gateway, or executor. The Unix peer UID is "
@@ -556,6 +563,15 @@ static int parse_options(int argc, char **argv, struct service_options *options)
                    !have_principals) {
             options->principal_file = argv[++i];
             have_principals = 1;
+        } else if (strcmp(argv[i], "--control-ca") == 0 && i + 1 < argc &&
+                   !options->control_ca_file) {
+            options->control_ca_file = argv[++i];
+        } else if (strcmp(argv[i], "--control-cert") == 0 && i + 1 < argc &&
+                   !options->control_certificate_file) {
+            options->control_certificate_file = argv[++i];
+        } else if (strcmp(argv[i], "--control-key") == 0 && i + 1 < argc &&
+                   !options->control_private_key_file) {
+            options->control_private_key_file = argv[++i];
         } else if (strcmp(argv[i], "--capacity") == 0 && i + 1 < argc &&
                    !have_capacity &&
                    parse_size(argv[++i], &options->capacity) == 0) {
@@ -563,6 +579,12 @@ static int parse_options(int argc, char **argv, struct service_options *options)
         } else {
             return -1;
         }
+    }
+    if ((options->control_ca_file || options->control_certificate_file ||
+         options->control_private_key_file) &&
+        (!options->control_ca_file || !options->control_certificate_file ||
+         !options->control_private_key_file)) {
+        return -1;
     }
     return have_state_directory && have_socket && have_node && have_instance &&
                    have_principals && have_capacity
@@ -1005,33 +1027,62 @@ static int admission_workspace_reset(
     return 0;
 }
 
-static int admission_transport_resolve_node(
-    void *context, uint32_t physical_node_id, uint64_t node_instance_id,
+static int admission_transport_resolve_member(
+    void *context, const struct wvm_member_key *member_key,
     struct wvm_admission_transport_target *target, char *error,
     size_t error_len)
 {
     struct admission_workspace *workspace = context;
-    struct wvm_membership_controller_member_status status;
-    struct wvm_member_key key = {
-        .role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME,
-        .role_id = physical_node_id,
-        .instance_id = node_instance_id,
-    };
+    const struct wvm_membership_controller_capture *capture;
+    size_t i;
 
-    if (!workspace || !workspace->membership_controller || !target) {
+    if (!workspace || !member_key || !target ||
+        wvm_member_key_validate(member_key, error, error_len) != 0) {
         snprintf(error, error_len, "invalid transport resolve arguments");
         return -1;
     }
-
-    if (wvm_membership_controller_member_status(workspace->membership_controller,
-                                                &key, &status, error,
-                                                error_len) != 0) {
-        return -1;
-    }
+    capture = &workspace->membership_capture;
     memset(target, 0, sizeof(*target));
-    target->member_key = status.member_key;
-    target->endpoint = status.endpoint;
-    return 0;
+    if (member_key->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
+        for (i = 0; i < capture->node_count; i++) {
+            const struct wvm_node_record *node = &capture->nodes[i];
+
+            if (node->physical_node_id != member_key->role_id ||
+                node->node_instance_id != member_key->instance_id) {
+                continue;
+            }
+            if (node->desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
+                node->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
+                snprintf(error, error_len,
+                         "node runtime is not an active healthy member");
+                return -1;
+            }
+            target->member_key = *member_key;
+            target->endpoint = node->control_endpoint;
+            return 0;
+        }
+    } else if (member_key->role_type == WVM_MANIFEST_ROLE_GATEWAY) {
+        for (i = 0; i < capture->gateway_count; i++) {
+            const struct wvm_gateway_record *gateway = &capture->gateways[i];
+
+            if (gateway->gateway_id != member_key->role_id ||
+                gateway->gateway_instance_id != member_key->instance_id) {
+                continue;
+            }
+            if (gateway->desired_membership_state !=
+                    WVM_MANIFEST_MEMBER_ACTIVE ||
+                gateway->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
+                snprintf(error, error_len,
+                         "gateway is not an active healthy member");
+                return -1;
+            }
+            target->member_key = *member_key;
+            target->endpoint = gateway->endpoint;
+            return 0;
+        }
+    }
+    snprintf(error, error_len, "member is absent from the admission snapshot");
+    return -1;
 }
 
 static int admission_transport_submit(
@@ -1046,18 +1097,21 @@ static int admission_transport_submit(
                  "authenticated admission stream is not initialized");
         return -EINVAL;
     }
-    if (target->member_key.role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME ||
-        target->member_key.role_id != workspace->local_physical_node_id ||
-        target->member_key.instance_id !=
-            workspace->local_runtime_instance_id) {
-        snprintf(error, error_len,
-                 "Unix admission transport requires the exact local runtime instance");
-        return -EXDEV;
-    }
-    if (target->endpoint.control_transport != WVM_CONTROL_TRANSPORT_UNIX_STREAM) {
-        snprintf(error, error_len,
-                 "TLS/TCP and QUIC admission connectors are not configured");
+    if (target->member_key.role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+        !(target->member_key.role_type == WVM_MANIFEST_ROLE_GATEWAY &&
+          (envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_PREPARE ||
+           envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_COMMIT ||
+           envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_ABORT ||
+           envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_RETIRE))) {
+        snprintf(error, error_len, "admission target role does not accept this stage");
         return -EOPNOTSUPP;
+    }
+    if (target->endpoint.control_transport == WVM_CONTROL_TRANSPORT_UNIX_STREAM &&
+        (target->member_key.role_id != workspace->local_physical_node_id ||
+         target->member_key.instance_id != workspace->local_runtime_instance_id)) {
+        snprintf(error, error_len,
+                 "Unix admission transport is restricted to the local runtime");
+        return -EXDEV;
     }
     return wvm_admission_stream_transport_submit(
         &workspace->stream_transport, target, envelope, error, error_len);
@@ -1201,8 +1255,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "wvm_ctl: admission capacity is too large\n");
         goto out;
     }
-    admission_workspace.route_snapshot_bytes_capacity = options.capacity * 512;
-    admission_workspace.route_ack_set_bytes_capacity = options.capacity * 64;
+    if (options.capacity > SIZE_MAX / 2U ||
+        options.capacity * 2U > SIZE_MAX / 512U ||
+        options.capacity * 2U > SIZE_MAX / 2048U) {
+        fprintf(stderr, "wvm_ctl: route workspace capacity is too large\n");
+        goto out;
+    }
+    admission_workspace.route_ack_capacity = options.capacity * 2U;
+    admission_workspace.route_snapshot_bytes_capacity = options.capacity * 2U * 2048U;
+    admission_workspace.route_ack_set_bytes_capacity = options.capacity * 2U * 512U;
     admission_workspace.capability_evidence.records =
         calloc(options.capacity,
                sizeof(*admission_workspace.capability_evidence.records));
@@ -1215,7 +1276,7 @@ int main(int argc, char **argv)
     admission_workspace.launch_plans = calloc(options.capacity, sizeof(*admission_workspace.launch_plans));
     admission_workspace.listener_plans = calloc(options.capacity, sizeof(*admission_workspace.listener_plans));
     admission_workspace.route_rules = calloc(options.capacity, sizeof(*admission_workspace.route_rules));
-    admission_workspace.route_ack_entries = calloc(options.capacity, sizeof(*admission_workspace.route_ack_entries));
+    admission_workspace.route_ack_entries = calloc(admission_workspace.route_ack_capacity, sizeof(*admission_workspace.route_ack_entries));
     admission_workspace.capture_nodes = calloc(options.capacity, sizeof(*admission_workspace.capture_nodes));
     admission_workspace.capture_gateways = calloc(options.capacity, sizeof(*admission_workspace.capture_gateways));
     admission_workspace.capture_hosted_gateways = calloc(options.capacity, sizeof(*admission_workspace.capture_hosted_gateways));
@@ -1296,7 +1357,7 @@ int main(int argc, char **argv)
             &admission_workspace.route_compiler,
             WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1,
             admission_workspace.route_rules, admission_workspace.capacity,
-            admission_workspace.route_ack_entries, admission_workspace.capacity,
+            admission_workspace.route_ack_entries, admission_workspace.route_ack_capacity,
             admission_workspace.route_snapshot_bytes,
             admission_workspace.route_snapshot_bytes_capacity,
             admission_workspace.route_ack_set_bytes,
@@ -1312,6 +1373,13 @@ int main(int argc, char **argv)
             &admission_workspace.unix_connector, authorize_unix_control_peer,
             &auth, 10000U, &admission_workspace.control_connector,
             error, sizeof(error)) != 0 ||
+        ((options.control_ca_file || options.control_certificate_file ||
+          options.control_private_key_file) &&
+         wvm_tls_control_connector_bind(
+             &admission_workspace.tls_connector, options.control_ca_file,
+             options.control_certificate_file, options.control_private_key_file,
+             10000U, &admission_workspace.control_connector, error,
+             sizeof(error)) != 0) ||
         wvm_admission_stream_transport_init(
             &admission_workspace.stream_transport,
             &admission_workspace.control_connector,
@@ -1325,7 +1393,7 @@ int main(int argc, char **argv)
             options.local_physical_node_id,
             options.local_runtime_instance_id,
             &admission_workspace,
-            admission_transport_resolve_node,
+            admission_transport_resolve_member,
             admission_transport_submit,
             error, sizeof(error)) != 0) {
         fprintf(stderr, "wvm_ctl: cannot initialize admission transport: %s\n", error);
@@ -1444,6 +1512,7 @@ close_plane:
 out:
     wvm_admission_stream_transport_destroy(
         &admission_workspace.stream_transport);
+    wvm_tls_control_connector_destroy(&admission_workspace.tls_connector);
     if (control_context.lock_initialized) {
         pthread_mutex_destroy(&control_context.lock);
     }

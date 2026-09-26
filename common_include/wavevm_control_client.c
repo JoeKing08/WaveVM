@@ -78,12 +78,90 @@ static wvm_control_stream_open_fn select_open_callback(
     }
 }
 
+static wvm_control_stream_authenticate_peer_fn select_authenticate_callback(
+    const struct wvm_control_stream_connector *connector,
+    enum wvm_control_transport transport, void **opaque, char *error,
+    size_t error_len)
+{
+    if (!connector || !opaque) {
+        set_error(error, error_len, "control authenticator is missing");
+        return NULL;
+    }
+    switch (transport) {
+    case WVM_CONTROL_TRANSPORT_UNIX_STREAM:
+        *opaque = connector->authenticate_unix_opaque
+                      ? connector->authenticate_unix_opaque
+                      : connector->opaque;
+        break;
+    case WVM_CONTROL_TRANSPORT_TLS_TCP:
+        *opaque = connector->authenticate_tls_opaque
+                      ? connector->authenticate_tls_opaque
+                      : connector->opaque;
+        break;
+    case WVM_CONTROL_TRANSPORT_QUIC_STREAM:
+        *opaque = connector->authenticate_quic_opaque
+                      ? connector->authenticate_quic_opaque
+                      : connector->opaque;
+        break;
+    default:
+        set_error(error, error_len, "control endpoint transport is invalid");
+        return NULL;
+    }
+    if (!connector->authenticate_peer && !connector->authenticate_unix &&
+        !connector->authenticate_tls && !connector->authenticate_quic) {
+        set_error(error, error_len,
+                  "authenticated control stream connector is incomplete");
+        return NULL;
+    }
+    switch (transport) {
+    case WVM_CONTROL_TRANSPORT_UNIX_STREAM:
+        return connector->authenticate_unix
+                   ? connector->authenticate_unix
+                   : connector->authenticate_peer;
+    case WVM_CONTROL_TRANSPORT_TLS_TCP:
+        return connector->authenticate_tls
+                   ? connector->authenticate_tls
+                   : connector->authenticate_peer;
+    case WVM_CONTROL_TRANSPORT_QUIC_STREAM:
+        return connector->authenticate_quic
+                   ? connector->authenticate_quic
+                   : connector->authenticate_peer;
+    default:
+        return NULL;
+    }
+}
+
+static wvm_control_stream_exchange_fn select_exchange_callback(
+    const struct wvm_control_stream_connector *connector,
+    enum wvm_control_transport transport, void **opaque)
+{
+    if (!connector || !opaque) {
+        return NULL;
+    }
+    switch (transport) {
+    case WVM_CONTROL_TRANSPORT_TLS_TCP:
+        *opaque = connector->exchange_tls_opaque
+                      ? connector->exchange_tls_opaque
+                      : connector->opaque;
+        return connector->exchange_tls_tcp;
+    case WVM_CONTROL_TRANSPORT_QUIC_STREAM:
+        *opaque = connector->exchange_quic_opaque
+                      ? connector->exchange_quic_opaque
+                      : connector->opaque;
+        return connector->exchange_quic_stream;
+    default:
+        return NULL;
+    }
+}
+
 int wvm_control_stream_client_init(
     struct wvm_control_stream_client *client,
     const struct wvm_control_stream_connector *connector, char *error,
     size_t error_len)
 {
-    if (!client || !connector || !connector->authenticate_peer) {
+    if (!client || !connector ||
+        (!connector->authenticate_peer && !connector->authenticate_unix &&
+         !connector->authenticate_tls && !connector->authenticate_quic)) {
         set_error(error, error_len,
                   "authenticated control stream client is incomplete");
         return -EINVAL;
@@ -112,6 +190,9 @@ int wvm_control_stream_client_exchange(
     struct wvm_control_result *result, char *error, size_t error_len)
 {
     wvm_control_stream_open_fn open_stream;
+    wvm_control_stream_authenticate_peer_fn authenticate_peer;
+    wvm_control_stream_exchange_fn exchange_stream;
+    void *callback_opaque;
     int stream_fd = -1;
     int status;
 
@@ -146,17 +227,30 @@ int wvm_control_stream_client_exchange(
     status = set_socket_timeout(stream_fd, client->connector.timeout_ms, error,
                                 error_len);
     if (status == 0) {
-        status = client->connector.authenticate_peer(
-            client->connector.opaque, stream_fd, expected_peer, error,
-            error_len);
+        authenticate_peer = select_authenticate_callback(
+            &client->connector, endpoint->control_transport, &callback_opaque,
+            error, error_len);
+        if (!authenticate_peer) {
+            status = -EINVAL;
+        } else {
+            status = authenticate_peer(callback_opaque, stream_fd, expected_peer,
+                                       error, error_len);
+        }
         if (status != 0) {
             status = callback_failure(status);
         }
     }
     if (status == 0) {
-        status = wvm_control_transport_exchange(
-            stream_fd, expected_peer->role_id, expected_peer->instance_id,
-            request, result, error, error_len);
+        exchange_stream = select_exchange_callback(
+            &client->connector, endpoint->control_transport, &callback_opaque);
+        if (exchange_stream) {
+            status = exchange_stream(callback_opaque, expected_peer, endpoint,
+                                     request, result, error, error_len);
+        } else {
+            status = wvm_control_transport_exchange(
+                stream_fd, expected_peer->role_id, expected_peer->instance_id,
+                request, result, error, error_len);
+        }
     }
     shutdown(stream_fd, SHUT_RDWR);
     close(stream_fd);

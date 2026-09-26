@@ -22,7 +22,12 @@ struct wvm_admission_node_service_config {
     uint32_t local_physical_node_id;
     uint64_t local_runtime_instance_id;
     size_t max_frame_bytes;
+    const struct wvm_endpoint *network_endpoint;
+    const char *tls_ca_file;
+    const char *tls_certificate_file;
+    const char *tls_private_key_file;
     wvm_control_transport_authenticate_fn authenticate;
+    wvm_control_transport_authenticate_io_fn authenticate_io;
     void *authenticate_opaque;
     struct wvm_admission_receiver_config receiver;
 };

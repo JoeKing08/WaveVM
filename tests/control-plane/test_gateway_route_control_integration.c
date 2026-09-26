@@ -21,6 +21,8 @@
 #include "wavevm_envelope.h"
 #include "wavevm_route_delivery.h"
 #include "wavevm_runtime_gate.h"
+#include "wavevm_control_client.h"
+#include "wavevm_tls_control_connector.h"
 
 static int expect(int condition, const char *message)
 {
@@ -40,11 +42,6 @@ static void sleep_ms(long milliseconds)
     delay.tv_nsec = (milliseconds % 1000L) * 1000000L;
     while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {
     }
-}
-
-static uint16_t read_be16(const uint8_t *bytes)
-{
-    return ((uint16_t)bytes[0] << 8) | bytes[1];
 }
 
 static void fill_endpoint(struct wvm_endpoint *endpoint, uint16_t port)
@@ -248,15 +245,51 @@ static int reserve_udp_port(uint16_t *port_out)
     return 0;
 }
 
+static int reserve_tcp_port(uint16_t *port_out)
+{
+    struct sockaddr_in address;
+    socklen_t length = sizeof(address);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (fd < 0) {
+        return -1;
+    }
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+        getsockname(fd, (struct sockaddr *)&address, &length) != 0) {
+        close(fd);
+        return -1;
+    }
+    *port_out = ntohs(address.sin_port);
+    close(fd);
+    return 0;
+}
+
 static int wait_for_control_socket(const char *path)
 {
     struct stat st;
+    struct sockaddr_un address;
     int attempts;
 
+    memset(&address, 0, sizeof(address));
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, sizeof(address.sun_path), "%s", path);
     for (attempts = 0; attempts < 200; attempts++) {
         if (lstat(path, &st) == 0 && S_ISSOCK(st.st_mode) &&
             (st.st_mode & 0777U) == 0600U) {
-            return 0;
+            int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+            if (fd >= 0) {
+                int connected = connect(fd, (struct sockaddr *)&address,
+                                        sizeof(address));
+
+                close(fd);
+                if (connected == 0) {
+                    return 0;
+                }
+            }
         }
         sleep_ms(25);
     }
@@ -268,16 +301,22 @@ static pid_t start_gateway(const char *gateway_path, const char *manifest_path,
                            const char *journal_path,
                            const char *control_socket_path,
                            const char *config_path, const char *log_path,
-                           uint16_t data_port, uint16_t legacy_control_port)
+                           uint16_t data_port, uint16_t legacy_control_port,
+                           uint16_t tls_control_port, const char *ca_file,
+                           const char *certificate_file,
+                           const char *private_key_file)
 {
     pid_t child;
     char data_port_text[16];
     char control_port_text[16];
+    char tls_port_text[16];
 
     snprintf(data_port_text, sizeof(data_port_text), "%u",
              (unsigned)data_port);
     snprintf(control_port_text, sizeof(control_port_text), "%u",
              (unsigned)legacy_control_port);
+    snprintf(tls_port_text, sizeof(tls_port_text), "%u",
+             (unsigned)tls_control_port);
     child = fork();
     if (child != 0) {
         return child;
@@ -297,8 +336,20 @@ static pid_t start_gateway(const char *gateway_path, const char *manifest_path,
     setenv("WVM_RUNTIME_MANIFEST_PATH", manifest_path, 1);
     setenv("WVM_RUNTIME_PHYSICAL_NODE_ID", "17", 1);
     setenv("WVM_NODE_INSTANCE_ID", "44", 1);
+    setenv("WVM_GATEWAY_ID", "27", 1);
+    setenv("WVM_GATEWAY_INSTANCE_ID", "45", 1);
     setenv("WVM_GATEWAY_ROUTE_JOURNAL_PATH", journal_path, 1);
     setenv("WVM_GATEWAY_CONTROL_SOCKET", control_socket_path, 1);
+    setenv("WVM_GATEWAY_CONTROLLER_ROLE", "node-runtime", 1);
+    setenv("WVM_GATEWAY_CONTROLLER_ID", "71", 1);
+    setenv("WVM_GATEWAY_CONTROLLER_INSTANCE_ID", "72", 1);
+    setenv("WVM_GATEWAY_CONTROLLER_PHYSICAL_NODE_ID", "71", 1);
+    setenv("WVM_GATEWAY_CONTROLLER_RUNTIME_INSTANCE_ID", "72", 1);
+    setenv("WVM_GATEWAY_CONTROL_ADDRESS", "127.0.0.1", 1);
+    setenv("WVM_GATEWAY_CONTROL_PORT", tls_port_text, 1);
+    setenv("WVM_GATEWAY_CONTROL_CA_FILE", ca_file, 1);
+    setenv("WVM_GATEWAY_CONTROL_CERTIFICATE_FILE", certificate_file, 1);
+    setenv("WVM_GATEWAY_CONTROL_PRIVATE_KEY_FILE", private_key_file, 1);
     /*
      * The gateway must ignore this unrelated path in active mode and derive
      * the manifest sibling artifact instead.
@@ -331,6 +382,7 @@ static void stop_gateway(pid_t child)
 static void make_control_request(struct wvm_envelope *request,
                                  uint16_t message_type,
                                  uint8_t operation_tail,
+                                 const struct wvm_route_snapshot_key *key,
                                  const uint8_t *payload, size_t payload_bytes)
 {
     memset(request, 0, sizeof(*request));
@@ -338,77 +390,79 @@ static void make_control_request(struct wvm_envelope *request,
     request->vm_id = 701;
     request->vm_incarnation = 55;
     request->manifest_generation = 9;
-    request->origin_physical_node_id = 17;
-    request->origin_runtime_instance_id = 44;
+    request->origin_physical_node_id = 71;
+    request->origin_runtime_instance_id = 72;
     request->operation_id[WVM_IDENTITY_ID_BYTES - 1] = operation_tail;
     request->delivery_attempt_id = 1;
+    request->route_scope_id = key->scope_key.route_scope_id;
+    request->topology_revision = key->topology_revision;
+    request->route_generation = key->route_generation;
+    memcpy(request->route_snapshot_digest, key->snapshot_digest,
+           sizeof(request->route_snapshot_digest));
     request->payload = payload;
     request->payload_bytes = payload_bytes;
+    wvm_envelope_semantic_digest(payload, payload_bytes,
+                                 request->semantic_payload_digest);
 }
 
-static int send_control_request(const char *socket_path,
+static int send_control_request(struct wvm_control_stream_client *client,
+                                const struct wvm_endpoint *endpoint,
                                 const struct wvm_envelope *request,
                                 uint16_t expected_state)
 {
-    struct sockaddr_un address;
-    struct pollfd pollfd;
-    struct wvm_envelope response;
-    uint8_t request_bytes[WVM_ENVELOPE_HEADER_BYTES +
-                          WVM_ENVELOPE_MAX_LOCAL_PAYLOAD];
-    uint8_t response_bytes[WVM_ENVELOPE_HEADER_BYTES + 128];
-    size_t request_byte_count = 0;
-    ssize_t received;
+    const struct wvm_member_key gateway = {
+        .role_type = WVM_MANIFEST_ROLE_GATEWAY,
+        .role_id = 27,
+        .instance_id = 45,
+    };
+    struct wvm_control_result response;
     char error[256] = {0};
-    int fd;
-
-    if (wvm_envelope_encode(request, WVM_ENVELOPE_TRANSPORT_LOCAL,
-                               request_bytes, sizeof(request_bytes),
-                               &request_byte_count, error,
-                               sizeof(error)) != 0) {
-        fprintf(stderr, "cannot encode route control request: %s\n", error);
-        return -1;
-    }
-    fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-    if (fd < 0) {
-        return -1;
-    }
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    if (strlen(socket_path) >= sizeof(address.sun_path)) {
-        close(fd);
-        return -1;
-    }
-    snprintf(address.sun_path, sizeof(address.sun_path), "%s", socket_path);
-    if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-        send(fd, request_bytes, request_byte_count, MSG_NOSIGNAL) !=
-            (ssize_t)request_byte_count) {
-        close(fd);
-        return -1;
-    }
-    pollfd.fd = fd;
-    pollfd.events = POLLIN;
-    pollfd.revents = 0;
-    if (poll(&pollfd, 1, 3000) != 1 || !(pollfd.revents & POLLIN)) {
-        close(fd);
-        return -1;
-    }
-    received = recv(fd, response_bytes, sizeof(response_bytes), 0);
-    close(fd);
-    if (received <= 0 ||
-        wvm_envelope_decode(response_bytes, (size_t)received,
-                               WVM_ENVELOPE_TRANSPORT_LOCAL, &response,
-                               error, sizeof(error)) != 0 ||
-        response.message_type != WVM_ENVELOPE_MSG_CTRL_RESULT ||
-        response.payload_bytes != 72 ||
-        read_be16(response.payload) != 0 ||
-        read_be16(response.payload + 2) != expected_state ||
-        memcmp(response.operation_id, request->operation_id,
-               sizeof(response.operation_id)) != 0) {
+    if (wvm_control_stream_client_exchange(client, &gateway, endpoint,
+                                           request, &response, error,
+                                           sizeof(error)) != 0 ||
+        response.status_code != WVM_CONTROL_RESULT_SUCCESS ||
+        response.recorded_state != expected_state ||
+        response.applied_revision != request->route_generation) {
         fprintf(stderr, "invalid route control response: %s\n",
                 error[0] ? error : "unexpected response");
         return -1;
     }
     return 0;
+}
+
+static int reject_wrong_controller(const char *ca_file,
+                                   const char *gateway_certificate,
+                                   const char *gateway_private_key,
+                                   const struct wvm_endpoint *endpoint,
+                                   const struct wvm_envelope *request)
+{
+    const struct wvm_member_key gateway = {
+        .role_type = WVM_MANIFEST_ROLE_GATEWAY,
+        .role_id = 27,
+        .instance_id = 45,
+    };
+    struct wvm_tls_control_connector tls_state;
+    struct wvm_control_stream_connector connector = {0};
+    struct wvm_control_stream_client client = {0};
+    struct wvm_control_result response = {0};
+    char error[256] = {0};
+    int result = -1;
+
+    memset(&tls_state, 0, sizeof(tls_state));
+    if (wvm_tls_control_connector_bind(
+            &tls_state, ca_file, gateway_certificate, gateway_private_key,
+            3000, &connector, error, sizeof(error)) == 0 &&
+        wvm_control_stream_client_init(&client, &connector, error,
+                                       sizeof(error)) == 0 &&
+        wvm_control_stream_client_exchange(
+            &client, &gateway, endpoint, request, &response, error,
+            sizeof(error)) == 0 &&
+        response.status_code == WVM_CONTROL_RESULT_UNAUTHORIZED_ROLE) {
+        result = 0;
+    }
+    wvm_control_stream_client_destroy(&client);
+    wvm_tls_control_connector_destroy(&tls_state);
+    return result;
 }
 
 static int expect_forwarded_frame(int receiver_fd, uint16_t gateway_port,
@@ -513,6 +567,10 @@ int main(int argc, char **argv)
     struct wvm_required_ack_entry successor_ack;
     struct wvm_required_ack_entry poison_ack;
     struct wvm_envelope request;
+    struct wvm_endpoint gateway_endpoint;
+    struct wvm_tls_control_connector tls_state;
+    struct wvm_control_stream_connector connector;
+    struct wvm_control_stream_client client;
     uint8_t snapshot_bytes[8192];
     uint8_t key_bytes[512];
     size_t snapshot_byte_count = 0;
@@ -522,6 +580,7 @@ int main(int argc, char **argv)
     uint16_t poison_receiver_port;
     uint16_t gateway_port;
     uint16_t legacy_control_port;
+    uint16_t tls_control_port;
     char error[256] = {0};
     pid_t gateway = -1;
     int initial_receiver = -1;
@@ -530,11 +589,15 @@ int main(int argc, char **argv)
     int config_fd = -1;
     int legacy_probe = -1;
     int result = 1;
+    int client_initialized = 0;
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s /path/to/wavevm_gateway\n", argv[0]);
+    if (argc != 7) {
+        fprintf(stderr, "usage: %s GATEWAY CA GATEWAY_CERT GATEWAY_KEY CONTROLLER_CERT CONTROLLER_KEY\n", argv[0]);
         return 2;
     }
+    memset(&tls_state, 0, sizeof(tls_state));
+    memset(&connector, 0, sizeof(connector));
+    memset(&client, 0, sizeof(client));
     if (!mkdtemp(directory)) {
         perror("mkdtemp");
         return 1;
@@ -556,7 +619,8 @@ int main(int argc, char **argv)
                    poison_receiver >= 0,
                "bind V1 route receivers") ||
         expect(reserve_udp_port(&gateway_port) == 0 &&
-                   reserve_udp_port(&legacy_control_port) == 0,
+                   reserve_udp_port(&legacy_control_port) == 0 &&
+                   reserve_tcp_port(&tls_control_port) == 0,
                "reserve gateway ports") ||
         finalize_snapshot(&initial_snapshot, &initial_rule, &initial_ack, 1,
                           initial_receiver_port, error, sizeof(error)) != 0 ||
@@ -586,9 +650,26 @@ int main(int argc, char **argv)
     close(config_fd);
     config_fd = -1;
 
+    fill_endpoint(&gateway_endpoint, gateway_port);
+    gateway_endpoint.has_control_address = 1;
+    gateway_endpoint.control_address_bytes = 4;
+    gateway_endpoint.control_address[0] = 127;
+    gateway_endpoint.control_address[3] = 1;
+    gateway_endpoint.control_port = tls_control_port;
+    if (wvm_tls_control_connector_bind(&tls_state, argv[2], argv[5],
+                                       argv[6], 3000, &connector,
+                                       error, sizeof(error)) != 0 ||
+        wvm_control_stream_client_init(&client, &connector, error,
+                                       sizeof(error)) != 0) {
+        fprintf(stderr, "TLS control test setup failed: %s\n", error);
+        goto out;
+    }
+    client_initialized = 1;
+
     gateway = start_gateway(argv[1], manifest_path, poison_route_path,
                             journal_path, control_socket_path, config_path,
-                            log_path, gateway_port, legacy_control_port);
+                            log_path, gateway_port, legacy_control_port,
+                            tls_control_port, argv[2], argv[3], argv[4]);
     if (expect(gateway > 0, "fork active gateway") ||
         expect(wait_for_control_socket(control_socket_path) == 0,
                "create authenticated V1 control socket") ||
@@ -615,9 +696,13 @@ int main(int argc, char **argv)
         goto out;
     }
     make_control_request(&request, WVM_ENVELOPE_MSG_ROUTE_PREPARE, 2,
+                         &successor_snapshot.route_snapshot_key,
                          snapshot_bytes, snapshot_byte_count);
-    if (expect(send_control_request(control_socket_path, &request, 1) == 0,
-               "prepare successor through gateway control socket") ||
+    if (expect(reject_wrong_controller(argv[2], argv[3], argv[4],
+                                       &gateway_endpoint, &request) == 0,
+               "reject gateway certificate as route controller") ||
+        expect(send_control_request(&client, &gateway_endpoint, &request, 1) == 0,
+               "prepare successor through authenticated TLS") ||
         encode_key(&successor_snapshot.route_snapshot_key, key_bytes,
                    sizeof(key_bytes), &key_byte_count, error,
                    sizeof(error)) != 0) {
@@ -625,18 +710,19 @@ int main(int argc, char **argv)
         goto out;
     }
     make_control_request(&request, WVM_ENVELOPE_MSG_ROUTE_COMMIT, 3,
+                         &successor_snapshot.route_snapshot_key,
                          key_bytes, key_byte_count);
-    if (expect(send_control_request(control_socket_path, &request, 2) == 0,
-               "commit successor through gateway control socket")) {
+    if (expect(send_control_request(&client, &gateway_endpoint, &request, 2) == 0,
+               "commit successor through authenticated TLS")) {
         goto out;
     }
 
     stop_gateway(gateway);
     gateway = -1;
-    unlink(control_socket_path);
     gateway = start_gateway(argv[1], manifest_path, poison_route_path,
                             journal_path, control_socket_path, config_path,
-                            log_path, gateway_port, legacy_control_port);
+                            log_path, gateway_port, legacy_control_port,
+                            tls_control_port, argv[2], argv[3], argv[4]);
     if (expect(gateway > 0, "restart gateway with route journal") ||
         expect(wait_for_control_socket(control_socket_path) == 0,
                "restore V1 control socket after replay") ||
@@ -649,6 +735,21 @@ int main(int argc, char **argv)
     puts("gateway route-control integration: PASS");
 out:
     stop_gateway(gateway);
+    if (result != 0) {
+        FILE *log = fopen(log_path, "r");
+        char line[512];
+
+        if (log) {
+            while (fgets(line, sizeof(line), log)) {
+                fputs(line, stderr);
+            }
+            fclose(log);
+        }
+    }
+    if (client_initialized) {
+        wvm_control_stream_client_destroy(&client);
+    }
+    wvm_tls_control_connector_destroy(&tls_state);
     if (legacy_probe >= 0) {
         close(legacy_probe);
     }
