@@ -407,25 +407,19 @@ int wvm_control_result_decode(const uint8_t bytes[WVM_CONTROL_RESULT_BYTES],
     return 0;
 }
 
-int wvm_control_transport_exchange_io(
-    const struct wvm_control_io *io, uint32_t peer_physical_node_id,
-    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
-    struct wvm_control_result *result, char *error, size_t error_len)
+static int exchange_frame_io(
+    const struct wvm_control_io *io, const struct wvm_envelope *request,
+    uint8_t *reply, size_t reply_capacity, struct wvm_envelope *response,
+    char *error, size_t error_len)
 {
     uint8_t prefix[WVM_CONTROL_TRANSPORT_FRAME_PREFIX_BYTES];
-    uint8_t reply[WVM_ENVELOPE_HEADER_BYTES + WVM_CONTROL_RESULT_BYTES];
-    uint8_t digest[WVM_SHA256_DIGEST_BYTES];
-    struct wvm_envelope response;
-    struct wvm_control_result decoded;
     uint8_t *frame;
     size_t frame_bytes;
     size_t capacity;
     int status;
 
-    if ((!io || !io->read || !io->write) || peer_physical_node_id == 0 ||
-        peer_runtime_instance_id == 0 || !result ||
+    if (!io || !io->read || !io->write || !response || !reply ||
         !request_metadata_valid(request) ||
-        !typed_request(request->message_type) ||
         request->payload_bytes > WVM_ENVELOPE_MAX_LOCAL_PAYLOAD) {
         set_error(error, error_len, "control exchange input is invalid");
         return -EINVAL;
@@ -461,7 +455,7 @@ int wvm_control_transport_exchange_io(
         return status;
     }
     frame_bytes = read_be32(prefix);
-    if (frame_bytes != sizeof(reply)) {
+    if (frame_bytes != reply_capacity) {
         set_error(error, error_len, "control reply length is invalid");
         return -EMSGSIZE;
     }
@@ -473,17 +467,51 @@ int wvm_control_transport_exchange_io(
         }
         return status;
     }
-    if (wvm_envelope_decode(reply, frame_bytes, WVM_ENVELOPE_TRANSPORT_LOCAL,
-                            &response, error, error_len) != 0 ||
-        response.message_type != WVM_ENVELOPE_MSG_CTRL_RESULT ||
-        response.flags != 0 || response.vm_id != 0 ||
-        !route_metadata_is_empty(&response) ||
-        response.origin_physical_node_id != peer_physical_node_id ||
-        response.origin_runtime_instance_id != peer_runtime_instance_id ||
-        response.delivery_attempt_id != request->delivery_attempt_id ||
-        memcmp(response.operation_id, request->operation_id,
-               WVM_IDENTITY_ID_BYTES) != 0 ||
-        response.payload_bytes != WVM_CONTROL_RESULT_BYTES ||
+    return wvm_envelope_decode(reply, frame_bytes,
+                               WVM_ENVELOPE_TRANSPORT_LOCAL, response, error,
+                               error_len) == 0 ? 0 : -EPROTO;
+}
+
+static int exchange_response_matches(
+    const struct wvm_envelope *response, const struct wvm_envelope *request,
+    uint32_t peer_physical_node_id, uint64_t peer_runtime_instance_id,
+    size_t result_bytes)
+{
+    return response->message_type == WVM_ENVELOPE_MSG_CTRL_RESULT &&
+           response->flags == 0 && response->vm_id == 0 &&
+           route_metadata_is_empty(response) &&
+           response->origin_physical_node_id == peer_physical_node_id &&
+           response->origin_runtime_instance_id == peer_runtime_instance_id &&
+           response->delivery_attempt_id == request->delivery_attempt_id &&
+           memcmp(response->operation_id, request->operation_id,
+                  WVM_IDENTITY_ID_BYTES) == 0 &&
+           response->payload_bytes == result_bytes;
+}
+
+int wvm_control_transport_exchange_io(
+    const struct wvm_control_io *io, uint32_t peer_physical_node_id,
+    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
+    struct wvm_control_result *result, char *error, size_t error_len)
+{
+    uint8_t reply[WVM_ENVELOPE_HEADER_BYTES + WVM_CONTROL_RESULT_BYTES];
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+    struct wvm_envelope response;
+    struct wvm_control_result decoded;
+    int exchange_status;
+
+    if (peer_physical_node_id == 0 || peer_runtime_instance_id == 0 ||
+        !result || !request || !typed_request(request->message_type)) {
+        set_error(error, error_len, "control exchange input is invalid");
+        return -EINVAL;
+    }
+    exchange_status = exchange_frame_io(io, request, reply, sizeof(reply),
+                                        &response, error, error_len);
+    if (exchange_status != 0) {
+        return exchange_status;
+    }
+    if (!exchange_response_matches(&response, request, peer_physical_node_id,
+                                   peer_runtime_instance_id,
+                                   WVM_CONTROL_RESULT_BYTES) ||
         wvm_control_result_decode(response.payload, &decoded) != 0 ||
         memcmp(decoded.in_reply_to_operation_id, request->operation_id,
                WVM_IDENTITY_ID_BYTES) != 0) {
@@ -508,6 +536,43 @@ int wvm_control_transport_exchange_io(
             set_error(error, error_len, "admission reply does not bind request");
             return -EPROTO;
         }
+    }
+    *result = decoded;
+    return 0;
+}
+
+int wvm_control_transport_membership_exchange_io(
+    const struct wvm_control_io *io, uint32_t peer_physical_node_id,
+    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
+    struct wvm_membership_control_result *result, char *error,
+    size_t error_len)
+{
+    uint8_t reply[WVM_ENVELOPE_HEADER_BYTES +
+                  WVM_MEMBERSHIP_CONTROL_RESULT_BYTES];
+    struct wvm_envelope response;
+    struct wvm_membership_control_result decoded;
+    int exchange_status;
+
+    if (peer_physical_node_id == 0 || peer_runtime_instance_id == 0 ||
+        !result || !request || !supported_request(request->message_type) ||
+        typed_request(request->message_type)) {
+        set_error(error, error_len, "membership exchange input is invalid");
+        return -EINVAL;
+    }
+    exchange_status = exchange_frame_io(io, request, reply, sizeof(reply),
+                                        &response, error, error_len);
+    if (exchange_status != 0) {
+        return exchange_status;
+    }
+    if (!exchange_response_matches(&response, request, peer_physical_node_id,
+                                   peer_runtime_instance_id,
+                                   WVM_MEMBERSHIP_CONTROL_RESULT_BYTES) ||
+        wvm_membership_control_result_decode(response.payload, &decoded) != 0 ||
+        memcmp(decoded.in_reply_to_operation_id, request->operation_id,
+               WVM_IDENTITY_ID_BYTES) != 0) {
+        set_error(error, error_len,
+                  "membership reply does not match request or peer");
+        return -EPROTO;
     }
     *result = decoded;
     return 0;

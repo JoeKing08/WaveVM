@@ -165,6 +165,13 @@ int wvm_control_transport_exchange_io(
     uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
     struct wvm_control_result *result, char *error, size_t error_len);
 
+/* Membership requests use the same authenticated framing, but a shorter result. */
+int wvm_control_transport_membership_exchange_io(
+    const struct wvm_control_io *io, uint32_t peer_physical_node_id,
+    uint64_t peer_runtime_instance_id, const struct wvm_envelope *request,
+    struct wvm_membership_control_result *result, char *error,
+    size_t error_len);
+
 /*
  * Encode a typed result and write CTRL_RESULT back on the same ordered stream.
  * Production control-plane streams should use the apply callback so each

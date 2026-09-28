@@ -70,17 +70,29 @@ static int wait_for_exit(pid_t child)
 }
 
 static pid_t start_service(const char *program, const char *state_directory,
-                           const char *socket_path, const char *principal_file)
+                           const char *socket_path, const char *principal_file,
+                           const char *port, const char *ca,
+                           const char *certificate, const char *key)
 {
     pid_t child = fork();
 
     if (child != 0) {
         return child;
     }
-    execl(program, program, "serve", "--state-dir", state_directory,
-          "--socket", socket_path, "--local-node-id", "900",
-          "--local-instance-id", "901", "--principals", principal_file,
-          "--capacity", "8", (char *)NULL);
+    if (port) {
+        execl(program, program, "serve", "--state-dir", state_directory,
+              "--socket", socket_path, "--local-node-id", "900",
+              "--local-instance-id", "901", "--principals", principal_file,
+              "--capacity", "8", "--control-address", "127.0.0.1",
+              "--control-port", port, "--control-ca", ca,
+              "--control-cert", certificate, "--control-key", key,
+              (char *)NULL);
+    } else {
+        execl(program, program, "serve", "--state-dir", state_directory,
+              "--socket", socket_path, "--local-node-id", "900",
+              "--local-instance-id", "901", "--principals", principal_file,
+              "--capacity", "8", (char *)NULL);
+    }
     _exit(127);
 }
 
@@ -334,7 +346,7 @@ int main(int argc, char **argv)
     pid_t child = -1;
     int result = 1;
 
-    if (argc != 2 ||
+    if ((argc != 2 && argc != 6) ||
         snprintf(temporary_directory, sizeof(temporary_directory),
                  "/tmp/wavevm-ctl-service-%ld", (long)getpid()) < 0 ||
         mkdir(temporary_directory, S_IRWXU) != 0 ||
@@ -370,7 +382,11 @@ int main(int argc, char **argv)
         goto out;
     }
     operation_id[WVM_IDENTITY_ID_BYTES - 1] = 1;
-    child = start_service(argv[1], state_directory, socket_path, principal_path);
+    child = start_service(argv[1], state_directory, socket_path, principal_path,
+                          argc == 6 ? argv[2] : NULL,
+                          argc == 6 ? argv[3] : NULL,
+                          argc == 6 ? argv[4] : NULL,
+                          argc == 6 ? argv[5] : NULL);
     if (expect(child > 0 && wait_for_path(socket_path, 1) == 0,
                "start control plane with an empty cluster") != 0 ||
         expect(stat(membership_journal, &journal_stat) == 0 &&
@@ -385,7 +401,11 @@ int main(int argc, char **argv)
         goto out;
     }
     child = -1;
-    child = start_service(argv[1], state_directory, socket_path, principal_path);
+    child = start_service(argv[1], state_directory, socket_path, principal_path,
+                          argc == 6 ? argv[2] : NULL,
+                          argc == 6 ? argv[3] : NULL,
+                          argc == 6 ? argv[4] : NULL,
+                          argc == 6 ? argv[5] : NULL);
     if (expect(child > 0 && wait_for_path(socket_path, 1) == 0,
                "start manifest-free control-plane daemon") != 0 ||
         expect(stat(membership_journal, &journal_stat) == 0 &&
@@ -415,7 +435,11 @@ int main(int argc, char **argv)
     if (check_pending_membership(membership_journal) != 0) {
         goto out;
     }
-    child = start_service(argv[1], state_directory, socket_path, principal_path);
+    child = start_service(argv[1], state_directory, socket_path, principal_path,
+                          argc == 6 ? argv[2] : NULL,
+                          argc == 6 ? argv[3] : NULL,
+                          argc == 6 ? argv[4] : NULL,
+                          argc == 6 ? argv[5] : NULL);
     if (expect(child > 0 && wait_for_path(socket_path, 1) == 0,
                "restart durable control-plane daemon") != 0 ||
         expect(exchange_registration(socket_path, node_bytes, node_byte_count,

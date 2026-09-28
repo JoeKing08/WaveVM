@@ -264,6 +264,7 @@ int wavevm_admission_agent_main(int argc, char **argv)
     struct wvm_admission_runtime_agent agent;
     struct sigaction action = {.sa_handler = request_stop};
     struct sigaction child_action = {.sa_handler = child_exited};
+    struct sigaction ignore_pipe = {.sa_handler = SIG_IGN};
     sigset_t blocked_signals;
     sigset_t previous_signals;
     char route_journal[WVM_ADMISSION_SLOT_PATH_MAX];
@@ -377,6 +378,8 @@ int wavevm_admission_agent_main(int argc, char **argv)
     if (sigemptyset(&action.sa_mask) != 0 ||
         sigaction(SIGINT, &action, NULL) != 0 ||
         sigaction(SIGTERM, &action, NULL) != 0 ||
+        sigemptyset(&ignore_pipe.sa_mask) != 0 ||
+        sigaction(SIGPIPE, &ignore_pipe, NULL) != 0 ||
         sigemptyset(&child_action.sa_mask) != 0 ||
         sigaction(SIGCHLD, &child_action, NULL) != 0 ||
         sigemptyset(&blocked_signals) != 0 ||

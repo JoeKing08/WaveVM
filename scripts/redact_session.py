@@ -148,10 +148,16 @@ def iter_records(path: Path) -> Iterator[tuple[int, Any]]:
     opener = gzip.open if path.name.endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as source:
         for line_number, line in enumerate(source, 1):
-            if not line.strip():
+            # Interrupted Claude Code writes can prepend sparse NUL padding to
+            # an otherwise complete JSON record. NUL is not legal JSON, so
+            # remove only that padding and keep every non-NUL byte strict.
+            cleaned_line = line.replace("\0", "")
+            if "\0" in line and not cleaned_line.strip():
+                continue
+            if not cleaned_line.strip():
                 raise ValueError(f"line {line_number}: blank JSONL record")
             try:
-                yield line_number, json.loads(line)
+                yield line_number, json.loads(cleaned_line)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"line {line_number}: invalid JSON: {exc.msg}") from exc
 

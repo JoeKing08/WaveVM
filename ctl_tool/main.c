@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -107,6 +108,8 @@ struct service_options {
     const char *control_ca_file;
     const char *control_certificate_file;
     const char *control_private_key_file;
+    const char *control_address;
+    uint32_t control_port;
     uint32_t local_physical_node_id;
     uint64_t local_runtime_instance_id;
     size_t capacity;
@@ -458,7 +461,8 @@ static void print_usage(const char *program)
             "Usage:\n"
             "  %s serve --state-dir DIR --socket PATH --local-node-id N "
             "--local-instance-id N --principals FILE --capacity N "
-            "[--control-ca FILE --control-cert FILE --control-key FILE]\n\n"
+            "[--control-ca FILE --control-cert FILE --control-key FILE] "
+            "[--control-address IP --control-port PORT]\n\n"
             "FILE contains one local authenticated principal per line:\n"
             "  UID ROLE ROLE_ID INSTANCE_ID\n"
             "ROLE is node-runtime, gateway, or executor. The Unix peer UID is "
@@ -572,6 +576,14 @@ static int parse_options(int argc, char **argv, struct service_options *options)
         } else if (strcmp(argv[i], "--control-key") == 0 && i + 1 < argc &&
                    !options->control_private_key_file) {
             options->control_private_key_file = argv[++i];
+        } else if (strcmp(argv[i], "--control-address") == 0 && i + 1 < argc &&
+                   !options->control_address) {
+            options->control_address = argv[++i];
+        } else if (strcmp(argv[i], "--control-port") == 0 && i + 1 < argc &&
+                   options->control_port == 0 &&
+                   parse_u32(argv[++i], &options->control_port) == 0 &&
+                   options->control_port <= UINT16_MAX) {
+            /* Parsed above. */
         } else if (strcmp(argv[i], "--capacity") == 0 && i + 1 < argc &&
                    !have_capacity &&
                    parse_size(argv[++i], &options->capacity) == 0) {
@@ -584,6 +596,11 @@ static int parse_options(int argc, char **argv, struct service_options *options)
          options->control_private_key_file) &&
         (!options->control_ca_file || !options->control_certificate_file ||
          !options->control_private_key_file)) {
+        return -1;
+    }
+    if ((options->control_address && options->control_port == 0) ||
+        (!options->control_address && options->control_port != 0) ||
+        (options->control_address && !options->control_ca_file)) {
         return -1;
     }
     return have_state_directory && have_socket && have_node && have_instance &&
@@ -780,6 +797,46 @@ static int authenticate_local_peer(void *opaque, int stream_fd,
     }
     snprintf(error, error_len, "local control peer has no configured principal");
     return -1;
+}
+
+static int authenticate_tls_peer(void *opaque, int stream_fd,
+                                 const struct wvm_control_io *io,
+                                 struct wvm_member_key *actor, char *error,
+                                 size_t error_len)
+{
+    (void)opaque;
+    (void)stream_fd;
+    return wvm_tls_control_peer_identity(io, actor, error, error_len);
+}
+
+static int make_control_endpoint(const struct service_options *options,
+                                 struct wvm_endpoint *endpoint, char *error,
+                                 size_t error_len)
+{
+    struct in_addr ipv4;
+    struct in6_addr ipv6;
+
+    memset(endpoint, 0, sizeof(*endpoint));
+    endpoint->data_transport = WVM_DATA_TRANSPORT_UDP;
+    endpoint->data_port = 1;
+    endpoint->control_transport = WVM_CONTROL_TRANSPORT_TLS_TCP;
+    endpoint->has_control_address = 1;
+    endpoint->control_port = (uint16_t)options->control_port;
+    if (inet_pton(AF_INET, options->control_address, &ipv4) == 1) {
+        endpoint->data_address_bytes = 4;
+        endpoint->control_address_bytes = 4;
+        memcpy(endpoint->data_address, &ipv4, 4);
+        memcpy(endpoint->control_address, &ipv4, 4);
+    } else if (inet_pton(AF_INET6, options->control_address, &ipv6) == 1) {
+        endpoint->data_address_bytes = 16;
+        endpoint->control_address_bytes = 16;
+        memcpy(endpoint->data_address, &ipv6, 16);
+        memcpy(endpoint->control_address, &ipv6, 16);
+    } else {
+        snprintf(error, error_len, "invalid control listener IP address");
+        return -1;
+    }
+    return wvm_endpoint_validate(endpoint, error, error_len);
 }
 
 static int capability_ref_compare(const void *left_value,
@@ -1173,12 +1230,17 @@ static void request_shutdown(int signal_number)
 static int install_signal_handlers(void)
 {
     struct sigaction action;
+    struct sigaction ignore_pipe;
 
     memset(&action, 0, sizeof(action));
+    memset(&ignore_pipe, 0, sizeof(ignore_pipe));
     action.sa_handler = request_shutdown;
+    ignore_pipe.sa_handler = SIG_IGN;
     sigemptyset(&action.sa_mask);
+    sigemptyset(&ignore_pipe.sa_mask);
     return sigaction(SIGINT, &action, NULL) == 0 &&
-                   sigaction(SIGTERM, &action, NULL) == 0
+                   sigaction(SIGTERM, &action, NULL) == 0 &&
+                   sigaction(SIGPIPE, &ignore_pipe, NULL) == 0
                ? 0
                : -1;
 }
@@ -1200,6 +1262,7 @@ int main(int argc, char **argv)
     struct wvm_vm_namespace_allocator namespace_allocator;
     struct wvm_control_plane_membership_config membership_config;
     struct wvm_control_service_config service_config;
+    struct wvm_endpoint control_endpoint;
     struct control_context control_context;
     struct admission_workspace admission_workspace;
     struct wvm_admission_authority_owner_config authority_config;
@@ -1217,6 +1280,12 @@ int main(int argc, char **argv)
     }
     if (parse_options(argc, argv, &options) != 0) {
         print_usage(argv[0]);
+        return 2;
+    }
+    if (options.control_address &&
+        make_control_endpoint(&options, &control_endpoint, error,
+                              sizeof(error)) != 0) {
+        fprintf(stderr, "wvm_ctl: invalid TLS listener: %s\n", error);
         return 2;
     }
     memset(&service, 0, sizeof(service));
@@ -1467,6 +1536,13 @@ int main(int argc, char **argv)
     memset(&service_config, 0, sizeof(service_config));
     service_config.plane = &plane;
     service_config.socket_path = options.socket_path;
+    if (options.control_address) {
+        service_config.network_endpoint = &control_endpoint;
+        service_config.tls_ca_file = options.control_ca_file;
+        service_config.tls_certificate_file = options.control_certificate_file;
+        service_config.tls_private_key_file = options.control_private_key_file;
+        service_config.authenticate_io = authenticate_tls_peer;
+    }
     service_config.socket_mode = S_IRUSR | S_IWUSR;
     service_config.listen_backlog = 32;
     service_config.local_physical_node_id = options.local_physical_node_id;

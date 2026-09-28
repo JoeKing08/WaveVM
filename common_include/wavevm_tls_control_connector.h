@@ -26,6 +26,14 @@ int wvm_tls_control_connector_bind(
 void wvm_tls_control_connector_destroy(
     struct wvm_tls_control_connector *tls_connector);
 
+int wvm_tls_control_membership_exchange(
+    struct wvm_tls_control_connector *tls_connector,
+    const struct wvm_member_key *expected_peer,
+    uint32_t peer_physical_node_id, uint64_t peer_runtime_instance_id,
+    const struct wvm_endpoint *endpoint, const struct wvm_envelope *request,
+    struct wvm_membership_control_result *result, char *error,
+    size_t error_len);
+
 /* Extract and validate the authenticated peer identity on a TLS server stream. */
 int wvm_tls_control_peer_identity(
     const struct wvm_control_io *io, struct wvm_member_key *member,

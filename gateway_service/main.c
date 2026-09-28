@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <string.h>
+#include <signal.h>
 #include <unistd.h>
 #include "aggregator.h"
 #include "../common_include/wavevm_protocol.h" 
@@ -137,6 +138,13 @@ static int init_gateway_runtime_gate(void)
 }
 
 int main(int argc, char **argv) {
+    struct sigaction ignore_pipe = {.sa_handler = SIG_IGN};
+
+    sigemptyset(&ignore_pipe.sa_mask);
+    if (sigaction(SIGPIPE, &ignore_pipe, NULL) != 0) {
+        perror("gateway SIGPIPE policy");
+        return 1;
+    }
     if (argc < 6) {
         fprintf(stderr, "Usage: %s <LOCAL_PORT> <UPSTREAM_IP> <UPSTREAM_PORT> <CONFIG_FILE> <CTRL_PORT>\n", argv[0]);
         return 1;

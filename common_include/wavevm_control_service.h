@@ -3,8 +3,8 @@
 
 /*
  * Production lifecycle binding between the authoritative control plane and
- * its local authenticated stream listener. The service owns only the
- * listener; the caller retains ownership of the already-open durable control
+ * its authenticated stream listeners. The service owns only the
+ * listeners; the caller retains ownership of the already-open durable control
  * plane and its membership state.
  */
 
@@ -18,12 +18,17 @@
 struct wvm_control_service_config {
     struct wvm_control_plane *plane;
     const char *socket_path;
+    const struct wvm_endpoint *network_endpoint;
+    const char *tls_ca_file;
+    const char *tls_certificate_file;
+    const char *tls_private_key_file;
     mode_t socket_mode;
     int listen_backlog;
     uint32_t local_physical_node_id;
     uint64_t local_runtime_instance_id;
     size_t max_frame_bytes;
     wvm_control_transport_authenticate_fn authenticate;
+    wvm_control_transport_authenticate_io_fn authenticate_io;
     void *authenticate_opaque;
     wvm_control_transport_control_apply_fn control_apply;
     void *control_apply_opaque;

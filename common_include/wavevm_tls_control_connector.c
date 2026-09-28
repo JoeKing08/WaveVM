@@ -399,6 +399,53 @@ static int exchange_tls(void *opaque, const struct wvm_member_key *expected_peer
     return status;
 }
 
+int wvm_tls_control_membership_exchange(
+    struct wvm_tls_control_connector *tls_connector,
+    const struct wvm_member_key *expected_peer,
+    uint32_t peer_physical_node_id, uint64_t peer_runtime_instance_id,
+    const struct wvm_endpoint *endpoint, const struct wvm_envelope *request,
+    struct wvm_membership_control_result *result, char *error,
+    size_t error_len)
+{
+    struct wvm_control_io io;
+    SSL *ssl;
+    int fd = -1;
+    int status;
+
+    if (!tls_connector || !tls_connector->ssl_context ||
+        tls_connector->active_ssl || !expected_peer || !endpoint || !request ||
+        peer_physical_node_id == 0 || peer_runtime_instance_id == 0 ||
+        !result || wvm_member_key_validate(expected_peer, error,
+                                           error_len) != 0 ||
+        wvm_endpoint_validate(endpoint, error, error_len) != 0) {
+        set_error(error, error_len, "TLS membership exchange input is invalid");
+        return -EINVAL;
+    }
+    status = open_tls_tcp(tls_connector, endpoint, &fd, error, error_len);
+    if (status != 0) {
+        return status;
+    }
+    status = authenticate_tls(tls_connector, fd, expected_peer, error,
+                              error_len);
+    if (status != 0) {
+        close(fd);
+        return status;
+    }
+    ssl = tls_connector->active_ssl;
+    io.opaque = ssl;
+    io.read = tls_read;
+    io.write = tls_write;
+    status = wvm_control_transport_membership_exchange_io(
+        &io, peer_physical_node_id, peer_runtime_instance_id, request, result,
+        error, error_len);
+    (void)SSL_shutdown(ssl);
+    SSL_free(ssl);
+    tls_connector->active_ssl = NULL;
+    tls_connector->active_fd = -1;
+    close(fd);
+    return status;
+}
+
 int wvm_tls_control_connector_bind(
     struct wvm_tls_control_connector *tls_connector, const char *ca_file,
     const char *certificate_file, const char *private_key_file,
