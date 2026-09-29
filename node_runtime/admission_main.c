@@ -617,6 +617,8 @@ static int register_local_node(const struct agent_options *options,
         return -1;
     }
     if (result.status_code != WVM_MEMBERSHIP_CONTROL_SUCCESS ||
+        result.recorded_state != WVM_MANIFEST_MEMBER_PENDING ||
+        result.applied_revision == 0 ||
         memcmp(result.in_reply_to_operation_id, request.operation_id,
                sizeof(request.operation_id)) != 0 ||
         bytes_are_zero(result.record_digest, sizeof(result.record_digest))) {
