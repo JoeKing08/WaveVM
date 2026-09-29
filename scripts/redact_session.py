@@ -47,6 +47,18 @@ PUBLIC_KEY_RE = re.compile(
 )
 
 TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "password assignment",
+        re.compile(
+            r"(?im)\b(?:sudo|root|admin|login|ssh)[ _-]*"
+            r"(?:password|passwd|passphrase)\b[ \t]*(?:is|:|=)?[ \t]*"
+            r"(?:\r?\n[ \t]*)?\S+"
+        ),
+    ),
+    (
+        "Chinese password assignment",
+        re.compile(r"(?:\u5bc6\u7801|\u53e3\u4ee4)(?:\u6211\u544a\u8bc9\u4f60)?[ \t\r\n,:\uff1a\uff0c]*[^\s,\uff0c;\uff1b]+"),
+    ),
     ("github token", re.compile(r"(?i)(?:github_pat_|gh[pousr]_|gh_)\w+")),
     ("gitlab token", re.compile(r"(?i)glpat-[A-Za-z0-9_-]+")),
     ("circleci token", re.compile(r"(?i)CCIPAT_[A-Za-z0-9_-]+")),

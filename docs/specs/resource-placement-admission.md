@@ -31,6 +31,16 @@ resource provider, not a mandatory guest NUMA node and not a unit at which a
 VM must consume all resources. One VM may use a fraction of several nodes; one
 physical node may host allocations for several VMs when their reservations fit.
 
+Several registered resource providers may share one `physical_host_id`. This
+is a supported logical-node subdivision, not permission to double-count host
+capacity. The planner first validates each node's independent allocatable
+budget, then validates the aggregate host budget for CPU, memory, accelerator
+contexts, and host/gateway overhead across every node and gateway record in
+that host group. A host-wide conflict is a structured admission rejection.
+Each node instance also receives an explicit port/socket/name namespace and
+exclusive leases; no planner or runtime may assume that a host has only one
+node agent or reuse a host-global default port/path.
+
 Non-goals for V1:
 
 - CPU, memory, or storage overcommit. A configured future overcommit policy
@@ -118,6 +128,13 @@ NodeInventory {
     exclusive_resource_inventory;
 }
 ```
+
+In addition to the inventory above, a node record exposes `physical_host_id`
+and `node_instance_namespace`. The former groups independently schedulable
+providers for aggregate accounting and correlated failure. The latter scopes
+the node agent's local sockets, shared memory, logs, temporary files, and
+instance-specific listener leases. These fields are part of the authoritative
+registration/profile input, not values inferred by a launch script.
 
 `allocatable_*` values are explicit fields or deterministic derived values.
 They must never be calculated from a remote `nproc`, total RAM, or an arbitrary

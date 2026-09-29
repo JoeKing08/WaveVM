@@ -104,6 +104,32 @@ participant ACK或runtime启动代码必然缺失。
     不应只归为"未经核实的怀疑"。
 
 ================================================================
+五、专项问题：单机多节点（计算节点/网关意义上的，非VM意义上的）
+================================================================
+
+16. 【新AI核实，待原AI确认】"网关+计算节点同机部署"是spec承认的合法场景，但代码从未验证过；
+    "一台机器多个独立计算节点身份"不是这个架构的设计目标。
+
+    a) docs/specs/cluster-membership-topology-lifecycle.md:139 明确写道："A gateway and a
+       compute node may share one physical host, but their records are not aliases."——并专门
+       设计了 hosting_physical_node_id、failure_domain_id 两个显式字段（不从endpoint地址推断），
+       用来区分"只挂了计算节点或只挂了网关"和"整台主机一起挂"。这是真实的设计意图。
+
+    b) 但同一份spec 114行说明："physical_node_id identifies a resource provider"，
+       node_instance_id只在agent进程或主机实例被替换时变化——即一个physical_node_id对应一个
+       资源提供者身份。wvm_node_record结构（common_include/wavevm_control.h:136-151）也是
+       一条记录=一个计算节点，架构上没有设计"一台物理机注册出多个独立计算节点身份"这种拓扑。
+
+    c) 即便是(a)里spec明确认可的"网关+计算节点同机"场景，实现层面也从未被验证：
+       - master_core/user_backend.c:1675 硬编码 htons(9000) 作为gateway默认端口（见第13条），
+         若同机运行多个Mode B node_runtime进程，这个默认值是否总被manifest配置覆盖未经验证；
+       - tests/mode-b/ 目录完全不存在（见第11条），"两个Mode B进程同机运行隔离"这个最基础的
+         同机多进程场景从未有过真实双进程测试覆盖。
+
+    结论：spec承认"网关+计算节点"可以同机，但不支持"多个计算节点"同机；就算是spec认可的那种
+    同机场景，代码也没有验证过是否真的隔离干净，第13条的硬编码端口是潜在的同机冲突隐患。
+
+================================================================
 以下条目此前被怀疑为缺口，经复核证明是假警报，不需要处理：
 ================================================================
 - wvm_runtime_ready_publish "无调用点"：假警报。真实调用点在 master_core/main_wrapper.c:1854，在QEMU对接的Unix

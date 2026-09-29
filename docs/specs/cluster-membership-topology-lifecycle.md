@@ -95,6 +95,7 @@ following logical fields are required.
 ```text
 NodeRecord {
     physical_node_id;
+    physical_host_id;
     node_instance_id;
     failure_domain_id;
     control_endpoint;
@@ -108,13 +109,35 @@ NodeRecord {
     observed_health_state;
     membership_revision;
     topology_revision;
+    node_instance_namespace;
 }
 ```
 
-`physical_node_id` identifies a resource provider. `node_instance_id` changes
-when its agent process or host instance is replaced. A physical host can own
-multiple local vnodes, but vnode assignment is a routing concern rather than a
-claim that each vnode is an independently schedulable machine.
+`physical_node_id` identifies one independently schedulable resource provider.
+`physical_host_id` identifies the physical host that contains that provider;
+it is not a network address and is not inferred from an endpoint. Multiple
+compute `NodeRecord`s may use the same `physical_host_id`, but they must have
+different `physical_node_id`, `node_instance_id`, resource reservations,
+listener endpoints, and `node_instance_namespace` values. `node_instance_id`
+changes when that node agent instance or its host instance is replaced. A
+physical host can also own multiple local vnodes, but vnode assignment is a
+routing concern rather than a claim that each vnode is an independently
+schedulable machine.
+
+The controller accounts capacity at both levels: each node record has its own
+allocatable budget, while the host aggregate limits CPU, memory, accelerator,
+and host-overhead reservations. The same physical capacity must not be
+counted once per logical node. A host failure invalidates every hosted node
+and gateway role together; a process or node-instance failure may affect only
+that member. Node-level cordon and drain therefore remain separate from
+host-level removal.
+
+`node_instance_namespace` is the canonical instance-scoped namespace for the
+node agent's local Unix sockets, shared-memory names, logs, and temporary
+paths. Network data/control ports and local socket paths are selected from
+the registered node-instance profile and held by explicit leases. No node
+startup path may fall back to a host-global default such as port 9000 or a
+host-global socket name.
 
 ### 3.2 Gateway Record
 
@@ -138,9 +161,11 @@ GatewayRecord {
 
 A gateway and a compute node may share one physical host, but their records are
 not aliases. `hosting_physical_node_id` and `failure_domain_id` are explicit
-registration fields and must not be inferred from endpoint address. A live host
-can have a compute-local or gateway-local process failure, while a host failure
-is a correlated failure of every hosted role.
+registration fields and must not be inferred from endpoint address. A gateway
+may share a `physical_host_id` with one or more compute records, provided its
+gateway endpoint and host-side reservations do not overlap. A live host can
+have a compute-local or gateway-local process failure, while a host failure is
+a correlated failure of every hosted role.
 
 ### 3.3 Route Snapshot
 

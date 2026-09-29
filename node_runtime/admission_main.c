@@ -15,6 +15,8 @@
 #include <unistd.h>
 
 #include "../common_include/wavevm_admission_runtime_agent.h"
+#include "../common_include/wavevm_membership_control.h"
+#include "../common_include/wavevm_sha256.h"
 #include "../common_include/wavevm_tls_control_connector.h"
 
 enum agent_option {
@@ -40,6 +42,22 @@ enum agent_option {
     OPT_TLS_CA,
     OPT_TLS_CERT,
     OPT_TLS_KEY,
+    OPT_DATA_PORT,
+    OPT_REGISTER_CONTROLLER_ADDRESS,
+    OPT_REGISTER_CONTROLLER_PORT,
+    OPT_FAILURE_DOMAIN_ID,
+    OPT_POD_ID,
+    OPT_VNODE_FIRST,
+    OPT_VNODE_COUNT,
+    OPT_SIDECAR_ADDRESS,
+    OPT_SIDECAR_DATA_PORT,
+    OPT_SIDECAR_CONTROL_PORT,
+    OPT_ROLE_BITS,
+    OPT_CAPABILITY_PROFILE_GENERATION,
+    OPT_CAPABILITY_PROFILE_DIGEST,
+    OPT_STORAGE_CAPABILITIES_DIGEST,
+    OPT_ACCELERATOR_FAULT_CAPABILITIES_DIGEST,
+    OPT_EXCLUSIVE_RESOURCE_DIGEST,
 };
 
 struct agent_options {
@@ -65,6 +83,22 @@ struct agent_options {
     const char *tls_ca_file;
     const char *tls_certificate_file;
     const char *tls_private_key_file;
+    uint64_t data_port;
+    const char *registration_controller_address;
+    uint64_t registration_controller_port;
+    uint64_t failure_domain_id;
+    uint64_t pod_id;
+    uint64_t vnode_first;
+    uint64_t vnode_count;
+    const char *sidecar_address;
+    uint64_t sidecar_data_port;
+    uint64_t sidecar_control_port;
+    uint64_t role_bits;
+    uint64_t capability_profile_generation;
+    uint8_t capability_profile_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t storage_capabilities_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t accelerator_fault_capabilities_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t exclusive_resource_inventory_digest[WVM_SHA256_DIGEST_BYTES];
 };
 
 struct agent_authentication {
@@ -102,6 +136,65 @@ static int parse_number(const char *text, uint64_t *output)
     return 0;
 }
 
+static int parse_hex_digest(const char *text,
+                            uint8_t output[WVM_SHA256_DIGEST_BYTES])
+{
+    size_t index;
+
+    if (!text || !output || strlen(text) != WVM_SHA256_DIGEST_BYTES * 2U) {
+        return -1;
+    }
+    for (index = 0; index < WVM_SHA256_DIGEST_BYTES; index++) {
+        unsigned char high;
+        unsigned char low;
+
+        if (text[index * 2U] >= '0' && text[index * 2U] <= '9') {
+            high = (unsigned char)(text[index * 2U] - '0');
+        } else if (text[index * 2U] >= 'a' && text[index * 2U] <= 'f') {
+            high = (unsigned char)(text[index * 2U] - 'a' + 10U);
+        } else if (text[index * 2U] >= 'A' && text[index * 2U] <= 'F') {
+            high = (unsigned char)(text[index * 2U] - 'A' + 10U);
+        } else {
+            return -1;
+        }
+        if (text[index * 2U + 1U] >= '0' && text[index * 2U + 1U] <= '9') {
+            low = (unsigned char)(text[index * 2U + 1U] - '0');
+        } else if (text[index * 2U + 1U] >= 'a' &&
+                   text[index * 2U + 1U] <= 'f') {
+            low = (unsigned char)(text[index * 2U + 1U] - 'a' + 10U);
+        } else if (text[index * 2U + 1U] >= 'A' &&
+                   text[index * 2U + 1U] <= 'F') {
+            low = (unsigned char)(text[index * 2U + 1U] - 'A' + 10U);
+        } else {
+            return -1;
+        }
+        output[index] = (uint8_t)((high << 4U) | low);
+    }
+    return 0;
+}
+
+static int bytes_are_zero(const uint8_t *bytes, size_t byte_count)
+{
+    size_t index;
+
+    if (!bytes) {
+        return 1;
+    }
+    for (index = 0; index < byte_count; index++) {
+        if (bytes[index] != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+#define OPTION_SEEN(option) (UINT64_C(1) << ((option) - OPT_STATE_DIR))
+
+static int option_set_complete(uint64_t seen, uint64_t required)
+{
+    return (seen & required) == 0 || (seen & required) == required;
+}
+
 static int parse_options(int argc, char **argv, struct agent_options *options)
 {
     static const struct option long_options[] = {
@@ -127,9 +220,50 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
         {"tls-ca", required_argument, NULL, OPT_TLS_CA},
         {"tls-cert", required_argument, NULL, OPT_TLS_CERT},
         {"tls-key", required_argument, NULL, OPT_TLS_KEY},
+        {"data-port", required_argument, NULL, OPT_DATA_PORT},
+        {"register-controller-address", required_argument, NULL,
+         OPT_REGISTER_CONTROLLER_ADDRESS},
+        {"register-controller-port", required_argument, NULL,
+         OPT_REGISTER_CONTROLLER_PORT},
+        {"failure-domain-id", required_argument, NULL, OPT_FAILURE_DOMAIN_ID},
+        {"pod-id", required_argument, NULL, OPT_POD_ID},
+        {"vnode-first", required_argument, NULL, OPT_VNODE_FIRST},
+        {"vnode-count", required_argument, NULL, OPT_VNODE_COUNT},
+        {"sidecar-address", required_argument, NULL, OPT_SIDECAR_ADDRESS},
+        {"sidecar-data-port", required_argument, NULL, OPT_SIDECAR_DATA_PORT},
+        {"sidecar-control-port", required_argument, NULL,
+         OPT_SIDECAR_CONTROL_PORT},
+        {"role-bits", required_argument, NULL, OPT_ROLE_BITS},
+        {"capability-profile-generation", required_argument, NULL,
+         OPT_CAPABILITY_PROFILE_GENERATION},
+        {"capability-profile-digest", required_argument, NULL,
+         OPT_CAPABILITY_PROFILE_DIGEST},
+        {"storage-capabilities-digest", required_argument, NULL,
+         OPT_STORAGE_CAPABILITIES_DIGEST},
+        {"accelerator-fault-capabilities-digest", required_argument, NULL,
+         OPT_ACCELERATOR_FAULT_CAPABILITIES_DIGEST},
+        {"exclusive-resource-digest", required_argument, NULL,
+         OPT_EXCLUSIVE_RESOURCE_DIGEST},
         {0, 0, 0, 0},
     };
-    unsigned int seen = 0;
+    const uint64_t local_network_options =
+        OPTION_SEEN(OPT_CONTROL_ADDRESS) | OPTION_SEEN(OPT_CONTROL_PORT) |
+        OPTION_SEEN(OPT_TLS_CA) | OPTION_SEEN(OPT_TLS_CERT) |
+        OPTION_SEEN(OPT_TLS_KEY) | OPTION_SEEN(OPT_DATA_PORT);
+    const uint64_t registration_options =
+        OPTION_SEEN(OPT_REGISTER_CONTROLLER_ADDRESS) |
+        OPTION_SEEN(OPT_REGISTER_CONTROLLER_PORT) |
+        OPTION_SEEN(OPT_FAILURE_DOMAIN_ID) | OPTION_SEEN(OPT_POD_ID) |
+        OPTION_SEEN(OPT_VNODE_FIRST) | OPTION_SEEN(OPT_VNODE_COUNT) |
+        OPTION_SEEN(OPT_SIDECAR_ADDRESS) |
+        OPTION_SEEN(OPT_SIDECAR_DATA_PORT) |
+        OPTION_SEEN(OPT_SIDECAR_CONTROL_PORT) | OPTION_SEEN(OPT_ROLE_BITS) |
+        OPTION_SEEN(OPT_CAPABILITY_PROFILE_GENERATION) |
+        OPTION_SEEN(OPT_CAPABILITY_PROFILE_DIGEST) |
+        OPTION_SEEN(OPT_STORAGE_CAPABILITIES_DIGEST) |
+        OPTION_SEEN(OPT_ACCELERATOR_FAULT_CAPABILITIES_DIGEST) |
+        OPTION_SEEN(OPT_EXCLUSIVE_RESOURCE_DIGEST);
+    uint64_t seen = 0;
     int option;
 
     memset(options, 0, sizeof(*options));
@@ -137,12 +271,12 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
     opterr = 0;
     while ((option = getopt_long(argc, argv, "", long_options, NULL)) != -1) {
         uint64_t *number = NULL;
-        unsigned int bit;
+        uint64_t bit;
 
-        if (option < OPT_STATE_DIR || option > OPT_TLS_KEY) {
+        if (option < OPT_STATE_DIR || option > OPT_EXCLUSIVE_RESOURCE_DIGEST) {
             return -1;
         }
-        bit = 1U << (option - OPT_STATE_DIR);
+        bit = OPTION_SEEN(option);
         if (seen & bit) {
             return -1;
         }
@@ -170,23 +304,68 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
         case OPT_TLS_CA: options->tls_ca_file = optarg; break;
         case OPT_TLS_CERT: options->tls_certificate_file = optarg; break;
         case OPT_TLS_KEY: options->tls_private_key_file = optarg; break;
+        case OPT_DATA_PORT: number = &options->data_port; break;
+        case OPT_REGISTER_CONTROLLER_ADDRESS:
+            options->registration_controller_address = optarg;
+            break;
+        case OPT_REGISTER_CONTROLLER_PORT:
+            number = &options->registration_controller_port;
+            break;
+        case OPT_FAILURE_DOMAIN_ID: number = &options->failure_domain_id; break;
+        case OPT_POD_ID: number = &options->pod_id; break;
+        case OPT_VNODE_FIRST: number = &options->vnode_first; break;
+        case OPT_VNODE_COUNT: number = &options->vnode_count; break;
+        case OPT_SIDECAR_ADDRESS: options->sidecar_address = optarg; break;
+        case OPT_SIDECAR_DATA_PORT: number = &options->sidecar_data_port; break;
+        case OPT_SIDECAR_CONTROL_PORT:
+            number = &options->sidecar_control_port;
+            break;
+        case OPT_ROLE_BITS: number = &options->role_bits; break;
+        case OPT_CAPABILITY_PROFILE_GENERATION:
+            number = &options->capability_profile_generation;
+            break;
+        case OPT_CAPABILITY_PROFILE_DIGEST:
+            if (parse_hex_digest(optarg, options->capability_profile_digest) != 0) {
+                return -1;
+            }
+            break;
+        case OPT_STORAGE_CAPABILITIES_DIGEST:
+            if (parse_hex_digest(optarg, options->storage_capabilities_digest) !=
+                0) {
+                return -1;
+            }
+            break;
+        case OPT_ACCELERATOR_FAULT_CAPABILITIES_DIGEST:
+            if (parse_hex_digest(optarg,
+                                 options->accelerator_fault_capabilities_digest) !=
+                0) {
+                return -1;
+            }
+            break;
+        case OPT_EXCLUSIVE_RESOURCE_DIGEST:
+            if (parse_hex_digest(optarg,
+                                 options->exclusive_resource_inventory_digest) !=
+                0) {
+                return -1;
+            }
+            break;
         default: return -1;
         }
         if ((number && parse_number(optarg, number) != 0) || !*optarg) {
             return -1;
         }
     }
-    if ((options->control_address || options->control_port ||
-         options->tls_ca_file || options->tls_certificate_file ||
-         options->tls_private_key_file) &&
-        (!options->control_address || options->control_port == 0 ||
-         !options->tls_ca_file || !options->tls_certificate_file ||
-         !options->tls_private_key_file)) {
+    if (!option_set_complete(seen, local_network_options) ||
+        !option_set_complete(seen, registration_options) ||
+        ((seen & registration_options) != 0 &&
+         (seen & local_network_options) != local_network_options)) {
         return -1;
     }
     return optind == argc &&
-           (seen & ((1U << (OPT_MAX_LEASES - OPT_STATE_DIR + 1)) - 1U)) ==
-               ((1U << (OPT_MAX_LEASES - OPT_STATE_DIR + 1)) - 1U) &&
+           (seen & ((UINT64_C(1) << (OPT_MAX_LEASES - OPT_STATE_DIR + 1)) -
+                    UINT64_C(1))) ==
+               ((UINT64_C(1) << (OPT_MAX_LEASES - OPT_STATE_DIR + 1)) -
+                UINT64_C(1)) &&
            options->node_id > 0 && options->node_id <= UINT32_MAX &&
            options->instance_id > 0 && options->inventory_revision > 0 &&
            options->vcpu_slots > 0 && options->vcpu_slots <= UINT32_MAX &&
@@ -201,7 +380,31 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
            options->max_storage <= SIZE_MAX &&
            options->max_members > 0 && options->max_members <= SIZE_MAX &&
            options->max_leases > 0 && options->max_leases <= SIZE_MAX &&
-           (!options->control_address || options->control_port <= UINT16_MAX)
+           (!options->control_address ||
+            (options->control_port <= UINT16_MAX &&
+             options->control_port != 0 && options->data_port <= UINT16_MAX &&
+             options->data_port != 0)) &&
+           (!(seen & registration_options) ||
+            (options->registration_controller_port <= UINT16_MAX &&
+             options->registration_controller_port != 0 &&
+             options->failure_domain_id > 0 &&
+             options->vnode_first <= UINT32_MAX &&
+             options->vnode_count > 0 && options->vnode_count <= UINT32_MAX &&
+             options->sidecar_data_port <= UINT16_MAX &&
+             options->sidecar_data_port != 0 &&
+             options->sidecar_control_port <= UINT16_MAX &&
+             options->sidecar_control_port != 0 &&
+             options->role_bits != 0 &&
+             options->capability_profile_generation != 0 &&
+             options->memory_bytes % WVM_MANIFEST_PAGE_BYTES == 0 &&
+             !bytes_are_zero(options->capability_profile_digest,
+                             sizeof(options->capability_profile_digest)) &&
+             !bytes_are_zero(options->storage_capabilities_digest,
+                             sizeof(options->storage_capabilities_digest)) &&
+             !bytes_are_zero(options->accelerator_fault_capabilities_digest,
+                             sizeof(options->accelerator_fault_capabilities_digest)) &&
+             !bytes_are_zero(options->exclusive_resource_inventory_digest,
+                             sizeof(options->exclusive_resource_inventory_digest))))
                ? 0
                : -1;
 }
@@ -256,6 +459,176 @@ static int authenticate_controller_io(
     return 0;
 }
 
+static int make_tls_endpoint(const char *address, uint16_t data_port,
+                             uint16_t control_port,
+                             struct wvm_endpoint *endpoint, char *error,
+                             size_t error_len)
+{
+    struct in_addr ipv4;
+    struct in6_addr ipv6;
+
+    if (!address || !endpoint || data_port == 0 || control_port == 0) {
+        return -1;
+    }
+    memset(endpoint, 0, sizeof(*endpoint));
+    endpoint->data_transport = WVM_DATA_TRANSPORT_UDP;
+    endpoint->data_port = data_port;
+    endpoint->control_transport = WVM_CONTROL_TRANSPORT_TLS_TCP;
+    endpoint->has_control_address = 1;
+    endpoint->control_port = control_port;
+    if (inet_pton(AF_INET, address, &ipv4) == 1) {
+        endpoint->data_address_bytes = 4;
+        endpoint->control_address_bytes = 4;
+        memcpy(endpoint->data_address, &ipv4, sizeof(ipv4));
+        memcpy(endpoint->control_address, &ipv4, sizeof(ipv4));
+    } else if (inet_pton(AF_INET6, address, &ipv6) == 1) {
+        endpoint->data_address_bytes = 16;
+        endpoint->control_address_bytes = 16;
+        memcpy(endpoint->data_address, &ipv6, sizeof(ipv6));
+        memcpy(endpoint->control_address, &ipv6, sizeof(ipv6));
+    } else {
+        if (error && error_len != 0) {
+            (void)snprintf(error, error_len, "endpoint address is not an IP literal");
+        }
+        return -1;
+    }
+    return wvm_endpoint_validate(endpoint, error, error_len);
+}
+
+static int build_registration_record(
+    const struct agent_options *options,
+    const struct wvm_endpoint *control_endpoint,
+    struct wvm_node_record *node, char *error, size_t error_len)
+{
+    struct wvm_endpoint sidecar_endpoint;
+
+    if (!options || !control_endpoint || !node ||
+        make_tls_endpoint(options->sidecar_address,
+                          (uint16_t)options->sidecar_data_port,
+                          (uint16_t)options->sidecar_control_port,
+                          &sidecar_endpoint, error, error_len) != 0) {
+        if (error && error[0] == '\0') {
+            (void)snprintf(error, error_len,
+                           "node registration sidecar endpoint is invalid");
+        }
+        return -1;
+    }
+    memset(node, 0, sizeof(*node));
+    node->physical_node_id = (uint32_t)options->node_id;
+    node->node_instance_id = options->instance_id;
+    node->failure_domain_id = options->failure_domain_id;
+    node->control_endpoint = *control_endpoint;
+    node->sidecar_endpoint = sidecar_endpoint;
+    node->role_bits = options->role_bits;
+    node->pod_id = options->pod_id;
+    node->local_vnode_first = (uint32_t)options->vnode_first;
+    node->local_vnode_count = (uint32_t)options->vnode_count;
+    node->inventory.physical_node_id = node->physical_node_id;
+    node->inventory.node_instance_id = node->node_instance_id;
+    node->inventory.failure_domain_id = node->failure_domain_id;
+    node->inventory.inventory_revision = options->inventory_revision;
+    node->inventory.registered_vcpu_slots = (uint32_t)options->vcpu_slots;
+    node->inventory.registered_memory_bytes = options->memory_bytes;
+    node->inventory.allocatable_vcpu_slots = (uint32_t)options->vcpu_slots;
+    node->inventory.allocatable_memory_bytes = options->memory_bytes;
+    memcpy(node->inventory.storage_capabilities_digest,
+           options->storage_capabilities_digest,
+           sizeof(node->inventory.storage_capabilities_digest));
+    memcpy(node->inventory.accelerator_fault_capabilities_digest,
+           options->accelerator_fault_capabilities_digest,
+           sizeof(node->inventory.accelerator_fault_capabilities_digest));
+    memcpy(node->inventory.exclusive_resource_inventory_digest,
+           options->exclusive_resource_inventory_digest,
+           sizeof(node->inventory.exclusive_resource_inventory_digest));
+    node->capability.physical_node_id = node->physical_node_id;
+    node->capability.node_instance_id = node->node_instance_id;
+    node->capability.profile_generation = options->capability_profile_generation;
+    memcpy(node->capability.profile_digest, options->capability_profile_digest,
+           sizeof(node->capability.profile_digest));
+    node->desired_membership_state = WVM_MANIFEST_MEMBER_PENDING;
+    node->observed_health_state = WVM_MEMBERSHIP_RECOVERING;
+    /* Registration normalizes revisions under the controller's durable lock. */
+    node->membership_revision = 1;
+    node->topology_revision = 1;
+    return wvm_node_record_validate(node, error, error_len);
+}
+
+static int register_local_node(const struct agent_options *options,
+                               const struct wvm_endpoint *control_endpoint,
+                               char *error, size_t error_len)
+{
+    struct wvm_tls_control_connector tls_connector;
+    struct wvm_control_stream_connector connector;
+    struct wvm_node_record node;
+    struct wvm_endpoint controller_endpoint;
+    struct wvm_member_key controller_member;
+    struct wvm_membership_control_result result;
+    struct wvm_envelope request;
+    uint8_t node_bytes[WVM_MEMBERSHIP_CONTROL_MAX_RECORD_BYTES];
+    uint8_t operation_digest[WVM_SHA256_DIGEST_BYTES];
+    size_t node_byte_count = 0;
+    int status;
+
+    if (!options || !control_endpoint ||
+        build_registration_record(options, control_endpoint, &node, error,
+                                  error_len) != 0 ||
+        wvm_node_record_encode(&node, node_bytes, sizeof(node_bytes),
+                               &node_byte_count, error, error_len) != 0 ||
+        make_tls_endpoint(options->registration_controller_address,
+                          (uint16_t)options->registration_controller_port,
+                          (uint16_t)options->registration_controller_port,
+                          &controller_endpoint, error, error_len) != 0) {
+        return -1;
+    }
+    memset(&controller_member, 0, sizeof(controller_member));
+    controller_member.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    controller_member.role_id = (uint32_t)options->controller_node_id;
+    controller_member.instance_id = options->controller_instance_id;
+    memset(&request, 0, sizeof(request));
+    request.message_type = WVM_ENVELOPE_MSG_REGISTER_MEMBER;
+    request.origin_physical_node_id = node.physical_node_id;
+    request.origin_runtime_instance_id = node.node_instance_id;
+    request.delivery_attempt_id = 1;
+    request.payload = node_bytes;
+    request.payload_bytes = node_byte_count;
+    wvm_envelope_semantic_digest(node_bytes, node_byte_count,
+                                 request.semantic_payload_digest);
+    wvm_sha256_digest(node_bytes, node_byte_count, operation_digest);
+    memcpy(request.operation_id, operation_digest, sizeof(request.operation_id));
+    if (bytes_are_zero(request.operation_id, sizeof(request.operation_id))) {
+        request.operation_id[sizeof(request.operation_id) - 1U] = 1;
+    }
+    memset(&tls_connector, 0, sizeof(tls_connector));
+    memset(&connector, 0, sizeof(connector));
+    if (wvm_tls_control_connector_bind(
+            &tls_connector, options->tls_ca_file,
+            options->tls_certificate_file, options->tls_private_key_file,
+            10000U, &connector, error, error_len) != 0) {
+        return -1;
+    }
+    memset(&result, 0, sizeof(result));
+    status = wvm_tls_control_membership_exchange(
+        &tls_connector, &controller_member,
+        (uint32_t)options->controller_node_id,
+        options->controller_instance_id, &controller_endpoint, &request,
+        &result, error, error_len);
+    wvm_tls_control_connector_destroy(&tls_connector);
+    if (status != 0) {
+        return -1;
+    }
+    if (result.status_code != WVM_MEMBERSHIP_CONTROL_SUCCESS ||
+        memcmp(result.in_reply_to_operation_id, request.operation_id,
+               sizeof(request.operation_id)) != 0 ||
+        bytes_are_zero(result.record_digest, sizeof(result.record_digest))) {
+        if (error && error_len != 0) {
+            (void)snprintf(error, error_len,
+                           "controller rejected durable node registration");
+        }
+        return -1;
+    }
+    return 0;
+}
+
 int wavevm_admission_agent_main(int argc, char **argv)
 {
     struct agent_options options;
@@ -283,7 +656,18 @@ int wavevm_admission_agent_main(int argc, char **argv)
                 "--max-vcpus N --max-memory-chunks N --max-storage N "
                 "--max-members N --max-leases N "
                 "[--control-address ADDR --control-port PORT "
-                "--tls-ca FILE --tls-cert FILE --tls-key FILE]\n", argv[0]);
+                "--tls-ca FILE --tls-cert FILE --tls-key FILE --data-port PORT] "
+                "[--register-controller-address ADDR "
+                "--register-controller-port PORT --failure-domain-id N "
+                "--pod-id N --vnode-first N --vnode-count N "
+                "--sidecar-address ADDR --sidecar-data-port PORT "
+                "--sidecar-control-port PORT --role-bits N "
+                "--capability-profile-generation N "
+                "--capability-profile-digest HEX64 "
+                "--storage-capabilities-digest HEX64 "
+                "--accelerator-fault-capabilities-digest HEX64 "
+                "--exclusive-resource-digest HEX64]\n",
+                argv[0]);
         return 2;
     }
     {
@@ -307,32 +691,10 @@ int wavevm_admission_agent_main(int argc, char **argv)
         return 2;
     }
     if (options.control_address) {
-        struct in_addr ipv4;
-        struct in6_addr ipv6;
-
-        memset(&network_endpoint, 0, sizeof(network_endpoint));
-        network_endpoint.data_transport = WVM_DATA_TRANSPORT_UDP;
-        network_endpoint.data_port = 1;
-        network_endpoint.control_transport = WVM_CONTROL_TRANSPORT_TLS_TCP;
-        network_endpoint.has_control_address = 1;
-        network_endpoint.control_port = (uint16_t)options.control_port;
-        if (inet_pton(AF_INET, options.control_address, &ipv4) == 1) {
-            network_endpoint.data_address_bytes = 4;
-            network_endpoint.control_address_bytes = 4;
-            memcpy(network_endpoint.data_address, &ipv4, 4);
-            memcpy(network_endpoint.control_address, &ipv4, 4);
-        } else if (inet_pton(AF_INET6, options.control_address, &ipv6) == 1) {
-            network_endpoint.data_address_bytes = 16;
-            network_endpoint.control_address_bytes = 16;
-            memcpy(network_endpoint.data_address, &ipv6, 16);
-            memcpy(network_endpoint.control_address, &ipv6, 16);
-        } else if (wvm_endpoint_validate(&network_endpoint, error,
-                                         sizeof(error)) != 0) {
-            fprintf(stderr, "[node-runtime] invalid TLS control address: %s\n",
-                    options.control_address);
-            return 2;
-        }
-        if (wvm_endpoint_validate(&network_endpoint, error, sizeof(error)) != 0) {
+        if (make_tls_endpoint(options.control_address,
+                              (uint16_t)options.data_port,
+                              (uint16_t)options.control_port,
+                              &network_endpoint, error, sizeof(error)) != 0) {
             fprintf(stderr, "[node-runtime] invalid TLS control endpoint: %s\n",
                     error);
             return 2;
@@ -394,6 +756,19 @@ int wavevm_admission_agent_main(int argc, char **argv)
     if (wvm_admission_runtime_agent_init(&agent, &config, error, sizeof(error)) != 0 ||
         wvm_admission_runtime_agent_start(&agent, error, sizeof(error)) != 0) {
         fprintf(stderr, "[node-runtime] cannot start admission agent: %s\n", error);
+        wvm_admission_runtime_agent_destroy(&agent);
+        (void)sigprocmask(SIG_SETMASK, &previous_signals, NULL);
+        return result;
+    }
+    if (options.registration_controller_address &&
+        register_local_node(&options, &network_endpoint, error,
+                            sizeof(error)) != 0) {
+        fprintf(stderr, "[node-runtime] cannot register local node: %s\n",
+                error[0] ? error : "unknown error");
+        if (wvm_admission_runtime_agent_stop(&agent, error, sizeof(error)) != 0) {
+            fprintf(stderr, "[node-runtime] cannot stop admission agent: %s\n",
+                    error);
+        }
         wvm_admission_runtime_agent_destroy(&agent);
         (void)sigprocmask(SIG_SETMASK, &previous_signals, NULL);
         return result;

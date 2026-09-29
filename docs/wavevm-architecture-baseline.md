@@ -44,6 +44,9 @@ The long-term goal is not only to boot a demo guest. The goal is a maintainable 
 - The same high-level semantics apply to KVM and TCG.
 - The same high-level semantics apply to flat and fractal topologies.
 - The same cluster can host multiple independent VMs.
+- A physical host can expose multiple explicitly isolated compute-node
+  instances when its aggregate CPU, memory, accelerator, port, and socket
+  budgets are sufficient.
 - Compute nodes and routing gateways can join, drain, fail, and leave through
   explicit control-plane lifecycle operations.
 - Restricted environments can run without a kernel module.
@@ -448,6 +451,9 @@ The identity terms are distinct:
   reuses the same `vm_id`.
 - `physical_node_id` identifies a registered resource-providing host in the
   cluster.
+- `physical_host_id` identifies the physical host group for aggregate resource
+  accounting and correlated failure. It may contain multiple distinct
+  `physical_node_id` resource providers and gateway roles.
 - `vnode_id` identifies a DHT/routing slot inside one VM namespace. A physical
   node may own multiple vnodes.
 - `primary_vnode` is the designated vnode used to identify a physical node in
@@ -470,6 +476,10 @@ V1 identity rules:
 - Physical node IDs and vnode IDs occupy different semantic domains even when
   their numeric values happen to match.
 - `WVM_INSTANCE_ID` must never be treated as an alias for `vm_id`.
+- Node-agent identity, listener ports, Unix socket paths, shared-memory names,
+  logs, and temporary paths must be explicitly parameterized by the
+  registered node instance. A host-global default is invalid when two node
+  instances share one host.
 - The current legacy wire header has no `vm_incarnation` field. Until a complete
   path negotiates V1 identity, a nonzero legacy `vm_id` must not be reused while
   old routes, packets, or processes from its previous lifetime can still exist.

@@ -106,7 +106,7 @@ The V1 enum registry is:
 | `0x1009` | `RouteRule` | `1:U16:destination_kind`, `2:U64:destination_scope`, `3:U32:destination_vnode_or_endpoint`, `4:U16:next_hop_kind`, `5:Record<MemberKey>:next_hop_member`, `6:Record<Endpoint>:next_hop_endpoint`, `7:U16:hop_limit` |
 | `0x100a` | `RouteSnapshot` | `1:Record<RouteSnapshotKey>:route_snapshot_key`, `2:U64:membership_revision`, `3:U16:topology_kind`, `4:List<RouteRule, destination_kind/destination_scope/destination_vnode_or_endpoint>:next_hop_rules`, `5:Record<RequiredAckSet>:required_ack_set`, `6:Record<RouteSnapshotKey>:predecessor_snapshot_key?`, `7:U64:operation_retention_horizon_ms`, `8:U16:retirement_policy` |
 | `0x100b` | `NodeInventory` | `1:U32:physical_node_id`, `2:U64:node_instance_id`, `3:U64:failure_domain_id`, `4:U64:inventory_revision`, `5:U32:registered_vcpu_slots`, `6:U64:registered_memory_bytes`, `7:U32:reserved_host_cpu_slots`, `8:U64:reserved_host_memory_bytes`, `9:U32:reserved_gateway_cpu_slots`, `10:U64:reserved_gateway_memory_bytes`, `11:List<U32, value>:hosted_gateway_role_ids`, `12:U32:allocatable_vcpu_slots`, `13:U64:allocatable_memory_bytes`, `14:Digest32:storage_capabilities_digest`, `15:Digest32:accelerator_fault_capabilities_digest`, `16:Digest32:exclusive_resource_inventory_digest` |
-| `0x100c` | `NodeRecord` | `1:U32:physical_node_id`, `2:U64:node_instance_id`, `3:U64:failure_domain_id`, `4:Record<Endpoint>:control_endpoint`, `5:Record<Endpoint>:sidecar_endpoint`, `6:U64:role_bits`, `7:U64:pod_id`, `8:U32:local_vnode_first`, `9:U32:local_vnode_count`, `10:Record<NodeInventory>:inventory`, `11:Record<CapabilityRef>:capability`, `12:U16:desired_membership_state`, `13:U16:observed_health_state`, `14:U64:membership_revision`, `15:U64:topology_revision` |
+| `0x100c` | `NodeRecord` | `1:U32:physical_node_id`, `2:U64:node_instance_id`, `3:U64:failure_domain_id`, `4:Record<Endpoint>:control_endpoint`, `5:Record<Endpoint>:sidecar_endpoint`, `6:U64:role_bits`, `7:U64:pod_id`, `8:U32:local_vnode_first`, `9:U32:local_vnode_count`, `10:Record<NodeInventory>:inventory`, `11:Record<CapabilityRef>:capability`, `12:U16:desired_membership_state`, `13:U16:observed_health_state`, `14:U64:membership_revision`, `15:U64:topology_revision`, `16:U64:physical_host_id`, `17:Record<NodeInstanceNamespace>:node_instance_namespace` |
 | `0x100d` | `GatewayRecord` | `1:U32:gateway_id`, `2:U64:gateway_instance_id`, `3:U32:hosting_physical_node_id`, `4:U64:failure_domain_id`, `5:Record<Endpoint>:endpoint`, `6:U64:role_bits`, `7:U64:pod_id_or_scope`, `8:List<U32, value>:parent_gateway_ids`, `9:List<U32, value>:child_gateway_ids`, `10:U16:desired_membership_state`, `11:U16:observed_health_state`, `12:U64:membership_revision`, `13:U64:topology_revision` |
 | `0x100e` | `AdmissionEligibilityFence` | `1:ID16:admission_tx_id`, `2:U64:membership_revision`, `3:U64:topology_revision`, `4:U64:inventory_revision`, `5:U64:capability_profile_generation`, `6:List<RequiredMember, member_key>:selected_members`, `7:Record<VmRouteScopeKey>:required_route_scope_key`, `8:Digest32:required_ack_set_digest`, `9:Digest32:fence_digest`, `10:U64:admission_eligibility_revision` |
 | `0x100f` | `VcpuAssignment` | `1:U32:guest_vcpu_index`, `2:U32:executor_physical_node_id`, `3:U16:backend`, `4:U16:executor_class`, `5:U32:executor_slot`, `6:ID16:reservation_id` |
@@ -142,7 +142,8 @@ The V1 enum registry is:
 | `0x102d` | `AdmissionReservationStage` | `1:Record<CandidateVmManifest>:candidate`, `2:Record<ResourceReservation>:reservation`, `3:Record<ActivationRecord>:activation?`, `4:U16:abort_reason?` |
 | `0x102e` | `AdmissionParticipantStage` | `1:Record<CandidateVmManifest>:candidate`, `2:Record<NodeRuntimeManifest>:runtime_manifest`, `3:Record<ActivationRecord>:activation?`, `4:U16:abort_reason?` |
 | `0x102f` | `CapabilityReport` | `1:U64:profile_generation`, `2:List<CapabilityRecord, capability_id/provider_instance_id>:records` |
-| `0x1030` | `NodeRuntimeProfile` | `1:U32:physical_node_id`, `2:U64:node_instance_id`, `3:U64:inventory_revision`, `4:U64:capability_profile_generation`, `5:U64:runtime_profile_generation`, `6:U16:node_runtime_control_port`, `7:U16:local_executor_control_port`, `8:U32:executor_worker_count`, `9:U32:sync_batch_size`, `10:U32:vcpu_handoff_record_capacity`, `11:List<U16>:node_runtime_data_ports`, `12:List<U16>:local_executor_service_ports` |
+| `0x1030` | `NodeRuntimeProfile` | `1:U32:physical_node_id`, `2:U64:node_instance_id`, `3:U64:inventory_revision`, `4:U64:capability_profile_generation`, `5:U64:runtime_profile_generation`, `6:U16:node_runtime_control_port`, `7:U16:local_executor_control_port`, `8:U32:executor_worker_count`, `9:U32:sync_batch_size`, `10:U32:vcpu_handoff_record_capacity`, `11:List<U16>:node_runtime_data_ports`, `12:List<U16>:local_executor_service_ports`, `13:U64:physical_host_id`, `14:Record<NodeInstanceNamespace>:node_instance_namespace` |
+| `0x1031` | `NodeInstanceNamespace` | `1:Text<128>:namespace`, `2:Digest32:derivation_salt_digest`, `3:U64:name_generation` |
 
 ## 3. Cross-Record Constraints
 
@@ -213,6 +214,18 @@ The V1 enum registry is:
   `failure_domain_id` must equal that host's failure domain for a co-located
   gateway role; a distinct value is valid only for a separately registered
   external gateway host.
+- `NodeRecord.physical_host_id` is the stable host-group identity used for
+  correlated failure and aggregate resource accounting. It may be shared by
+  multiple compute records and gateway records, but `physical_node_id` remains
+  unique per resource provider. `physical_host_id` is never derived from an
+  IP address, hostname, or endpoint equality.
+- `NodeRecord.node_instance_namespace` and
+  `NodeRuntimeProfile.node_instance_namespace` must match. Every endpoint,
+  port-pool entry, local Unix socket, shared-memory name, log path, and
+  temporary path allocated to a node instance is scoped by this namespace and
+  by an explicit lease owner. A duplicate host-wide port/path or a missing
+  instance parameter rejects registration or admission; hard-coded defaults
+  are not valid production inputs.
 - `AdmissionEligibilityFence.selected_members` is the complete member set used
   by the plan. Every plan participant, route-ACK member, reservation owner,
   QEMU host, and executor must appear in it with its exact instance and

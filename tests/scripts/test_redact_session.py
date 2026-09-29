@@ -12,7 +12,10 @@ import unittest
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "redact_session.py"
-split_archive = runpy.run_path(str(SCRIPT))["split_archive"]
+MODULE = runpy.run_path(str(SCRIPT))
+split_archive = MODULE["split_archive"]
+redact_string = MODULE["redact_string"]
+scan_output = MODULE["scan_output"]
 
 
 class SplitArchiveTests(unittest.TestCase):
@@ -63,6 +66,25 @@ class SplitArchiveTests(unittest.TestCase):
                 split_archive(source, output, 1)
             self.assertEqual(existing.read_bytes(), b"previous backup")
             self.assertEqual(set(directory.iterdir()), {source, existing})
+
+
+class RedactionTests(unittest.TestCase):
+    def test_free_text_password_assignments_are_removed_and_scanned(self):
+        for source in (
+            "sudo password: test-only-password",
+            "\u5bc6\u7801\u6211\u544a\u8bc9\u4f60\uff0ctest-only-password",
+        ):
+            redacted, changes = redact_string(source, ())
+            self.assertGreater(changes, 0)
+            self.assertEqual(redacted, "[REDACTED]")
+
+        with tempfile.TemporaryDirectory(prefix="wavevm-redaction-test-") as tmp:
+            path = Path(tmp) / "session.jsonl"
+            path.write_text(
+                '{"message":"sudo password: test-only-password"}\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(scan_output(path))
 
 
 if __name__ == "__main__":

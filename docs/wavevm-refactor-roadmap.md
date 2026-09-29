@@ -38,6 +38,9 @@ The first usable release must provide:
   before Mode A is advertised for multi-VM hosts;
 - basic membership operations: node/gateway join, compute cordon, safe drain,
   and gateway replacement through an acknowledged route snapshot;
+- multiple compute-node instances on one physical host, with explicit host
+  aggregation, per-instance port/socket/name leases, and correlated host
+  failure semantics;
 - create, activate, start, stop, and partial-start cleanup with bounded
   failure reporting;
 - guest readiness plus evidence of remote vCPU and remote memory activity in
@@ -537,6 +540,12 @@ Actions:
 - Extend planner output with explicit `host_node`, host overhead, selected
   capabilities, and per-node process plans.
 - Implement the deterministic compact/spread algorithms from Phase 4.
+- Replace the one-resource-provider-per-host assumption with explicit
+  `physical_host_id` grouping. Validate per-node capacity and aggregate host
+  CPU/memory/accelerator/overhead capacity without double counting.
+- Make node registration and runtime profiles carry explicit instance
+  namespaces and leased data/control/local-service ports and socket paths;
+  reject host-wide collisions before admission.
 - Allocate VM identity before candidate-manifest/reservation emission; prepare
   VM route scope, guest/host resources, and participants under one eligibility
   fence before a durable activation decision.
@@ -666,8 +675,10 @@ Actions:
 
 - **Minimum usable smoke matrix:** generate bounded manifests for flat and
   fractal TCG, flat and fractal KVM, one-node kernel acceleration, and two
-  Mode B VMs on one physical host; after Phase 8, include two Mode A VMs on
-  one physical host to prove context isolation.
+  Mode B VMs on one physical host; include two independent compute-node
+  instances on one physical host with distinct ports/sockets and aggregate
+  resource accounting; after Phase 8, include two Mode A VMs on one physical
+  host to prove context isolation.
 - **Minimum usable evidence:** record the capability report, manifest digest,
   actual QEMU resource arguments, guest readiness, remote vCPU/memory evidence,
   and cleanup result.
