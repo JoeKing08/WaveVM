@@ -14,6 +14,8 @@
 struct prepare_capture {
     unsigned int calls;
     unsigned int fail_on_call;
+    unsigned int commit_calls;
+    unsigned int fail_on_commit_call;
 };
 
 static int expect(int condition, const char *message)
@@ -201,6 +203,68 @@ static void build_transaction(struct wvm_route_transaction_record *transaction,
     transaction->state = WVM_ROUTE_TRANSACTION_PREPARING;
 }
 
+static int build_join_snapshot(
+    struct wvm_route_snapshot_record *snapshot,
+    struct wvm_route_rule_record *rule,
+    struct wvm_required_ack_entry snapshot_ack_entries[2],
+    struct wvm_required_ack_entry transaction_ack_entries[2],
+    struct wvm_required_ack_entry decoded_transaction_ack_entries[2],
+    struct wvm_required_ack_set *ack_set,
+    uint64_t topology_revision, uint64_t membership_revision,
+    const struct wvm_member_key *node_member,
+    const struct wvm_endpoint *node_endpoint,
+    const struct wvm_member_key *gateway_member,
+    const struct wvm_endpoint *gateway_endpoint, char *error,
+    size_t error_len)
+{
+    uint8_t encoded[8192];
+    size_t encoded_bytes;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->route_snapshot_key.scope_key.vm_id = 256;
+    snapshot->route_snapshot_key.scope_key.vm_incarnation = 1;
+    snapshot->route_snapshot_key.scope_key.route_scope_id = 1;
+    snapshot->route_snapshot_key.topology_revision = topology_revision;
+    snapshot->route_snapshot_key.route_generation = 2;
+    snapshot->membership_revision = membership_revision;
+    snapshot->topology_kind = WVM_ROUTE_TOPOLOGY_FLAT;
+    snapshot->operation_retention_horizon_ms = 5000;
+    snapshot->retirement_policy = 1;
+    memset(rule, 0, sizeof(*rule));
+    rule->destination_kind = WVM_ROUTE_DESTINATION_EXACT_VNODE;
+    rule->next_hop_kind = WVM_ROUTE_NEXT_HOP_GATEWAY;
+    rule->next_hop_member = *gateway_member;
+    rule->next_hop_endpoint = *gateway_endpoint;
+    rule->hop_limit = 4;
+    snapshot->next_hop_rules.entries = rule;
+    snapshot->next_hop_rules.count = 1;
+    snapshot->next_hop_rules.capacity = 1;
+    memset(snapshot_ack_entries, 0, 2 * sizeof(*snapshot_ack_entries));
+    snapshot_ack_entries[0].member_key = *node_member;
+    snapshot_ack_entries[0].endpoint = *node_endpoint;
+    snapshot_ack_entries[0].role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    snapshot_ack_entries[0].expected_snapshot_key = snapshot->route_snapshot_key;
+    snapshot_ack_entries[1].member_key = *gateway_member;
+    snapshot_ack_entries[1].endpoint = *gateway_endpoint;
+    snapshot_ack_entries[1].role_type = WVM_MANIFEST_ROLE_GATEWAY;
+    snapshot_ack_entries[1].expected_snapshot_key = snapshot->route_snapshot_key;
+    snapshot->required_ack_set.entries.entries = snapshot_ack_entries;
+    snapshot->required_ack_set.entries.count = 2;
+    snapshot->required_ack_set.entries.capacity = 2;
+    if (wvm_route_snapshot_record_encode(
+            snapshot, encoded, sizeof(encoded), &encoded_bytes, NULL, error,
+            error_len) != 0 ||
+        wvm_route_snapshot_record_decode(encoded, encoded_bytes, snapshot,
+                                         error, error_len) != 0) {
+        return -1;
+    }
+    return build_ack_set(ack_set, transaction_ack_entries,
+                         decoded_transaction_ack_entries, 2,
+                         &snapshot->route_snapshot_key, node_member,
+                         node_endpoint, gateway_member, gateway_endpoint,
+                         error, error_len);
+}
+
 static int build_gateway_successor_transaction(
     struct wvm_route_transaction_record *transaction,
     struct wvm_route_snapshot_record *snapshot,
@@ -301,16 +365,45 @@ static int build_gateway_successor_transaction(
 
 static int route_prepare(void *context,
                          const struct wvm_route_transaction_record *transaction,
+                         const struct wvm_route_snapshot_record *snapshot,
                          const struct wvm_required_ack_entry *ack_entry,
                          char *error, size_t error_len)
 {
     struct prepare_capture *capture = context;
 
-    (void)transaction;
-    (void)ack_entry;
+    if (wvm_route_snapshot_record_binds_transaction(
+            snapshot, transaction, error, error_len) != 0 ||
+        memcmp(ack_entry->expected_snapshot_key.snapshot_digest,
+               snapshot->route_snapshot_key.snapshot_digest,
+               WVM_SHA256_DIGEST_BYTES) != 0) {
+        return -1;
+    }
     capture->calls++;
     if (capture->fail_on_call == capture->calls) {
         snprintf(error, error_len, "simulated participant prepare failure");
+        return -1;
+    }
+    return 0;
+}
+
+static int route_commit(void *context,
+                        const struct wvm_route_transaction_record *transaction,
+                        const struct wvm_route_snapshot_record *snapshot,
+                        const struct wvm_required_ack_entry *ack_entry,
+                        char *error, size_t error_len)
+{
+    struct prepare_capture *capture = context;
+
+    if (wvm_route_snapshot_record_binds_transaction(
+            snapshot, transaction, error, error_len) != 0 ||
+        memcmp(ack_entry->expected_snapshot_key.snapshot_digest,
+               snapshot->route_snapshot_key.snapshot_digest,
+               WVM_SHA256_DIGEST_BYTES) != 0) {
+        return -1;
+    }
+    capture->commit_calls++;
+    if (capture->fail_on_commit_call == capture->commit_calls) {
+        snprintf(error, error_len, "simulated participant commit failure");
         return -1;
     }
     return 0;
@@ -378,7 +471,9 @@ int main(void)
     struct wvm_member_key gateway_member;
     struct wvm_member_key successor_gateway_member;
     struct wvm_member_key node_member;
-    struct wvm_route_snapshot_key route_key;
+    struct wvm_route_snapshot_record join_snapshot;
+    struct wvm_route_rule_record join_rule;
+    struct wvm_required_ack_entry join_snapshot_ack_entries[2];
     struct wvm_required_ack_entry ack_entries[2];
     struct wvm_required_ack_entry decoded_ack_entries[2];
     struct wvm_required_ack_set ack_set;
@@ -411,6 +506,7 @@ int main(void)
     uint16_t route_state;
     char error[256] = {0};
     int fd;
+    int join_result;
 
     fd = mkstemp(journal_path);
     if (fd < 0) {
@@ -449,23 +545,28 @@ int main(void)
         return 1;
     }
 
-    build_route_key(&route_key, controller.topology_revision + 1, 2, 0x52);
-    if (expect(build_ack_set(&ack_set, ack_entries, decoded_ack_entries, 2,
-                             &route_key, &node_member,
-                             &node.control_endpoint, &gateway_member,
-                             &gateway.endpoint, error, sizeof(error)) == 0,
-               "build join RequiredAckSet")) {
+    if (expect(build_join_snapshot(
+                   &join_snapshot, &join_rule, join_snapshot_ack_entries,
+                   ack_entries, decoded_ack_entries, &ack_set,
+                   controller.topology_revision + 1,
+                   controller.membership_revision + 1, &node_member,
+                   &node.control_endpoint, &gateway_member, &gateway.endpoint,
+                   error, sizeof(error)) == 0,
+               "build join route snapshot and RequiredAckSet")) {
         wvm_membership_controller_close(&controller);
         unlink(journal_path);
         return 1;
     }
-    build_transaction(&failed_transaction, 0x42, &route_key, &ack_set);
+    build_transaction(&failed_transaction, 0x42,
+                      &join_snapshot.route_snapshot_key, &ack_set);
     memset(&join_request, 0, sizeof(join_request));
     join_request.member_kind = WVM_MEMBERSHIP_COMPUTE;
     join_request.authenticated_actor = &node_member;
     join_request.node = &node;
     join_request.route_transaction = &failed_transaction;
+    join_request.route_snapshot = &join_snapshot;
     join_request.route_prepare = route_prepare;
+    join_request.route_commit = route_commit;
     join_request.route_prepare_context = &capture;
     capture.calls = 0;
     capture.fail_on_call = 2;
@@ -487,12 +588,39 @@ int main(void)
         return 1;
     }
 
-    build_transaction(&successful_transaction, 0x43, &route_key, &ack_set);
+    build_transaction(&successful_transaction, 0x43,
+                      &join_snapshot.route_snapshot_key, &ack_set);
     join_request.route_transaction = &successful_transaction;
     capture.calls = 0;
     capture.fail_on_call = 0;
+    capture.commit_calls = 0;
+    capture.fail_on_commit_call = 2;
     if (expect(wvm_membership_coordinator_join(&controller, &join_request,
-                                               error, sizeof(error)) == 0,
+                                               error, sizeof(error)) != 0,
+               "join waits for every consumer commit ACK") ||
+        expect(wvm_membership_controller_route_state(
+                   &controller, successful_transaction.operation_id,
+                   &route_state, error, sizeof(error)) == 0 &&
+                   route_state == WVM_ROUTE_TRANSACTION_ACTIVATED,
+               "controller route remains committed for retry") ||
+        expect((entry = wvm_membership_controller_find(&controller,
+                                                       &node_member)) != NULL &&
+                   entry->node.desired_membership_state ==
+                       WVM_MANIFEST_MEMBER_PREPARED,
+               "commit failure leaves joining member non-schedulable")) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return 1;
+    }
+    error[0] = '\0';
+    capture.commit_calls = 0;
+    capture.fail_on_commit_call = 0;
+    join_result = wvm_membership_coordinator_join(&controller, &join_request,
+                                                   error, sizeof(error));
+    if (join_result != 0) {
+        fprintf(stderr, "membership-coordinator join error: %s\n", error);
+    }
+    if (expect(join_result == 0,
                "join completes after every participant ACK") ||
         expect((entry = wvm_membership_controller_find(&controller, &node_member)) !=
                    NULL &&

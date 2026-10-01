@@ -124,18 +124,23 @@ int wvm_membership_coordinator_join(
     int result;
 
     if (!controller || !request || !request->authenticated_actor ||
-        !request->route_transaction || !request->route_prepare ||
+        !request->route_transaction || !request->route_snapshot ||
+        !request->route_prepare || !request->route_commit ||
         operation_id_is_zero(request->route_transaction->operation_id)) {
         set_error(error, error_len,
                   "membership join orchestration input is invalid");
         return -1;
     }
     if (join_member_key(request, &member_key, error, error_len) != 0 ||
-        !member_key_equal_local(request->authenticated_actor, &member_key) ||
+        wvm_route_snapshot_record_binds_transaction(
+            request->route_snapshot, request->route_transaction, error,
+            error_len) != 0 ||
         count_join_member_ack(request->route_transaction, &member_key,
                               &joining_ack_index, error, error_len) != 0) {
-        set_error(error, error_len,
-                  "membership join actor or route participant is invalid");
+        return -1;
+    }
+    if (!member_key_equal_local(request->authenticated_actor, &member_key)) {
+        set_error(error, error_len, "membership join actor is not the member");
         return -1;
     }
     if (request->member_kind == WVM_MEMBERSHIP_COMPUTE) {
@@ -178,7 +183,8 @@ int wvm_membership_coordinator_join(
                 &request->route_transaction->required_ack_set.entries.entries[i];
 
             if (request->route_prepare(request->route_prepare_context,
-                                       request->route_transaction, ack, error,
+                                       request->route_transaction,
+                                       request->route_snapshot, ack, error,
                                        error_len) != 0 ||
                 wvm_membership_controller_route_ack_prepare(
                     controller, request->route_transaction->operation_id,
@@ -199,6 +205,18 @@ int wvm_membership_coordinator_join(
                     error_len) != 0) {
                 return -1;
             }
+            return -1;
+        }
+    }
+    for (i = 0; i < request->route_transaction->required_ack_set.entries.count;
+         i++) {
+        const struct wvm_required_ack_entry *ack =
+            &request->route_transaction->required_ack_set.entries.entries[i];
+
+        if (request->route_commit(request->route_prepare_context,
+                                  request->route_transaction,
+                                  request->route_snapshot, ack, error,
+                                  error_len) != 0) {
             return -1;
         }
     }
@@ -317,14 +335,9 @@ static int gateway_request_valid(
         set_error(error, error_len, "gateway drain operation input is invalid");
         return -1;
     }
-    if (wvm_route_transaction_record_validate(
-            request->successor_transaction, error, error_len) != 0 ||
-        wvm_route_snapshot_record_validate(request->successor_snapshot, error,
-                                           error_len) != 0 ||
-        memcmp(request->successor_transaction->route_snapshot_key.snapshot_digest,
-               request->successor_snapshot->route_snapshot_key.snapshot_digest,
-               WVM_SHA256_DIGEST_BYTES) != 0) {
-        set_error(error, error_len, "gateway drain successor is invalid");
+    if (wvm_route_snapshot_record_binds_transaction(
+            request->successor_snapshot, request->successor_transaction,
+            error, error_len) != 0) {
         return -1;
     }
     return 0;
@@ -394,8 +407,9 @@ int wvm_membership_coordinator_drain_gateway(
                      .entries[i];
 
             if (request->route_prepare(request->route_prepare_context,
-                                       request->successor_transaction, ack,
-                                       error, error_len) != 0 ||
+                                       request->successor_transaction,
+                                       request->successor_snapshot, ack, error,
+                                       error_len) != 0 ||
                 wvm_membership_controller_route_ack_prepare(
                     controller, request->successor_transaction->operation_id,
                     &ack->member_key, error, error_len) != 0) {

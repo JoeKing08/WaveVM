@@ -11,8 +11,9 @@
 
 #include "wavevm_membership_controller.h"
 
-typedef int (*wvm_membership_route_prepare_fn)(
+typedef int (*wvm_membership_route_stage_fn)(
     void *context, const struct wvm_route_transaction_record *transaction,
+    const struct wvm_route_snapshot_record *snapshot,
     const struct wvm_required_ack_entry *ack_entry, char *error,
     size_t error_len);
 
@@ -22,7 +23,9 @@ struct wvm_membership_join_request {
     const struct wvm_node_record *node;
     const struct wvm_gateway_record *gateway;
     const struct wvm_route_transaction_record *route_transaction;
-    wvm_membership_route_prepare_fn route_prepare;
+    const struct wvm_route_snapshot_record *route_snapshot;
+    wvm_membership_route_stage_fn route_prepare;
+    wvm_membership_route_stage_fn route_commit;
     void *route_prepare_context;
 };
 
@@ -37,16 +40,17 @@ struct wvm_membership_gateway_drain_request {
     uint64_t expected_membership_revision;
     uint64_t expected_topology_revision;
     uint64_t expected_admission_eligibility_revision;
-    wvm_membership_route_prepare_fn route_prepare;
+    wvm_membership_route_stage_fn route_prepare;
     void *route_prepare_context;
 };
 
 /*
  * Register/validate/prepare one member, publish one complete route snapshot,
- * collect the required remote prepare acknowledgements, commit the route, and
- * activate the joining member. A failure before route commit aborts the route
- * transaction; the member remains non-active and therefore non-schedulable.
- * The route callback must be idempotent for the supplied operation ID.
+ * collect remote prepare ACKs, commit the controller route, then collect
+ * consumer commit ACKs before activating the joining member. A failure before
+ * controller commit aborts the route; a consumer commit failure leaves the
+ * member non-active and must be retried with the same transaction. Stage
+ * callbacks must be idempotent for the supplied operation ID.
  */
 int wvm_membership_coordinator_join(
     struct wvm_membership_controller *controller,
