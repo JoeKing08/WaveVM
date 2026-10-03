@@ -18,6 +18,9 @@
 #define WVM_RECORD_ROUTE_TRANSACTION 0x1020U
 #define WVM_RECORD_GATEWAY_DRAIN_REQUEST 0x102bU
 #define WVM_RECORD_MEMBER_CORDON_REQUEST 0x102cU
+#define WVM_RECORD_CLUSTER_ADMISSION_PROOF 0x1032U
+#define WVM_RECORD_CLUSTER_ADMISSION_ACK_ENTRY 0x1033U
+#define WVM_RECORD_CLUSTER_ADMISSION_ACK_SET 0x1034U
 
 #define WVM_ENDPOINT_ADDRESS_MAX_BYTES 16U
 #define WVM_ENDPOINT_SERVER_NAME_MAX_BYTES 253U
@@ -82,6 +85,35 @@ struct wvm_required_ack_entry_list {
 struct wvm_required_ack_set {
     struct wvm_required_ack_entry_list entries;
     uint8_t entries_digest[WVM_SHA256_DIGEST_BYTES];
+};
+
+/* Cluster admission ACKs are intentionally independent of VM route scopes. */
+struct wvm_cluster_admission_ack_entry {
+    struct wvm_member_key member_key;
+    struct wvm_endpoint endpoint;
+    enum wvm_manifest_role_type role_type;
+};
+
+struct wvm_cluster_admission_ack_entry_list {
+    struct wvm_cluster_admission_ack_entry *entries;
+    size_t count;
+    size_t capacity;
+};
+
+struct wvm_cluster_admission_ack_set {
+    struct wvm_cluster_admission_ack_entry_list entries;
+};
+
+struct wvm_cluster_admission_proof {
+    uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
+    struct wvm_member_key member_key;
+    uint64_t membership_revision;
+    uint64_t topology_revision;
+    uint64_t admission_eligibility_revision;
+    uint8_t canonical_member_record_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t capability_evidence_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t topology_assignment_digest[WVM_SHA256_DIGEST_BYTES];
+    struct wvm_cluster_admission_ack_set required_ack_set;
 };
 
 struct wvm_route_rule_record {
@@ -240,6 +272,16 @@ int wvm_required_ack_set_encode(const struct wvm_required_ack_set *ack_set,
 int wvm_required_ack_set_decode(const uint8_t *bytes, size_t encoded_bytes,
                                 struct wvm_required_ack_set *ack_set,
                                 char *error, size_t error_len);
+
+int wvm_cluster_admission_proof_validate(
+    const struct wvm_cluster_admission_proof *proof, char *error,
+    size_t error_len);
+int wvm_cluster_admission_proof_encode(
+    const struct wvm_cluster_admission_proof *proof, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len);
+int wvm_cluster_admission_proof_decode(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_cluster_admission_proof *proof, char *error, size_t error_len);
 
 int wvm_route_snapshot_record_validate(
     const struct wvm_route_snapshot_record *snapshot, char *error,

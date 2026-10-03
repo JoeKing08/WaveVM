@@ -1062,6 +1062,309 @@ int wvm_required_ack_set_decode(const uint8_t *bytes, size_t encoded_bytes,
                                            error, error_len);
 }
 
+static int cluster_admission_ack_entry_compare(
+    const struct wvm_cluster_admission_ack_entry *left,
+    const struct wvm_cluster_admission_ack_entry *right)
+{
+    return member_key_compare(&left->member_key, &right->member_key);
+}
+
+static int cluster_admission_ack_entry_validate(
+    const struct wvm_cluster_admission_ack_entry *entry, char *error,
+    size_t error_len)
+{
+    if (!entry || wvm_member_key_validate(&entry->member_key, error,
+                                          error_len) != 0 ||
+        wvm_endpoint_validate(&entry->endpoint, error, error_len) != 0 ||
+        entry->role_type != entry->member_key.role_type) {
+        set_error(error, error_len, "cluster admission ACK entry is invalid");
+        return -1;
+    }
+    return 0;
+}
+
+static int cluster_admission_ack_entry_size(
+    const void *value, size_t *encoded_size)
+{
+    const struct wvm_cluster_admission_ack_entry *entry = value;
+    size_t fields[3];
+
+    if (cluster_admission_ack_entry_validate(entry, NULL, 0) != 0 ||
+        member_key_size(&fields[0]) != 0 ||
+        endpoint_size(&entry->endpoint, &fields[1]) != 0) {
+        return -1;
+    }
+    fields[2] = 2;
+    return canonical_record_size(fields, 3, encoded_size);
+}
+
+static int cluster_admission_ack_entry_encode(
+    const void *value, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len)
+{
+    const struct wvm_cluster_admission_ack_entry *entry = value;
+    struct wvm_canonical_builder builder;
+    size_t member_bytes;
+    size_t endpoint_bytes;
+
+    if (cluster_admission_ack_entry_validate(entry, error, error_len) != 0 ||
+        member_key_size(&member_bytes) != 0 ||
+        endpoint_size(&entry->endpoint, &endpoint_bytes) != 0 ||
+        wvm_canonical_record_begin(&builder, bytes, capacity,
+                                   WVM_RECORD_CLUSTER_ADMISSION_ACK_ENTRY) != 0 ||
+        append_nested_record(&builder, 1, member_bytes,
+                             member_key_encode_adapter, &entry->member_key,
+                             error, error_len) != 0 ||
+        append_nested_record(&builder, 2, endpoint_bytes, endpoint_encode_adapter,
+                             &entry->endpoint, error, error_len) != 0 ||
+        wvm_canonical_field_append_u16(&builder, 3, entry->role_type) != 0 ||
+        wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
+        set_error(error, error_len, "cannot encode cluster admission ACK entry");
+        return -1;
+    }
+    return 0;
+}
+
+static int cluster_admission_ack_entry_decode(const uint8_t *bytes,
+                                             size_t encoded_bytes, void *value,
+                                             char *error, size_t error_len)
+{
+    struct wvm_cluster_admission_ack_entry *entry = value;
+    struct wvm_canonical_field fields[4];
+
+    unsigned char present[4];
+
+    if (!entry || parse_record_fields(bytes, encoded_bytes,
+                                      WVM_RECORD_CLUSTER_ADMISSION_ACK_ENTRY, fields,
+                                      present, 3, error, error_len) != 0) {
+        set_error(error, error_len, "cluster admission ACK entry is malformed");
+        return -1;
+    }
+    if (!present[1] || !present[2] || !present[3] ||
+        fields[3].value_bytes != 2 ||
+        wvm_member_key_decode(fields[1].value, fields[1].value_bytes,
+                              &entry->member_key, error, error_len) != 0 ||
+        wvm_endpoint_decode(fields[2].value, fields[2].value_bytes,
+                            &entry->endpoint, error, error_len) != 0) {
+        set_error(error, error_len,
+                  "cluster admission ACK entry has invalid fields");
+        return -1;
+    }
+    entry->role_type = (enum wvm_manifest_role_type)read_be16(fields[3].value);
+    return cluster_admission_ack_entry_validate(entry, error, error_len);
+}
+
+static int cluster_admission_ack_set_validate(
+    const struct wvm_cluster_admission_ack_set *set, char *error,
+    size_t error_len)
+{
+    size_t i;
+
+    if (!set || set->entries.count == 0 || !set->entries.entries ||
+        set->entries.count > set->entries.capacity) {
+        set_error(error, error_len, "cluster admission ACK set is empty");
+        return -1;
+    }
+    for (i = 0; i < set->entries.count; i++) {
+        if (cluster_admission_ack_entry_validate(&set->entries.entries[i],
+                                                 error, error_len) != 0 ||
+            (i != 0 && cluster_admission_ack_entry_compare(
+                           &set->entries.entries[i - 1],
+                           &set->entries.entries[i]) >= 0)) {
+            set_error(error, error_len,
+                      "cluster admission ACK set is not strictly ordered");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int cluster_admission_ack_set_size(
+    const struct wvm_cluster_admission_ack_set *set, size_t *encoded_size)
+{
+    size_t list_bytes;
+    size_t fields[1];
+
+    if (cluster_admission_ack_set_validate(set, NULL, 0) != 0 ||
+        record_list_size(set->entries.entries, set->entries.count,
+                         sizeof(*set->entries.entries),
+                         cluster_admission_ack_entry_size,
+                         &list_bytes) != 0) {
+        return -1;
+    }
+    fields[0] = list_bytes;
+    return canonical_record_size(fields, 1, encoded_size);
+}
+
+static int cluster_admission_ack_set_encode(
+    const struct wvm_cluster_admission_ack_set *set, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len)
+{
+    size_t list_bytes;
+    size_t record_bytes;
+    struct wvm_canonical_builder builder;
+    uint8_t *list_value;
+
+    if (cluster_admission_ack_set_validate(set, error, error_len) != 0 ||
+        record_list_size(set->entries.entries, set->entries.count,
+                         sizeof(*set->entries.entries),
+                         cluster_admission_ack_entry_size, &list_bytes) != 0 ||
+        cluster_admission_ack_set_size(set, &record_bytes) != 0 ||
+        record_bytes > capacity ||
+        wvm_canonical_record_begin(&builder, bytes, capacity,
+                                   WVM_RECORD_CLUSTER_ADMISSION_ACK_SET) != 0 ||
+        wvm_canonical_field_reserve(&builder, 1, (uint32_t)list_bytes,
+                                    &list_value) != 0 ||
+        record_list_encode(set->entries.entries, set->entries.count,
+                           sizeof(*set->entries.entries),
+                           cluster_admission_ack_entry_size,
+                           cluster_admission_ack_entry_encode, list_value,
+                           list_bytes, error, error_len) != 0 ||
+        wvm_canonical_record_finish(&builder, encoded_bytes) != 0 ||
+        *encoded_bytes != record_bytes) {
+        set_error(error, error_len, "cannot encode cluster admission ACK set");
+        return -1;
+    }
+    return 0;
+}
+
+static int cluster_admission_ack_set_decode(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_cluster_admission_ack_set *set, char *error, size_t error_len)
+{
+    struct wvm_canonical_field fields[2];
+    unsigned char present[2];
+
+    if (!set || parse_record_fields(bytes, encoded_bytes,
+                                   WVM_RECORD_CLUSTER_ADMISSION_ACK_SET,
+                                   fields, present, 1, error, error_len) != 0 ||
+        !present[1] ||
+        record_list_decode(fields[1].value, fields[1].value_bytes,
+                           set->entries.entries,
+                           set->entries.capacity,
+                           sizeof(*set->entries.entries),
+                           &set->entries.count,
+                           cluster_admission_ack_entry_decode, error,
+                           error_len) != 0 ||
+        cluster_admission_ack_set_validate(set, error, error_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int wvm_cluster_admission_proof_validate(
+    const struct wvm_cluster_admission_proof *proof, char *error,
+    size_t error_len)
+{
+    if (!proof || bytes_are_zero(proof->operation_id,
+                                 sizeof(proof->operation_id)) ||
+        wvm_member_key_validate(&proof->member_key, error, error_len) != 0 ||
+        proof->membership_revision == 0 || proof->topology_revision == 0 ||
+        proof->admission_eligibility_revision == 0 ||
+        bytes_are_zero(proof->canonical_member_record_digest,
+                       sizeof(proof->canonical_member_record_digest)) ||
+        bytes_are_zero(proof->capability_evidence_digest,
+                       sizeof(proof->capability_evidence_digest)) ||
+        bytes_are_zero(proof->topology_assignment_digest,
+                       sizeof(proof->topology_assignment_digest)) ||
+        cluster_admission_ack_set_validate(&proof->required_ack_set, error,
+                                           error_len) != 0) {
+        set_error(error, error_len, "cluster admission proof is invalid");
+        return -1;
+    }
+    return 0;
+}
+
+int wvm_cluster_admission_proof_encode(
+    const struct wvm_cluster_admission_proof *proof, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len)
+{
+    struct wvm_canonical_builder builder;
+    size_t member_bytes;
+    size_t ack_record_bytes;
+    size_t ack_encoded_bytes;
+    uint8_t *ack_value;
+
+    if (wvm_cluster_admission_proof_validate(proof, error, error_len) != 0 ||
+        member_key_size(&member_bytes) != 0 ||
+        cluster_admission_ack_set_size(&proof->required_ack_set, &ack_record_bytes) != 0 ||
+        wvm_canonical_record_begin(&builder, bytes, capacity,
+                                   WVM_RECORD_CLUSTER_ADMISSION_PROOF) != 0 ||
+        wvm_canonical_field_append(&builder, 1, proof->operation_id,
+                                   sizeof(proof->operation_id)) != 0 ||
+        append_nested_record(&builder, 2, member_bytes,
+                             member_key_encode_adapter, &proof->member_key,
+                             error, error_len) != 0 ||
+        wvm_canonical_field_append_u64(&builder, 3, proof->membership_revision) != 0 ||
+        wvm_canonical_field_append_u64(&builder, 4, proof->topology_revision) != 0 ||
+        wvm_canonical_field_append_u64(&builder, 5,
+                                       proof->admission_eligibility_revision) != 0 ||
+        wvm_canonical_field_append(&builder, 6,
+                                   proof->canonical_member_record_digest,
+                                   WVM_SHA256_DIGEST_BYTES) != 0 ||
+        wvm_canonical_field_append(&builder, 7, proof->capability_evidence_digest,
+                                   WVM_SHA256_DIGEST_BYTES) != 0 ||
+        wvm_canonical_field_append(&builder, 8, proof->topology_assignment_digest,
+                                   WVM_SHA256_DIGEST_BYTES) != 0 ||
+        wvm_canonical_field_reserve(&builder, 9, (uint32_t)ack_record_bytes,
+                                    &ack_value) != 0 ||
+        cluster_admission_ack_set_encode(&proof->required_ack_set, ack_value,
+                                         ack_record_bytes, &ack_encoded_bytes, error,
+                                         error_len) != 0 ||
+        ack_encoded_bytes != ack_record_bytes ||
+        wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
+        set_error(error, error_len, "cannot encode cluster admission proof");
+        return -1;
+    }
+    return 0;
+}
+
+int wvm_cluster_admission_proof_decode(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_cluster_admission_proof *proof, char *error, size_t error_len)
+{
+    struct wvm_canonical_field fields[10];
+    unsigned char present[10];
+    struct wvm_cluster_admission_ack_set ack_set;
+
+    if (!proof || parse_record_fields(bytes, encoded_bytes,
+                                      WVM_RECORD_CLUSTER_ADMISSION_PROOF,
+                                      fields, present, 9, error, error_len) != 0 ||
+        !present[1] || !present[2] || !present[3] || !present[4] ||
+        !present[5] || !present[6] || !present[7] || !present[8] ||
+        !present[9] || fields[1].value_bytes != WVM_IDENTITY_ID_BYTES ||
+        fields[3].value_bytes != 8 || fields[4].value_bytes != 8 ||
+        fields[5].value_bytes != 8 ||
+        fields[6].value_bytes != WVM_SHA256_DIGEST_BYTES ||
+        fields[7].value_bytes != WVM_SHA256_DIGEST_BYTES ||
+        fields[8].value_bytes != WVM_SHA256_DIGEST_BYTES) {
+        set_error(error, error_len, "cluster admission proof has invalid fields");
+        return -1;
+    }
+    ack_set = proof->required_ack_set;
+    memset(proof, 0, sizeof(*proof));
+    proof->required_ack_set = ack_set;
+    memcpy(proof->operation_id, fields[1].value, sizeof(proof->operation_id));
+    if (wvm_member_key_decode(fields[2].value, fields[2].value_bytes,
+                              &proof->member_key, error, error_len) != 0 ||
+        (proof->membership_revision = read_be64(fields[3].value)) == 0 ||
+        (proof->topology_revision = read_be64(fields[4].value)) == 0 ||
+        (proof->admission_eligibility_revision = read_be64(fields[5].value)) == 0 ||
+        cluster_admission_ack_set_decode(fields[9].value, fields[9].value_bytes,
+                                         &proof->required_ack_set, error,
+                                         error_len) != 0) {
+        set_error(error, error_len, "cluster admission proof decode failed");
+        return -1;
+    }
+    memcpy(proof->canonical_member_record_digest, fields[6].value,
+           WVM_SHA256_DIGEST_BYTES);
+    memcpy(proof->capability_evidence_digest, fields[7].value,
+           WVM_SHA256_DIGEST_BYTES);
+    memcpy(proof->topology_assignment_digest, fields[8].value,
+           WVM_SHA256_DIGEST_BYTES);
+    return wvm_cluster_admission_proof_validate(proof, error, error_len);
+}
+
 static int route_rule_compare(const struct wvm_route_rule_record *left,
                               const struct wvm_route_rule_record *right)
 {
