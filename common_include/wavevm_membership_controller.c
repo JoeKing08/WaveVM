@@ -29,6 +29,11 @@ enum wvm_membership_journal_kind {
     WVM_MEMBERSHIP_JOURNAL_GATEWAY_DRAIN_COMMIT = 9,
     WVM_MEMBERSHIP_JOURNAL_GATEWAY_DRAIN_ABORT = 10,
     WVM_MEMBERSHIP_JOURNAL_MEMBER_ACTIVATION_BINDING = 11,
+    WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_BEGIN = 12,
+    WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_ACK = 13,
+    WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_COMMIT = 14,
+    WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_ABORT = 15,
+    WVM_MEMBERSHIP_JOURNAL_MEMBER_ENROLLMENT_BINDING = 16,
 };
 
 static const uint8_t membership_journal_magic[8] = {
@@ -160,6 +165,104 @@ static int member_key_equal(const struct wvm_member_key *left,
     return left && right && left->role_type == right->role_type &&
            left->role_id == right->role_id &&
            left->instance_id == right->instance_id;
+}
+
+static void enrollment_free(
+    struct wvm_membership_controller_enrollment *enrollment)
+{
+    if (!enrollment) {
+        return;
+    }
+    free(enrollment->required_ack_entries);
+    free(enrollment->ack_states);
+    memset(enrollment, 0, sizeof(*enrollment));
+}
+
+static struct wvm_membership_controller_enrollment *find_enrollment_mutable(
+    struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES])
+{
+    size_t i;
+
+    if (!controller || !operation_id) {
+        return NULL;
+    }
+    for (i = 0; i < controller->enrollment_capacity; i++) {
+        if (controller->enrollments[i].state != WVM_MEMBERSHIP_ENROLLMENT_NONE &&
+            memcmp(controller->enrollments[i].proof.operation_id,
+                   operation_id, WVM_IDENTITY_ID_BYTES) == 0) {
+            return &controller->enrollments[i];
+        }
+    }
+    return NULL;
+}
+
+static int enrollment_ack_index(
+    const struct wvm_membership_controller_enrollment *enrollment,
+    const struct wvm_member_key *member_key)
+{
+    size_t i;
+
+    if (!enrollment || !member_key) {
+        return -1;
+    }
+    for (i = 0; i < enrollment->proof.required_ack_set.entries.count; i++) {
+        if (member_key_equal(&enrollment->ack_states[i].member_key,
+                             member_key)) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int enrollment_all_acks_prepared(
+    const struct wvm_membership_controller_enrollment *enrollment)
+{
+    size_t i;
+
+    if (!enrollment) {
+        return 0;
+    }
+    for (i = 0; i < enrollment->proof.required_ack_set.entries.count; i++) {
+        if (!enrollment->ack_states[i].prepared) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int enrollment_proof_equal(
+    const struct wvm_cluster_admission_proof *left,
+    const struct wvm_cluster_admission_proof *right, char *error,
+    size_t error_len)
+{
+    uint8_t *left_bytes = NULL;
+    uint8_t *right_bytes = NULL;
+    size_t capacity = WVM_MEMBERSHIP_CONTROLLER_MAX_RECORD_BYTES;
+    size_t left_bytes_count = 0;
+    size_t right_bytes_count = 0;
+    int equal = 0;
+
+    left_bytes = malloc(capacity);
+    right_bytes = malloc(capacity);
+    if (!left_bytes || !right_bytes) {
+        set_error(error, error_len, "cannot compare cluster enrollment proofs");
+        goto out;
+    }
+    if (wvm_cluster_admission_proof_encode(left, left_bytes, capacity,
+                                           &left_bytes_count, error,
+                                           error_len) == 0 &&
+        wvm_cluster_admission_proof_encode(right, right_bytes, capacity,
+                                           &right_bytes_count, error,
+                                           error_len) == 0 &&
+        left_bytes_count == right_bytes_count &&
+        memcmp(left_bytes, right_bytes, left_bytes_count) == 0) {
+        equal = 1;
+    }
+out:
+    free(left_bytes);
+    free(right_bytes);
+    return equal;
 }
 
 static int member_role_equal(const struct wvm_member_key *left,
@@ -1113,6 +1216,71 @@ static int apply_activation_binding_replay(
     return 0;
 }
 
+static int persist_enrollment_binding_locked(
+    struct wvm_membership_controller *controller,
+    struct wvm_membership_controller_member_entry *entry,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len)
+{
+    uint8_t payload[30];
+
+    if (!entry || !operation_id || bytes_are_zero(operation_id,
+                                                  WVM_IDENTITY_ID_BYTES)) {
+        set_error(error, error_len, "member enrollment binding is invalid");
+        return -1;
+    }
+    if (entry->has_activation_enrollment_operation_id) {
+        return memcmp(entry->activation_enrollment_operation_id, operation_id,
+                      WVM_IDENTITY_ID_BYTES) == 0
+                   ? 0
+                   : (set_error(error, error_len,
+                                "member enrollment is already bound"),
+                      -1);
+    }
+    write_be16(payload, entry->member_key.role_type);
+    write_be32(payload + 2, entry->member_key.role_id);
+    write_be64(payload + 6, entry->member_key.instance_id);
+    memcpy(payload + 14, operation_id, WVM_IDENTITY_ID_BYTES);
+    if (journal_append_locked(
+            controller, WVM_MEMBERSHIP_JOURNAL_MEMBER_ENROLLMENT_BINDING,
+            payload, sizeof(payload), error, error_len) != 0) {
+        return -1;
+    }
+    entry->has_activation_enrollment_operation_id = 1;
+    memcpy(entry->activation_enrollment_operation_id, operation_id,
+           WVM_IDENTITY_ID_BYTES);
+    return 0;
+}
+
+static int apply_enrollment_binding_replay(
+    struct wvm_membership_controller *controller, const uint8_t *payload,
+    size_t payload_bytes, char *error, size_t error_len)
+{
+    struct wvm_member_key member_key;
+    struct wvm_membership_controller_member_entry *entry;
+
+    if (!controller || !payload || payload_bytes != 30 ||
+        bytes_are_zero(payload + 14, WVM_IDENTITY_ID_BYTES)) {
+        set_error(error, error_len, "member enrollment binding is malformed");
+        return -1;
+    }
+    memset(&member_key, 0, sizeof(member_key));
+    member_key.role_type = (enum wvm_manifest_role_type)read_be16(payload);
+    member_key.role_id = read_be32(payload + 2);
+    member_key.instance_id = read_be64(payload + 6);
+    entry = find_member_mutable(controller, &member_key);
+    if (!entry || (entry->has_activation_enrollment_operation_id &&
+                   memcmp(entry->activation_enrollment_operation_id,
+                          payload + 14, WVM_IDENTITY_ID_BYTES) != 0)) {
+        set_error(error, error_len, "member enrollment binding is inconsistent");
+        return -1;
+    }
+    entry->has_activation_enrollment_operation_id = 1;
+    memcpy(entry->activation_enrollment_operation_id, payload + 14,
+           WVM_IDENTITY_ID_BYTES);
+    return 0;
+}
+
 static int member_transition_locked(
     struct wvm_membership_controller *controller,
     const struct wvm_member_key *member_key,
@@ -1798,6 +1966,236 @@ static int apply_route_begin_replay(
     return 0;
 }
 
+static int enrollment_record_matches_member(
+    const struct wvm_membership_controller *controller,
+    const struct wvm_cluster_admission_proof *proof,
+    char *error, size_t error_len)
+{
+    const struct wvm_membership_controller_member_entry *entry =
+        wvm_membership_controller_find(controller, &proof->member_key);
+    uint8_t *record = NULL;
+    size_t record_bytes = 0;
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+    int result = -1;
+
+    if (!entry || entry_state(entry) != WVM_MANIFEST_MEMBER_PREPARED ||
+        entry_health(entry) != WVM_MEMBERSHIP_HEALTHY ||
+        entry_membership_revision(entry) != proof->membership_revision ||
+        entry_topology_revision(entry) != proof->topology_revision) {
+        set_error(error, error_len,
+                  "cluster enrollment member is not prepared at proof fence");
+        return -1;
+    }
+    if (entry->kind == WVM_MEMBERSHIP_COMPUTE) {
+        result = encode_node_alloc(&entry->node, &record, &record_bytes, error,
+                                   error_len);
+    } else if (entry->kind == WVM_MEMBERSHIP_GATEWAY) {
+        result = encode_gateway_alloc(&entry->gateway, &record, &record_bytes,
+                                      error, error_len);
+    }
+    if (result == 0) {
+        wvm_sha256_digest(record, record_bytes, digest);
+        if (memcmp(digest, proof->canonical_member_record_digest,
+                   sizeof(digest)) != 0) {
+            set_error(error, error_len,
+                      "cluster enrollment member record digest differs");
+            result = -1;
+        }
+    }
+    free(record);
+    return result;
+}
+
+static int endpoint_equal(const struct wvm_endpoint *left,
+                          const struct wvm_endpoint *right)
+{
+    return left && right &&
+           left->data_transport == right->data_transport &&
+           left->data_address_bytes == right->data_address_bytes &&
+           memcmp(left->data_address, right->data_address,
+                  left->data_address_bytes) == 0 &&
+           left->data_port == right->data_port &&
+           left->control_transport == right->control_transport &&
+           left->has_control_address == right->has_control_address &&
+           (!left->has_control_address ||
+            (left->control_address_bytes == right->control_address_bytes &&
+             memcmp(left->control_address, right->control_address,
+                    left->control_address_bytes) == 0)) &&
+           left->control_port == right->control_port &&
+           left->has_server_name == right->has_server_name &&
+           (!left->has_server_name ||
+            strcmp(left->server_name, right->server_name) == 0) &&
+           left->has_control_socket_path == right->has_control_socket_path &&
+           (!left->has_control_socket_path ||
+            strcmp(left->control_socket_path, right->control_socket_path) ==
+                0);
+}
+
+static int enrollment_ack_set_matches_members(
+    const struct wvm_membership_controller *controller,
+    const struct wvm_cluster_admission_proof *proof, char *error,
+    size_t error_len)
+{
+    size_t i;
+    int target_present = 0;
+
+    for (i = 0; i < proof->required_ack_set.entries.count; i++) {
+        const struct wvm_cluster_admission_ack_entry *ack =
+            &proof->required_ack_set.entries.entries[i];
+        const struct wvm_membership_controller_member_entry *entry =
+            wvm_membership_controller_find(controller, &ack->member_key);
+        const struct wvm_endpoint *endpoint;
+
+        if (!entry || ack->role_type != ack->member_key.role_type) {
+            set_error(error, error_len,
+                      "cluster enrollment ACK member is not registered");
+            return -1;
+        }
+        if (member_key_equal(&ack->member_key, &proof->member_key)) {
+            target_present = 1;
+        }
+        if (entry_state(entry) != WVM_MANIFEST_MEMBER_ACTIVE &&
+            !member_key_equal(&ack->member_key, &proof->member_key)) {
+            set_error(error, error_len,
+                      "cluster enrollment ACK member is not an active peer");
+            return -1;
+        }
+        endpoint = entry->kind == WVM_MEMBERSHIP_COMPUTE
+                       ? &entry->node.control_endpoint
+                       : &entry->gateway.endpoint;
+        if (!endpoint_equal(endpoint, &ack->endpoint)) {
+            set_error(error, error_len,
+                      "cluster enrollment ACK endpoint differs from membership");
+            return -1;
+        }
+    }
+    if (!target_present) {
+        set_error(error, error_len,
+                  "cluster enrollment ACK set omits joining member");
+        return -1;
+    }
+    return 0;
+}
+
+static int apply_enrollment_begin_replay(
+    struct wvm_membership_controller *controller, const uint8_t *payload,
+    size_t payload_bytes, char *error, size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *enrollment;
+    size_t ack_count;
+    size_t i;
+
+    if (!controller || !payload || payload_bytes == 0 ||
+        payload_bytes > WVM_MEMBERSHIP_CONTROLLER_MAX_RECORD_BYTES) {
+        set_error(error, error_len, "cluster enrollment begin is malformed");
+        return -1;
+    }
+    for (i = 0; i < controller->enrollment_capacity; i++) {
+        if (controller->enrollments[i].state == WVM_MEMBERSHIP_ENROLLMENT_NONE) {
+            break;
+        }
+    }
+    if (i == controller->enrollment_capacity) {
+        set_error(error, error_len, "cluster enrollment table is full");
+        return -1;
+    }
+    enrollment = &controller->enrollments[i];
+    memset(&enrollment->proof, 0, sizeof(enrollment->proof));
+    ack_count = 0;
+    enrollment->required_ack_entries = calloc(
+        controller->member_capacity ? controller->member_capacity : 1,
+        sizeof(*enrollment->required_ack_entries));
+    enrollment->ack_states = calloc(
+        controller->member_capacity ? controller->member_capacity : 1,
+        sizeof(*enrollment->ack_states));
+    if (!enrollment->required_ack_entries || !enrollment->ack_states) {
+        enrollment_free(enrollment);
+        set_error(error, error_len, "cannot allocate cluster enrollment ACK state");
+        return -1;
+    }
+    enrollment->proof.required_ack_set.entries.entries =
+        enrollment->required_ack_entries;
+    enrollment->proof.required_ack_set.entries.capacity =
+        controller->member_capacity;
+    if (wvm_cluster_admission_proof_decode(payload, payload_bytes,
+                                           &enrollment->proof, error,
+                                           error_len) != 0 ||
+        enrollment->proof.membership_revision != controller->membership_revision ||
+        enrollment->proof.topology_revision != controller->topology_revision ||
+        enrollment->proof.admission_eligibility_revision !=
+            controller->admission_eligibility_revision ||
+        enrollment_record_matches_member(controller, &enrollment->proof, error,
+                                          error_len) != 0 ||
+        enrollment_ack_set_matches_members(controller, &enrollment->proof,
+                                           error, error_len) != 0) {
+        enrollment_free(enrollment);
+        set_error(error, error_len, "cluster enrollment begin fence is invalid");
+        return -1;
+    }
+    ack_count = enrollment->proof.required_ack_set.entries.count;
+    for (i = 0; i < ack_count; i++) {
+        enrollment->ack_states[i].member_key =
+            enrollment->required_ack_entries[i].member_key;
+    }
+    enrollment->state = WVM_MEMBERSHIP_ENROLLMENT_PREPARING;
+    return 0;
+}
+
+static int apply_enrollment_ack_replay(
+    struct wvm_membership_controller *controller, const uint8_t *payload,
+    size_t payload_bytes, char *error, size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *enrollment;
+    struct wvm_member_key member_key;
+    int index;
+
+    if (!controller || !payload || payload_bytes != 30) {
+        set_error(error, error_len, "cluster enrollment ACK is malformed");
+        return -1;
+    }
+    enrollment = find_enrollment_mutable(controller, payload);
+    memset(&member_key, 0, sizeof(member_key));
+    member_key.role_type = (enum wvm_manifest_role_type)read_be16(payload + 16);
+    member_key.role_id = read_be32(payload + 18);
+    member_key.instance_id = read_be64(payload + 22);
+    index = enrollment_ack_index(enrollment, &member_key);
+    if (!enrollment || enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_PREPARING ||
+        index < 0) {
+        set_error(error, error_len, "cluster enrollment ACK is inconsistent");
+        return -1;
+    }
+    enrollment->ack_states[index].prepared = 1;
+    return 0;
+}
+
+static int apply_enrollment_terminal_replay(
+    struct wvm_membership_controller *controller, const uint8_t *payload,
+    size_t payload_bytes, enum wvm_membership_enrollment_state next_state,
+    char *error, size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *enrollment;
+
+    if (!controller || !payload || payload_bytes != WVM_IDENTITY_ID_BYTES ||
+        bytes_are_zero(payload, payload_bytes)) {
+        set_error(error, error_len, "cluster enrollment terminal frame is invalid");
+        return -1;
+    }
+    enrollment = find_enrollment_mutable(controller, payload);
+    if (!enrollment || enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_PREPARING ||
+        (next_state == WVM_MEMBERSHIP_ENROLLMENT_COMMITTED &&
+         (!enrollment_all_acks_prepared(enrollment) ||
+          controller->membership_revision !=
+              enrollment->proof.membership_revision ||
+          controller->topology_revision != enrollment->proof.topology_revision ||
+          controller->admission_eligibility_revision !=
+              enrollment->proof.admission_eligibility_revision))) {
+        set_error(error, error_len, "cluster enrollment terminal transition is invalid");
+        return -1;
+    }
+    enrollment->state = next_state;
+    return 0;
+}
+
 static int replay_journal_frame(struct wvm_membership_controller *controller,
                                 uint16_t kind, const uint8_t *payload,
                                 size_t payload_bytes, char *error,
@@ -1826,6 +2224,23 @@ static int replay_journal_frame(struct wvm_membership_controller *controller,
     case WVM_MEMBERSHIP_JOURNAL_MEMBER_ACTIVATION_BINDING:
         return apply_activation_binding_replay(controller, payload,
                                                payload_bytes, error, error_len);
+    case WVM_MEMBERSHIP_JOURNAL_MEMBER_ENROLLMENT_BINDING:
+        return apply_enrollment_binding_replay(controller, payload,
+                                               payload_bytes, error, error_len);
+    case WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_BEGIN:
+        return apply_enrollment_begin_replay(controller, payload, payload_bytes,
+                                             error, error_len);
+    case WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_ACK:
+        return apply_enrollment_ack_replay(controller, payload, payload_bytes,
+                                           error, error_len);
+    case WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_COMMIT:
+        return apply_enrollment_terminal_replay(
+            controller, payload, payload_bytes,
+            WVM_MEMBERSHIP_ENROLLMENT_COMMITTED, error, error_len);
+    case WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_ABORT:
+        return apply_enrollment_terminal_replay(
+            controller, payload, payload_bytes,
+            WVM_MEMBERSHIP_ENROLLMENT_ABORTED, error, error_len);
     case WVM_MEMBERSHIP_JOURNAL_ROUTE_BEGIN:
         return apply_route_begin_replay(controller, payload, payload_bytes,
                                         error, error_len);
@@ -1874,6 +2289,8 @@ void wvm_membership_controller_init(
     controller->member_capacity = member_capacity;
     controller->routes = routes;
     controller->route_capacity = route_capacity;
+    controller->enrollments = calloc(member_capacity, sizeof(*controller->enrollments));
+    controller->enrollment_capacity = controller->enrollments ? member_capacity : 0;
     controller->dependencies = dependencies;
     controller->dependency_capacity = dependency_capacity;
     controller->membership_revision = 1;
@@ -1903,7 +2320,8 @@ int wvm_membership_controller_open(
     if (!controller || !journal_path || journal_path[0] == '\0' ||
         controller->journal_fd >= 0 || !controller->members ||
         controller->member_capacity == 0 || !controller->routes ||
-        controller->route_capacity == 0 || !controller->dependencies ||
+        controller->route_capacity == 0 || !controller->enrollments ||
+        controller->enrollment_capacity == 0 || !controller->dependencies ||
         controller->dependency_capacity == 0) {
         set_error(error, error_len, "membership controller initialization invalid");
         return -1;
@@ -1990,6 +2408,10 @@ void wvm_membership_controller_close(
     for (i = 0; i < controller->route_count; i++) {
         route_entry_free(&controller->routes[i]);
     }
+    for (i = 0; i < controller->enrollment_capacity; i++) {
+        enrollment_free(&controller->enrollments[i]);
+    }
+    free(controller->enrollments);
     controller->member_count = 0;
     controller->route_count = 0;
     controller->dependency_count = 0;
@@ -2625,6 +3047,270 @@ int wvm_membership_controller_route_abort(
         result = route_state_change_locked(controller, route,
                                            WVM_ROUTE_TRANSACTION_ABORTED,
                                            error, error_len);
+    }
+    pthread_mutex_unlock(&controller->lock);
+    return result;
+}
+
+int wvm_membership_controller_cluster_enrollment_begin(
+    struct wvm_membership_controller *controller,
+    const struct wvm_cluster_admission_proof *proof, char *error,
+    size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *existing;
+    uint8_t *payload = NULL;
+    size_t payload_capacity = WVM_MEMBERSHIP_CONTROLLER_MAX_RECORD_BYTES;
+    size_t payload_bytes = 0;
+    size_t i;
+    int result = -1;
+
+    if (!controller || controller->journal_fd < 0 || !proof ||
+        !controller->enrollments) {
+        set_error(error, error_len, "cluster enrollment controller is not ready");
+        return -1;
+    }
+    pthread_mutex_lock(&controller->lock);
+    existing = find_enrollment_mutable(controller, proof->operation_id);
+    if (existing) {
+        if (enrollment_proof_equal(&existing->proof, proof, error, error_len) &&
+            existing->state != WVM_MEMBERSHIP_ENROLLMENT_ABORTED) {
+            result = 0;
+        } else {
+            set_error(error, error_len,
+                      "cluster enrollment operation ID is already bound");
+        }
+        goto out;
+    }
+    if (wvm_cluster_admission_proof_validate(proof, error, error_len) != 0 ||
+        proof->membership_revision != controller->membership_revision ||
+        proof->topology_revision != controller->topology_revision ||
+        proof->admission_eligibility_revision !=
+            controller->admission_eligibility_revision ||
+        enrollment_record_matches_member(controller, proof, error, error_len) !=
+            0 ||
+        enrollment_ack_set_matches_members(controller, proof, error,
+                                           error_len) != 0) {
+        set_error(error, error_len, "cluster enrollment proof is stale or invalid");
+        goto out;
+    }
+    for (i = 0; i < controller->enrollment_capacity; i++) {
+        if (controller->enrollments[i].state == WVM_MEMBERSHIP_ENROLLMENT_NONE) {
+            break;
+        }
+    }
+    if (i == controller->enrollment_capacity) {
+        set_error(error, error_len, "cluster enrollment table is full");
+        goto out;
+    }
+    payload = malloc(payload_capacity);
+    if (!payload ||
+        wvm_cluster_admission_proof_encode(proof, payload, payload_capacity,
+                                           &payload_bytes, error,
+                                           error_len) != 0) {
+        goto out;
+    }
+    if (journal_append_locked(
+            controller, WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_BEGIN,
+            payload, payload_bytes, error, error_len) != 0) {
+        goto out;
+    }
+    if (apply_enrollment_begin_replay(controller, payload, payload_bytes,
+                                      error, error_len) == 0) {
+        result = 0;
+    }
+out:
+    free(payload);
+    pthread_mutex_unlock(&controller->lock);
+    return result;
+}
+
+int wvm_membership_controller_cluster_enrollment_ack_prepare(
+    struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    const struct wvm_member_key *member_key, char *error, size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *enrollment;
+    uint8_t payload[30];
+    int index;
+    int result = -1;
+
+    if (!controller || controller->journal_fd < 0 || !operation_id ||
+        !member_key) {
+        set_error(error, error_len, "cluster enrollment ACK input is invalid");
+        return -1;
+    }
+    pthread_mutex_lock(&controller->lock);
+    enrollment = find_enrollment_mutable(controller, operation_id);
+    index = enrollment_ack_index(enrollment, member_key);
+    if (!enrollment || enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_PREPARING ||
+        index < 0 ||
+        controller->membership_revision !=
+            enrollment->proof.membership_revision ||
+        controller->topology_revision != enrollment->proof.topology_revision ||
+        controller->admission_eligibility_revision !=
+            enrollment->proof.admission_eligibility_revision) {
+        set_error(error, error_len, "cluster enrollment ACK is outside its proof");
+    } else if (enrollment->ack_states[index].prepared) {
+        result = 0;
+    } else {
+        memcpy(payload, operation_id, WVM_IDENTITY_ID_BYTES);
+        write_be16(payload + 16, member_key->role_type);
+        write_be32(payload + 18, member_key->role_id);
+        write_be64(payload + 22, member_key->instance_id);
+        if (journal_append_locked(
+                controller, WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_ACK,
+                payload, sizeof(payload), error, error_len) == 0) {
+            result = apply_enrollment_ack_replay(controller, payload,
+                                                  sizeof(payload), error,
+                                                  error_len);
+        }
+    }
+    pthread_mutex_unlock(&controller->lock);
+    return result;
+}
+
+int wvm_membership_controller_cluster_enrollment_commit(
+    struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *enrollment;
+    int result = -1;
+
+    if (!controller || controller->journal_fd < 0 || !operation_id) {
+        set_error(error, error_len, "cluster enrollment commit input is invalid");
+        return -1;
+    }
+    pthread_mutex_lock(&controller->lock);
+    enrollment = find_enrollment_mutable(controller, operation_id);
+    if (enrollment &&
+        enrollment->state == WVM_MEMBERSHIP_ENROLLMENT_COMMITTED &&
+        enrollment_all_acks_prepared(enrollment)) {
+        result = 0;
+    } else if (!enrollment ||
+               enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_PREPARING ||
+               !enrollment_all_acks_prepared(enrollment) ||
+               controller->membership_revision !=
+                   enrollment->proof.membership_revision ||
+               controller->topology_revision !=
+                   enrollment->proof.topology_revision ||
+               controller->admission_eligibility_revision !=
+                   enrollment->proof.admission_eligibility_revision) {
+        set_error(error, error_len,
+                  "cluster enrollment commit lacks durable ACKs or current fence");
+    } else if (journal_append_locked(
+                   controller, WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_COMMIT,
+                   operation_id, WVM_IDENTITY_ID_BYTES, error,
+                   error_len) == 0) {
+        result = apply_enrollment_terminal_replay(
+            controller, operation_id, WVM_IDENTITY_ID_BYTES,
+            WVM_MEMBERSHIP_ENROLLMENT_COMMITTED, error, error_len);
+    }
+    pthread_mutex_unlock(&controller->lock);
+    return result;
+}
+
+int wvm_membership_controller_cluster_enrollment_abort(
+    struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *enrollment;
+    int result = -1;
+
+    if (!controller || controller->journal_fd < 0 || !operation_id) {
+        set_error(error, error_len, "cluster enrollment abort input is invalid");
+        return -1;
+    }
+    pthread_mutex_lock(&controller->lock);
+    enrollment = find_enrollment_mutable(controller, operation_id);
+    if (enrollment && enrollment->state == WVM_MEMBERSHIP_ENROLLMENT_ABORTED) {
+        result = 0;
+    } else if (!enrollment ||
+               enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_PREPARING) {
+        set_error(error, error_len, "cluster enrollment is not abortable");
+    } else if (journal_append_locked(
+                   controller, WVM_MEMBERSHIP_JOURNAL_CLUSTER_ENROLLMENT_ABORT,
+                   operation_id, WVM_IDENTITY_ID_BYTES, error,
+                   error_len) == 0) {
+        result = apply_enrollment_terminal_replay(
+            controller, operation_id, WVM_IDENTITY_ID_BYTES,
+            WVM_MEMBERSHIP_ENROLLMENT_ABORTED, error, error_len);
+    }
+    pthread_mutex_unlock(&controller->lock);
+    return result;
+}
+
+int wvm_membership_controller_cluster_enrollment_state(
+    const struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], uint16_t *state_out,
+    char *error, size_t error_len)
+{
+    struct wvm_membership_controller_enrollment *enrollment;
+
+    if (!controller || !operation_id || !state_out) {
+        set_error(error, error_len, "cluster enrollment state input is invalid");
+        return -1;
+    }
+    pthread_mutex_lock((pthread_mutex_t *)&controller->lock);
+    enrollment = find_enrollment_mutable(
+        (struct wvm_membership_controller *)controller, operation_id);
+    if (!enrollment) {
+        pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+        set_error(error, error_len, "cluster enrollment operation is unknown");
+        return -1;
+    }
+    *state_out = (uint16_t)enrollment->state;
+    pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+    return 0;
+}
+
+int wvm_membership_controller_activate_member_from_enrollment(
+    struct wvm_membership_controller *controller,
+    const struct wvm_member_key *member_key,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len)
+{
+    struct wvm_membership_controller_member_entry *member;
+    struct wvm_membership_controller_enrollment *enrollment;
+    int result = -1;
+
+    if (!controller || controller->journal_fd < 0 || !member_key ||
+        !operation_id) {
+        set_error(error, error_len,
+                  "cluster enrollment activation input is invalid");
+        return -1;
+    }
+    pthread_mutex_lock(&controller->lock);
+    member = find_member_mutable(controller, member_key);
+    enrollment = find_enrollment_mutable(controller, operation_id);
+    if (!member || !enrollment ||
+        enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_COMMITTED ||
+        !member_key_equal(&enrollment->proof.member_key, member_key) ||
+        !enrollment_all_acks_prepared(enrollment)) {
+        set_error(error, error_len,
+                  "member activation lacks committed cluster enrollment");
+    } else if (entry_state(member) == WVM_MANIFEST_MEMBER_ACTIVE) {
+        if (member->has_activation_enrollment_operation_id &&
+            memcmp(member->activation_enrollment_operation_id, operation_id,
+                   WVM_IDENTITY_ID_BYTES) == 0) {
+            result = 0;
+        } else {
+            set_error(error, error_len,
+                      "active member is not the enrollment commit result");
+        }
+    } else if (entry_state(member) != WVM_MANIFEST_MEMBER_PREPARED ||
+               entry_health(member) != WVM_MEMBERSHIP_HEALTHY) {
+        set_error(error, error_len,
+                  "cluster enrollment activation requires healthy prepared member");
+    } else {
+        if (persist_enrollment_binding_locked(controller, member, operation_id,
+                                              error, error_len) == 0) {
+            result = persist_member_state_locked(controller, member,
+                                                 WVM_MANIFEST_MEMBER_ACTIVE,
+                                                 WVM_MEMBERSHIP_HEALTHY, 0,
+                                                 error, error_len);
+        }
     }
     pthread_mutex_unlock(&controller->lock);
     return result;

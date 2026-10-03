@@ -310,14 +310,21 @@ unfinished candidate even when the registered topology did not change.
    claims, exclusive names, Pod capacity, and admission policy.
 3. The control plane assigns a Pod and local vnode range without colliding with
    active identities. It records the member as `VALIDATING`.
-4. It compiles route snapshot `G+1` for every affected scope, persists the
-   survivor `RequiredAckSet`, and distributes a prepare record to that set.
-5. Each recipient validates identity, namespace, topology revision, and next
-   hops, then acknowledges prepared state without using it for normal traffic.
-6. After all persisted required acknowledgements, the control plane commits
-   `G+1` and
-   marks the compute role `ACTIVE`. The scheduler may then use its capacity for
-   future VM admissions.
+4. If no VM route scope exists, it creates a cluster-scope
+   `ClusterAdmissionProof` with current membership/topology/eligibility fences
+   and a `ClusterAdmissionAckSet`; it must not synthesize a VM scope or route
+   snapshot. If VM scopes are affected, each scope uses its own immutable route
+   snapshot transaction and ACK set.
+5. Each required cluster-proof peer validates identity, record digest,
+   capability/topology evidence, and revision fence, then acknowledges the
+   prepared proof without using it for normal traffic. Route-scope ACKs remain
+   separate and validate their snapshot keys and next hops.
+6. The controller durably commits the cluster proof after every required
+   cluster ACK is durable, then marks the joining compute role `ACTIVE` under
+   that enrollment authorization. For VM-scoped changes, route activation is
+   committed independently; neither transaction substitutes for the other.
+   The scheduler may use the new capacity only after the relevant durable
+   admission and route decisions complete.
 7. A failed prepare aborts the operation. The candidate remains non-routable
    and non-schedulable, and no partial route remains authoritative.
 

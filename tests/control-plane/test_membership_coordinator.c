@@ -18,6 +18,16 @@ struct prepare_capture {
     unsigned int fail_on_commit_call;
 };
 
+struct enrollment_prepare_capture {
+    unsigned int calls;
+    int fail;
+};
+
+static int activate_gateway(struct wvm_membership_controller *controller,
+                            const struct wvm_gateway_record *gateway,
+                            const struct wvm_member_key *gateway_member,
+                            char *error, size_t error_len);
+
 static int expect(int condition, const char *message)
 {
     if (!condition) {
@@ -409,6 +419,190 @@ static int route_commit(void *context,
     return 0;
 }
 
+static int enrollment_prepare(void *context,
+                              const struct wvm_cluster_admission_proof *proof,
+                              const struct wvm_cluster_admission_ack_entry *ack,
+                              char *error, size_t error_len)
+{
+    struct enrollment_prepare_capture *capture = context;
+
+    if (!proof || !ack || ack->role_type != ack->member_key.role_type) {
+        snprintf(error, error_len, "invalid enrollment participant ACK");
+        return -1;
+    }
+    capture->calls++;
+    if (capture->fail) {
+        snprintf(error, error_len, "participant rejected cluster proof");
+        return -1;
+    }
+    return 0;
+}
+
+static int build_cluster_proof(
+    struct wvm_cluster_admission_proof *proof,
+    struct wvm_cluster_admission_ack_entry *ack_entries,
+    const struct wvm_member_key *member_key, const struct wvm_endpoint *endpoint,
+    const struct wvm_member_key *ack_member,
+    const struct wvm_endpoint *ack_endpoint,
+    const struct wvm_node_record *node, uint64_t membership_revision,
+    uint64_t topology_revision, uint64_t eligibility_revision,
+    uint8_t operation_tail, char *error, size_t error_len)
+{
+    uint8_t *record = NULL;
+    uint8_t encoded[16384];
+    size_t record_bytes = 0;
+    size_t encoded_bytes = 0;
+
+    (void)endpoint;
+
+    if (wvm_node_record_encode(node, encoded, sizeof(encoded), &record_bytes,
+                               error, error_len) != 0) {
+        return -1;
+    }
+    record = malloc(record_bytes);
+    if (!record) {
+        return -1;
+    }
+    memcpy(record, encoded, record_bytes);
+    memset(proof, 0, sizeof(*proof));
+    proof->operation_id[WVM_IDENTITY_ID_BYTES - 1] = operation_tail;
+    proof->member_key = *member_key;
+    proof->membership_revision = membership_revision;
+    proof->topology_revision = topology_revision;
+    proof->admission_eligibility_revision = eligibility_revision;
+    wvm_sha256_digest(record, record_bytes, proof->canonical_member_record_digest);
+    memset(proof->capability_evidence_digest, operation_tail,
+           sizeof(proof->capability_evidence_digest));
+    memset(proof->topology_assignment_digest, operation_tail + 1U,
+           sizeof(proof->topology_assignment_digest));
+    ack_entries[0].member_key = *ack_member;
+    ack_entries[0].endpoint = *ack_endpoint;
+    ack_entries[0].role_type = ack_member->role_type;
+    proof->required_ack_set.entries.entries = ack_entries;
+    proof->required_ack_set.entries.count = 1;
+    proof->required_ack_set.entries.capacity = 1;
+    if (wvm_cluster_admission_proof_encode(
+            proof, encoded, sizeof(encoded), &encoded_bytes, error,
+            error_len) != 0) {
+        free(record);
+        return -1;
+    }
+    free(record);
+    return wvm_cluster_admission_proof_validate(proof, error, error_len);
+}
+
+static int run_cluster_enrollment_test(char *error, size_t error_len)
+{
+    char journal_path[] = "/tmp/wavevm-cluster-enrollment.XXXXXX";
+    struct wvm_membership_controller_member_entry members[2];
+    struct wvm_membership_controller_route_entry routes[2];
+    struct wvm_membership_dependency dependencies[2];
+    struct wvm_membership_controller controller;
+    struct wvm_membership_controller_member_entry recovered_members[2];
+    struct wvm_membership_controller_route_entry recovered_routes[2];
+    struct wvm_membership_dependency recovered_dependencies[2];
+    struct wvm_membership_controller recovered;
+    struct wvm_node_record node;
+    struct wvm_member_key member_key;
+    const struct wvm_membership_controller_member_entry *prepared_member;
+    struct wvm_cluster_admission_proof proof;
+    struct wvm_cluster_admission_ack_entry ack_entries[1];
+    struct wvm_cluster_admission_proof missing_ack_proof;
+    struct wvm_cluster_admission_ack_entry missing_ack_entries[1];
+    struct enrollment_prepare_capture capture = {0};
+    struct wvm_membership_cluster_enrollment_request request;
+    uint16_t state;
+    int fd;
+
+    fd = mkstemp(journal_path);
+    if (fd < 0) {
+        return -1;
+    }
+    close(fd);
+    fill_node(&node);
+    node_key(&node, &member_key);
+    wvm_membership_controller_init(&controller, members, 2, routes, 2,
+                                   dependencies, 2, authorize, NULL);
+    if (wvm_membership_controller_open(&controller, journal_path, error,
+                                       error_len) != 0 ||
+        wvm_membership_controller_register_node(&controller, &member_key, &node,
+                                                error, error_len) != 0 ||
+        wvm_membership_controller_report_self_health(
+            &controller, &member_key, WVM_MEMBERSHIP_HEALTHY, error,
+            error_len) != 0 ||
+        wvm_membership_controller_begin_validation(&controller, &member_key,
+                                                   error, error_len) != 0 ||
+        wvm_membership_controller_prepare_member(&controller, &member_key,
+                                                 error, error_len) != 0) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return -1;
+    }
+    prepared_member = wvm_membership_controller_find(&controller, &member_key);
+    if (!prepared_member || controller.route_count != 0 ||
+        build_cluster_proof(
+            &proof, ack_entries, &member_key,
+            &prepared_member->node.control_endpoint, &member_key,
+            &prepared_member->node.control_endpoint, &prepared_member->node,
+            controller.membership_revision, controller.topology_revision,
+            controller.admission_eligibility_revision, 0x41, error,
+            error_len) != 0 ||
+        build_cluster_proof(
+            &missing_ack_proof, missing_ack_entries, &member_key,
+            &prepared_member->node.control_endpoint, &member_key,
+            &prepared_member->node.control_endpoint, &prepared_member->node,
+            controller.membership_revision, controller.topology_revision,
+            controller.admission_eligibility_revision, 0x42, error,
+            error_len) != 0) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return -1;
+    }
+    memset(&request, 0, sizeof(request));
+    request.member_kind = WVM_MEMBERSHIP_COMPUTE;
+    request.authenticated_actor = &member_key;
+    request.node = &node;
+    request.proof = &proof;
+    request.prepare = enrollment_prepare;
+    request.prepare_context = &capture;
+    if (wvm_membership_controller_cluster_enrollment_begin(
+            &controller, &missing_ack_proof, error, error_len) != 0 ||
+        wvm_membership_controller_cluster_enrollment_commit(
+            &controller, missing_ack_proof.operation_id, error, error_len) == 0 ||
+        wvm_membership_controller_cluster_enrollment_abort(
+            &controller, missing_ack_proof.operation_id, error, error_len) != 0 ||
+        wvm_membership_coordinator_enroll_cluster_member(
+            &controller, &request, error, error_len) != 0 ||
+        wvm_membership_controller_find(&controller, &member_key)
+                ->node.desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
+        controller.route_count != 0 || capture.calls != 1 ||
+        wvm_membership_controller_activate_member(
+            &controller, &member_key, proof.operation_id, error,
+            error_len) == 0) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return -1;
+    }
+    wvm_membership_controller_close(&controller);
+    wvm_membership_controller_init(&recovered, recovered_members, 2,
+                                   recovered_routes, 2, recovered_dependencies,
+                                   2, authorize, NULL);
+    if (wvm_membership_controller_open(&recovered, journal_path, error,
+                                       error_len) != 0 ||
+        wvm_membership_controller_cluster_enrollment_state(
+            &recovered, proof.operation_id, &state, error, error_len) != 0 ||
+        state != WVM_MEMBERSHIP_ENROLLMENT_COMMITTED ||
+        wvm_membership_controller_find(&recovered, &member_key)
+                ->node.desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE) {
+        wvm_membership_controller_close(&recovered);
+        unlink(journal_path);
+        return -1;
+    }
+    wvm_membership_controller_close(&recovered);
+    unlink(journal_path);
+    return 0;
+}
+
 static int activate_gateway(struct wvm_membership_controller *controller,
                             const struct wvm_gateway_record *gateway,
                             const struct wvm_member_key *gateway_member,
@@ -507,6 +701,13 @@ int main(void)
     char error[256] = {0};
     int fd;
     int join_result;
+
+    if (run_cluster_enrollment_test(error, sizeof(error)) != 0) {
+        fprintf(stderr, "membership-coordinator enrollment detail: %s\n", error);
+        if (expect(0, "cluster enrollment durable contract") != 0) {
+            return 1;
+        }
+    }
 
     fd = mkstemp(journal_path);
     if (fd < 0) {

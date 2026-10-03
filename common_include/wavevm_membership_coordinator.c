@@ -229,6 +229,102 @@ int wvm_membership_coordinator_join(
     return 0;
 }
 
+int wvm_membership_coordinator_enroll_cluster_member(
+    struct wvm_membership_controller *controller,
+    const struct wvm_membership_cluster_enrollment_request *request,
+    char *error, size_t error_len)
+{
+    struct wvm_member_key member_key;
+    struct wvm_membership_controller_member_status status;
+    uint16_t state;
+    size_t i;
+    int result;
+
+    if (!controller || !request || !request->authenticated_actor ||
+        !request->proof || !request->prepare ||
+        (request->member_kind == WVM_MEMBERSHIP_COMPUTE && !request->node) ||
+        (request->member_kind == WVM_MEMBERSHIP_GATEWAY && !request->gateway)) {
+        set_error(error, error_len, "cluster enrollment request is invalid");
+        return -1;
+    }
+    member_key = request->proof->member_key;
+    if (!member_key_equal_local(request->authenticated_actor, &member_key)) {
+        set_error(error, error_len, "cluster enrollment actor is not the member");
+        return -1;
+    }
+    if (request->member_kind == WVM_MEMBERSHIP_COMPUTE) {
+        result = wvm_membership_controller_register_node(
+            controller, request->authenticated_actor, request->node, error,
+            error_len);
+    } else if (request->member_kind == WVM_MEMBERSHIP_GATEWAY) {
+        result = wvm_membership_controller_register_gateway(
+            controller, request->authenticated_actor, request->gateway, error,
+            error_len);
+    } else {
+        set_error(error, error_len, "cluster enrollment member kind is invalid");
+        return -1;
+    }
+    if (result != 0 ||
+        wvm_membership_controller_report_self_health(
+            controller, request->authenticated_actor, WVM_MEMBERSHIP_HEALTHY,
+            error, error_len) != 0 ||
+        wvm_membership_controller_member_status(controller, &member_key,
+                                                &status, error, error_len) != 0) {
+        return -1;
+    }
+    if (status.desired_membership_state == WVM_MANIFEST_MEMBER_PENDING &&
+        wvm_membership_controller_begin_validation(controller, &member_key,
+                                                   error, error_len) != 0) {
+        return -1;
+    }
+    if ((status.desired_membership_state == WVM_MANIFEST_MEMBER_PENDING ||
+         status.desired_membership_state == WVM_MANIFEST_MEMBER_VALIDATING) &&
+        wvm_membership_controller_prepare_member(controller, &member_key, error,
+                                                 error_len) != 0) {
+        return -1;
+    }
+    if (status.desired_membership_state != WVM_MANIFEST_MEMBER_PENDING &&
+        status.desired_membership_state != WVM_MANIFEST_MEMBER_VALIDATING &&
+        status.desired_membership_state != WVM_MANIFEST_MEMBER_PREPARED &&
+        status.desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE) {
+        set_error(error, error_len, "cluster enrollment member is not joinable");
+        return -1;
+    }
+    if (wvm_membership_controller_cluster_enrollment_begin(
+            controller, request->proof, error, error_len) != 0) {
+        return -1;
+    }
+    if (wvm_membership_controller_cluster_enrollment_state(
+            controller, request->proof->operation_id, &state, error,
+            error_len) != 0) {
+        return -1;
+    }
+    if (state == WVM_MEMBERSHIP_ENROLLMENT_PREPARING) {
+        for (i = 0; i < request->proof->required_ack_set.entries.count; i++) {
+            const struct wvm_cluster_admission_ack_entry *ack =
+                &request->proof->required_ack_set.entries.entries[i];
+
+            if (request->prepare(request->prepare_context, request->proof, ack,
+                                 error, error_len) != 0 ||
+                wvm_membership_controller_cluster_enrollment_ack_prepare(
+                    controller, request->proof->operation_id, &ack->member_key,
+                    error, error_len) != 0) {
+                (void)wvm_membership_controller_cluster_enrollment_abort(
+                    controller, request->proof->operation_id, error, error_len);
+                return -1;
+            }
+        }
+        if (wvm_membership_controller_cluster_enrollment_commit(
+                controller, request->proof->operation_id, error, error_len) != 0) {
+            (void)wvm_membership_controller_cluster_enrollment_abort(
+                controller, request->proof->operation_id, error, error_len);
+            return -1;
+        }
+    }
+    return wvm_membership_controller_activate_member_from_enrollment(
+        controller, &member_key, request->proof->operation_id, error, error_len);
+}
+
 static int compute_member_key_valid(
     const struct wvm_membership_compute_drain_request *request, char *error,
     size_t error_len)

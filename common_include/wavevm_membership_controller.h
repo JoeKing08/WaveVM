@@ -32,6 +32,8 @@ struct wvm_membership_controller_member_entry {
     uint64_t active_dependency_count;
     int has_activation_route_operation_id;
     uint8_t activation_route_operation_id[WVM_IDENTITY_ID_BYTES];
+    int has_activation_enrollment_operation_id;
+    uint8_t activation_enrollment_operation_id[WVM_IDENTITY_ID_BYTES];
 };
 
 /* A lock-safe, pointer-free view of one registered member. */
@@ -62,6 +64,25 @@ struct wvm_membership_controller_route_entry {
     struct wvm_membership_controller_route_ack_state *required_ack_states;
     uint64_t prepared_membership_revision;
     uint64_t prepared_admission_eligibility_revision;
+};
+
+enum wvm_membership_enrollment_state {
+    WVM_MEMBERSHIP_ENROLLMENT_NONE = 0,
+    WVM_MEMBERSHIP_ENROLLMENT_PREPARING = 1,
+    WVM_MEMBERSHIP_ENROLLMENT_COMMITTED = 2,
+    WVM_MEMBERSHIP_ENROLLMENT_ABORTED = 3,
+};
+
+struct wvm_membership_controller_enrollment_ack_state {
+    struct wvm_member_key member_key;
+    int prepared;
+};
+
+struct wvm_membership_controller_enrollment {
+    struct wvm_cluster_admission_proof proof;
+    struct wvm_cluster_admission_ack_entry *required_ack_entries;
+    struct wvm_membership_controller_enrollment_ack_state *ack_states;
+    enum wvm_membership_enrollment_state state;
 };
 
 struct wvm_membership_controller_gateway_drain {
@@ -119,6 +140,8 @@ struct wvm_membership_controller {
     struct wvm_membership_controller_route_entry *routes;
     size_t route_count;
     size_t route_capacity;
+    struct wvm_membership_controller_enrollment *enrollments;
+    size_t enrollment_capacity;
     struct wvm_membership_dependency *dependencies;
     size_t dependency_count;
     size_t dependency_capacity;
@@ -215,6 +238,32 @@ int wvm_membership_controller_route_retire(
     size_t error_len);
 int wvm_membership_controller_route_abort(
     struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len);
+
+int wvm_membership_controller_cluster_enrollment_begin(
+    struct wvm_membership_controller *controller,
+    const struct wvm_cluster_admission_proof *proof, char *error,
+    size_t error_len);
+int wvm_membership_controller_cluster_enrollment_ack_prepare(
+    struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    const struct wvm_member_key *member_key, char *error, size_t error_len);
+int wvm_membership_controller_cluster_enrollment_commit(
+    struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len);
+int wvm_membership_controller_cluster_enrollment_abort(
+    struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len);
+int wvm_membership_controller_cluster_enrollment_state(
+    const struct wvm_membership_controller *controller,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], uint16_t *state_out,
+    char *error, size_t error_len);
+int wvm_membership_controller_activate_member_from_enrollment(
+    struct wvm_membership_controller *controller,
+    const struct wvm_member_key *member_key,
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
     size_t error_len);
 

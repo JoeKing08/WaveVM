@@ -17,6 +17,21 @@ typedef int (*wvm_membership_route_stage_fn)(
     const struct wvm_required_ack_entry *ack_entry, char *error,
     size_t error_len);
 
+typedef int (*wvm_membership_cluster_enrollment_prepare_fn)(
+    void *context, const struct wvm_cluster_admission_proof *proof,
+    const struct wvm_cluster_admission_ack_entry *ack_entry, char *error,
+    size_t error_len);
+
+struct wvm_membership_cluster_enrollment_request {
+    enum wvm_membership_member_kind member_kind;
+    const struct wvm_member_key *authenticated_actor;
+    const struct wvm_node_record *node;
+    const struct wvm_gateway_record *gateway;
+    const struct wvm_cluster_admission_proof *proof;
+    wvm_membership_cluster_enrollment_prepare_fn prepare;
+    void *prepare_context;
+};
+
 struct wvm_membership_join_request {
     enum wvm_membership_member_kind member_kind;
     const struct wvm_member_key *authenticated_actor;
@@ -56,6 +71,19 @@ int wvm_membership_coordinator_join(
     struct wvm_membership_controller *controller,
     const struct wvm_membership_join_request *request, char *error,
     size_t error_len);
+
+/*
+ * Cluster-scope admission for members before VM route scopes exist. The
+ * callback must perform the authenticated peer prepare/ACK exchange and bind
+ * the responding identity to ack_entry. This library does not provide a
+ * transport or validate capability/topology evidence. It never creates a VM
+ * route record; a controller-owned proof builder and production transport are
+ * required before this can be used as the live join path.
+ */
+int wvm_membership_coordinator_enroll_cluster_member(
+    struct wvm_membership_controller *controller,
+    const struct wvm_membership_cluster_enrollment_request *request,
+    char *error, size_t error_len);
 
 /*
  * Compute members have no route replacement phase: cordon first, then drain
