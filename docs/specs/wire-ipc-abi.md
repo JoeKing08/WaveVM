@@ -414,6 +414,13 @@ tags starting at one; no listed field is optional unless marked optional.
 | `0x0501` | `REJOIN` | Exact canonical `RejoinMemberRequest` (`0x102a`), containing a `NodeRecord` or `GatewayRecord`, optional prior `MemberKey`, and recovery evidence digest | Fresh registration only; no implicit use of old instance identity | `VALIDATING` membership result. It never rebinds a running V1 VM. |
 | `0x0502` | `RECOVERY_REBIND` | old/new `MemberKey`, manifest/snapshot digests, reservation proof, memory/vCPU/storage recovery proof | Not supported in V1 without a separately accepted recovery specification | `UNSUPPORTED` in V1; retained as audit evidence. |
 
+The controller-owned member activation path uses `ClusterAdmissionProof`
+(`0x1032`) for the no-VM cluster case. Its nested
+`ClusterAdmissionAckSet` (`0x1034`) is a cluster-topology acknowledgement and
+must not be decoded as the per-VM route `RequiredAckSet` (`0x1008`). The proof
+does not create or activate a VM route scope. A member remains non-schedulable
+until the proof transaction is durably committed with every required peer ACK.
+
 `RequiredAckSet` is a canonical ordered list of `MemberKey`, expected endpoint,
 role, and snapshot key. It includes only surviving eligible node runtimes and
 gateways that must install a successor before normal traffic can use it, plus a

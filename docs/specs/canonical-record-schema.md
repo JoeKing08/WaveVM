@@ -144,6 +144,9 @@ The V1 enum registry is:
 | `0x102f` | `CapabilityReport` | `1:U64:profile_generation`, `2:List<CapabilityRecord, capability_id/provider_instance_id>:records` |
 | `0x1030` | `NodeRuntimeProfile` | `1:U32:physical_node_id`, `2:U64:node_instance_id`, `3:U64:inventory_revision`, `4:U64:capability_profile_generation`, `5:U64:runtime_profile_generation`, `6:U16:node_runtime_control_port`, `7:U16:local_executor_control_port`, `8:U32:executor_worker_count`, `9:U32:sync_batch_size`, `10:U32:vcpu_handoff_record_capacity`, `11:List<U16>:node_runtime_data_ports`, `12:List<U16>:local_executor_service_ports`, `13:U64:physical_host_id`, `14:Record<NodeInstanceNamespace>:node_instance_namespace` |
 | `0x1031` | `NodeInstanceNamespace` | `1:Text<128>:namespace`, `2:Digest32:derivation_salt_digest`, `3:U64:name_generation` |
+| `0x1032` | `ClusterAdmissionProof` | `1:ID16:operation_id`, `2:Record<MemberKey>:member_key`, `3:U64:membership_revision`, `4:U64:topology_revision`, `5:U64:admission_eligibility_revision`, `6:Digest32:canonical_member_record_digest`, `7:Digest32:capability_evidence_digest`, `8:Digest32:topology_assignment_digest`, `9:Record<ClusterAdmissionAckSet>:required_ack_set` |
+| `0x1033` | `ClusterAdmissionAckEntry` | `1:Record<MemberKey>:member_key`, `2:Record<Endpoint>:endpoint`, `3:U16:role_type` |
+| `0x1034` | `ClusterAdmissionAckSet` | `1:List<ClusterAdmissionAckEntry, member_key>:entries` |
 
 ## 3. Cross-Record Constraints
 

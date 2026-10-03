@@ -209,6 +209,31 @@ partially edited map.
 validate the full key and digest. Scope creation, activation, and retirement
 are lifecycle operations, not an implied result of a membership join.
 
+### 3.4 Cluster Admission Proof Without VM Scope
+
+Membership admission has a cluster-level phase that is separate from VM route
+scope publication. When a cluster has no VM incarnation yet, a node or gateway
+cannot be activated by manufacturing a `VmRouteScopeKey`, a `RouteSnapshot`, or
+a test VM ID. The controller instead creates a `ClusterAdmissionProof`
+(`0x1032`) after validating the authenticated member record, endpoint and
+capability evidence, host and Pod assignment, and current membership,
+topology, and eligibility revisions.
+
+The proof contains the member identity and canonical record digest, the three
+revision fences, capability and topology evidence digests, and a separate
+`ClusterAdmissionAckSet` (`0x1034`) whose entries use
+`ClusterAdmissionAckEntry` (`0x1033`). The required peers prepare and
+acknowledge this proof. Only a durable proof commit followed by all required
+peer acknowledgements may move the member from `VALIDATING`/`PREPARED` to
+`ACTIVE`. Registration, TLS reachability, or a heartbeat alone never does so.
+
+When the first VM is created, placement allocates its real VM incarnation and
+route scope, then the ordinary per-VM `RouteSnapshot` prepare/commit flow is
+used. A cluster admission proof never carries VM identity and never becomes a
+route snapshot. If proof preparation or commit fails, the member remains
+non-schedulable and the proof can be retried or durably aborted under its same
+operation identity.
+
 ## 4. Member and Health State Machines
 
 Membership state applies independently to compute and gateway records:
