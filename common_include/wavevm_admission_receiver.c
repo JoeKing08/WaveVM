@@ -17,6 +17,8 @@ typedef int (*canonical_encode_fn)(const void *record, uint8_t *bytes,
                                    size_t capacity, size_t *encoded_bytes,
                                    char *error, size_t error_len);
 
+static int state_parent_open(const char *path);
+
 static void set_error(char *error, size_t error_len, const char *format, ...)
 {
     va_list arguments;
@@ -181,6 +183,9 @@ static int stage_message_type(uint16_t message_type)
     case WVM_ENVELOPE_MSG_ROUTE_COMMIT:
     case WVM_ENVELOPE_MSG_ROUTE_ABORT:
     case WVM_ENVELOPE_MSG_ROUTE_RETIRE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT:
         return 1;
     default:
         return 0;
@@ -244,6 +249,498 @@ static int controller_matches(const struct wvm_admission_receiver *receiver,
                receiver->config.controller_physical_node_id &&
            request->origin_runtime_instance_id ==
                receiver->config.controller_runtime_instance_id;
+}
+
+static int cluster_enrollment_message(uint16_t message_type)
+{
+    return message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE ||
+           message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT ||
+           message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT;
+}
+
+static int endpoint_equal(const struct wvm_endpoint *left,
+                          const struct wvm_endpoint *right)
+{
+    return left && right && left->data_transport == right->data_transport &&
+           left->data_address_bytes == right->data_address_bytes &&
+           left->data_port == right->data_port &&
+           memcmp(left->data_address, right->data_address,
+                  left->data_address_bytes) == 0 &&
+           left->control_transport == right->control_transport &&
+           left->has_control_address == right->has_control_address &&
+           left->control_address_bytes == right->control_address_bytes &&
+           left->control_port == right->control_port &&
+           (!left->has_control_address ||
+            memcmp(left->control_address, right->control_address,
+                   left->control_address_bytes) == 0) &&
+           left->has_server_name == right->has_server_name &&
+           (!left->has_server_name ||
+            strcmp(left->server_name, right->server_name) == 0) &&
+           left->has_control_socket_path == right->has_control_socket_path &&
+           (!left->has_control_socket_path ||
+            strcmp(left->control_socket_path, right->control_socket_path) == 0);
+}
+
+static void write_be16_local(uint8_t *bytes, uint16_t value)
+{
+    bytes[0] = (uint8_t)(value >> 8);
+    bytes[1] = (uint8_t)value;
+}
+
+static void write_be32_local(uint8_t *bytes, uint32_t value)
+{
+    bytes[0] = (uint8_t)(value >> 24);
+    bytes[1] = (uint8_t)(value >> 16);
+    bytes[2] = (uint8_t)(value >> 8);
+    bytes[3] = (uint8_t)value;
+}
+
+static uint16_t read_be16_local(const uint8_t *bytes)
+{
+    return (uint16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
+}
+
+static uint32_t read_be32_local(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+           ((uint32_t)bytes[2] << 8) | bytes[3];
+}
+
+#define WVM_ADMISSION_ENROLLMENT_RECORD_MAGIC 0x5756454eU
+#define WVM_ADMISSION_ENROLLMENT_RECORD_VERSION 1U
+#define WVM_ADMISSION_ENROLLMENT_RECORD_HEADER_BYTES 32U
+
+static int enrollment_local_member_key(
+    const struct wvm_admission_receiver *receiver,
+    struct wvm_member_key *member_key)
+{
+    if (!receiver || !member_key) {
+        return -1;
+    }
+    memset(member_key, 0, sizeof(*member_key));
+    member_key->role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    member_key->role_id = receiver->config.local_physical_node_id;
+    member_key->instance_id = receiver->config.local_node_instance_id;
+    return wvm_member_key_validate(member_key, NULL, 0);
+}
+
+static int enrollment_config_valid(
+    const struct wvm_admission_receiver *receiver)
+{
+    const struct wvm_admission_receiver_config *config;
+
+    if (!receiver || !(config = &receiver->config) ||
+        !config->local_endpoint || !config->enrollment_state_directory ||
+        !config->enrollment_state_directory[0] || !config->enrollment_slots ||
+        config->enrollment_slot_capacity == 0 ||
+        !config->enrollment_proof_storage ||
+        config->enrollment_proof_capacity == 0 ||
+        !config->enrollment_proof_scratch ||
+        config->enrollment_proof_scratch_capacity == 0 ||
+        !config->enrollment_ack_scratch ||
+        config->enrollment_ack_scratch_capacity == 0) {
+        return 0;
+    }
+    return 1;
+}
+
+static int enrollment_path_for_operation(
+    const struct wvm_admission_receiver *receiver,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *path,
+    size_t path_capacity)
+{
+    size_t offset = 0;
+    size_t i;
+    int length;
+
+    if (!receiver || !operation_id || !path || path_capacity == 0 ||
+        !receiver->config.enrollment_state_directory) {
+        return -1;
+    }
+    length = snprintf(path, path_capacity, "%s/cluster-enrollment-",
+                      receiver->config.enrollment_state_directory);
+    if (length < 0 || (size_t)length >= path_capacity) {
+        return -1;
+    }
+    offset = (size_t)length;
+    for (i = 0; i < WVM_IDENTITY_ID_BYTES; i++) {
+        length = snprintf(path + offset, path_capacity - offset, "%02x",
+                          operation_id[i]);
+        if (length != 2 || (size_t)length >= path_capacity - offset) {
+            return -1;
+        }
+        offset += (size_t)length;
+    }
+    length = snprintf(path + offset, path_capacity - offset, ".state");
+    return length < 0 || (size_t)length >= path_capacity - offset ? -1 : 0;
+}
+
+static int enrollment_state_write_full(int fd, const uint8_t *bytes,
+                                       size_t count)
+{
+    size_t offset = 0;
+
+    while (offset < count) {
+        ssize_t written = write(fd, bytes + offset, count - offset);
+
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        if (written <= 0) {
+            return -1;
+        }
+        offset += (size_t)written;
+    }
+    return 0;
+}
+
+static int enrollment_state_read_full(int fd, uint8_t *bytes, size_t count)
+{
+    size_t offset = 0;
+
+    while (offset < count) {
+        ssize_t received = read(fd, bytes + offset, count - offset);
+
+        if (received < 0 && errno == EINTR) {
+            continue;
+        }
+        if (received <= 0) {
+            return -1;
+        }
+        offset += (size_t)received;
+    }
+    return 0;
+}
+
+static int enrollment_slot_persist(
+    struct wvm_admission_receiver *receiver,
+    struct wvm_admission_enrollment_slot *slot, char *error,
+    size_t error_len)
+{
+    uint8_t header[WVM_ADMISSION_ENROLLMENT_RECORD_HEADER_BYTES] = {0};
+    char temporary[WVM_ADMISSION_ENROLLMENT_STATE_PATH_MAX] = {0};
+    int directory_fd = -1;
+    int fd = -1;
+    int result = -1;
+    int length;
+
+    if (!receiver || !slot || slot->state == WVM_ADMISSION_ENROLLMENT_PARTICIPANT_NONE ||
+        slot->proof_bytes_count == 0 ||
+        slot->proof_bytes_count > slot->proof_capacity ||
+        slot->proof_bytes_count > UINT32_MAX || slot->state_path[0] == '\0') {
+        set_error(error, error_len, "enrollment participant state is invalid");
+        return -1;
+    }
+    write_be32_local(header, WVM_ADMISSION_ENROLLMENT_RECORD_MAGIC);
+    write_be16_local(header + 4, WVM_ADMISSION_ENROLLMENT_RECORD_VERSION);
+    write_be16_local(header + 6, (uint16_t)slot->state);
+    write_be32_local(header + 8, (uint32_t)slot->proof_bytes_count);
+    memcpy(header + 16, slot->operation_id, sizeof(slot->operation_id));
+    length = snprintf(temporary, sizeof(temporary), "%s.tmp.XXXXXX",
+                      slot->state_path);
+    if (length < 0 || (size_t)length >= sizeof(temporary) ||
+        (directory_fd = state_parent_open(slot->state_path)) < 0 ||
+        (fd = mkstemp(temporary)) < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 ||
+        enrollment_state_write_full(fd, header, sizeof(header)) != 0 ||
+        enrollment_state_write_full(fd, slot->proof_bytes,
+                                    slot->proof_bytes_count) != 0 ||
+        fsync(fd) != 0 || rename(temporary, slot->state_path) != 0 ||
+        fsync(directory_fd) != 0) {
+        goto out;
+    }
+    result = 0;
+out:
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (directory_fd >= 0) {
+        close(directory_fd);
+    }
+    if (temporary[0]) {
+        unlink(temporary);
+    }
+    if (result != 0) {
+        slot->state_failed = 1;
+        set_error(error, error_len,
+                  "cannot persist enrollment participant state");
+    }
+    return result;
+}
+
+static int enrollment_slot_load(
+    struct wvm_admission_receiver *receiver,
+    struct wvm_admission_enrollment_slot *slot,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len)
+{
+    uint8_t header[WVM_ADMISSION_ENROLLMENT_RECORD_HEADER_BYTES];
+    int fd;
+    uint32_t proof_bytes;
+    uint16_t state;
+
+    if (enrollment_path_for_operation(receiver, operation_id, slot->state_path,
+                                      sizeof(slot->state_path)) != 0) {
+        set_error(error, error_len, "enrollment state path is too long");
+        return -1;
+    }
+    fd = open(slot->state_path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0 && errno == ENOENT) {
+        return 0;
+    }
+    if (fd < 0 || enrollment_state_read_full(fd, header, sizeof(header)) != 0) {
+        if (fd >= 0) {
+            close(fd);
+        }
+        set_error(error, error_len, "cannot read enrollment participant state");
+        return -1;
+    }
+    proof_bytes = read_be32_local(header + 8);
+    state = read_be16_local(header + 6);
+    if (read_be32_local(header) != WVM_ADMISSION_ENROLLMENT_RECORD_MAGIC ||
+        read_be16_local(header + 4) != WVM_ADMISSION_ENROLLMENT_RECORD_VERSION ||
+        state < WVM_ADMISSION_ENROLLMENT_PARTICIPANT_PREPARED ||
+        state > WVM_ADMISSION_ENROLLMENT_PARTICIPANT_ABORTED ||
+        proof_bytes == 0 || proof_bytes > slot->proof_capacity ||
+        memcmp(header + 16, operation_id, WVM_IDENTITY_ID_BYTES) != 0 ||
+        enrollment_state_read_full(fd, slot->proof_bytes, proof_bytes) != 0) {
+        close(fd);
+        set_error(error, error_len, "enrollment participant state is malformed");
+        return -1;
+    }
+    close(fd);
+    memcpy(slot->operation_id, operation_id, sizeof(slot->operation_id));
+    slot->proof_bytes_count = proof_bytes;
+    slot->state = (enum wvm_admission_enrollment_participant_state)state;
+    return 1;
+}
+
+static int enrollment_proof_matches_local(
+    struct wvm_admission_receiver *receiver,
+    const struct wvm_cluster_admission_proof *proof,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len)
+{
+    struct wvm_member_key local_key;
+    size_t i;
+    int found = 0;
+
+    if (!receiver || !proof || !operation_id ||
+        memcmp(proof->operation_id, operation_id, WVM_IDENTITY_ID_BYTES) != 0 ||
+        enrollment_local_member_key(receiver, &local_key) != 0) {
+        set_error(error, error_len,
+                  "enrollment proof operation or local identity differs");
+        return -1;
+    }
+    for (i = 0; i < proof->required_ack_set.entries.count; i++) {
+        const struct wvm_cluster_admission_ack_entry *entry =
+            &proof->required_ack_set.entries.entries[i];
+
+        if (!member_key_equal(&entry->member_key, &local_key)) {
+            continue;
+        }
+        if (entry->role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME ||
+            !receiver->config.local_endpoint ||
+            !endpoint_equal(&entry->endpoint, receiver->config.local_endpoint)) {
+            set_error(error, error_len,
+                      "enrollment proof local ACK endpoint is not authoritative");
+            return -1;
+        }
+        found = 1;
+        break;
+    }
+    if (!found) {
+        set_error(error, error_len,
+                  "enrollment proof does not include this node runtime");
+        return -1;
+    }
+    return 0;
+}
+
+static int enrollment_proof_decode(
+    struct wvm_admission_receiver *receiver, const uint8_t *payload,
+    size_t payload_bytes, const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    struct wvm_cluster_admission_proof *proof, size_t *canonical_bytes,
+    char *error, size_t error_len)
+{
+    if (!receiver || !payload || payload_bytes == 0 || !proof ||
+        !canonical_bytes ||
+        payload_bytes > receiver->config.enrollment_proof_scratch_capacity ||
+        !receiver->config.enrollment_proof_scratch ||
+        !receiver->config.enrollment_ack_scratch) {
+        set_error(error, error_len, "cluster enrollment proof storage is unavailable");
+        return -1;
+    }
+    memset(proof, 0, sizeof(*proof));
+    proof->required_ack_set.entries.entries =
+        receiver->config.enrollment_ack_scratch;
+    proof->required_ack_set.entries.capacity =
+        receiver->config.enrollment_ack_scratch_capacity;
+    if (wvm_cluster_admission_proof_decode(
+            payload, payload_bytes, proof, error, error_len) != 0 ||
+        wvm_cluster_admission_proof_validate(proof, error, error_len) != 0 ||
+        enrollment_proof_matches_local(receiver, proof, operation_id, error,
+                                       error_len) != 0 ||
+        wvm_cluster_admission_proof_encode(
+            proof, receiver->config.enrollment_proof_scratch,
+            receiver->config.enrollment_proof_scratch_capacity, canonical_bytes,
+            error, error_len) != 0 ||
+        *canonical_bytes != payload_bytes ||
+        memcmp(receiver->config.enrollment_proof_scratch, payload,
+               payload_bytes) != 0) {
+        set_error(error, error_len, "cluster enrollment proof is not canonical");
+        return -1;
+    }
+    return 0;
+}
+
+static int enrollment_slot_lookup(
+    struct wvm_admission_receiver *receiver,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    struct wvm_admission_enrollment_slot **slot_out, int *fresh,
+    char *error, size_t error_len)
+{
+    size_t i;
+
+    for (i = 0; i < receiver->config.enrollment_slot_capacity; i++) {
+        struct wvm_admission_enrollment_slot *slot =
+            &receiver->config.enrollment_slots[i];
+
+        if (slot->state != WVM_ADMISSION_ENROLLMENT_PARTICIPANT_NONE &&
+            memcmp(slot->operation_id, operation_id,
+                   WVM_IDENTITY_ID_BYTES) == 0) {
+            *slot_out = slot;
+            *fresh = 0;
+            return 0;
+        }
+    }
+    for (i = 0; i < receiver->config.enrollment_slot_capacity; i++) {
+        struct wvm_admission_enrollment_slot *slot =
+            &receiver->config.enrollment_slots[i];
+        int loaded;
+
+        if (slot->state != WVM_ADMISSION_ENROLLMENT_PARTICIPANT_NONE) {
+            continue;
+        }
+        memset(slot->operation_id, 0, sizeof(slot->operation_id));
+        slot->proof_bytes_count = 0;
+        slot->state_failed = 0;
+        loaded = enrollment_slot_load(receiver, slot, operation_id, error,
+                                      error_len);
+        if (loaded < 0) {
+            return -1;
+        }
+        if (loaded == 0) {
+            memcpy(slot->operation_id, operation_id,
+                   sizeof(slot->operation_id));
+        }
+        *slot_out = slot;
+        *fresh = loaded == 0;
+        return 0;
+    }
+    set_error(error, error_len, "enrollment participant table is full");
+    return -1;
+}
+
+static void enrollment_slot_release_if_fresh(
+    struct wvm_admission_enrollment_slot *slot, int fresh)
+{
+    if (slot && fresh) {
+        memset(slot->operation_id, 0, sizeof(slot->operation_id));
+        slot->proof_bytes_count = 0;
+        slot->state = WVM_ADMISSION_ENROLLMENT_PARTICIPANT_NONE;
+        slot->state_path[0] = '\0';
+        slot->state_failed = 0;
+    }
+}
+
+static int apply_cluster_enrollment(
+    struct wvm_admission_receiver *receiver, const struct wvm_envelope *request,
+    struct wvm_control_result *result, char *error, size_t error_len)
+{
+    struct wvm_cluster_admission_proof proof;
+    struct wvm_admission_enrollment_slot *slot = NULL;
+    size_t canonical_bytes = 0;
+    int fresh = 0;
+    int same_proof;
+    enum wvm_admission_enrollment_participant_state requested_state;
+
+    if (!enrollment_config_valid(receiver) ||
+        request->payload_bytes == 0 ||
+        request->payload_bytes > receiver->config.enrollment_proof_capacity ||
+        enrollment_proof_decode(receiver, request->payload, request->payload_bytes,
+                                request->operation_id, &proof, &canonical_bytes,
+                                error, error_len) != 0 ||
+        enrollment_slot_lookup(receiver, request->operation_id, &slot, &fresh,
+                               error, error_len) != 0) {
+        enrollment_slot_release_if_fresh(slot, fresh);
+        return -1;
+    }
+    if (fresh) {
+        memcpy(slot->proof_bytes, receiver->config.enrollment_proof_scratch,
+               canonical_bytes);
+        slot->proof_bytes_count = canonical_bytes;
+    } else {
+        same_proof = slot->proof_bytes_count == canonical_bytes &&
+                     memcmp(slot->proof_bytes,
+                            receiver->config.enrollment_proof_scratch,
+                            canonical_bytes) == 0;
+        if (!same_proof) {
+            set_error(error, error_len,
+                      "cluster enrollment operation proof conflicts with retained state");
+            return -1;
+        }
+    }
+    if (request->message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE) {
+        requested_state = WVM_ADMISSION_ENROLLMENT_PARTICIPANT_PREPARED;
+        if (!fresh && slot->state != requested_state) {
+            set_error(error, error_len,
+                      "cluster enrollment prepare conflicts with terminal state");
+            return -1;
+        }
+    } else if (request->message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT) {
+        requested_state = WVM_ADMISSION_ENROLLMENT_PARTICIPANT_COMMITTED;
+        if (slot->state == WVM_ADMISSION_ENROLLMENT_PARTICIPANT_ABORTED ||
+            (fresh && slot->state == WVM_ADMISSION_ENROLLMENT_PARTICIPANT_NONE)) {
+            set_error(error, error_len,
+                      "cluster enrollment commit has no prepared state");
+            enrollment_slot_release_if_fresh(slot, fresh);
+            return -1;
+        }
+        if (!fresh && slot->state == requested_state) {
+            result->recorded_state = requested_state;
+            result->applied_revision = proof.admission_eligibility_revision;
+            result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+            return 0;
+        }
+        if (fresh) {
+            set_error(error, error_len,
+                      "cluster enrollment commit has no prepared state");
+            enrollment_slot_release_if_fresh(slot, fresh);
+            return -1;
+        }
+    } else {
+        requested_state = WVM_ADMISSION_ENROLLMENT_PARTICIPANT_ABORTED;
+        if (fresh || slot->state == WVM_ADMISSION_ENROLLMENT_PARTICIPANT_COMMITTED) {
+            set_error(error, error_len,
+                      "cluster enrollment abort has no prepared state");
+            enrollment_slot_release_if_fresh(slot, fresh);
+            return -1;
+        }
+        if (!fresh && slot->state == requested_state) {
+            result->recorded_state = requested_state;
+            result->applied_revision = proof.admission_eligibility_revision;
+            result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+            return 0;
+        }
+    }
+    slot->state = requested_state;
+    if (enrollment_slot_persist(receiver, slot, error, error_len) != 0) {
+        return -1;
+    }
+    result->recorded_state = requested_state;
+    result->applied_revision = proof.admission_eligibility_revision;
+    result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+    return 0;
 }
 
 static int candidate_matches_request(
@@ -1063,7 +1560,10 @@ int wvm_admission_receiver_apply(
         return 0;
     }
     pthread_mutex_lock(&receiver->lock);
-    switch (request->message_type) {
+    if (cluster_enrollment_message(request->message_type)) {
+        apply_result = apply_cluster_enrollment(receiver, request, result, error,
+                                                error_len);
+    } else switch (request->message_type) {
     case WVM_ENVELOPE_MSG_PREPARE_RESERVATION:
     case WVM_ENVELOPE_MSG_COMMIT_RESERVATION:
     case WVM_ENVELOPE_MSG_ABORT_RESERVATION:

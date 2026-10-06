@@ -18,6 +18,27 @@
 #include "wavevm_route_control.h"
 #include "wavevm_runtime_delivery.h"
 
+#define WVM_ADMISSION_ENROLLMENT_STATE_PATH_MAX 4096U
+#define WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES (64U * 1024U)
+
+enum wvm_admission_enrollment_participant_state {
+    WVM_ADMISSION_ENROLLMENT_PARTICIPANT_NONE = 0,
+    WVM_ADMISSION_ENROLLMENT_PARTICIPANT_PREPARED = 1,
+    WVM_ADMISSION_ENROLLMENT_PARTICIPANT_COMMITTED = 2,
+    WVM_ADMISSION_ENROLLMENT_PARTICIPANT_ABORTED = 3,
+};
+
+/* Caller-owned, fixed-capacity durable state for one cluster enrollment op. */
+struct wvm_admission_enrollment_slot {
+    uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
+    enum wvm_admission_enrollment_participant_state state;
+    uint8_t *proof_bytes;
+    size_t proof_capacity;
+    size_t proof_bytes_count;
+    char state_path[WVM_ADMISSION_ENROLLMENT_STATE_PATH_MAX];
+    int state_failed;
+};
+
 struct wvm_admission_receiver_slot {
     /* Both storage sets and all nested arrays are caller-owned and bounded. */
     struct wvm_admission_participant_stage_storage prepared_storage;
@@ -73,6 +94,16 @@ struct wvm_admission_receiver_config {
      */
     struct wvm_admission_reservation_stage_storage *reservation_scratch_storage;
     struct wvm_route_control *route_control;
+    const struct wvm_endpoint *local_endpoint;
+    const char *enrollment_state_directory;
+    struct wvm_admission_enrollment_slot *enrollment_slots;
+    size_t enrollment_slot_capacity;
+    uint8_t *enrollment_proof_storage;
+    size_t enrollment_proof_capacity;
+    uint8_t *enrollment_proof_scratch;
+    size_t enrollment_proof_scratch_capacity;
+    struct wvm_cluster_admission_ack_entry *enrollment_ack_scratch;
+    size_t enrollment_ack_scratch_capacity;
     void *context;
     wvm_admission_receiver_resolve_slot_fn resolve_slot;
     wvm_admission_receiver_delivery_inputs_fn delivery_inputs;

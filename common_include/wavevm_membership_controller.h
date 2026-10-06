@@ -424,4 +424,26 @@ int wvm_membership_controller_capture_current_cluster_records(
     uint64_t capability_profile_generation,
     struct wvm_cluster_record_set *records_out, char *error, size_t error_len);
 
+/*
+ * Build a cluster-scope admission proof from the controller's authoritative
+ * member records. The caller owns PROOF, ACK_STORAGE, and all digest/input
+ * buffers; this function does not allocate output storage. The three expected
+ * revisions form a current-state fence and must equal the controller values.
+ * Capability and topology digests bind caller-provided evidence; this builder
+ * does not probe or generate that evidence. No VM ID, RouteSnapshot, or route
+ * ACK is created here.
+ */
+int wvm_membership_controller_build_cluster_admission_proof(
+    const struct wvm_membership_controller *controller,
+    const struct wvm_member_key *target_member_key,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    uint64_t expected_membership_revision,
+    uint64_t expected_topology_revision,
+    uint64_t expected_admission_eligibility_revision,
+    const uint8_t capability_evidence_digest[WVM_SHA256_DIGEST_BYTES],
+    const uint8_t topology_assignment_digest[WVM_SHA256_DIGEST_BYTES],
+    struct wvm_cluster_admission_proof *proof_out,
+    struct wvm_cluster_admission_ack_entry *ack_storage,
+    size_t ack_capacity, char *error, size_t error_len);
+
 #endif /* WAVEVM_MEMBERSHIP_CONTROLLER_H */

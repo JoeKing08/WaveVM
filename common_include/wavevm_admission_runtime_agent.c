@@ -21,6 +21,10 @@ struct agent_slot_storage {
 struct agent_owned_storage {
     struct agent_slot_storage *slot_storage;
     struct wvm_admission_receiver_slot *slots;
+    struct wvm_admission_enrollment_slot *enrollment_slots;
+    uint8_t *enrollment_proof_storage;
+    uint8_t *enrollment_proof_scratch;
+    struct wvm_cluster_admission_ack_entry *enrollment_ack_scratch;
     struct wvm_resource_reservation *reservation_records;
     struct wvm_vcpu_assignment *reservation_vcpus;
     struct wvm_memory_chunk_assignment *reservation_memory;
@@ -329,6 +333,7 @@ static int agent_storage_init(
 {
     struct agent_owned_storage *owned;
     struct wvm_admission_node node;
+    size_t enrollment_storage_bytes;
     size_t i;
 
     owned = calloc(1, sizeof(*owned));
@@ -341,13 +346,29 @@ static int agent_storage_init(
     owned->slots = calloc(config->slot_capacity, sizeof(*owned->slots));
     owned->slot_storage = calloc(config->slot_capacity,
                                  sizeof(*owned->slot_storage));
+    owned->enrollment_slots = calloc(config->slot_capacity,
+                                     sizeof(*owned->enrollment_slots));
+    if (checked_count(config->slot_capacity,
+                      WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES,
+                      &enrollment_storage_bytes) != 0) {
+        free(owned);
+        set_error(error, error_len, "enrollment storage dimensions overflow");
+        return -EOVERFLOW;
+    }
+    owned->enrollment_proof_storage = calloc(enrollment_storage_bytes, 1U);
+    owned->enrollment_proof_scratch = calloc(
+        WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES, 1U);
+    owned->enrollment_ack_scratch = calloc(
+        config->max_members, sizeof(*owned->enrollment_ack_scratch));
     owned->reservation_records = calloc(
         config->slot_capacity, sizeof(*owned->reservation_records));
     owned->runtime_pids = calloc(config->slot_capacity,
                                  sizeof(*owned->runtime_pids));
     agent->owned_storage = owned;
     agent->slot_capacity = config->slot_capacity;
-    if (!owned->slots || !owned->slot_storage ||
+    if (!owned->slots || !owned->slot_storage || !owned->enrollment_slots ||
+        !owned->enrollment_proof_storage || !owned->enrollment_proof_scratch ||
+        !owned->enrollment_ack_scratch ||
         !owned->reservation_records || !owned->runtime_pids) {
         set_error(error, error_len, "cannot allocate admission agent slots");
         return -ENOMEM;
@@ -363,6 +384,11 @@ static int agent_storage_init(
         }
         owned->slots[i].prepared_storage = owned->slot_storage[i].prepared;
         owned->slots[i].scratch_storage = owned->slot_storage[i].scratch;
+        owned->enrollment_slots[i].proof_bytes =
+            owned->enrollment_proof_storage +
+            i * WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES;
+        owned->enrollment_slots[i].proof_capacity =
+            WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES;
     }
     if (checked_count(config->max_members, config->max_leases_per_requirement,
                       &i) != 0) {
@@ -533,6 +559,18 @@ int wvm_admission_runtime_agent_init(
     receiver_config.reservation_registry = &agent->reservation_registry;
     receiver_config.reservation_scratch_storage = &agent->reservation_scratch;
     receiver_config.route_control = &agent->route_control;
+    receiver_config.local_endpoint = config->network_endpoint;
+    receiver_config.enrollment_state_directory = config->state_directory;
+    receiver_config.enrollment_slots = owned->enrollment_slots;
+    receiver_config.enrollment_slot_capacity = config->slot_capacity;
+    receiver_config.enrollment_proof_storage = owned->enrollment_proof_storage;
+    receiver_config.enrollment_proof_capacity =
+        WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES;
+    receiver_config.enrollment_proof_scratch = owned->enrollment_proof_scratch;
+    receiver_config.enrollment_proof_scratch_capacity =
+        WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES;
+    receiver_config.enrollment_ack_scratch = owned->enrollment_ack_scratch;
+    receiver_config.enrollment_ack_scratch_capacity = config->max_members;
     receiver_config.context = agent;
     receiver_config.resolve_slot = resolve_slot;
     receiver_config.delivery_inputs = delivery_inputs;
@@ -571,6 +609,7 @@ int wvm_admission_runtime_agent_init(
     }
     agent->slot_registry_initialized = 1;
     agent->slots = owned->slots;
+    agent->enrollment_slots = owned->enrollment_slots;
     agent->slot_capacity = config->slot_capacity;
     agent->initialized = 1;
     return 0;
@@ -650,6 +689,10 @@ void wvm_admission_runtime_agent_destroy(
         free(owned->reservation_leases);
         free(owned->reservation_routes);
         free(owned->runtime_pids);
+        free(owned->enrollment_ack_scratch);
+        free(owned->enrollment_proof_scratch);
+        free(owned->enrollment_proof_storage);
+        free(owned->enrollment_slots);
         free(owned->slots);
         free(owned->slot_storage);
         free(owned);

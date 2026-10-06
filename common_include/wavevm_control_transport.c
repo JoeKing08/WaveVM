@@ -164,6 +164,9 @@ static int admission_request(uint16_t message_type)
     case WVM_ENVELOPE_MSG_ROUTE_COMMIT:
     case WVM_ENVELOPE_MSG_ROUTE_ABORT:
     case WVM_ENVELOPE_MSG_ROUTE_RETIRE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT:
         return 1;
     default:
         return 0;
@@ -218,6 +221,15 @@ static int request_metadata_valid(const struct wvm_envelope *request)
         return 0;
     }
     if (admission_request(request->message_type)) {
+        if (request->message_type ==
+                WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE ||
+            request->message_type ==
+                WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT ||
+            request->message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT) {
+            return request->vm_id == 0 && request->vm_incarnation == 0 &&
+                   request->manifest_generation == 0 &&
+                   route_metadata_is_empty(request);
+        }
         return request->vm_id != 0 && forwarding_metadata_is_empty(request);
     }
     return request->vm_id == 0 && route_metadata_is_empty(request);

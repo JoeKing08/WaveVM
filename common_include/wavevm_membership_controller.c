@@ -167,6 +167,21 @@ static int member_key_equal(const struct wvm_member_key *left,
            left->instance_id == right->instance_id;
 }
 
+static int member_key_compare_local(const struct wvm_member_key *left,
+                                    const struct wvm_member_key *right)
+{
+    if (left->role_type != right->role_type) {
+        return left->role_type < right->role_type ? -1 : 1;
+    }
+    if (left->role_id != right->role_id) {
+        return left->role_id < right->role_id ? -1 : 1;
+    }
+    if (left->instance_id != right->instance_id) {
+        return left->instance_id < right->instance_id ? -1 : 1;
+    }
+    return 0;
+}
+
 static void enrollment_free(
     struct wvm_membership_controller_enrollment *enrollment)
 {
@@ -2029,6 +2044,54 @@ static int endpoint_equal(const struct wvm_endpoint *left,
            (!left->has_control_socket_path ||
             strcmp(left->control_socket_path, right->control_socket_path) ==
                 0);
+}
+
+static const struct wvm_endpoint *member_control_endpoint(
+    const struct wvm_membership_controller_member_entry *entry)
+{
+    if (!entry) {
+        return NULL;
+    }
+    return entry->kind == WVM_MEMBERSHIP_COMPUTE
+               ? &entry->node.control_endpoint
+               : &entry->gateway.endpoint;
+}
+
+static int member_record_digest(
+    const struct wvm_membership_controller_member_entry *entry,
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES], char *error, size_t error_len)
+{
+    uint8_t *record = NULL;
+    size_t record_bytes = 0;
+    int result;
+
+    if (!entry || !digest) {
+        set_error(error, error_len, "member record digest input is invalid");
+        return -1;
+    }
+    if (entry->kind == WVM_MEMBERSHIP_COMPUTE) {
+        result = encode_node_alloc(&entry->node, &record, &record_bytes, error,
+                                   error_len);
+    } else if (entry->kind == WVM_MEMBERSHIP_GATEWAY) {
+        result = encode_gateway_alloc(&entry->gateway, &record, &record_bytes,
+                                      error, error_len);
+    } else {
+        set_error(error, error_len, "member record kind is invalid");
+        return -1;
+    }
+    if (result == 0) {
+        wvm_sha256_digest(record, record_bytes, digest);
+    }
+    free(record);
+    return result;
+}
+
+static int admission_target_state_allowed(
+    enum wvm_manifest_member_state state)
+{
+    return state == WVM_MANIFEST_MEMBER_PENDING ||
+           state == WVM_MANIFEST_MEMBER_VALIDATING ||
+           state == WVM_MANIFEST_MEMBER_PREPARED;
 }
 
 static int enrollment_ack_set_matches_members(
@@ -4428,4 +4491,142 @@ int wvm_membership_controller_capture_current_cluster_records(
         capture, capability_records, capability_record_count,
         resource_reservations, resource_reservation_count, inventory_revision,
         capability_profile_generation, records_out, error, error_len);
+}
+
+int wvm_membership_controller_build_cluster_admission_proof(
+    const struct wvm_membership_controller *controller,
+    const struct wvm_member_key *target_member_key,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    uint64_t expected_membership_revision,
+    uint64_t expected_topology_revision,
+    uint64_t expected_admission_eligibility_revision,
+    const uint8_t capability_evidence_digest[WVM_SHA256_DIGEST_BYTES],
+    const uint8_t topology_assignment_digest[WVM_SHA256_DIGEST_BYTES],
+    struct wvm_cluster_admission_proof *proof_out,
+    struct wvm_cluster_admission_ack_entry *ack_storage,
+    size_t ack_capacity, char *error, size_t error_len)
+{
+    struct wvm_membership_controller_member_entry *target;
+    struct wvm_cluster_admission_proof candidate;
+    size_t ack_count = 1;
+    size_t i;
+
+    if (!controller || controller->journal_fd < 0 || !target_member_key ||
+        !operation_id || !capability_evidence_digest ||
+        !topology_assignment_digest || !proof_out || !ack_storage ||
+        ack_capacity == 0 ||
+        wvm_member_key_validate(target_member_key, error, error_len) != 0 ||
+        bytes_are_zero(operation_id, WVM_IDENTITY_ID_BYTES) ||
+        bytes_are_zero(capability_evidence_digest, WVM_SHA256_DIGEST_BYTES) ||
+        bytes_are_zero(topology_assignment_digest, WVM_SHA256_DIGEST_BYTES) ||
+        expected_membership_revision == 0 || expected_topology_revision == 0 ||
+        expected_admission_eligibility_revision == 0) {
+        set_error(error, error_len,
+                  "cluster admission proof builder input is invalid");
+        return -1;
+    }
+
+    pthread_mutex_lock((pthread_mutex_t *)&controller->lock);
+    target = find_member_mutable((struct wvm_membership_controller *)controller,
+                                  target_member_key);
+    if (!target) {
+        set_error(error, error_len,
+                  "cluster admission proof target is not registered");
+        goto fail;
+    }
+    if (!admission_target_state_allowed(entry_state(target))) {
+        set_error(error, error_len,
+                  "cluster admission proof target is not enrollment eligible");
+        goto fail;
+    }
+    if (controller->membership_revision != expected_membership_revision ||
+        controller->topology_revision != expected_topology_revision ||
+        controller->admission_eligibility_revision !=
+            expected_admission_eligibility_revision ||
+        entry_membership_revision(target) != expected_membership_revision ||
+        entry_topology_revision(target) != expected_topology_revision) {
+        set_error(error, error_len,
+                  "cluster admission proof revision fence is stale");
+        goto fail;
+    }
+    for (i = 0; i < controller->member_count; i++) {
+        const struct wvm_membership_controller_member_entry *entry =
+            &controller->members[i];
+
+        if (entry != target && entry_state(entry) == WVM_MANIFEST_MEMBER_ACTIVE &&
+            entry_health(entry) == WVM_MEMBERSHIP_HEALTHY) {
+            ack_count++;
+        }
+    }
+    if (ack_count > ack_capacity) {
+        set_error(error, error_len,
+                  "cluster admission proof ACK storage is too small");
+        goto fail;
+    }
+
+    memset(&candidate, 0, sizeof(candidate));
+    memcpy(candidate.operation_id, operation_id, sizeof(candidate.operation_id));
+    candidate.member_key = *target_member_key;
+    candidate.membership_revision = expected_membership_revision;
+    candidate.topology_revision = expected_topology_revision;
+    candidate.admission_eligibility_revision =
+        expected_admission_eligibility_revision;
+    memcpy(candidate.capability_evidence_digest, capability_evidence_digest,
+           sizeof(candidate.capability_evidence_digest));
+    memcpy(candidate.topology_assignment_digest, topology_assignment_digest,
+           sizeof(candidate.topology_assignment_digest));
+    candidate.required_ack_set.entries.entries = ack_storage;
+    candidate.required_ack_set.entries.capacity = ack_capacity;
+    candidate.required_ack_set.entries.count = 0;
+
+    ack_storage[candidate.required_ack_set.entries.count].member_key =
+        target->member_key;
+    ack_storage[candidate.required_ack_set.entries.count].endpoint =
+        *member_control_endpoint(target);
+    ack_storage[candidate.required_ack_set.entries.count].role_type =
+        target->member_key.role_type;
+    candidate.required_ack_set.entries.count++;
+    for (i = 0; i < controller->member_count; i++) {
+        const struct wvm_membership_controller_member_entry *entry =
+            &controller->members[i];
+
+        if (entry == target || entry_state(entry) != WVM_MANIFEST_MEMBER_ACTIVE ||
+            entry_health(entry) != WVM_MEMBERSHIP_HEALTHY) {
+            continue;
+        }
+        ack_storage[candidate.required_ack_set.entries.count].member_key =
+            entry->member_key;
+        ack_storage[candidate.required_ack_set.entries.count].endpoint =
+            *member_control_endpoint(entry);
+        ack_storage[candidate.required_ack_set.entries.count].role_type =
+            entry->member_key.role_type;
+        candidate.required_ack_set.entries.count++;
+    }
+
+    for (i = 1; i < candidate.required_ack_set.entries.count; i++) {
+        struct wvm_cluster_admission_ack_entry value = ack_storage[i];
+        size_t position = i;
+
+        while (position != 0 &&
+               member_key_compare_local(
+                   &value.member_key,
+                   &ack_storage[position - 1].member_key) < 0) {
+            ack_storage[position] = ack_storage[position - 1];
+            position--;
+        }
+        ack_storage[position] = value;
+    }
+    if (member_record_digest(target, candidate.canonical_member_record_digest,
+                             error, error_len) != 0 ||
+        wvm_cluster_admission_proof_validate(&candidate, error, error_len) !=
+            0) {
+        goto fail;
+    }
+    *proof_out = candidate;
+    pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+    return 0;
+
+fail:
+    pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+    return -1;
 }

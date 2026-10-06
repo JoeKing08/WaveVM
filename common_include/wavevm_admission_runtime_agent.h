@@ -51,6 +51,7 @@ struct wvm_admission_runtime_agent {
     struct wvm_admission_node_service node_service;
     struct wvm_admission_slot_registry slot_registry;
     struct wvm_admission_receiver_slot *slots;
+    struct wvm_admission_enrollment_slot *enrollment_slots;
     struct wvm_admission_reservation_stage_storage reservation_scratch;
     void *owned_storage;
     struct wvm_route_control_snapshot *delivery_snapshot;

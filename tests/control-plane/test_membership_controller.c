@@ -390,12 +390,20 @@ int main(void)
     struct wvm_required_ack_entry committed_optional_departure_entries[1];
     struct wvm_route_transaction_record aborted_successor_transaction;
     struct wvm_route_transaction_record committed_successor_transaction;
+    struct wvm_cluster_admission_proof admission_proof;
+    struct wvm_cluster_admission_proof decoded_admission_proof;
+    struct wvm_cluster_admission_ack_entry admission_ack_entries[4];
+    struct wvm_cluster_admission_ack_entry decoded_admission_ack_entries[4];
     struct wvm_membership_dependency dependency;
     struct wvm_membership_dependency gateway_dependency;
     uint32_t gateway_ids[2] = {7, 8};
     uint32_t gateway_parent_ids[1] = {7};
     uint32_t gateway_child_ids[1] = {8};
     uint8_t capability_profile_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t capability_evidence_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t topology_assignment_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t admission_proof_bytes[16384];
+    size_t admission_proof_bytes_count;
     size_t node_count;
     size_t gateway_count;
     uint64_t membership_revision;
@@ -543,6 +551,45 @@ int main(void)
         return 1;
     }
 
+    memset(capability_evidence_digest, 0x31,
+           sizeof(capability_evidence_digest));
+    memset(topology_assignment_digest, 0x32,
+           sizeof(topology_assignment_digest));
+    if (expect(wvm_membership_controller_build_cluster_admission_proof(
+                   &controller, &node_member,
+                   (uint8_t[WVM_IDENTITY_ID_BYTES]){[WVM_IDENTITY_ID_BYTES - 1] =
+                                                         0x51},
+                   controller.membership_revision, controller.topology_revision,
+                   controller.admission_eligibility_revision,
+                   capability_evidence_digest, topology_assignment_digest,
+                   &admission_proof, admission_ack_entries,
+                   sizeof(admission_ack_entries) /
+                       sizeof(admission_ack_entries[0]),
+                   error, sizeof(error)) == 0 &&
+                   admission_proof.required_ack_set.entries.count == 1 &&
+                   member_key_equal(
+                       &admission_proof.required_ack_set.entries.entries[0]
+                            .member_key,
+                       &node_member),
+               "build first-member cluster admission proof with self ACK") ||
+        expect(wvm_membership_controller_build_cluster_admission_proof(
+                   &controller, &node_member,
+                   (uint8_t[WVM_IDENTITY_ID_BYTES]){[WVM_IDENTITY_ID_BYTES - 1] =
+                                                         0x52},
+                   controller.membership_revision, controller.topology_revision,
+                   controller.admission_eligibility_revision,
+                   (uint8_t[WVM_SHA256_DIGEST_BYTES]){0},
+                   topology_assignment_digest, &admission_proof,
+                   admission_ack_entries,
+                   sizeof(admission_ack_entries) /
+                       sizeof(admission_ack_entries[0]),
+                   error, sizeof(error)) != 0,
+               "reject missing capability evidence digest")) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return 1;
+    }
+
     memset(&route_key, 0, sizeof(route_key));
     route_key.scope_key.vm_id = 256;
     route_key.scope_key.vm_incarnation = 1;
@@ -595,6 +642,76 @@ int main(void)
         return 1;
     }
 
+    if (expect(wvm_membership_controller_build_cluster_admission_proof(
+                   &controller, &child_gateway_member,
+                   (uint8_t[WVM_IDENTITY_ID_BYTES]){[WVM_IDENTITY_ID_BYTES - 1] =
+                                                         0x53},
+                   controller.membership_revision, controller.topology_revision,
+                   controller.admission_eligibility_revision,
+                   capability_evidence_digest, topology_assignment_digest,
+                   &admission_proof, admission_ack_entries,
+                   sizeof(admission_ack_entries) /
+                       sizeof(admission_ack_entries[0]),
+                   error, sizeof(error)) == 0 &&
+                   admission_proof.required_ack_set.entries.count == 3 &&
+                   admission_proof.required_ack_set.entries.entries[0]
+                           .member_key.role_type ==
+                       WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+                   admission_proof.required_ack_set.entries.entries[1]
+                           .member_key.role_id == gateway_member.role_id &&
+                   admission_proof.required_ack_set.entries.entries[2]
+                           .member_key.role_id == child_gateway_member.role_id,
+               "build stable cluster admission ACK set with active peers") ||
+        expect(wvm_membership_controller_build_cluster_admission_proof(
+                   &controller, &node_member,
+                   (uint8_t[WVM_IDENTITY_ID_BYTES]){[WVM_IDENTITY_ID_BYTES - 1] =
+                                                         0x54},
+                   controller.membership_revision, controller.topology_revision,
+                   controller.admission_eligibility_revision,
+                   capability_evidence_digest, topology_assignment_digest,
+                   &admission_proof, admission_ack_entries,
+                   sizeof(admission_ack_entries) /
+                       sizeof(admission_ack_entries[0]),
+                   error, sizeof(error)) != 0,
+               "reject ACTIVE enrollment target") ||
+        expect(wvm_membership_controller_build_cluster_admission_proof(
+                   &controller, &child_gateway_member,
+                   (uint8_t[WVM_IDENTITY_ID_BYTES]){0},
+                   controller.membership_revision, controller.topology_revision,
+                   controller.admission_eligibility_revision,
+                   capability_evidence_digest, topology_assignment_digest,
+                   &admission_proof, admission_ack_entries,
+                   sizeof(admission_ack_entries) /
+                       sizeof(admission_ack_entries[0]),
+                   error, sizeof(error)) != 0,
+               "reject zero enrollment operation ID") ||
+        expect(wvm_cluster_admission_proof_encode(
+                   &admission_proof, admission_proof_bytes,
+                   sizeof(admission_proof_bytes), &admission_proof_bytes_count,
+                   error, sizeof(error)) == 0,
+               "encode controller-built admission proof")) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return 1;
+    }
+    memset(&decoded_admission_proof, 0, sizeof(decoded_admission_proof));
+    decoded_admission_proof.required_ack_set.entries.entries =
+        decoded_admission_ack_entries;
+    decoded_admission_proof.required_ack_set.entries.capacity =
+        sizeof(decoded_admission_ack_entries) /
+        sizeof(decoded_admission_ack_entries[0]);
+    if (expect(wvm_cluster_admission_proof_decode(
+                   admission_proof_bytes, admission_proof_bytes_count,
+                   &decoded_admission_proof, error, sizeof(error)) == 0 &&
+                   decoded_admission_proof.member_key.role_id ==
+                       child_gateway_member.role_id &&
+                   decoded_admission_proof.required_ack_set.entries.count == 3,
+               "round-trip controller-built admission proof")) {
+        wvm_membership_controller_close(&controller);
+        unlink(journal_path);
+        return 1;
+    }
+
     child_route_key = route_key;
     child_route_key.scope_key.vm_id = 257;
     child_route_key.route_generation = 1;
@@ -626,13 +743,14 @@ int main(void)
                     &controller, child_transaction.operation_id, error,
                     sizeof(error)) == 0 &&
                 wvm_membership_controller_activate_member(
-                    &controller, &child_gateway_member,
-                    child_transaction.operation_id, error, sizeof(error)) == 0),
+                   &controller, &child_gateway_member,
+                   child_transaction.operation_id, error, sizeof(error)) == 0),
                "activate the replacement gateway through a committed route")) {
         wvm_membership_controller_close(&controller);
         unlink(journal_path);
         return 1;
     }
+
     memset(&capture, 0, sizeof(capture));
     capture.nodes = captured_nodes;
     capture.node_capacity = sizeof(captured_nodes) / sizeof(captured_nodes[0]);

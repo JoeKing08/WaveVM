@@ -217,6 +217,9 @@ static int message_type_known(uint16_t message_type)
     case WVM_ENVELOPE_MSG_CREATE_VM:
     case WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES:
     case WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT:
         return 1;
     default:
         return 0;
@@ -235,6 +238,9 @@ static int cluster_control_message(uint16_t message_type)
     case WVM_ENVELOPE_MSG_CREATE_VM:
     case WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES:
     case WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT:
+    case WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT:
         return 1;
     default:
         return 0;
