@@ -562,6 +562,7 @@ int wvm_admission_runtime_agent_init(
         config->controller_runtime_instance_id;
     receiver_config.local_physical_node_id = config->local_physical_node_id;
     receiver_config.local_node_instance_id = config->local_node_instance_id;
+    receiver_config.local_role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
     receiver_config.reservation_registry = &agent->reservation_registry;
     receiver_config.reservation_scratch_storage = &agent->reservation_scratch;
     receiver_config.route_control = &agent->route_control;

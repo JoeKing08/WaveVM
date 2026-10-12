@@ -356,6 +356,75 @@ int main(void)
     }
     wvm_admission_receiver_destroy(&receiver);
 
+    /* GATEWAY local_role_type must match proof ACK role for participation. */
+    memset(slots, 0, sizeof(slots));
+    init_enrollment_slots(slots, &proof_storage[0][0], 4);
+    fill_receiver_config(&receiver_config, &controller, &local_endpoint,
+                         directory, slots, 4, &proof_storage[0][0],
+                         proof_scratch, ack_scratch);
+    receiver_config.local_role_type = WVM_MANIFEST_ROLE_GATEWAY;
+    receiver_config.local_physical_node_id = 901;
+    receiver_config.local_node_instance_id = 902;
+    if (wvm_admission_receiver_init(&receiver, &receiver_config, error,
+                                    sizeof(error)) != 0) {
+        fprintf(stderr, "gateway receiver init failed: %s\n", error);
+        goto out;
+    }
+    {
+        struct wvm_member_key gateway_key;
+        struct wvm_endpoint gateway_endpoint = local_endpoint;
+        uint8_t gw_operation_id[WVM_IDENTITY_ID_BYTES];
+
+        memset(&gateway_key, 0, sizeof(gateway_key));
+        gateway_key.role_type = WVM_MANIFEST_ROLE_GATEWAY;
+        gateway_key.role_id = 901;
+        gateway_key.instance_id = 902;
+        memset(gw_operation_id, 0, sizeof(gw_operation_id));
+        gw_operation_id[15] = 0x91;
+        memset(&proof, 0, sizeof(proof));
+        memcpy(proof.operation_id, gw_operation_id, WVM_IDENTITY_ID_BYTES);
+        proof.member_key = gateway_key;
+        proof.membership_revision = 7;
+        proof.topology_revision = 8;
+        proof.admission_eligibility_revision = 9;
+        memset(proof.canonical_member_record_digest, 0x41,
+               sizeof(proof.canonical_member_record_digest));
+        memset(proof.capability_evidence_digest, 0x42,
+               sizeof(proof.capability_evidence_digest));
+        memset(proof.topology_assignment_digest, 0x43,
+               sizeof(proof.topology_assignment_digest));
+        proof.required_ack_set.entries.entries = acks;
+        proof.required_ack_set.entries.capacity = 1;
+        proof.required_ack_set.entries.count = 1;
+        acks[0].member_key = gateway_key;
+        acks[0].endpoint = gateway_endpoint;
+        acks[0].role_type = WVM_MANIFEST_ROLE_GATEWAY;
+        if (encode_proof(&proof, payload, sizeof(payload), &payload_bytes, error,
+                         sizeof(error)) != 0) {
+            fprintf(stderr, "gateway proof encode failed: %s\n", error);
+            goto receiver_out;
+        }
+        fill_request(&request, WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE,
+                     gw_operation_id, payload, payload_bytes);
+        if (apply_expect(&receiver, &request, &controller,
+                         WVM_CONTROL_RESULT_SUCCESS,
+                         WVM_ADMISSION_ENROLLMENT_PARTICIPANT_PREPARED, error,
+                         sizeof(error)) != 0) {
+            fprintf(stderr, "gateway prepare failed: %s\n", error);
+            goto receiver_out;
+        }
+        fill_request(&request, WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT,
+                     gw_operation_id, payload, payload_bytes);
+        if (apply_expect(&receiver, &request, &controller,
+                         WVM_CONTROL_RESULT_SUCCESS,
+                         WVM_ADMISSION_ENROLLMENT_PARTICIPANT_COMMITTED, error,
+                         sizeof(error)) != 0) {
+            fprintf(stderr, "gateway commit failed: %s\n", error);
+            goto receiver_out;
+        }
+    }
+    wvm_admission_receiver_destroy(&receiver);
+
     memset(slots, 0, sizeof(slots));
     init_enrollment_slots(slots, &proof_storage[0][0], 4);
     fill_receiver_config(&receiver_config, &controller, &local_endpoint,

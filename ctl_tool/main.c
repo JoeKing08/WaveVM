@@ -1165,12 +1165,21 @@ static int admission_transport_submit(
                  "authenticated admission stream is not initialized");
         return -EINVAL;
     }
-    if (target->member_key.role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME &&
-        !(target->member_key.role_type == WVM_MANIFEST_ROLE_GATEWAY &&
-          (envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_PREPARE ||
-           envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_COMMIT ||
-           envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_ABORT ||
-           envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_RETIRE))) {
+    if (target->member_key.role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
+        /* Compute participants accept reservation/manifest/route/enrollment. */
+    } else if (target->member_key.role_type == WVM_MANIFEST_ROLE_GATEWAY &&
+               (envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_PREPARE ||
+                envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_COMMIT ||
+                envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_ABORT ||
+                envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_RETIRE ||
+                envelope->message_type ==
+                    WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE ||
+                envelope->message_type ==
+                    WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT ||
+                envelope->message_type ==
+                    WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT)) {
+        /* Gateways accept route stages and cluster-enrollment participation. */
+    } else {
         snprintf(error, error_len, "admission target role does not accept this stage");
         return -EOPNOTSUPP;
     }

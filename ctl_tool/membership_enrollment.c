@@ -135,6 +135,84 @@ static int topology_assignment_digest_from_node(
     return 0;
 }
 
+
+static int capability_evidence_digest_from_gateway(
+    const struct wvm_gateway_record *gateway,
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES], char *error, size_t error_len)
+{
+    uint8_t encoded[64];
+    size_t offset = 0;
+
+    if (!gateway || !digest || gateway->gateway_id == 0 ||
+        gateway->gateway_instance_id == 0 ||
+        gateway->hosting_physical_node_id == 0) {
+        set_error(error, error_len,
+                  "gateway capability evidence for enrollment is incomplete");
+        return -1;
+    }
+    memset(encoded, 0, sizeof(encoded));
+    encoded[offset++] = (uint8_t)(gateway->gateway_id >> 24);
+    encoded[offset++] = (uint8_t)(gateway->gateway_id >> 16);
+    encoded[offset++] = (uint8_t)(gateway->gateway_id >> 8);
+    encoded[offset++] = (uint8_t)gateway->gateway_id;
+    encoded[offset++] = (uint8_t)(gateway->gateway_instance_id >> 56);
+    encoded[offset++] = (uint8_t)(gateway->gateway_instance_id >> 48);
+    encoded[offset++] = (uint8_t)(gateway->gateway_instance_id >> 40);
+    encoded[offset++] = (uint8_t)(gateway->gateway_instance_id >> 32);
+    encoded[offset++] = (uint8_t)(gateway->gateway_instance_id >> 24);
+    encoded[offset++] = (uint8_t)(gateway->gateway_instance_id >> 16);
+    encoded[offset++] = (uint8_t)(gateway->gateway_instance_id >> 8);
+    encoded[offset++] = (uint8_t)gateway->gateway_instance_id;
+    encoded[offset++] = (uint8_t)(gateway->hosting_physical_node_id >> 24);
+    encoded[offset++] = (uint8_t)(gateway->hosting_physical_node_id >> 16);
+    encoded[offset++] = (uint8_t)(gateway->hosting_physical_node_id >> 8);
+    encoded[offset++] = (uint8_t)gateway->hosting_physical_node_id;
+    encoded[offset++] = (uint8_t)(gateway->role_bits >> 56);
+    encoded[offset++] = (uint8_t)(gateway->role_bits >> 48);
+    encoded[offset++] = (uint8_t)(gateway->role_bits >> 40);
+    encoded[offset++] = (uint8_t)(gateway->role_bits >> 32);
+    encoded[offset++] = (uint8_t)(gateway->role_bits >> 24);
+    encoded[offset++] = (uint8_t)(gateway->role_bits >> 16);
+    encoded[offset++] = (uint8_t)(gateway->role_bits >> 8);
+    encoded[offset++] = (uint8_t)gateway->role_bits;
+    wvm_sha256_digest(encoded, offset, digest);
+    return 0;
+}
+
+static int topology_assignment_digest_from_gateway(
+    const struct wvm_gateway_record *gateway,
+    uint8_t digest[WVM_SHA256_DIGEST_BYTES], char *error, size_t error_len)
+{
+    uint8_t encoded[32];
+    size_t offset = 0;
+
+    if (!gateway || !digest || gateway->failure_domain_id == 0 ||
+        gateway->pod_id_or_scope == 0) {
+        set_error(error, error_len,
+                  "gateway topology assignment for enrollment is incomplete");
+        return -1;
+    }
+    memset(encoded, 0, sizeof(encoded));
+    encoded[offset++] = (uint8_t)(gateway->failure_domain_id >> 56);
+    encoded[offset++] = (uint8_t)(gateway->failure_domain_id >> 48);
+    encoded[offset++] = (uint8_t)(gateway->failure_domain_id >> 40);
+    encoded[offset++] = (uint8_t)(gateway->failure_domain_id >> 32);
+    encoded[offset++] = (uint8_t)(gateway->failure_domain_id >> 24);
+    encoded[offset++] = (uint8_t)(gateway->failure_domain_id >> 16);
+    encoded[offset++] = (uint8_t)(gateway->failure_domain_id >> 8);
+    encoded[offset++] = (uint8_t)gateway->failure_domain_id;
+    encoded[offset++] = (uint8_t)(gateway->pod_id_or_scope >> 56);
+    encoded[offset++] = (uint8_t)(gateway->pod_id_or_scope >> 48);
+    encoded[offset++] = (uint8_t)(gateway->pod_id_or_scope >> 40);
+    encoded[offset++] = (uint8_t)(gateway->pod_id_or_scope >> 32);
+    encoded[offset++] = (uint8_t)(gateway->pod_id_or_scope >> 24);
+    encoded[offset++] = (uint8_t)(gateway->pod_id_or_scope >> 16);
+    encoded[offset++] = (uint8_t)(gateway->pod_id_or_scope >> 8);
+    encoded[offset++] = (uint8_t)gateway->pod_id_or_scope;
+    wvm_sha256_digest(encoded, offset, digest);
+    return 0;
+}
+
 int wvm_ctl_membership_enrollment_init(
     struct wvm_ctl_membership_enrollment *enrollment,
     struct wvm_control_plane *plane, uint32_t controller_physical_node_id,
@@ -288,6 +366,117 @@ int wvm_ctl_membership_enrollment_activate_compute(
         controller, &request, error, error_len);
 }
 
+
+int wvm_ctl_membership_enrollment_activate_gateway(
+    struct wvm_ctl_membership_enrollment *enrollment,
+    const struct wvm_member_key *member_key, char *error, size_t error_len)
+{
+    struct wvm_membership_controller *controller;
+    const struct wvm_membership_controller_member_entry *entry;
+    struct wvm_cluster_admission_proof proof;
+    struct wvm_membership_cluster_enrollment_request request;
+    uint8_t capability_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t topology_digest[WVM_SHA256_DIGEST_BYTES];
+    uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
+    struct wvm_gateway_record gateway_copy;
+
+    if (!enrollment || !enrollment->initialized || !enrollment->plane ||
+        !member_key ||
+        member_key->role_type != WVM_MANIFEST_ROLE_GATEWAY ||
+        wvm_member_key_validate(member_key, error, error_len) != 0) {
+        set_error(error, error_len, "cluster enrollment gateway target is invalid");
+        return -1;
+    }
+    controller = &enrollment->plane->membership_controller;
+    if (controller->route_count != 0) {
+        set_error(error, error_len,
+                  "cluster enrollment refuses VM route scopes; use route join");
+        return -1;
+    }
+    entry = wvm_membership_controller_find(controller, member_key);
+    if (!entry || entry->kind != WVM_MEMBERSHIP_GATEWAY) {
+        set_error(error, error_len,
+                  "cluster enrollment target gateway member is missing");
+        return -1;
+    }
+    if (entry->gateway.desired_membership_state == WVM_MANIFEST_MEMBER_ACTIVE) {
+        return 0;
+    }
+    if (wvm_membership_controller_report_self_health(
+            controller, member_key, WVM_MEMBERSHIP_HEALTHY, error,
+            error_len) != 0) {
+        return -1;
+    }
+    entry = wvm_membership_controller_find(controller, member_key);
+    if (!entry) {
+        set_error(error, error_len,
+                  "cluster enrollment gateway disappeared during preparation");
+        return -1;
+    }
+    if (entry->gateway.desired_membership_state == WVM_MANIFEST_MEMBER_PENDING &&
+        wvm_membership_controller_begin_validation(controller, member_key, error,
+                                                   error_len) != 0) {
+        return -1;
+    }
+    entry = wvm_membership_controller_find(controller, member_key);
+    if (!entry) {
+        set_error(error, error_len,
+                  "cluster enrollment gateway disappeared during validation");
+        return -1;
+    }
+    if ((entry->gateway.desired_membership_state == WVM_MANIFEST_MEMBER_PENDING ||
+         entry->gateway.desired_membership_state ==
+             WVM_MANIFEST_MEMBER_VALIDATING) &&
+        wvm_membership_controller_prepare_member(controller, member_key, error,
+                                                 error_len) != 0) {
+        return -1;
+    }
+    entry = wvm_membership_controller_find(controller, member_key);
+    if (!entry || entry->kind != WVM_MEMBERSHIP_GATEWAY) {
+        set_error(error, error_len,
+                  "cluster enrollment gateway missing after prepare");
+        return -1;
+    }
+    if (entry->gateway.desired_membership_state != WVM_MANIFEST_MEMBER_PREPARED &&
+        entry->gateway.desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE) {
+        set_error(error, error_len,
+                  "cluster enrollment gateway did not reach PREPARED");
+        return -1;
+    }
+    if (entry->gateway.desired_membership_state == WVM_MANIFEST_MEMBER_ACTIVE) {
+        return 0;
+    }
+    gateway_copy = entry->gateway;
+    if (capability_evidence_digest_from_gateway(&gateway_copy, capability_digest,
+                                                error, error_len) != 0 ||
+        topology_assignment_digest_from_gateway(&gateway_copy, topology_digest,
+                                                error, error_len) != 0 ||
+        allocate_nonzero_operation_id(operation_id, error, error_len) != 0) {
+        return -1;
+    }
+    memset(&proof, 0, sizeof(proof));
+    if (wvm_membership_controller_build_cluster_admission_proof(
+            controller, member_key, operation_id, controller->membership_revision,
+            controller->topology_revision,
+            controller->admission_eligibility_revision, capability_digest,
+            topology_digest, &proof, enrollment->ack_storage,
+            enrollment->ack_capacity, error, error_len) != 0) {
+        return -1;
+    }
+    memset(&request, 0, sizeof(request));
+    request.member_kind = WVM_MEMBERSHIP_GATEWAY;
+    request.authenticated_actor = member_key;
+    request.gateway = &gateway_copy;
+    request.proof = &proof;
+    if (wvm_membership_enrollment_transport_bind(&enrollment->transport,
+                                                 &request, error,
+                                                 error_len) != 0) {
+        return -1;
+    }
+    return wvm_membership_coordinator_enroll_cluster_member(
+        controller, &request, error, error_len);
+}
+
 int wvm_ctl_membership_enrollment_apply(
     void *opaque, const struct wvm_envelope *request,
     const struct wvm_member_key *authenticated_actor,
@@ -308,21 +497,26 @@ int wvm_ctl_membership_enrollment_apply(
     if (rc != 0 || !request || !result ||
         result->status_code != WVM_MEMBERSHIP_CONTROL_SUCCESS ||
         request->message_type != WVM_ENVELOPE_MSG_REGISTER_MEMBER ||
-        !authenticated_actor ||
-        authenticated_actor->role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME) {
+        !authenticated_actor) {
         return rc;
     }
     enroll_error[0] = '\0';
-    if (wvm_ctl_membership_enrollment_activate_compute(
-            enrollment, authenticated_actor, enroll_error,
-            sizeof(enroll_error)) != 0) {
-        /*
-         * Registration remains durable as PENDING/VALIDATING/PREPARED. Do not
-         * fail the REGISTER reply; enrollment can be retried later.
-         */
-        fprintf(stderr,
-                "wvm_ctl: cluster enrollment after REGISTER deferred: %s\n",
-                enroll_error[0] ? enroll_error : "unknown error");
+    if (authenticated_actor->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
+        if (wvm_ctl_membership_enrollment_activate_compute(
+                enrollment, authenticated_actor, enroll_error,
+                sizeof(enroll_error)) != 0) {
+            fprintf(stderr,
+                    "wvm_ctl: cluster enrollment after REGISTER deferred: %s\n",
+                    enroll_error[0] ? enroll_error : "unknown error");
+        }
+    } else if (authenticated_actor->role_type == WVM_MANIFEST_ROLE_GATEWAY) {
+        if (wvm_ctl_membership_enrollment_activate_gateway(
+                enrollment, authenticated_actor, enroll_error,
+                sizeof(enroll_error)) != 0) {
+            fprintf(stderr,
+                    "wvm_ctl: gateway enrollment after REGISTER deferred: %s\n",
+                    enroll_error[0] ? enroll_error : "unknown error");
+        }
     }
     return 0;
 }

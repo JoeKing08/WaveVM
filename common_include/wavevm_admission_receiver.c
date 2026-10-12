@@ -310,15 +310,31 @@ static uint32_t read_be32_local(const uint8_t *bytes)
 #define WVM_ADMISSION_ENROLLMENT_RECORD_VERSION 1U
 #define WVM_ADMISSION_ENROLLMENT_RECORD_HEADER_BYTES 32U
 
+static enum wvm_manifest_role_type enrollment_local_role(
+    const struct wvm_admission_receiver *receiver)
+{
+    if (!receiver || receiver->config.local_role_type == 0) {
+        return WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    }
+    return receiver->config.local_role_type;
+}
+
 static int enrollment_local_member_key(
     const struct wvm_admission_receiver *receiver,
     struct wvm_member_key *member_key)
 {
+    enum wvm_manifest_role_type role;
+
     if (!receiver || !member_key) {
         return -1;
     }
+    role = enrollment_local_role(receiver);
+    if (role != WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+        role != WVM_MANIFEST_ROLE_GATEWAY) {
+        return -1;
+    }
     memset(member_key, 0, sizeof(*member_key));
-    member_key->role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    member_key->role_type = role;
     member_key->role_id = receiver->config.local_physical_node_id;
     member_key->instance_id = receiver->config.local_node_instance_id;
     return wvm_member_key_validate(member_key, NULL, 0);
@@ -538,7 +554,7 @@ static int enrollment_proof_matches_local(
         if (!member_key_equal(&entry->member_key, &local_key)) {
             continue;
         }
-        if (entry->role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME ||
+        if (entry->role_type != enrollment_local_role(receiver) ||
             !receiver->config.local_endpoint ||
             !endpoint_equal(&entry->endpoint, receiver->config.local_endpoint)) {
             set_error(error, error_len,
@@ -550,7 +566,7 @@ static int enrollment_proof_matches_local(
     }
     if (!found) {
         set_error(error, error_len,
-                  "enrollment proof does not include this node runtime");
+                  "enrollment proof does not include this local member");
         return -1;
     }
     return 0;

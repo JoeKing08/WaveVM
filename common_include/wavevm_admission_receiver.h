@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "wavevm_admission_stage.h"
+#include "wavevm_manifest.h"
 #include "wavevm_control_transport.h"
 #include "wavevm_reservation_runtime.h"
 #include "wavevm_route_control.h"
@@ -86,6 +87,12 @@ struct wvm_admission_receiver_config {
     uint64_t controller_runtime_instance_id;
     uint32_t local_physical_node_id;
     uint64_t local_node_instance_id;
+    /*
+     * Local membership role for cluster-enrollment participation.
+     * NODE_RUNTIME uses physical_node_id as role_id; GATEWAY uses gateway_id
+     * in local_physical_node_id. Zero means NODE_RUNTIME for back-compat.
+     */
+    enum wvm_manifest_role_type local_role_type;
     struct wvm_local_reservation_registry *reservation_registry;
     /*
      * Transient decode storage reused under the receiver lock.  All nested

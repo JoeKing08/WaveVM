@@ -38,9 +38,17 @@ int wvm_ctl_membership_enrollment_activate_compute(
     const struct wvm_member_key *member_key, char *error, size_t error_len);
 
 /*
+ * Same enrollment path for a registered GATEWAY member. Does not create a VM
+ * route scope and does not forge ACTIVE without proof prepare/ACK/commit.
+ */
+int wvm_ctl_membership_enrollment_activate_gateway(
+    struct wvm_ctl_membership_enrollment *enrollment,
+    const struct wvm_member_key *member_key, char *error, size_t error_len);
+
+/*
  * Membership apply wrapper: after a successful REGISTER_MEMBER for a compute
- * node, continue controller-owned cluster enrollment to ACTIVE. Registration
- * success is preserved even when enrollment fails (member remains non-ACTIVE).
+ * node or gateway, continue controller-owned cluster enrollment to ACTIVE.
+ * Registration success is preserved even when enrollment fails.
  */
 int wvm_ctl_membership_enrollment_apply(
     void *opaque, const struct wvm_envelope *request,
