@@ -87,6 +87,7 @@ static int runtime_route_key_equal(const struct wvm_route_snapshot_key *left,
 static void request_shutdown(int signal_number)
 {
     (void)signal_number;
+    fprintf(stderr, "[System] signal shutdown requested\n");
     g_shutdown_requested = 1;
 }
 
@@ -1863,6 +1864,8 @@ int wavevm_master_runtime_main(
     }
 
     printf("[+] WaveVM V29 Node Ready. Waiting for QEMU...\n");
+    fflush(stdout);
+    fprintf(stderr, "[System] runtime readiness published; listening for QEMU\n");
 
     // 10. Backend/Logic Core 已在前面初始化并注入拓扑。
     // 此处严禁重复初始化，否则会重置 CPU 路由表为 AUTO_ROUTE。
@@ -1921,6 +1924,10 @@ int wavevm_master_runtime_main(
             close(client_fd);
         }
     }
+
+    fprintf(stderr,
+            "[System] control accept loop ended (shutdown=%d)\n",
+            (int)g_shutdown_requested);
 
     /* Only the main thread performs teardown.  The signal handler above only
      * changes the stop flag, so these calls remain outside signal context. */

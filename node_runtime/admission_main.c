@@ -673,16 +673,24 @@ int wavevm_admission_agent_main(int argc, char **argv)
         return 2;
     }
     {
-        ssize_t executable_bytes = readlink("/proc/self/exe",
-                                            runtime_executable,
-                                            sizeof(runtime_executable) - 1U);
+        const char *override_exe = getenv("WVM_NODE_RUNTIME_EXE");
+        ssize_t executable_bytes;
 
-        if (executable_bytes <= 0 ||
-            (size_t)executable_bytes >= sizeof(runtime_executable) - 1U) {
-            fprintf(stderr, "[node-runtime] cannot resolve agent executable\n");
-            return 1;
+        if (override_exe && override_exe[0] == '/' &&
+            strlen(override_exe) < sizeof(runtime_executable)) {
+            snprintf(runtime_executable, sizeof(runtime_executable), "%s",
+                     override_exe);
+        } else {
+            executable_bytes = readlink("/proc/self/exe", runtime_executable,
+                                        sizeof(runtime_executable) - 1U);
+            if (executable_bytes <= 0 ||
+                (size_t)executable_bytes >= sizeof(runtime_executable) - 1U) {
+                fprintf(stderr,
+                        "[node-runtime] cannot resolve agent executable\n");
+                return 1;
+            }
+            runtime_executable[executable_bytes] = '\0';
         }
-        runtime_executable[executable_bytes] = '\0';
     }
     if (snprintf(route_journal, sizeof(route_journal), "%s/route.journal",
                  options.state_dir) >= (int)sizeof(route_journal) ||

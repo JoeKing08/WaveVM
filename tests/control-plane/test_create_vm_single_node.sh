@@ -189,14 +189,30 @@ fi
 cp "$tmpdir/evidence/capabilities-801.record" "$tmpdir/ctl-state/"
 cp "$tmpdir/evidence/runtime-profile-801.record" "$tmpdir/ctl-state/"
 
-create_out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" || true)
+# Replay CREATE_VM until live ready promotes COMMITTED→RUNNING, or timeout.
+create_out=""
+for ((attempt = 0; attempt < 80; attempt++)); do
+    create_out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" || true)
+    echo "attempt=$attempt $create_out"
+    if [[ "$create_out" == status=0* ]]; then
+        break
+    fi
+    if [[ "$create_out" != status=14* ]]; then
+        break
+    fi
+    sleep 0.25
+done
 echo "$create_out"
-if [[ "$create_out" != status=0* && "$create_out" != status=14* ]]; then
-    echo "CREATE_VM did not reach SUCCESS(0) or IN_PROGRESS(14)" >&2
+# Honest RUNNING: SUCCESS(0). IN_PROGRESS(14) means COMMITTED without live ready.
+if [[ "$create_out" != status=0* ]]; then
+    echo "CREATE_VM did not reach SUCCESS(0)/RUNNING (got: $create_out)" >&2
     echo "--- ctl.log ---" >&2
     cat "$tmpdir/ctl.log" >&2 || true
     echo "--- agent.log ---" >&2
     cat "$tmpdir/agent.log" >&2 || true
+    echo "--- child runtime logs ---" >&2
+    find "$tmpdir/runtime" -type f \( -name '*.log' -o -name 'stderr*' -o -name 'stdout*' \) \
+        -print -exec cat {} \; >&2 2>/dev/null || true
     # Stop ctl to allow offline ACTIVE check for diagnosis.
     kill -TERM "$agent_pid" 2>/dev/null || true
     wait "$agent_pid" 2>/dev/null || true
@@ -204,7 +220,8 @@ if [[ "$create_out" != status=0* && "$create_out" != status=14* ]]; then
     kill -TERM "$ctl_pid" 2>/dev/null || true
     wait "$ctl_pid" 2>/dev/null || true
     ctl_pid=
-    if "$tmpdir/check_registration" "$tmpdir/ctl-state/membership.journal"         "$agent_control_port"; then
+    if "$tmpdir/check_registration" "$tmpdir/ctl-state/membership.journal" \
+        "$agent_control_port"; then
         echo "membership ACTIVE confirmed offline" >&2
     else
         echo "membership NOT ACTIVE offline" >&2
@@ -221,4 +238,4 @@ ctl_pid=
 "$tmpdir/check_registration" "$tmpdir/ctl-state/membership.journal" \
     "$agent_control_port"
 
-echo "single-node CREATE_VM prepare→activate→commit path: PASS ($create_out)"
+echo "single-node CREATE_VM prepare→activate→commit→RUNNING: PASS ($create_out)"

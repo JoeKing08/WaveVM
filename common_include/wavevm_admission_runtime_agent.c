@@ -286,6 +286,12 @@ static void reap_runtime_children(struct wvm_admission_runtime_agent *agent)
         pid_t pid = owned->runtime_pids[i];
 
         if (pid > 0 && waitpid(pid, &status, WNOHANG) == pid) {
+            fprintf(stderr,
+                    "[runtime-agent] admitted child pid=%d exited status=0x%x "
+                    "signaled=%d sig=%d exited=%d code=%d\n",
+                    (int)pid, status, WIFSIGNALED(status),
+                    WIFSIGNALED(status) ? WTERMSIG(status) : 0,
+                    WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1);
             owned->runtime_pids[i] = 0;
         }
     }

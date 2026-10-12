@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <sys/prctl.h>
 #include <sys/un.h>
 #include <string.h>
 #include <unistd.h>
@@ -35,6 +34,8 @@ int wavevm_master_runtime_main(
 int wavevm_executor_runtime_main(
     const struct wvm_node_runtime_context *runtime);
 extern volatile sig_atomic_t g_shutdown_requested;
+static uint64_t g_agent_parent_pid;
+
 int wavevm_admission_agent_main(int argc, char **argv);
 
 struct role_launch {
@@ -644,6 +645,29 @@ static void print_launch_environment(void)
  * Invocation:
  *   wavevm_node_runtime --manifest FILE --node-instance N
  */
+static int agent_parent_gone(void)
+{
+    return g_agent_parent_pid != 0 &&
+           (uint64_t)getppid() != g_agent_parent_pid;
+}
+
+static void *agent_parent_watchdog(void *arg)
+{
+    (void)arg;
+    while (!g_shutdown_requested) {
+        if (agent_parent_gone()) {
+            fprintf(stderr,
+                    "[node-runtime] agent parent pid=%" PRIu64
+                    " is gone; shutting down child\n",
+                    g_agent_parent_pid);
+            g_shutdown_requested = 1;
+            break;
+        }
+        usleep(200000);
+    }
+    return NULL;
+}
+
 static int run_runtime_main(int argc, char **argv)
 {
     const char *manifest_path = NULL;
@@ -1075,6 +1099,14 @@ static int run_runtime_main(int argc, char **argv)
         return 1;
     }
 
+    {
+        pthread_t watchdog_thread;
+        if (g_agent_parent_pid != 0 &&
+            pthread_create(&watchdog_thread, NULL, agent_parent_watchdog,
+                           NULL) == 0) {
+            pthread_detach(watchdog_thread);
+        }
+    }
     master_launch.runtime = &runtime_context;
     if (pthread_create(&master_thread, NULL, run_master_role,
                        &master_launch) != 0) {
@@ -1119,15 +1151,21 @@ int main(int argc, char **argv)
         uint64_t parent_pid;
         char *runtime_argv[6];
 
+        /*
+         * Do not use PR_SET_PDEATHSIG here. posix_spawn runs on a short-lived
+         * admission worker thread; PDEATHSIG is bound to that thread, so the
+         * child receives SIGKILL when the worker returns even though the agent
+         * process is still alive. Watch the agent process id instead.
+         */
         if (argc != 8 || strcmp(argv[2], "--parent-pid") != 0 ||
             strcmp(argv[4], "--manifest") != 0 ||
             strcmp(argv[6], "--node-instance") != 0 ||
             parse_u64(argv[3], &parent_pid) != 0 ||
-            prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 ||
-            (uint64_t)getppid() != parent_pid) {
+            parent_pid == 0 || (uint64_t)getppid() != parent_pid) {
             fprintf(stderr, "[node-runtime] child is not bound to its agent\n");
             return 2;
         }
+        g_agent_parent_pid = parent_pid;
         runtime_argv[0] = argv[0];
         runtime_argv[1] = argv[4];
         runtime_argv[2] = argv[5];

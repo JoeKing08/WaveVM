@@ -60,6 +60,15 @@ __attribute__((weak))
 #endif
 volatile sig_atomic_t g_shutdown_requested = 0;
 
+static void executor_request_process_shutdown(const char *why)
+{
+    fprintf(stderr, "[Hybrid] requesting process shutdown: %s\n",
+            why ? why : "unknown");
+    fflush(stderr);
+    g_shutdown_requested = 1;
+}
+
+
 // --- 全局配置变量 ---
 static int g_service_port = 9000;
 static int g_nonblock_recv = 0;
@@ -155,7 +164,11 @@ enum executor_startup_state {
 
 static pthread_mutex_t g_executor_startup_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_executor_startup_changed = PTHREAD_COND_INITIALIZER;
-static enum executor_startup_state g_executor_startup_state = EXECUTOR_FAILED;
+/*
+ * Start in STARTING so a concurrent wait_ready from node-runtime cannot
+ * observe the pre-thread FAILED sentinel and abort before this role runs.
+ */
+static enum executor_startup_state g_executor_startup_state = EXECUTOR_STARTING;
 
 #define g_executor_manifest_storage (*g_executor_manifest_storage_ptr)
 #define g_executor_runtime_gate (*g_executor_runtime_gate_ptr)
@@ -3278,9 +3291,9 @@ void spawn_tcg_processes(int base_id) {
     }
     
     tcg_endpoints = malloc(sizeof(slave_endpoint_t) * g_num_cores);
-    if (!tcg_endpoints) { perror("malloc endpoints"); exit(1); }
+    if (!tcg_endpoints) { perror("malloc endpoints"); return; }
     g_tcg_session_fds = malloc(sizeof(*g_tcg_session_fds) * g_num_cores);
-    if (!g_tcg_session_fds) { perror("malloc executor sessions"); exit(1); }
+    if (!g_tcg_session_fds) { perror("malloc executor sessions"); free(tcg_endpoints); tcg_endpoints = NULL; return; }
     for (long i = 0; i < g_num_cores; i++) {
         g_tcg_session_fds[i] = -1;
     }
@@ -3732,7 +3745,7 @@ int wavevm_executor_runtime_main(
             }
         }
         if (wvm_executor_runtime_wait_ready() != 0) {
-            g_shutdown_requested = 1;
+            executor_request_process_shutdown("kvm wait_ready failed");
         }
         for(long i=0; i<total_threads; i++) pthread_join(threads[i], NULL);
         free(threads);
@@ -3750,7 +3763,7 @@ int wavevm_executor_runtime_main(
         for (long i = 0; i < proxy_threads; i++) {
             if (pthread_create(&threads[i], NULL, tcg_proxy_thread, NULL) != 0) {
                 executor_publish_startup_state(EXECUTOR_FAILED);
-                g_shutdown_requested = 1;
+                executor_request_process_shutdown("tcg proxy thread create failed");
                 free(threads);
                 return 1;
             }
@@ -3758,17 +3771,52 @@ int wavevm_executor_runtime_main(
         /* Create the per-vCPU typed sessions before publishing executor
          * readiness, so the bridge cannot accept a TCG handoff without a
          * corresponding helper endpoint. */
+        /*
+         * Session socketpairs are created here; QEMU-TCG helpers are best-effort
+         * for later guest handoff. CREATE_VM RUNNING only requires the local
+         * proxy listener (EXECUTOR_READY), not a verified guest E2E attach.
+         */
         spawn_tcg_processes(g_base_id);
         if (wvm_executor_runtime_wait_ready() != 0) {
-            g_shutdown_requested = 1;
+            /*
+             * Do not set g_shutdown_requested here: it is shared with the
+             * co-located master role. Node-runtime already gates on wait_ready
+             * before starting master; tearing down the process-wide flag would
+             * drop a published ready record and leave CREATE_VM IN_PROGRESS.
+             */
+            fprintf(stderr,
+                    "[Hybrid] TCG proxy did not reach EXECUTOR_READY "
+                    "(state=%d); leaving master shutdown flag untouched\n",
+                    (int)g_executor_startup_state);
             for (long i = 0; i < proxy_threads; i++) {
                 pthread_join(threads[i], NULL);
             }
             free(threads);
             return 1;
         }
-        while (wait(NULL) > 0);
-        g_shutdown_requested = 1;
+        fprintf(stderr,
+                "[Hybrid] local executor READY; staying up for control-plane "
+                "RUNNING (TCG helpers best-effort)\n");
+        while (!g_shutdown_requested) {
+            int status;
+            pid_t died = waitpid(-1, &status, WNOHANG);
+
+            if (died > 0) {
+                fprintf(stderr,
+                        "[Hybrid] TCG helper pid=%d exited status=%d "
+                        "(proxy remains ready for control-plane RUNNING)\n",
+                        (int)died, status);
+                continue;
+            }
+            if (died < 0 && errno != ECHILD) {
+                fprintf(stderr,
+                        "[Hybrid] waitpid error errno=%d; executor loop ends "
+                        "without process-wide shutdown\n",
+                        errno);
+                break;
+            }
+            usleep(100000);
+        }
         for (long i = 0; i < proxy_threads; i++) {
             pthread_join(threads[i], NULL);
         }

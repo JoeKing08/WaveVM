@@ -1006,8 +1006,17 @@ static int admission_workspace_prepare_template(
     options.memory_consistency_policy = 1;
     options.guest_numa_nodes = workspace->membership_capture.node_count;
     options.executor_class = 1;
+    /*
+     * Every placed node-runtime child co-locates the local executor. The
+     * admitted manifest must authorize EXECUTOR registration or the child
+     * fails wait_ready and CREATE_VM never leaves IN_PROGRESS.
+     * The placement host also owns the QEMU frontend connection.
+     */
     options.node_runtime_role_bits =
-        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_NODE_RUNTIME);
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_NODE_RUNTIME) |
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR);
+    options.host_extra_role_bits =
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_QEMU_FRONTEND);
     options.candidate_created_at = now = current_unix_time_ms();
     if (now == 0 || now > UINT64_MAX - 60000U) {
         snprintf(error, error_len, "cannot obtain admission timestamp");

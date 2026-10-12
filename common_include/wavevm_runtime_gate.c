@@ -729,12 +729,21 @@ int wvm_runtime_gate_register(
 {
     size_t i;
 
-    if (!gate || !registration ||
-        (gate->state != WVM_RUNTIME_GATE_PREPARED &&
-         gate->state != WVM_RUNTIME_GATE_ACTIVE) ||
-        registration_matches_manifest(gate, registration, error, error_len) !=
-            0) {
+    if (!gate || !registration) {
         set_error(error, error_len, "runtime registration rejected");
+        return -1;
+    }
+    if (gate->state != WVM_RUNTIME_GATE_PREPARED &&
+        gate->state != WVM_RUNTIME_GATE_ACTIVE) {
+        set_error(error, error_len, "runtime gate is not open for registration");
+        return -1;
+    }
+    if (registration_matches_manifest(gate, registration, error, error_len) !=
+        0) {
+        /* Keep the specific mismatch reason from registration_matches_manifest. */
+        if (!error || error_len == 0 || error[0] == '\0') {
+            set_error(error, error_len, "runtime registration rejected");
+        }
         return -1;
     }
     /* One registration represents one local transport connection. */
