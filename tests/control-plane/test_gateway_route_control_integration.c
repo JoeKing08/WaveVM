@@ -350,6 +350,15 @@ static pid_t start_gateway(const char *gateway_path, const char *manifest_path,
     setenv("WVM_GATEWAY_CONTROL_CA_FILE", ca_file, 1);
     setenv("WVM_GATEWAY_CONTROL_CERTIFICATE_FILE", certificate_file, 1);
     setenv("WVM_GATEWAY_CONTROL_PRIVATE_KEY_FILE", private_key_file, 1);
+    {
+        char enrollment_dir[512];
+        snprintf(enrollment_dir, sizeof(enrollment_dir), "%s.enrollment",
+                 journal_path);
+        if (mkdir(enrollment_dir, 0700) != 0 && errno != EEXIST) {
+            _exit(127);
+        }
+        setenv("WVM_GATEWAY_ENROLLMENT_STATE_DIR", enrollment_dir, 1);
+    }
     /*
      * The gateway must ignore this unrelated path in active mode and derive
      * the manifest sibling artifact instead.

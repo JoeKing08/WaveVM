@@ -42,6 +42,10 @@
 #include "../common_include/wavevm_control_owner.h"
 #include "../common_include/wavevm_tls_control_connector.h"
 #include "../common_include/wavevm_runtime_gate.h"
+#include "../common_include/wavevm_admission_receiver.h"
+#include "../common_include/wavevm_envelope.h"
+#include "../common_include/wavevm_membership_control.h"
+#include "../common_include/wavevm_sha256.h"
 #include "uthash.h"
 
 #if defined(__x86_64__) || defined(__i386__)
@@ -84,6 +88,19 @@ struct gateway_control_authentication {
 };
 
 static struct gateway_control_authentication g_route_control_authentication;
+
+#define GATEWAY_ENROLLMENT_SLOTS 4
+#define GATEWAY_ENROLLMENT_PROOF_BYTES WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES
+
+static struct wvm_admission_receiver g_enrollment_receiver;
+static int g_enrollment_receiver_ready = 0;
+static struct wvm_admission_enrollment_slot g_enrollment_slots[GATEWAY_ENROLLMENT_SLOTS];
+static uint8_t g_enrollment_proof_storage[GATEWAY_ENROLLMENT_SLOTS]
+                                         [GATEWAY_ENROLLMENT_PROOF_BYTES];
+static uint8_t g_enrollment_proof_scratch[GATEWAY_ENROLLMENT_PROOF_BYTES];
+static struct wvm_cluster_admission_ack_entry g_enrollment_ack_scratch[16];
+static char g_enrollment_state_directory[512];
+
 #define BATCH_SIZE 64
 #define WVM_BIG_PKT_THRESHOLD 200
 #define WVM_RXQ_DROP_HEARTBEAT (512 * 1024)
@@ -1101,20 +1118,20 @@ static int gateway_route_key_matches_request(
                   sizeof(key->snapshot_digest)) == 0;
 }
 
-static int gateway_route_control_apply(
-    void *context, const struct wvm_envelope *request,
+static int gateway_enrollment_message(uint16_t message_type)
+{
+    return message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_PREPARE ||
+           message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_COMMIT ||
+           message_type == WVM_ENVELOPE_MSG_CLUSTER_ENROLLMENT_ABORT;
+}
+
+static int gateway_route_control_apply_inner(
+    const struct wvm_envelope *request,
     const struct wvm_member_key *authenticated_actor,
     struct wvm_control_result *result, char *error, size_t error_len)
 {
     struct wvm_route_control_result route_result;
 
-    (void)context;
-    if (!request || !result) {
-        if (error && error_len != 0) {
-            snprintf(error, error_len, "gateway route control request is invalid");
-        }
-        return -EINVAL;
-    }
     gateway_result_init(result, request);
     if (!gateway_member_equal(authenticated_actor,
                               &g_route_control_authentication.controller) ||
@@ -1152,6 +1169,244 @@ static int gateway_route_control_apply(
     result->expiry_or_retention_deadline =
         route_result.operation_retention_horizon_ms;
     result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+    return 0;
+}
+
+/*
+ * Same authenticated TLS/Unix listener dispatches cluster-enrollment
+ * participation and VM route stages. Enrollment uses GATEWAY local_role_type.
+ */
+static int gateway_control_apply(
+    void *context, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    struct wvm_control_result *result, char *error, size_t error_len)
+{
+    (void)context;
+    if (!request || !result) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "gateway control request is invalid");
+        }
+        return -EINVAL;
+    }
+    if (gateway_enrollment_message(request->message_type)) {
+        if (!g_enrollment_receiver_ready) {
+            gateway_result_init(result, request);
+            result->status_code = WVM_CONTROL_RESULT_UNSUPPORTED;
+            return 0;
+        }
+        return wvm_admission_receiver_apply(&g_enrollment_receiver, request,
+                                            authenticated_actor, result, error,
+                                            error_len);
+    }
+    return gateway_route_control_apply_inner(request, authenticated_actor,
+                                             result, error, error_len);
+}
+
+static int gateway_bytes_are_zero(const uint8_t *bytes, size_t count)
+{
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (bytes[i] != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int gateway_init_enrollment_receiver(char *error, size_t error_len)
+{
+    const char *state_dir = getenv("WVM_GATEWAY_ENROLLMENT_STATE_DIR");
+    struct wvm_admission_receiver_config config;
+    size_t i;
+
+    if (!state_dir || state_dir[0] == '\0') {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "WVM_GATEWAY_ENROLLMENT_STATE_DIR is required for gateway "
+                     "control");
+        }
+        return -EINVAL;
+    }
+    if (strlen(state_dir) >= sizeof(g_enrollment_state_directory) ||
+        (mkdir(state_dir, 0700) != 0 && errno != EEXIST)) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "cannot create gateway enrollment state directory");
+        }
+        return -EINVAL;
+    }
+    snprintf(g_enrollment_state_directory, sizeof(g_enrollment_state_directory),
+             "%s", state_dir);
+    memset(g_enrollment_slots, 0, sizeof(g_enrollment_slots));
+    for (i = 0; i < GATEWAY_ENROLLMENT_SLOTS; i++) {
+        g_enrollment_slots[i].proof_bytes = g_enrollment_proof_storage[i];
+        g_enrollment_slots[i].proof_capacity = GATEWAY_ENROLLMENT_PROOF_BYTES;
+    }
+    memset(&config, 0, sizeof(config));
+    config.controller_member_key = g_route_control_authentication.controller;
+    config.controller_physical_node_id =
+        g_route_control_authentication.controller_physical_node_id;
+    config.controller_runtime_instance_id =
+        g_route_control_authentication.controller_runtime_instance_id;
+    config.local_physical_node_id = g_route_control_physical_node_id;
+    config.local_node_instance_id = g_route_control_instance_id;
+    config.local_role_type = WVM_MANIFEST_ROLE_GATEWAY;
+    config.local_endpoint = &g_route_control_network_endpoint;
+    config.enrollment_state_directory = g_enrollment_state_directory;
+    config.enrollment_slots = g_enrollment_slots;
+    config.enrollment_slot_capacity = GATEWAY_ENROLLMENT_SLOTS;
+    config.enrollment_proof_storage = &g_enrollment_proof_storage[0][0];
+    config.enrollment_proof_capacity = GATEWAY_ENROLLMENT_PROOF_BYTES;
+    config.enrollment_proof_scratch = g_enrollment_proof_scratch;
+    config.enrollment_proof_scratch_capacity = GATEWAY_ENROLLMENT_PROOF_BYTES;
+    config.enrollment_ack_scratch = g_enrollment_ack_scratch;
+    config.enrollment_ack_scratch_capacity =
+        sizeof(g_enrollment_ack_scratch) / sizeof(g_enrollment_ack_scratch[0]);
+    if (wvm_admission_receiver_init(&g_enrollment_receiver, &config, error,
+                                    error_len) != 0) {
+        return -EINVAL;
+    }
+    g_enrollment_receiver_ready = 1;
+    return 0;
+}
+
+static int gateway_register_with_controller(char *error, size_t error_len)
+{
+    const char *register_address =
+        getenv("WVM_GATEWAY_REGISTER_CONTROLLER_ADDRESS");
+    const char *register_port_text =
+        getenv("WVM_GATEWAY_REGISTER_CONTROLLER_PORT");
+    const char *hosting_text = getenv("WVM_GATEWAY_HOSTING_NODE_ID");
+    const char *failure_text = getenv("WVM_GATEWAY_FAILURE_DOMAIN_ID");
+    const char *pod_text = getenv("WVM_GATEWAY_POD_ID");
+    const char *role_bits_text = getenv("WVM_GATEWAY_ROLE_BITS");
+    const char *tls_ca = getenv("WVM_GATEWAY_CONTROL_CA_FILE");
+    const char *tls_certificate = getenv("WVM_GATEWAY_CONTROL_CERTIFICATE_FILE");
+    const char *tls_private_key = getenv("WVM_GATEWAY_CONTROL_PRIVATE_KEY_FILE");
+    uint64_t register_port;
+    uint64_t hosting_node_id;
+    uint64_t failure_domain_id;
+    uint64_t pod_id;
+    uint64_t role_bits;
+    struct wvm_tls_control_connector tls_connector;
+    struct wvm_control_stream_connector connector;
+    struct wvm_gateway_record gateway;
+    struct wvm_endpoint controller_endpoint;
+    struct wvm_member_key controller_member;
+    struct wvm_membership_control_result result;
+    struct wvm_envelope request;
+    uint8_t gateway_bytes[WVM_MEMBERSHIP_CONTROL_MAX_RECORD_BYTES];
+    uint8_t operation_digest[WVM_SHA256_DIGEST_BYTES];
+    size_t gateway_byte_count = 0;
+    int status;
+
+    if (!register_address || register_address[0] == '\0') {
+        return 0; /* registration is optional */
+    }
+    if (!register_port_text || !hosting_text || !failure_text || !pod_text ||
+        !role_bits_text || !tls_ca || !tls_certificate || !tls_private_key ||
+        gateway_parse_u64(register_port_text, &register_port) != 0 ||
+        register_port == 0 || register_port > UINT16_MAX ||
+        gateway_parse_u64(hosting_text, &hosting_node_id) != 0 ||
+        hosting_node_id == 0 || hosting_node_id > UINT32_MAX ||
+        gateway_parse_u64(failure_text, &failure_domain_id) != 0 ||
+        failure_domain_id == 0 ||
+        gateway_parse_u64(pod_text, &pod_id) != 0 || pod_id == 0 ||
+        gateway_parse_u64(role_bits_text, &role_bits) != 0 || role_bits == 0) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "gateway registration environment is incomplete");
+        }
+        return -EINVAL;
+    }
+    memset(&gateway, 0, sizeof(gateway));
+    gateway.gateway_id = g_route_control_physical_node_id;
+    gateway.gateway_instance_id = g_route_control_instance_id;
+    gateway.hosting_physical_node_id = (uint32_t)hosting_node_id;
+    gateway.failure_domain_id = failure_domain_id;
+    gateway.endpoint = g_route_control_network_endpoint;
+    gateway.role_bits = role_bits;
+    gateway.pod_id_or_scope = pod_id;
+    gateway.desired_membership_state = WVM_MANIFEST_MEMBER_PENDING;
+    gateway.observed_health_state = WVM_MEMBERSHIP_RECOVERING;
+    gateway.membership_revision = 1;
+    gateway.topology_revision = 1;
+    if (wvm_gateway_record_validate(&gateway, error, error_len) != 0 ||
+        wvm_gateway_record_encode(&gateway, gateway_bytes, sizeof(gateway_bytes),
+                                  &gateway_byte_count, error, error_len) != 0) {
+        return -1;
+    }
+    memset(&controller_endpoint, 0, sizeof(controller_endpoint));
+    controller_endpoint.data_transport = WVM_DATA_TRANSPORT_UDP;
+    controller_endpoint.data_address_bytes = 4;
+    controller_endpoint.data_port = (uint16_t)register_port;
+    controller_endpoint.control_transport = WVM_CONTROL_TRANSPORT_TLS_TCP;
+    controller_endpoint.has_control_address = 1;
+    controller_endpoint.control_address_bytes = 4;
+    controller_endpoint.control_port = (uint16_t)register_port;
+    if (inet_pton(AF_INET, register_address,
+                  controller_endpoint.data_address) != 1 ||
+        inet_pton(AF_INET, register_address,
+                  controller_endpoint.control_address) != 1 ||
+        wvm_endpoint_validate(&controller_endpoint, error, error_len) != 0) {
+        return -1;
+    }
+    memset(&controller_member, 0, sizeof(controller_member));
+    controller_member.role_type =
+        g_route_control_authentication.controller.role_type;
+    controller_member.role_id =
+        g_route_control_authentication.controller.role_id;
+    controller_member.instance_id =
+        g_route_control_authentication.controller.instance_id;
+    memset(&request, 0, sizeof(request));
+    request.message_type = WVM_ENVELOPE_MSG_REGISTER_MEMBER;
+    request.origin_physical_node_id = gateway.hosting_physical_node_id;
+    request.origin_runtime_instance_id = gateway.gateway_instance_id;
+    request.delivery_attempt_id = 1;
+    request.payload = gateway_bytes;
+    request.payload_bytes = gateway_byte_count;
+    wvm_envelope_semantic_digest(gateway_bytes, gateway_byte_count,
+                                 request.semantic_payload_digest);
+    wvm_sha256_digest(gateway_bytes, gateway_byte_count, operation_digest);
+    memcpy(request.operation_id, operation_digest, sizeof(request.operation_id));
+    if (gateway_bytes_are_zero(request.operation_id,
+                               sizeof(request.operation_id))) {
+        request.operation_id[sizeof(request.operation_id) - 1U] = 1;
+    }
+    memset(&tls_connector, 0, sizeof(tls_connector));
+    memset(&connector, 0, sizeof(connector));
+    if (wvm_tls_control_connector_bind(&tls_connector, tls_ca, tls_certificate,
+                                       tls_private_key, 10000U, &connector,
+                                       error, error_len) != 0) {
+        return -1;
+    }
+    memset(&result, 0, sizeof(result));
+    status = wvm_tls_control_membership_exchange(
+        &tls_connector, &controller_member,
+        g_route_control_authentication.controller_physical_node_id,
+        g_route_control_authentication.controller_runtime_instance_id,
+        &controller_endpoint, &request, &result, error, error_len);
+    wvm_tls_control_connector_destroy(&tls_connector);
+    if (status != 0) {
+        return -1;
+    }
+    if (result.status_code != WVM_MEMBERSHIP_CONTROL_SUCCESS ||
+        result.recorded_state != WVM_MANIFEST_MEMBER_PENDING ||
+        result.applied_revision == 0 ||
+        memcmp(result.in_reply_to_operation_id, request.operation_id,
+               sizeof(request.operation_id)) != 0 ||
+        gateway_bytes_are_zero(result.record_digest,
+                               sizeof(result.record_digest))) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "controller rejected durable gateway registration");
+        }
+        return -1;
+    }
+    fprintf(stderr,
+            "[Gateway] REGISTER accepted; cluster enrollment continues on "
+            "controller\n");
     return 0;
 }
 
@@ -1307,7 +1562,7 @@ static int init_route_control_from_environment(void)
     owner_config.authenticate = gateway_authenticate_unix;
     owner_config.authenticate_io = gateway_authenticate_tls;
     owner_config.authenticate_opaque = &g_route_control_authentication;
-    owner_config.admission_apply = gateway_route_control_apply;
+    owner_config.admission_apply = gateway_control_apply;
     owner_config.admission_apply_opaque = &g_route_control;
     if (wvm_control_owner_init(&g_route_control_owner, &owner_config, error,
                                sizeof(error)) != 0 ||
@@ -1324,6 +1579,24 @@ static int init_route_control_from_environment(void)
             "[Gateway] authenticated route control socket=%s port=%u\n",
             g_route_control_socket_path,
             (unsigned)g_route_control_network_endpoint.control_port);
+    if (gateway_init_enrollment_receiver(error, sizeof(error)) != 0) {
+        fprintf(stderr, "[Gateway] enrollment receiver failed: %s\n",
+                error[0] ? error : "cannot initialize enrollment");
+        wvm_control_owner_destroy(&g_route_control_owner);
+        wvm_route_control_close(&g_route_control);
+        g_route_control_ready = 0;
+        return -EINVAL;
+    }
+    if (gateway_register_with_controller(error, sizeof(error)) != 0) {
+        fprintf(stderr, "[Gateway] controller registration failed: %s\n",
+                error[0] ? error : "REGISTER rejected");
+        wvm_admission_receiver_destroy(&g_enrollment_receiver);
+        g_enrollment_receiver_ready = 0;
+        wvm_control_owner_destroy(&g_route_control_owner);
+        wvm_route_control_close(&g_route_control);
+        g_route_control_ready = 0;
+        return -EINVAL;
+    }
     return 0;
 }
 
@@ -1990,22 +2263,46 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
         const char *mq = getenv("WVM_GATEWAY_MULTI_QUEUE");
         if (mq && mq[0] == '0') g_multi_queue = 0;
     }
-    if (getenv("WVM_RUNTIME_GATE_ACTIVE") &&
-        strcmp(getenv("WVM_RUNTIME_GATE_ACTIVE"), "0") != 0) {
-        const char *snapshot_path =
-            getenv("WVM_RUNTIME_ROUTE_SNAPSHOT_PATH");
+    {
+        const char *gate_active = getenv("WVM_RUNTIME_GATE_ACTIVE");
+        const char *control_socket = getenv("WVM_GATEWAY_CONTROL_SOCKET");
+        int runtime_gate_on =
+            gate_active && gate_active[0] != '\0' &&
+            strcmp(gate_active, "0") != 0;
+        int control_requested =
+            control_socket && control_socket[0] != '\0';
 
-        if (init_route_control_from_environment() != 0 ||
-            !snapshot_path || snapshot_path[0] == '\0' ||
-            init_route_runtime_from_snapshot_file(snapshot_path) != 0) {
-            fprintf(stderr,
-                    "[Gateway] active runtime requires a valid route "
-                    "snapshot path\n");
-            return -EINVAL;
+        if (runtime_gate_on) {
+            const char *snapshot_path =
+                getenv("WVM_RUNTIME_ROUTE_SNAPSHOT_PATH");
+
+            if (init_route_control_from_environment() != 0 ||
+                !snapshot_path || snapshot_path[0] == '\0' ||
+                init_route_runtime_from_snapshot_file(snapshot_path) != 0) {
+                fprintf(stderr,
+                        "[Gateway] active runtime requires a valid route "
+                        "snapshot path\n");
+                return -EINVAL;
+            }
+        } else if (control_requested) {
+            /*
+             * Membership/control listener without a VM runtime gate: used for
+             * cluster enrollment to ACTIVE before any VM route snapshot exists.
+             */
+            if (init_route_control_from_environment() != 0) {
+                return -EINVAL;
+            }
+            if (config_path && config_path[0] != '\0' &&
+                load_slave_config(config_path) != 0) {
+                return -ENOENT;
+            }
+            if (init_route_runtime_from_environment() != 0) {
+                return -EINVAL;
+            }
+        } else {
+            if (load_slave_config(config_path) != 0) return -ENOENT;
+            if (init_route_runtime_from_environment() != 0) return -EINVAL;
         }
-    } else {
-        if (load_slave_config(config_path) != 0) return -ENOENT;
-        if (init_route_runtime_from_environment() != 0) return -EINVAL;
     }
     if (g_route_authority_active && tx_scheduler_start() != 0) {
         fprintf(stderr, "[Gateway] cannot start V1 transmit scheduler\n");
