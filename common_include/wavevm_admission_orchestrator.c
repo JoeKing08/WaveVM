@@ -262,13 +262,30 @@ static int abort_identity_transaction(
     struct wvm_coordinator_transaction *transaction, char *error,
     size_t error_len)
 {
+    char prior[256];
+    char cleanup_error[256] = {0};
+
+    if (error && error_len != 0 && error[0] != '\0') {
+        (void)snprintf(prior, sizeof(prior), "%s", error);
+    } else {
+        prior[0] = '\0';
+    }
     if (wvm_control_plane_transition(
             input->control_plane, transaction, WVM_LIFECYCLE_IDENTITY_ALLOCATED,
-            WVM_LIFECYCLE_ABORTING, error, error_len) != 0 ||
+            WVM_LIFECYCLE_ABORTING, cleanup_error, sizeof(cleanup_error)) != 0 ||
         wvm_control_plane_transition(
             input->control_plane, transaction, WVM_LIFECYCLE_ABORTING,
-            WVM_LIFECYCLE_ABORTED, error, error_len) != 0) {
+            WVM_LIFECYCLE_ABORTED, cleanup_error, sizeof(cleanup_error)) != 0) {
+        if (prior[0] != '\0') {
+            set_error(error, error_len, "%s (abort cleanup: %s)", prior,
+                      cleanup_error[0] ? cleanup_error : "failed");
+        } else if (cleanup_error[0] != '\0') {
+            set_error(error, error_len, "%s", cleanup_error);
+        }
         return -1;
+    }
+    if (prior[0] != '\0') {
+        set_error(error, error_len, "%s", prior);
     }
     return -1;
 }

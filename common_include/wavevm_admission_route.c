@@ -322,6 +322,82 @@ static int build_operation_id(
     return bytes_are_zero(operation_id, WVM_IDENTITY_ID_BYTES) ? -1 : 0;
 }
 
+
+static int append_single_node_leaf_rules(
+    struct wvm_admission_route_compiler *compiler,
+    const struct wvm_node_record *node, char *error, size_t error_len)
+{
+    uint64_t vnode_end;
+    uint64_t vnode;
+    const struct wvm_endpoint *next_hop;
+
+    if (!compiler || !node) {
+        set_error(error, error_len, "single-node leaf route input is invalid");
+        return -1;
+    }
+    if (node->local_vnode_first == UINT32_MAX ||
+        node->local_vnode_count > UINT32_MAX - node->local_vnode_first ||
+        node->local_vnode_count == 0) {
+        set_error(error, error_len, "single-node leaf vnode range is invalid");
+        return -1;
+    }
+    /*
+     * Co-located leaf sidecar: exact vnodes forward to the node's authoritative
+     * sidecar endpoint without a separate GatewayRecord. Cross-node fabrics
+     * still require an ACTIVE gateway.
+     */
+    next_hop = &node->sidecar_endpoint;
+    if (wvm_endpoint_validate(next_hop, error, error_len) != 0) {
+        return -1;
+    }
+    vnode_end = (uint64_t)node->local_vnode_first + node->local_vnode_count;
+    for (vnode = node->local_vnode_first; vnode < vnode_end; vnode++) {
+        struct wvm_route_rule_record rule;
+
+        if (vnode > UINT32_MAX) {
+            set_error(error, error_len, "single-node leaf vnode exceeds u32");
+            return -1;
+        }
+        memset(&rule, 0, sizeof(rule));
+        rule.destination_kind = WVM_ROUTE_DESTINATION_EXACT_VNODE;
+        rule.destination_vnode_or_endpoint = (uint32_t)vnode;
+        rule.next_hop_kind = WVM_ROUTE_NEXT_HOP_ENDPOINT;
+        rule.next_hop_member.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+        rule.next_hop_member.role_id = node->physical_node_id;
+        rule.next_hop_member.instance_id = node->node_instance_id;
+        rule.next_hop_endpoint = *next_hop;
+        rule.hop_limit = 1;
+        if (append_route_rule(compiler, &rule, error, error_len) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static const struct wvm_node_record *select_single_active_node(
+    const struct wvm_cluster_record_set *records)
+{
+    const struct wvm_node_record *selected = NULL;
+    size_t i;
+
+    if (!records) {
+        return NULL;
+    }
+    for (i = 0; i < records->node_count; i++) {
+        const struct wvm_node_record *node = &records->nodes[i];
+
+        if (node->desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
+            node->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
+            continue;
+        }
+        if (selected) {
+            return NULL;
+        }
+        selected = node;
+    }
+    return selected;
+}
+
 int wvm_admission_route_compile(
     void *context, const struct wvm_coordinator_transaction *transaction,
     const struct wvm_cluster_record_set *records,
@@ -340,7 +416,7 @@ int wvm_admission_route_compile(
 
     if (compiler_storage_valid(compiler, error, error_len) != 0 ||
         !transaction || !records || !prepared_route || !route_transaction ||
-        !route_snapshot || records->gateway_count == 0 ||
+        !route_snapshot ||
         wvm_vm_route_scope_key_validate(&transaction->route_scope_key, error,
                                         error_len) != 0 ||
         wvm_cluster_snapshot_build(records, &snapshot,
@@ -352,22 +428,46 @@ int wvm_admission_route_compile(
     }
     wvm_admission_snapshot_cleanup(&snapshot.admission);
     gateway = select_gateway(records, compiler->topology_kind);
-    if (!gateway) {
-        set_error(error, error_len,
-                  "admission route compiler has no eligible gateway");
-        return -1;
-    }
     memset(compiler->route_rules, 0,
            compiler->route_rule_capacity * sizeof(*compiler->route_rules));
     compiler->route_rule_count = 0;
-    if ((compiler->topology_kind == WVM_ROUTE_TOPOLOGY_FLAT
-             ? append_flat_rules(compiler, records, gateway, error, error_len)
-             : append_fractal_rules(compiler, records, gateway, error,
-                                    error_len)) != 0 ||
-        (rule_count = compiler->route_rule_count) == 0) {
-        if (error && error[0] == '\0') {
-            set_error(error, error_len, "admission route compiler produced no rules");
+    if (gateway) {
+        if ((compiler->topology_kind == WVM_ROUTE_TOPOLOGY_FLAT
+                 ? append_flat_rules(compiler, records, gateway, error,
+                                     error_len)
+                 : append_fractal_rules(compiler, records, gateway, error,
+                                        error_len)) != 0 ||
+            (rule_count = compiler->route_rule_count) == 0) {
+            if (error && error[0] == '\0') {
+                set_error(error, error_len,
+                          "admission route compiler produced no rules");
+            }
+            return -1;
         }
+    } else if (compiler->topology_kind == WVM_ROUTE_TOPOLOGY_FLAT &&
+               records->gateway_count == 0) {
+        /*
+         * Empty-gateway leaf: only when the cluster truly has no GatewayRecord.
+         * An unhealthy/ineligible gateway still fails closed instead of falling
+         * back to a co-located sidecar path.
+         */
+        const struct wvm_node_record *single_node =
+            select_single_active_node(records);
+
+        if (!single_node ||
+            append_single_node_leaf_rules(compiler, single_node, error,
+                                          error_len) != 0 ||
+            (rule_count = compiler->route_rule_count) == 0) {
+            if (error && error[0] == '\0') {
+                set_error(error, error_len,
+                          "admission route compiler has no eligible gateway "
+                          "or single-node leaf");
+            }
+            return -1;
+        }
+    } else {
+        set_error(error, error_len,
+                  "admission route compiler has no eligible gateway");
         return -1;
     }
 
@@ -406,7 +506,7 @@ int wvm_admission_route_compile(
             return -1;
         }
     }
-    {
+    if (gateway) {
         struct wvm_member_key member_key;
 
         memset(&member_key, 0, sizeof(member_key));

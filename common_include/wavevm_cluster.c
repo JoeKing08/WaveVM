@@ -698,11 +698,17 @@ static int required_member_add(
     size_t i;
 
     if (!members || !member || !members->entries ||
-        members->count >= members->capacity ||
         wvm_required_member_validate(member, error, error_len) != 0) {
-        set_error(error, error_len, "cannot add required member");
+        if (error && error_len != 0 && error[0] == '\0') {
+            set_error(error, error_len, "cannot add required member");
+        }
         return -1;
     }
+    /*
+     * Idempotent re-add must succeed even when the list is already full: fence
+     * builders first insert placement nodes, then replay route ACK members that
+     * often name the same ACTIVE compute node.
+     */
     for (insert_at = 0; insert_at < members->count; insert_at++) {
         int comparison = member_key_compare(
             &members->entries[insert_at].member_key, &member->member_key);
@@ -719,6 +725,10 @@ static int required_member_add(
         if (comparison > 0) {
             break;
         }
+    }
+    if (members->count >= members->capacity) {
+        set_error(error, error_len, "cannot add required member");
+        return -1;
     }
     for (i = members->count; i > insert_at; i--) {
         members->entries[i] = members->entries[i - 1U];

@@ -77,6 +77,7 @@ struct admission_workspace {
     uint8_t *route_snapshot_bytes;
     uint8_t *route_ack_set_bytes;
     size_t capacity;
+    size_t route_rule_capacity;
     size_t route_snapshot_bytes_capacity;
     size_t route_ack_set_bytes_capacity;
     size_t route_ack_capacity;
@@ -1329,14 +1330,22 @@ int main(int argc, char **argv)
         fprintf(stderr, "wvm_ctl: admission capacity is too large\n");
         goto out;
     }
-    if (options.capacity > SIZE_MAX / 2U ||
-        options.capacity * 2U > SIZE_MAX / 512U ||
-        options.capacity * 2U > SIZE_MAX / 2048U) {
+    if (options.capacity > SIZE_MAX / 64U ||
+        options.capacity * 64U > SIZE_MAX / sizeof(struct wvm_route_rule_record) ||
+        options.capacity * 64U > SIZE_MAX / 256U ||
+        options.capacity * 2U > SIZE_MAX / 512U) {
         fprintf(stderr, "wvm_ctl: route workspace capacity is too large\n");
         goto out;
     }
+    /*
+     * FLAT compile emits one EXACT_VNODE rule per local vnode. Keep headroom
+     * beyond membership capacity so single-node leaf and multi-vnode fabrics
+     * do not fail closed on rule storage.
+     */
+    admission_workspace.route_rule_capacity = options.capacity * 64U;
     admission_workspace.route_ack_capacity = options.capacity * 2U;
-    admission_workspace.route_snapshot_bytes_capacity = options.capacity * 2U * 2048U;
+    admission_workspace.route_snapshot_bytes_capacity =
+        admission_workspace.route_rule_capacity * 256U;
     admission_workspace.route_ack_set_bytes_capacity = options.capacity * 2U * 512U;
     admission_workspace.capability_evidence.records =
         calloc(options.capacity,
@@ -1349,7 +1358,9 @@ int main(int argc, char **argv)
     admission_workspace.reservations = calloc(options.capacity, sizeof(*admission_workspace.reservations));
     admission_workspace.launch_plans = calloc(options.capacity, sizeof(*admission_workspace.launch_plans));
     admission_workspace.listener_plans = calloc(options.capacity, sizeof(*admission_workspace.listener_plans));
-    admission_workspace.route_rules = calloc(options.capacity, sizeof(*admission_workspace.route_rules));
+    admission_workspace.route_rules = calloc(
+        admission_workspace.route_rule_capacity,
+        sizeof(*admission_workspace.route_rules));
     admission_workspace.route_ack_entries = calloc(admission_workspace.route_ack_capacity, sizeof(*admission_workspace.route_ack_entries));
     admission_workspace.capture_nodes = calloc(options.capacity, sizeof(*admission_workspace.capture_nodes));
     admission_workspace.capture_gateways = calloc(options.capacity, sizeof(*admission_workspace.capture_gateways));
@@ -1431,7 +1442,8 @@ int main(int argc, char **argv)
     if (wvm_admission_route_compiler_init(
             &admission_workspace.route_compiler,
             WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1,
-            admission_workspace.route_rules, admission_workspace.capacity,
+            admission_workspace.route_rules,
+            admission_workspace.route_rule_capacity,
             admission_workspace.route_ack_entries, admission_workspace.route_ack_capacity,
             admission_workspace.route_snapshot_bytes,
             admission_workspace.route_snapshot_bytes_capacity,

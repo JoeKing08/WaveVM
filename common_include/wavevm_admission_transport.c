@@ -293,16 +293,21 @@ static int submit_record(struct wvm_admission_transport *transport,
                sizeof(envelope.route_snapshot_digest));
     }
     if (stage_operation_id(transaction_id, message_type, &target->member_key,
-                           envelope.operation_id) != 0 ||
-        transport->submit(transport->context, target, &envelope, error,
-                          error_len) != 0) {
+                           envelope.operation_id) != 0) {
         free(payload);
+        set_error(error, error_len, "admission control stage was not durable");
+        return -1;
+    }
+    result = transport->submit(transport->context, target, &envelope, error,
+                               error_len);
+    free(payload);
+    if (result != 0) {
         if (error && error[0] == '\0') {
             set_error(error, error_len, "admission control stage was not durable");
         }
-        return -1;
+        /* Preserve NOT_READY/-EAGAIN so CREATE_VM can return IN_PROGRESS. */
+        return result;
     }
-    free(payload);
     return 0;
 }
 

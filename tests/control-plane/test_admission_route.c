@@ -355,6 +355,99 @@ int main(void)
                "reject route compilation without healthy gateway")) {
         return 1;
     }
+
+    /* Empty-gateway single-node FLAT leaf: exact vnodes → local sidecar. */
+    records.gateway_count = 0;
+    node.inventory.hosted_gateway_role_ids = NULL;
+    node.inventory.hosted_gateway_role_id_count = 0;
+    node.inventory.hosted_gateway_role_id_capacity = 0;
+    gateway.observed_health_state = WVM_MEMBERSHIP_HEALTHY;
+    if (expect(wvm_admission_route_compiler_init(
+                   &compiler, WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1, route_rules,
+                   16, ack_entries, 2, snapshot_bytes, sizeof(snapshot_bytes),
+                   ack_set_bytes, sizeof(ack_set_bytes), error,
+                   sizeof(error)) == 0,
+               "initialize single-node leaf route compiler") ||
+        expect(wvm_admission_route_compile(
+                   &compiler, &transaction, &records, &prepared_route,
+                   &route_transaction, &route_snapshot, error,
+                   sizeof(error)) == 0,
+               "compile single-node leaf route without gateway") ||
+        expect(compiler.route_rule_count == 16 &&
+                   route_snapshot.topology_kind == WVM_ROUTE_TOPOLOGY_FLAT,
+               "compile every active flat vnode on the leaf") ||
+        expect(route_snapshot.next_hop_rules.entries[0].next_hop_kind ==
+                       WVM_ROUTE_NEXT_HOP_ENDPOINT &&
+                   route_snapshot.next_hop_rules.entries[0].hop_limit == 1 &&
+                   route_snapshot.next_hop_rules.entries[0]
+                           .next_hop_endpoint.data_port ==
+                       node.sidecar_endpoint.data_port &&
+                   route_snapshot.next_hop_rules.entries[0]
+                           .next_hop_endpoint.control_port ==
+                       node.sidecar_endpoint.control_port,
+               "leaf next hop is the co-located sidecar endpoint") ||
+        expect(route_snapshot.required_ack_set.entries.count == 1 &&
+                   route_snapshot.required_ack_set.entries.entries[0]
+                           .member_key.role_type ==
+                       WVM_MANIFEST_ROLE_NODE_RUNTIME &&
+                   route_snapshot.required_ack_set.entries.entries[0]
+                           .member_key.role_id == node.physical_node_id,
+               "single-node leaf ACK set is node-only") ||
+        expect(wvm_route_snapshot_record_validate(&route_snapshot, error,
+                                                  sizeof(error)) == 0 &&
+                   wvm_route_transaction_record_validate(&route_transaction,
+                                                         error,
+                                                         sizeof(error)) == 0,
+               "validate compiled single-node leaf records")) {
+        fprintf(stderr, "admission-route test detail: %s\n", error);
+        return 1;
+    }
+
+    /* Two ACTIVE nodes and no gateway must still fail closed. */
+    {
+        struct wvm_node_record second = node;
+        struct wvm_node_record both[2];
+
+        second.physical_node_id = 19;
+        second.node_instance_id = 102;
+        second.capability.physical_node_id = 19;
+        second.capability.node_instance_id = 102;
+        second.inventory.physical_node_id = 19;
+        second.inventory.node_instance_id = 102;
+        second.control_endpoint.data_port = 9500;
+        second.control_endpoint.control_port = 9501;
+        second.sidecar_endpoint.data_port = 9600;
+        second.sidecar_endpoint.control_port = 9601;
+        both[0] = node;
+        both[1] = second;
+        records.nodes = both;
+        records.node_count = 2;
+        if (expect(wvm_admission_route_compile(
+                       &compiler, &transaction, &records, &prepared_route,
+                       &route_transaction, &route_snapshot, error,
+                       sizeof(error)) != 0,
+                   "reject empty-gateway compile with multiple ACTIVE nodes")) {
+            return 1;
+        }
+        records.nodes = &node;
+        records.node_count = 1;
+    }
+
+    /* FRACTAL still requires a gateway even for a single ACTIVE node. */
+    if (expect(wvm_admission_route_compiler_init(
+                   &compiler, WVM_ROUTE_TOPOLOGY_FRACTAL, 1, 6000, 1,
+                   route_rules, 16, ack_entries, 2, snapshot_bytes,
+                   sizeof(snapshot_bytes), ack_set_bytes, sizeof(ack_set_bytes),
+                   error, sizeof(error)) == 0,
+               "initialize fractal compiler for empty-gateway reject") ||
+        expect(wvm_admission_route_compile(
+                   &compiler, &transaction, &records, &prepared_route,
+                   &route_transaction, &route_snapshot, error,
+                   sizeof(error)) != 0,
+               "reject fractal compile without gateway")) {
+        return 1;
+    }
+
     puts("admission-route tests: PASS");
     return 0;
 }
