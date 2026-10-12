@@ -123,7 +123,7 @@ static int check_pending_membership(const char *journal_path)
             members[0].node.desired_membership_state == WVM_MANIFEST_MEMBER_PENDING &&
             members[0].node.observed_health_state == WVM_MEMBERSHIP_RECOVERING &&
             !members[0].has_activation_route_operation_id,
-        "registration and restart cannot activate a member without route commit");
+        "registration without peer enrollment transport leaves member non-ACTIVE");
 out:
     wvm_membership_controller_close(&controller);
     return result;

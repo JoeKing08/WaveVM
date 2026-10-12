@@ -19,7 +19,9 @@ struct prepare_capture {
 };
 
 struct enrollment_prepare_capture {
-    unsigned int calls;
+    unsigned int prepare_calls;
+    unsigned int commit_calls;
+    unsigned int abort_calls;
     int fail;
 };
 
@@ -430,10 +432,42 @@ static int enrollment_prepare(void *context,
         snprintf(error, error_len, "invalid enrollment participant ACK");
         return -1;
     }
-    capture->calls++;
+    capture->prepare_calls++;
     if (capture->fail) {
         snprintf(error, error_len, "participant rejected cluster proof");
         return -1;
+    }
+    return 0;
+}
+
+static int enrollment_commit(void *context,
+                             const struct wvm_cluster_admission_proof *proof,
+                             const struct wvm_cluster_admission_ack_entry *ack,
+                             char *error, size_t error_len)
+{
+    struct enrollment_prepare_capture *capture = context;
+
+    if (!proof || !ack || ack->role_type != ack->member_key.role_type) {
+        snprintf(error, error_len, "invalid enrollment commit ACK");
+        return -1;
+    }
+    capture->commit_calls++;
+    return 0;
+}
+
+static int enrollment_abort(void *context,
+                            const struct wvm_cluster_admission_proof *proof,
+                            const struct wvm_cluster_admission_ack_entry *ack,
+                            char *error, size_t error_len)
+{
+    struct enrollment_prepare_capture *capture = context;
+
+    (void)proof;
+    (void)ack;
+    (void)error;
+    (void)error_len;
+    if (capture) {
+        capture->abort_calls++;
     }
     return 0;
 }
@@ -564,6 +598,8 @@ static int run_cluster_enrollment_test(char *error, size_t error_len)
     request.node = &node;
     request.proof = &proof;
     request.prepare = enrollment_prepare;
+    request.commit = enrollment_commit;
+    request.abort = enrollment_abort;
     request.prepare_context = &capture;
     if (wvm_membership_controller_cluster_enrollment_begin(
             &controller, &missing_ack_proof, error, error_len) != 0 ||
@@ -575,7 +611,8 @@ static int run_cluster_enrollment_test(char *error, size_t error_len)
             &controller, &request, error, error_len) != 0 ||
         wvm_membership_controller_find(&controller, &member_key)
                 ->node.desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
-        controller.route_count != 0 || capture.calls != 1 ||
+        controller.route_count != 0 || capture.prepare_calls != 1 ||
+        capture.commit_calls != 1 ||
         wvm_membership_controller_activate_member(
             &controller, &member_key, proof.operation_id, error,
             error_len) == 0) {

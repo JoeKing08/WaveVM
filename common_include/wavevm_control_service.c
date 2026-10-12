@@ -53,8 +53,13 @@ int wvm_control_service_init(
     owner_config.authenticate = config->authenticate;
     owner_config.authenticate_io = config->authenticate_io;
     owner_config.authenticate_opaque = config->authenticate_opaque;
-    owner_config.apply = control_plane_apply;
-    owner_config.apply_opaque = config->plane;
+    if (config->membership_apply) {
+        owner_config.apply = config->membership_apply;
+        owner_config.apply_opaque = config->membership_apply_opaque;
+    } else {
+        owner_config.apply = control_plane_apply;
+        owner_config.apply_opaque = config->plane;
+    }
     owner_config.control_apply = config->control_apply;
     owner_config.control_apply_opaque = config->control_apply_opaque;
     owner_config.admission_apply = config->admission_apply;

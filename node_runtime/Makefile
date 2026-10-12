@@ -1,5 +1,5 @@
 CC ?= gcc
-CFLAGS ?= -Wall -O2 -msse4.2 -std=gnu11 -D_POSIX_C_SOURCE=200809L
+CFLAGS ?= -Wall -O2 -msse4.2 -std=gnu11 -D_DEFAULT_SOURCE
 CPPFLAGS ?= -I../common_include -pthread
 LDFLAGS ?= -pthread
 

@@ -229,6 +229,27 @@ int wvm_membership_coordinator_join(
     return 0;
 }
 
+static void enrollment_abort_prepared_peers(
+    const struct wvm_membership_cluster_enrollment_request *request,
+    size_t prepared_count, char *error, size_t error_len)
+{
+    size_t i;
+    char abort_error[256];
+
+    if (!request || !request->abort || prepared_count == 0) {
+        return;
+    }
+    for (i = 0; i < prepared_count; i++) {
+        const struct wvm_cluster_admission_ack_entry *ack =
+            &request->proof->required_ack_set.entries.entries[i];
+
+        (void)request->abort(request->prepare_context, request->proof, ack,
+                             abort_error, sizeof(abort_error));
+    }
+    (void)error;
+    (void)error_len;
+}
+
 int wvm_membership_coordinator_enroll_cluster_member(
     struct wvm_membership_controller *controller,
     const struct wvm_membership_cluster_enrollment_request *request,
@@ -238,10 +259,11 @@ int wvm_membership_coordinator_enroll_cluster_member(
     struct wvm_membership_controller_member_status status;
     uint16_t state;
     size_t i;
+    size_t prepared_count = 0;
     int result;
 
     if (!controller || !request || !request->authenticated_actor ||
-        !request->proof || !request->prepare ||
+        !request->proof || !request->prepare || !request->commit ||
         (request->member_kind == WVM_MEMBERSHIP_COMPUTE && !request->node) ||
         (request->member_kind == WVM_MEMBERSHIP_GATEWAY && !request->gateway)) {
         set_error(error, error_len, "cluster enrollment request is invalid");
@@ -309,15 +331,29 @@ int wvm_membership_coordinator_enroll_cluster_member(
                 wvm_membership_controller_cluster_enrollment_ack_prepare(
                     controller, request->proof->operation_id, &ack->member_key,
                     error, error_len) != 0) {
+                enrollment_abort_prepared_peers(request, prepared_count, error,
+                                                error_len);
                 (void)wvm_membership_controller_cluster_enrollment_abort(
                     controller, request->proof->operation_id, error, error_len);
                 return -1;
             }
+            prepared_count++;
         }
         if (wvm_membership_controller_cluster_enrollment_commit(
                 controller, request->proof->operation_id, error, error_len) != 0) {
+            enrollment_abort_prepared_peers(request, prepared_count, error,
+                                            error_len);
             (void)wvm_membership_controller_cluster_enrollment_abort(
                 controller, request->proof->operation_id, error, error_len);
+            return -1;
+        }
+    }
+    for (i = 0; i < request->proof->required_ack_set.entries.count; i++) {
+        const struct wvm_cluster_admission_ack_entry *ack =
+            &request->proof->required_ack_set.entries.entries[i];
+
+        if (request->commit(request->prepare_context, request->proof, ack, error,
+                            error_len) != 0) {
             return -1;
         }
     }

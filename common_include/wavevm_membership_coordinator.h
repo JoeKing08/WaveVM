@@ -17,10 +17,14 @@ typedef int (*wvm_membership_route_stage_fn)(
     const struct wvm_required_ack_entry *ack_entry, char *error,
     size_t error_len);
 
-typedef int (*wvm_membership_cluster_enrollment_prepare_fn)(
+typedef int (*wvm_membership_cluster_enrollment_stage_fn)(
     void *context, const struct wvm_cluster_admission_proof *proof,
     const struct wvm_cluster_admission_ack_entry *ack_entry, char *error,
     size_t error_len);
+
+/* Backward-compatible name for the prepare stage callback. */
+typedef wvm_membership_cluster_enrollment_stage_fn
+    wvm_membership_cluster_enrollment_prepare_fn;
 
 struct wvm_membership_cluster_enrollment_request {
     enum wvm_membership_member_kind member_kind;
@@ -28,7 +32,9 @@ struct wvm_membership_cluster_enrollment_request {
     const struct wvm_node_record *node;
     const struct wvm_gateway_record *gateway;
     const struct wvm_cluster_admission_proof *proof;
-    wvm_membership_cluster_enrollment_prepare_fn prepare;
+    wvm_membership_cluster_enrollment_stage_fn prepare;
+    wvm_membership_cluster_enrollment_stage_fn commit;
+    wvm_membership_cluster_enrollment_stage_fn abort;
     void *prepare_context;
 };
 
@@ -73,12 +79,11 @@ int wvm_membership_coordinator_join(
     size_t error_len);
 
 /*
- * Cluster-scope admission for members before VM route scopes exist. The
- * callback must perform the authenticated peer prepare/ACK exchange and bind
- * the responding identity to ack_entry. This library does not provide a
- * transport or validate capability/topology evidence. It never creates a VM
- * route record; a controller-owned proof builder and production transport are
- * required before this can be used as the live join path.
+ * Cluster-scope admission for members before VM route scopes exist. prepare
+ * and commit callbacks must perform the authenticated peer exchanges and bind
+ * the responding identity to ack_entry. abort is optional and is invoked
+ * best-effort for peers that already prepared when a later prepare fails.
+ * This library never creates a VM route record.
  */
 int wvm_membership_coordinator_enroll_cluster_member(
     struct wvm_membership_controller *controller,

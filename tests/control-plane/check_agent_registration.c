@@ -14,6 +14,7 @@ int main(int argc, char **argv)
     char *end;
     char error[256] = {0};
     int valid;
+    uint16_t enrollment_state = 0;
 
     if (argc != 3) {
         return 2;
@@ -36,16 +37,28 @@ int main(int argc, char **argv)
             members[0].member_key.instance_id == 802;
     if (valid) {
         node = &members[0].node;
-        valid = node->desired_membership_state == WVM_MANIFEST_MEMBER_PENDING &&
-                node->observed_health_state == WVM_MEMBERSHIP_RECOVERING &&
+        valid = node->desired_membership_state == WVM_MANIFEST_MEMBER_ACTIVE &&
+                node->observed_health_state == WVM_MEMBERSHIP_HEALTHY &&
                 node->control_endpoint.control_port == control_port &&
                 node->inventory.registered_vcpu_slots == 2 &&
                 node->inventory.registered_memory_bytes == 1073741824ULL &&
+                members[0].has_activation_enrollment_operation_id &&
                 !members[0].has_activation_route_operation_id;
+    }
+    if (valid &&
+        wvm_membership_controller_cluster_enrollment_state(
+            &controller, members[0].activation_enrollment_operation_id,
+            &enrollment_state, error, sizeof(error)) != 0) {
+        fprintf(stderr, "enrollment state lookup failed: %s\n", error);
+        valid = 0;
+    }
+    if (valid) {
+        valid = enrollment_state == WVM_MEMBERSHIP_ENROLLMENT_COMMITTED;
     }
     wvm_membership_controller_close(&controller);
     if (!valid) {
-        fprintf(stderr, "registration did not persist a pending node\n");
+        fprintf(stderr,
+                "registration did not persist an ACTIVE enrolled compute member\n");
         return 1;
     }
     return 0;

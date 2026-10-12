@@ -34,6 +34,12 @@ struct wvm_control_service_config {
     void *control_apply_opaque;
     wvm_control_transport_admission_apply_fn admission_apply;
     void *admission_apply_opaque;
+    /*
+     * Optional override for REGISTER/REJOIN/CORDON/DRAIN. When NULL, the
+     * service uses the durable control-plane membership apply path.
+     */
+    wvm_control_transport_apply_fn membership_apply;
+    void *membership_apply_opaque;
 };
 
 struct wvm_control_service {

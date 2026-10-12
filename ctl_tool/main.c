@@ -34,6 +34,7 @@
 #include "admission_readiness.h"
 #include "capability_publication.h"
 #include "runtime_profile_publication.h"
+#include "membership_enrollment.h"
 
 struct local_authentication;
 
@@ -1266,6 +1267,8 @@ int main(int argc, char **argv)
     struct control_context control_context;
     struct admission_workspace admission_workspace;
     struct wvm_admission_authority_owner_config authority_config;
+    struct wvm_ctl_membership_enrollment membership_enrollment;
+    struct wvm_cluster_admission_ack_entry *enrollment_acks = NULL;
     char admission_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_control_journal[WVM_CONTROL_PLANE_PATH_MAX];
@@ -1291,6 +1294,7 @@ int main(int argc, char **argv)
     memset(&service, 0, sizeof(service));
     memset(&control_context, 0, sizeof(control_context));
     memset(&admission_workspace, 0, sizeof(admission_workspace));
+    memset(&membership_enrollment, 0, sizeof(membership_enrollment));
     shutdown_requested = 0;
     if (ensure_state_directory(options.state_directory) != 0 ||
         make_state_path(options.state_directory, "admission.journal",
@@ -1315,6 +1319,7 @@ int main(int argc, char **argv)
     membership_routes = calloc(options.capacity, sizeof(*membership_routes));
     dependencies = calloc(options.capacity, sizeof(*dependencies));
     operations = calloc(options.capacity, sizeof(*operations));
+    enrollment_acks = calloc(options.capacity, sizeof(*enrollment_acks));
 
     /* Allocate admission authority workspace storage. */
     admission_workspace.capacity = options.capacity;
@@ -1356,6 +1361,7 @@ int main(int argc, char **argv)
 
     if (!entries || !route_entries || !runtime_entries || !namespace_records ||
         !members || !membership_routes || !dependencies || !operations ||
+        !enrollment_acks ||
         !admission_workspace.capability_evidence.records ||
         !admission_workspace.profile_capabilities ||
         !admission_workspace.lease_storage ||
@@ -1468,6 +1474,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "wvm_ctl: cannot initialize admission transport: %s\n", error);
         goto close_plane;
     }
+    memset(&membership_enrollment, 0, sizeof(membership_enrollment));
+    if (wvm_ctl_membership_enrollment_init(
+            &membership_enrollment, &plane, options.local_physical_node_id,
+            options.local_runtime_instance_id, &admission_workspace,
+            admission_transport_submit, enrollment_acks, options.capacity,
+            error, sizeof(error)) != 0) {
+        fprintf(stderr,
+                "wvm_ctl: cannot initialize cluster enrollment transport: %s\n",
+                error);
+        goto close_plane;
+    }
 
     memset(&authority_config, 0, sizeof(authority_config));
     authority_config.membership_controller = &plane.membership_controller;
@@ -1555,6 +1572,8 @@ int main(int argc, char **argv)
      * participant stages as ordinary CREATE_VM control requests. */
     service_config.admission_apply = NULL;
     service_config.admission_apply_opaque = NULL;
+    service_config.membership_apply = wvm_ctl_membership_enrollment_apply;
+    service_config.membership_apply_opaque = &membership_enrollment;
     if (install_signal_handlers() != 0) {
         fprintf(stderr, "wvm_ctl: cannot install signal handlers: %s\n",
                 strerror(errno));
@@ -1612,6 +1631,8 @@ out:
     wvm_ctl_runtime_profile_set_destroy(&admission_workspace.runtime_profile_set);
     wvm_ctl_capability_evidence_destroy(
         &admission_workspace.capability_evidence);
+    wvm_ctl_membership_enrollment_destroy(&membership_enrollment);
+    free(enrollment_acks);
     free(operations);
     free(dependencies);
     free(membership_routes);
