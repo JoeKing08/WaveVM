@@ -190,8 +190,22 @@ for ((attempt = 0; attempt < 200; attempt++)); do
 done
 [[ -s "$tmpdir/ctl-state/membership.journal" ]]
 [[ -s "$tmpdir/ctl-state/membership-control.journal" ]]
-# Give enrollment prepare/commit a moment after journal creation.
-sleep 0.5
+# Poll until the single Mode A compute member is ACTIVE before CREATE_VM.
+# (Dual = two VMs on one agent; not two nodes.) Fixed 0.5s was timing-sensitive.
+active_ok=0
+for ((attempt = 0; attempt < 200; attempt++)); do
+    cp -f "$tmpdir/ctl-state/membership.journal" "$tmpdir/membership.journal.snap" 2>/dev/null || true
+    if "$tmpdir/check_registration" "$tmpdir/membership.journal.snap"         "$agent_control_port" >/dev/null 2>&1; then
+        active_ok=1
+        break
+    fi
+    sleep 0.05
+done
+if [[ "$active_ok" -ne 1 ]]; then
+    echo "Mode A compute member did not reach ACTIVE before CREATE_VM" >&2
+    tail -n 80 "$tmpdir/ctl.log" >&2 || true
+    exit 1
+fi
 if ! kill -0 "$agent_pid" 2>/dev/null || ! kill -0 "$ctl_pid" 2>/dev/null; then
     echo "ctl or agent exited before CREATE_VM" >&2
     tail -n 80 "$tmpdir/ctl.log" >&2 || true

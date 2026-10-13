@@ -459,7 +459,7 @@ static int gateway_request_valid(
         wvm_member_key_validate(request->gateway_member_key, error, error_len) !=
             0 ||
         !request->successor_transaction || !request->successor_snapshot ||
-        !request->route_prepare ||
+        !request->route_prepare || !request->route_commit ||
         request->expected_membership_revision == 0 ||
         request->expected_topology_revision == 0 ||
         request->expected_admission_eligibility_revision == 0 ||
@@ -471,6 +471,50 @@ static int gateway_request_valid(
             request->successor_snapshot, request->successor_transaction,
             error, error_len) != 0) {
         return -1;
+    }
+    return 0;
+}
+
+static void abort_prepared_drain_peers(
+    const struct wvm_membership_gateway_drain_request *request,
+    size_t prepared_count)
+{
+    size_t i;
+    char abort_error[256];
+
+    if (!request || !request->route_abort || prepared_count == 0 ||
+        !request->successor_transaction || !request->successor_snapshot) {
+        return;
+    }
+    for (i = 0; i < prepared_count; i++) {
+        const struct wvm_required_ack_entry *ack =
+            &request->successor_transaction->required_ack_set.entries.entries[i];
+
+        (void)request->route_abort(request->route_prepare_context,
+                                   request->successor_transaction,
+                                   request->successor_snapshot, ack,
+                                   abort_error, sizeof(abort_error));
+    }
+}
+
+static int deliver_drain_peer_commits(
+    const struct wvm_membership_gateway_drain_request *request, char *error,
+    size_t error_len)
+{
+    size_t i;
+
+    for (i = 0;
+         i < request->successor_transaction->required_ack_set.entries.count;
+         i++) {
+        const struct wvm_required_ack_entry *ack =
+            &request->successor_transaction->required_ack_set.entries.entries[i];
+
+        if (request->route_commit(request->route_prepare_context,
+                                  request->successor_transaction,
+                                  request->successor_snapshot, ack, error,
+                                  error_len) != 0) {
+            return -1;
+        }
     }
     return 0;
 }
@@ -495,6 +539,7 @@ int wvm_membership_coordinator_drain_gateway(
 {
     uint16_t route_state;
     size_t i;
+    size_t prepared_count = 0;
     int have_route = 0;
 
     if (!controller || gateway_request_valid(request, error, error_len) != 0) {
@@ -547,6 +592,7 @@ int wvm_membership_coordinator_drain_gateway(
                     &ack->member_key, error, error_len) != 0) {
                 char abort_error[256] = {0};
 
+                abort_prepared_drain_peers(request, prepared_count);
                 if (abort_gateway_drain(controller, request, abort_error,
                                         sizeof(abort_error)) != 0) {
                     set_error(error, error_len,
@@ -555,23 +601,33 @@ int wvm_membership_coordinator_drain_gateway(
                 }
                 return -1;
             }
+            prepared_count++;
         }
-        return wvm_membership_controller_gateway_drain_apply(
-            controller, WVM_GATEWAY_DRAIN_ACTION_COMMIT,
-            request->gateway_member_key, NULL, NULL,
-            request->successor_transaction->operation_id,
-            request->expected_membership_revision,
-            request->expected_topology_revision,
-            request->expected_admission_eligibility_revision, error, error_len);
+        if (wvm_membership_controller_gateway_drain_apply(
+                controller, WVM_GATEWAY_DRAIN_ACTION_COMMIT,
+                request->gateway_member_key, NULL, NULL,
+                request->successor_transaction->operation_id,
+                request->expected_membership_revision,
+                request->expected_topology_revision,
+                request->expected_admission_eligibility_revision, error,
+                error_len) != 0) {
+            abort_prepared_drain_peers(request, prepared_count);
+            return -1;
+        }
+        return deliver_drain_peer_commits(request, error, error_len);
     }
     if (route_state == WVM_ROUTE_TRANSACTION_ACTIVATED) {
-        return wvm_membership_controller_gateway_drain_apply(
-            controller, WVM_GATEWAY_DRAIN_ACTION_COMMIT,
-            request->gateway_member_key, NULL, NULL,
-            request->successor_transaction->operation_id,
-            request->expected_membership_revision,
-            request->expected_topology_revision,
-            request->expected_admission_eligibility_revision, error, error_len);
+        if (wvm_membership_controller_gateway_drain_apply(
+                controller, WVM_GATEWAY_DRAIN_ACTION_COMMIT,
+                request->gateway_member_key, NULL, NULL,
+                request->successor_transaction->operation_id,
+                request->expected_membership_revision,
+                request->expected_topology_revision,
+                request->expected_admission_eligibility_revision, error,
+                error_len) != 0) {
+            return -1;
+        }
+        return deliver_drain_peer_commits(request, error, error_len);
     }
     set_error(error, error_len, "gateway drain route is not replayable");
     return -1;

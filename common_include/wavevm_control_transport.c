@@ -351,9 +351,97 @@ int wvm_control_transport_init(
     return 0;
 }
 
+static void clear_pending_after_membership(struct wvm_control_stream *transport)
+{
+    if (!transport) {
+        return;
+    }
+    free(transport->pending_payload);
+    transport->pending_payload = NULL;
+    transport->pending_payload_bytes = 0;
+    transport->pending_after_membership = 0;
+    memset(&transport->pending_request, 0, sizeof(transport->pending_request));
+    memset(&transport->pending_actor, 0, sizeof(transport->pending_actor));
+    memset(&transport->pending_result, 0, sizeof(transport->pending_result));
+}
+
+static int queue_after_membership_reply(
+    struct wvm_control_stream *transport, const struct wvm_envelope *request,
+    const struct wvm_member_key *actor,
+    const struct wvm_membership_control_result *result)
+{
+    uint8_t *payload_copy = NULL;
+
+    if (!transport || !request || !actor || !result) {
+        return -EINVAL;
+    }
+    /* One pending op per stream; membership clients are one-shot. */
+    clear_pending_after_membership(transport);
+    if (request->payload_bytes != 0) {
+        if (!request->payload) {
+            return -EINVAL;
+        }
+        payload_copy = malloc(request->payload_bytes);
+        if (!payload_copy) {
+            return -ENOMEM;
+        }
+        memcpy(payload_copy, request->payload, request->payload_bytes);
+    }
+    transport->pending_request = *request;
+    transport->pending_request.payload = payload_copy;
+    transport->pending_payload = payload_copy;
+    transport->pending_payload_bytes = request->payload_bytes;
+    transport->pending_actor = *actor;
+    transport->pending_result = *result;
+    transport->pending_after_membership = 1;
+    fprintf(stderr,
+            "wvm_ctl: queued after-membership hook type=0x%x\n",
+            (unsigned)request->message_type);
+    fflush(stderr);
+    return 0;
+}
+
+void wvm_control_transport_flush_after_membership_reply(
+    struct wvm_control_stream *transport)
+{
+    wvm_control_transport_after_membership_fn hook;
+    void *hook_opaque;
+    struct wvm_envelope request;
+    struct wvm_member_key actor;
+    struct wvm_membership_control_result result;
+    uint8_t *owned_payload;
+
+    if (!transport || !transport->pending_after_membership) {
+        return;
+    }
+    hook = transport->config.after_membership_reply;
+    hook_opaque = transport->config.after_membership_reply_opaque;
+    request = transport->pending_request;
+    actor = transport->pending_actor;
+    result = transport->pending_result;
+    owned_payload = transport->pending_payload;
+    /* Detach owned payload before clear so hook still sees it. */
+    transport->pending_after_membership = 0;
+    transport->pending_payload = NULL;
+    transport->pending_payload_bytes = 0;
+    memset(&transport->pending_request, 0, sizeof(transport->pending_request));
+    memset(&transport->pending_actor, 0, sizeof(transport->pending_actor));
+    memset(&transport->pending_result, 0, sizeof(transport->pending_result));
+    fprintf(stderr,
+            "wvm_ctl: flushing after-membership hook type=0x%x pending_was=1\n",
+            (unsigned)request.message_type);
+    fflush(stderr);
+    if (hook) {
+        hook(hook_opaque, &request, &actor, &result);
+    }
+    free(owned_payload);
+}
+
 void wvm_control_transport_destroy(struct wvm_control_stream *transport)
 {
     if (transport) {
+        wvm_control_transport_flush_after_membership_reply(transport);
+        clear_pending_after_membership(transport);
         memset(transport, 0, sizeof(*transport));
         transport->config.stream_fd = -1;
     }
@@ -769,6 +857,24 @@ int wvm_control_transport_serve_once(
         if (dispatch_result == 0) {
             dispatch_result = send_membership_result(transport, &request,
                                                      &result, error, error_len);
+            /*
+             * Queue peer-facing follow-ups (cluster enrollment, drain ROUTE_*)
+             * after the membership reply is on the wire. Flush runs only after
+             * this accepting stream ends so work cannot race the still-open
+             * REGISTER/DRAIN client exchange.
+             */
+            if (dispatch_result == 0 &&
+                transport->config.after_membership_reply) {
+                int queue_status = queue_after_membership_reply(
+                    transport, &request, &actor, &result);
+
+                if (queue_status != 0 && error && error_len != 0 &&
+                    error[0] == '\0') {
+                    set_error(error, error_len,
+                              "cannot queue membership after-reply work");
+                }
+                /* Reply already sent; queue failure must not rewrite it. */
+            }
         }
         free(frame);
         return dispatch_result == 0 ? WVM_CONTROL_TRANSPORT_ACCEPTED

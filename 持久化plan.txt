@@ -380,3 +380,52 @@ F04 部分修复完成。capability记录现在包含真实时间戳和唯一pro
 
 本轮动作：仅探针 + 本边界记录；**未**安装/构建 QEMU、**未**改生产路径、**未**声称 guest E2E、**未** commit/push。
 后续若要做真 guest：先构建 `wavevm-qemu`（`-accel wavevm`）、打通生产 frontend 启动（manifest/CREATE_VM 带 Cirros 或等价）、再考虑 `/dev/kvm` 权限或纯 TCG；guest smoke 从 `exit 77` 升级为生产路径验收。在此之前 CREATE_VM RUNNING ≠ guest 实机验收。
+
+
+[2026-10-13 20:56 CST 已验证：Codex 审计 P1/P2 修复 — 单元 PASS；集成仍卡 enrollment control-stream]
+纲领：`wire-ipc-abi` §4.2.2 ROUTE_PREPARE/COMMIT/ABORT；`cluster-membership-topology-lifecycle` §5.4 gateway drain；`runtime-manifest-lifecycle` activation recovery。未发明协议；无 commit/push。
+
+本轮（VM `joeking` tip `c058f2f6c` 同步 origin/main 后改码）：
+1. P1 gateway drain peer COMMIT/ABORT：`membership_coordinator` 增加 `route_commit`/`route_abort`；prepare 失败 best-effort ROUTE_ABORT 已 prepare peers；controller COMMIT 后交付 peer ROUTE_COMMIT（ACTIVATED 重放亦重投递）。`membership_drain_transport` 实现三阶段 submit + `deliver_commits`/`deliver_aborts`；`ctl_tool/gateway_drain` 在 PREPARE/COMMIT/ABORT 成功后分别收集/投递；失败 peer 路径 abort peers。
+2. P1 activation recovery membership deps：导出 `wvm_admission_register_membership_route_and_dependencies`；`wvm_admission_recovery_input.membership_controller`；`recover_activation` 与 COMMITTED resume 在打开 readiness 前幂等重跑 route+dependency_acquire，失败保持 closed。
+3. P1 TCG helper 退出：REQUIRED helper 退出后 `executor_request_process_shutdown`、UDP poke + `shutdown` 唤醒 proxy、`kill/waitpid` 收割剩余 helper，再 `pthread_join`。
+4. P2 enrollment resume fail-closed：仅 `no resumable enrollment for member` 可开新 op；歧义/容量/损坏 lookup 直接失败。
+5. P2 drain 范围：ctl 在 peer PREPARE 前校验 ACK≤8/rules≤4/departure≤2 与非零 VM scope；注释去掉含糊 “V1”，写明 one-scope + manifest_generation=1；gateway enrollment slots/ACK scratch 命名为显式容量常量。
+6. 测试脚本：`test_create_vm_single_node` / `dual_mode_a` 将固定 sleep 0.5 改为轮询 ACTIVE（snap journal + check_registration）。
+
+验证：
+- PASS rc=0：`test_membership_coordinator.sh`、`test_coordinator.sh`（含 recovery）。
+- FAIL/超时 rc=124（与 Codex 审计同类）：`test_gateway_drain_prepare_commit.sh`、`test_gateway_drain.sh`、`test_cordon_drain_compute.sh`、`test_create_vm_single_node.sh` — 均在 enrollment 未到 ACTIVE 前失败；ctl 日志 `cluster enrollment after REGISTER deferred: control stream read failed`。属 REGISTER 处理中同步 peer enrollment 与对端 control stream 的既有竞态/截断类问题，非本轮 drain/recovery/TCG 逻辑回归可证伪项；未在本轮内做嵌套 REGISTER 内重试（曾试 nanosleep 重试反致 `control reply prefix is truncated`，已撤回）。
+
+边界 / 未修：enrollment control-stream 竞态仍阻断生产竖切 ACTIVE；drain transport manifest_generation 仍固定 1（扩大前须绑依赖真实 generation）；未宣称 guest E2E。等待用户 session backup 后再 commit/push。
+
+[2026-10-13 21:52 CST 已验证：REGISTER 后 defer enroll → ACTIVE；CREATE_VM RUNNING 复通]
+纲领：`wire-ipc-abi` 控制流 framing；`cluster-membership-topology-lifecycle` cluster enrollment / §5.4 drain；未发明协议；无 commit/push。
+
+根因（enrollment）：
+- REGISTER 接受流上同步 peer enrollment（prepare/ACK/commit）与仍打开的 REGISTER 交换竞态 → `control stream read failed` / truncated reply；嵌套 REGISTER 内重试曾试过并撤回。
+- 正确设计：membership apply 只写 durable REGISTER 结果；`after_membership_reply` 在 CTRL 结果已写完且 **accepting stream 撕毁（SSL/fd close）之后** 再跑 peer enrollment；不在 apply 内开 peer 流。
+
+根因（CREATE_VM 卡 COMMITTED，本轮一并修）：
+- P1 TCG helper 退出路径增加 proxy wake/`pthread_join` 收割后，master 因同进程 executor 已 `shm_open(O_CREAT)` 而命中 `admitted SHM is already owned`→return 1→主线程 `g_shutdown_requested`→child 干净退出；READY 无法维持。旧行为是 join 卡在 proxy `recvmmsg`，进程假活、READY 仍在。
+- 修法：master 对已存在的 admitted `WVM_SHM_FILE` **attach mmap**（executor 已创建）；冷启动仍 `O_CREAT|O_EXCL`。未撤回 P1 TCG wake/reap。
+
+本轮文件：
+1. `wavevm_control_transport`：queue + `flush_after_membership_reply`（reply 后、stream teardown 时）；
+2. `wavevm_control_owner` / `control_service`：接线 hook；TLS accept 流先关再 flush；
+3. `ctl_tool/membership_enrollment`：apply 仅 durable；`after_reply` 驱动 enroll（可重试 transient stream 错）；
+4. `ctl_tool/gateway_drain`：enrollment + peer ROUTE_* 走同一 after-reply；
+5. `ctl_tool/main`：接线 `after_membership_reply`；admission connect timeout 保持 10000ms（曾试 2000 已恢复）；
+6. `master_core/main_wrapper.c`：SHM attach（见上）；
+7. 审计 P1/P2（drain COMMIT/ABORT、recovery deps、TCG reap、enrollment resume fail-closed、drain scope）保持；
+8. `session-backup/Grok Bot/` 旧 shard 已清空（目录保留）；`scripts/bot_to_grok_build.py` + README 仍未提交、未删。
+
+验证 PASS（tip `c058f2f6c` + 本地未提交，Asia/Shanghai）：
+| 测试 | 结果 |
+|---|---|
+| `test_create_vm_single_node.sh` | PASS status=0 recorded_state=11 RUNNING（脚本先轮询 membership ACTIVE 再 CREATE_VM） |
+| `test_cordon_drain_compute.sh` | PASS |
+| `test_gateway_drain.sh` | PASS |
+| `test_gateway_drain_prepare_commit.sh` | PASS PREPARE+ACK+COMMIT→DRAINING；gateway deps=1 |
+
+边界：未宣称 guest E2E；drain transport `manifest_generation` 仍固定 1；未 commit/push。停止等待用户。

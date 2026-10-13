@@ -47,14 +47,24 @@ int wvm_ctl_membership_enrollment_activate_gateway(
     const struct wvm_member_key *member_key, char *error, size_t error_len);
 
 /*
- * Membership apply wrapper: after a successful REGISTER_MEMBER for a compute
- * node or gateway, continue controller-owned cluster enrollment to ACTIVE.
- * Registration success is preserved even when enrollment fails.
+ * Durable membership apply only (REGISTER/CORDON/DRAIN/…). Does not open
+ * peer enrollment streams; those run from after_membership_reply once the
+ * membership CTRL result is fully written on the accepting stream.
  */
 int wvm_ctl_membership_enrollment_apply(
     void *opaque, const struct wvm_envelope *request,
     const struct wvm_member_key *authenticated_actor,
     struct wvm_membership_control_result *result, char *error,
     size_t error_len);
+
+/*
+ * Post-reply hook: after successful REGISTER_MEMBER, drive cluster enrollment
+ * prepare/ACK/commit to ACTIVE on a fresh peer control stream. Safe to retry
+ * transient stream errors here because the REGISTER exchange is already closed.
+ */
+void wvm_ctl_membership_enrollment_after_reply(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    const struct wvm_membership_control_result *result);
 
 #endif /* WVM_CTL_MEMBERSHIP_ENROLLMENT_H */

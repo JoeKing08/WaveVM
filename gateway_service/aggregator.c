@@ -89,7 +89,14 @@ struct gateway_control_authentication {
 
 static struct gateway_control_authentication g_route_control_authentication;
 
+/*
+ * Supported gateway enrollment capacity for the current narrow vertical:
+ * 4 concurrent enrollment slots and ACK scratch for 16 cluster peers.
+ * Requests that need more must be rejected by the receiver before durable
+ * PREPARE; widening requires matching ctl/controller bounds.
+ */
 #define GATEWAY_ENROLLMENT_SLOTS 4
+#define GATEWAY_ENROLLMENT_ACK_SCRATCH 16
 #define GATEWAY_ENROLLMENT_PROOF_BYTES WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES
 
 static struct wvm_admission_receiver g_enrollment_receiver;
@@ -98,7 +105,8 @@ static struct wvm_admission_enrollment_slot g_enrollment_slots[GATEWAY_ENROLLMEN
 static uint8_t g_enrollment_proof_storage[GATEWAY_ENROLLMENT_SLOTS]
                                          [GATEWAY_ENROLLMENT_PROOF_BYTES];
 static uint8_t g_enrollment_proof_scratch[GATEWAY_ENROLLMENT_PROOF_BYTES];
-static struct wvm_cluster_admission_ack_entry g_enrollment_ack_scratch[16];
+static struct wvm_cluster_admission_ack_entry
+    g_enrollment_ack_scratch[GATEWAY_ENROLLMENT_ACK_SCRATCH];
 static char g_enrollment_state_directory[512];
 
 #define BATCH_SIZE 64
@@ -1261,8 +1269,7 @@ static int gateway_init_enrollment_receiver(char *error, size_t error_len)
     config.enrollment_proof_scratch = g_enrollment_proof_scratch;
     config.enrollment_proof_scratch_capacity = GATEWAY_ENROLLMENT_PROOF_BYTES;
     config.enrollment_ack_scratch = g_enrollment_ack_scratch;
-    config.enrollment_ack_scratch_capacity =
-        sizeof(g_enrollment_ack_scratch) / sizeof(g_enrollment_ack_scratch[0]);
+    config.enrollment_ack_scratch_capacity = GATEWAY_ENROLLMENT_ACK_SCRATCH;
     if (wvm_admission_receiver_init(&g_enrollment_receiver, &config, error,
                                     error_len) != 0) {
         return -EINVAL;

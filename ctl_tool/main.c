@@ -1222,8 +1222,19 @@ static int admission_transport_submit(
                  "Unix admission transport is restricted to the local runtime");
         return -EXDEV;
     }
-    return wvm_admission_stream_transport_submit(
-        &workspace->stream_transport, target, envelope, error, error_len);
+    {
+        int submit_rc = wvm_admission_stream_transport_submit(
+            &workspace->stream_transport, target, envelope, error, error_len);
+        fprintf(stderr,
+                "wvm_ctl: admission submit type=0x%x peer=%u:%llu port=%u rc=%d err=%s\n",
+                (unsigned)envelope->message_type,
+                (unsigned)target->member_key.role_id,
+                (unsigned long long)target->member_key.instance_id,
+                (unsigned)target->endpoint.control_port, submit_rc,
+                (error && error[0]) ? error : "");
+        fflush(stderr);
+        return submit_rc;
+    }
 }
 
 static int authorize_self_registration(
@@ -1648,6 +1659,8 @@ int main(int argc, char **argv)
     service_config.admission_apply_opaque = NULL;
     service_config.membership_apply = wvm_ctl_gateway_drain_apply;
     service_config.membership_apply_opaque = &gateway_drain;
+    service_config.after_membership_reply = wvm_ctl_gateway_drain_after_reply;
+    service_config.after_membership_reply_opaque = &gateway_drain;
     if (install_signal_handlers() != 0) {
         fprintf(stderr, "wvm_ctl: cannot install signal handlers: %s\n",
                 strerror(errno));

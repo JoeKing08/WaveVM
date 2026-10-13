@@ -1753,53 +1753,56 @@ int wavevm_master_runtime_main(
 
     printf("[System] Initializing SHM: %s (Size: %lu MB)\n", shm_path, ram_mb);
 
-    /* An admitted namespace is owned by one live launch. Do not let a
-     * duplicate start unlink another instance's backing store. */
+    /*
+     * Same-process admitted launch: the executor role may already have created
+     * WVM_SHM_FILE while reaching READY (main starts master only after that).
+     * Attach to the existing backing store instead of failing closed — returning
+     * 1 here used to look "harmless" when executor pthread_join hung on proxy
+     * sockets, but after TCG shutdown wake/reap the child exits and CREATE_VM
+     * never leaves COMMITTED. Still use O_EXCL when creating so a cold start
+     * cannot silently replace another instance's object mid-create.
+     */
     {
-        int existing_shm_fd = shm_open(shm_path, O_RDWR, 0);
+        int shm_fd = -1;
+        int created = 0;
 
-        if (existing_shm_fd >= 0) {
-            close(existing_shm_fd);
-            fprintf(stderr,
-                    "[System] admitted SHM is already owned: %s\n",
-                    shm_path);
+        shm_fd = shm_open(shm_path, O_RDWR, 0);
+        if (shm_fd < 0 && errno == ENOENT) {
+            shm_fd = shm_open(shm_path, O_CREAT | O_EXCL | O_RDWR, 0666);
+            if (shm_fd >= 0) {
+                created = 1;
+            }
+        }
+        if (shm_fd < 0) {
+            fprintf(stderr, "[-] Failed to open shm file '%s': %s\n", shm_path,
+                    strerror(errno));
             return 1;
         }
-        if (errno != ENOENT) {
-            fprintf(stderr,
-                    "[System] cannot inspect admitted SHM '%s': %s\n",
-                    shm_path, strerror(errno));
+        if (created && ftruncate(shm_fd, g_shm_size) < 0) {
+            perror("ftruncate failed");
+            close(shm_fd);
+            if (created) {
+                shm_unlink(shm_path);
+            }
             return 1;
         }
-    }
-
-    int shm_flags = O_CREAT | O_RDWR;
-    shm_flags |= O_EXCL;
-    int shm_fd = shm_open(shm_path, shm_flags, 0666);
-    if (shm_fd < 0) { 
-        fprintf(stderr, "[-] Failed to open shm file '%s': %s\n", shm_path, strerror(errno));
-        return 1; 
-    }
-    
-    // 分配物理空间
-    if (ftruncate(shm_fd, g_shm_size) < 0) {
-        perror("ftruncate failed");
+        g_shm_ptr = mmap(NULL, g_shm_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                         shm_fd, 0);
         close(shm_fd);
-        return 1;
+        if (g_shm_ptr == MAP_FAILED) {
+            perror("mmap failed");
+            if (created) {
+                shm_unlink(shm_path);
+            }
+            return 1;
+        }
+        if (created) {
+            printf("[+] Memory Ready at %p (created)\n", g_shm_ptr);
+        } else {
+            printf("[+] Memory Ready at %p (attached executor backing store)\n",
+                   g_shm_ptr);
+        }
     }
-
-    // 映射到进程空间
-    g_shm_ptr = mmap(NULL, g_shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    close(shm_fd); // 映射后即可关闭 fd
-    
-    if (g_shm_ptr == MAP_FAILED) { 
-        perror("mmap failed"); 
-        return 1; 
-    }
-    
-    // 可选：预热内存 (避免运行时缺页抖动)
-    // memset(g_shm_ptr, 0, g_shm_size);
-    printf("[+] Memory Ready at %p\n", g_shm_ptr);
 
     // 9. 启动 UNIX Socket 监听 (QEMU 接口)
     int listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);

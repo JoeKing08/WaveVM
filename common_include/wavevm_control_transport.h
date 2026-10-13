@@ -92,6 +92,19 @@ typedef int (*wvm_control_transport_admission_apply_fn)(
     struct wvm_control_result *result, char *error, size_t error_len);
 
 /*
+ * Optional post-reply hook for membership apply (REGISTER/CORDON/DRAIN/…).
+ * Queued after CTRL membership result bytes are fully written, then invoked
+ * only once the accepting stream has finished (EOF/error/destroy) so peer
+ * RPCs (cluster enrollment, drain ROUTE_*) cannot race the still-open
+ * REGISTER/DRAIN client exchange. Best-effort: must not change the
+ * already-sent result; failures are logged by the hook owner.
+ */
+typedef void (*wvm_control_transport_after_membership_fn)(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    const struct wvm_membership_control_result *result);
+
+/*
  * Framing is independent from the underlying authenticated stream. Unix
  * sockets use the fd adapter; TLS connectors provide these callbacks so the
  * framing layer never reads encrypted bytes as if they were plaintext.
@@ -124,11 +137,20 @@ struct wvm_control_transport_config {
     void *admission_apply_opaque;
     wvm_control_transport_dispatch_fn dispatch;
     void *dispatch_opaque;
+    wvm_control_transport_after_membership_fn after_membership_reply;
+    void *after_membership_reply_opaque;
 };
 
 struct wvm_control_stream {
     struct wvm_control_transport_config config;
     int response_sent;
+    /* Deferred after_membership_reply until stream teardown (see flush). */
+    int pending_after_membership;
+    struct wvm_envelope pending_request;
+    uint8_t *pending_payload;
+    size_t pending_payload_bytes;
+    struct wvm_member_key pending_actor;
+    struct wvm_membership_control_result pending_result;
 };
 
 int wvm_control_transport_init(
@@ -137,6 +159,15 @@ int wvm_control_transport_init(
     size_t error_len);
 
 void wvm_control_transport_destroy(struct wvm_control_stream *transport);
+
+/*
+ * Run any membership after-reply hook deferred from serve_once. Safe to call
+ * more than once; clears pending state. Owner calls this after the accept
+ * loop ends (client closed the REGISTER/DRAIN exchange) and destroy also
+ * flushes as a safety net.
+ */
+void wvm_control_transport_flush_after_membership_reply(
+    struct wvm_control_stream *transport);
 
 /*
  * Serve exactly one length-prefixed local envelope.  A clean EOF before the

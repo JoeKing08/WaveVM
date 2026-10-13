@@ -62,6 +62,10 @@ struct wvm_membership_gateway_drain_request {
     uint64_t expected_topology_revision;
     uint64_t expected_admission_eligibility_revision;
     wvm_membership_route_stage_fn route_prepare;
+    /* Required: durable peer ROUTE_COMMIT after controller drain COMMIT. */
+    wvm_membership_route_stage_fn route_commit;
+    /* Optional: best-effort peer ROUTE_ABORT for peers that already prepared. */
+    wvm_membership_route_stage_fn route_abort;
     void *route_prepare_context;
 };
 
@@ -105,10 +109,12 @@ int wvm_membership_coordinator_remove_compute(
     size_t error_len);
 
 /*
- * Gateway removal is coupled to immutable successor publication. The route
- * callback prepares every required survivor; only then is the controller's
- * gateway-drain COMMIT allowed. A callback failure aborts only a PREPARING
- * transaction, never an already activated one.
+ * Gateway removal is coupled to immutable successor publication. route_prepare
+ * reaches every RequiredAckSet survivor; route_commit delivers peer
+ * ROUTE_COMMIT after the controller's durable drain COMMIT (wire-ipc-abi
+ * §4.2.2 / cluster-membership §5.4). route_abort is optional and best-effort
+ * for peers that already prepared when a later prepare fails. A prepare
+ * failure aborts only a PREPARING transaction, never an already activated one.
  */
 int wvm_membership_coordinator_drain_gateway(
     struct wvm_membership_controller *controller,

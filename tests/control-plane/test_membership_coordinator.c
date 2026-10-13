@@ -16,6 +16,7 @@ struct prepare_capture {
     unsigned int fail_on_call;
     unsigned int commit_calls;
     unsigned int fail_on_commit_call;
+    unsigned int abort_calls;
 };
 
 struct enrollment_prepare_capture {
@@ -417,6 +418,25 @@ static int route_commit(void *context,
     if (capture->fail_on_commit_call == capture->commit_calls) {
         snprintf(error, error_len, "simulated participant commit failure");
         return -1;
+    }
+    return 0;
+}
+
+static int route_abort(void *context,
+                       const struct wvm_route_transaction_record *transaction,
+                       const struct wvm_route_snapshot_record *snapshot,
+                       const struct wvm_required_ack_entry *ack_entry,
+                       char *error, size_t error_len)
+{
+    struct prepare_capture *capture = context;
+
+    (void)transaction;
+    (void)snapshot;
+    (void)ack_entry;
+    (void)error;
+    (void)error_len;
+    if (capture) {
+        capture->abort_calls++;
     }
     return 0;
 }
@@ -910,6 +930,8 @@ int main(void)
     gateway_drain.expected_admission_eligibility_revision =
         controller.admission_eligibility_revision;
     gateway_drain.route_prepare = route_prepare;
+    gateway_drain.route_commit = route_commit;
+    gateway_drain.route_abort = route_abort;
     gateway_drain.route_prepare_context = &capture;
     if (expect(wvm_membership_controller_dependency_acquire(
                    &controller, &dependency, error, sizeof(error)) == 0,
@@ -933,7 +955,7 @@ int main(void)
                 wvm_membership_coordinator_drain_gateway(
                     &controller, &gateway_drain, error, sizeof(error)) != 0),
                "abort gateway drain after participant prepare failure") ||
-        expect(capture.calls == 1 &&
+        expect(capture.calls == 1 && capture.abort_calls == 0 &&
                    wvm_membership_controller_route_state(
                        &controller, failed_successor_transaction.operation_id,
                        &route_state, error, sizeof(error)) == 0 &&
@@ -966,14 +988,17 @@ int main(void)
                     &committed_successor_transaction,
                 gateway_drain.successor_snapshot = &committed_successor_snapshot,
                 capture.calls = 0, capture.fail_on_call = 0,
+                capture.commit_calls = 0, capture.abort_calls = 0,
                 wvm_membership_coordinator_drain_gateway(
                     &controller, &gateway_drain, error, sizeof(error)) == 0),
                "commit gateway drain after all participant ACKs") ||
-        expect(capture.calls == 2 &&
-                   wvm_membership_coordinator_drain_gateway(
-                       &controller, &gateway_drain, error, sizeof(error)) == 0 &&
-                   capture.calls == 2,
-               "replay committed gateway drain without re-preparing") ||
+        expect(capture.calls == 2 && capture.commit_calls == 2,
+               "gateway drain delivered peer ROUTE_COMMIT to RequiredAckSet") ||
+        expect((capture.commit_calls = 0,
+                wvm_membership_coordinator_drain_gateway(
+                    &controller, &gateway_drain, error, sizeof(error)) == 0 &&
+                    capture.calls == 2 && capture.commit_calls == 2),
+               "replay committed gateway drain re-delivers peer COMMITs") ||
         expect(wvm_membership_coordinator_remove_gateway(
                    &controller, &gateway_member, error, sizeof(error)) != 0,
                "retain drained gateway while dependency exists")) {

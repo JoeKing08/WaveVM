@@ -8,10 +8,16 @@
 #include "../common_include/wavevm_envelope.h"
 #include "../common_include/wavevm_manifest.h"
 
-/* V1 one-scope drain ACK/rule bounds (cluster-membership §5.4). */
+/*
+ * One-scope gateway drain decode bounds (cluster-membership §5.4):
+ * RequiredAckSet <= 8, next-hop rules <= 4, optional departure <= 2.
+ * Larger multi-scope drains must be an explicit aggregate transaction.
+ */
 #define WVM_CTL_DRAIN_ACK_CAP 8U
 #define WVM_CTL_DRAIN_RULE_CAP 4U
 #define WVM_CTL_DRAIN_DEPARTURE_CAP 2U
+/* Supported CREATE_VM / one-scope drain fixtures use manifest_generation 1. */
+#define WVM_CTL_DRAIN_SUPPORTED_MANIFEST_GENERATION 1ULL
 
 static void set_error(char *error, size_t error_len, const char *message)
 {
@@ -33,14 +39,16 @@ int wvm_ctl_gateway_drain_init(
         return -1;
     }
     memset(drain, 0, sizeof(*drain));
-    /* Peer ROUTE_PREPARE envelopes require nonzero manifest_generation.
-     * V1 one-scope drain fixtures and CREATE_VM first-generation VMs use 1;
-     * a multi-generation drain transport must bind the dependency's real
-     * generation (follow-on). */
+    /*
+     * Peer ROUTE_* envelopes require nonzero manifest_generation. Supported
+     * one-scope drain fixtures and CREATE_VM first-generation VMs use
+     * generation 1; a multi-generation drain transport must bind the
+     * dependency's real generation before widening PREPARE acceptance.
+     */
     if (wvm_membership_drain_transport_init(
             &drain->transport, controller_physical_node_id,
-            controller_instance_id, 1, submit_context, submit, error,
-            error_len) != 0) {
+            controller_instance_id, WVM_CTL_DRAIN_SUPPORTED_MANIFEST_GENERATION,
+            submit_context, submit, error, error_len) != 0) {
         return -1;
     }
     drain->plane = plane;
@@ -88,6 +96,46 @@ static int decode_prepare_successor(
     return 0;
 }
 
+/*
+ * Reject PREPARE payloads outside the supported one-scope decode/transport
+ * bounds before peer ROUTE_PREPARE (controller PREPARE already durable).
+ */
+static int validate_supported_drain_scope(
+    const struct wvm_gateway_drain_request *decoded, char *error,
+    size_t error_len)
+{
+    if (!decoded) {
+        set_error(error, error_len, "gateway drain scope probe is missing");
+        return -1;
+    }
+    if (decoded->successor_transaction.required_ack_set.entries.count >
+            WVM_CTL_DRAIN_ACK_CAP ||
+        decoded->successor_snapshot.required_ack_set.entries.count >
+            WVM_CTL_DRAIN_ACK_CAP ||
+        decoded->successor_snapshot.next_hop_rules.count >
+            WVM_CTL_DRAIN_RULE_CAP ||
+        decoded->successor_transaction.optional_departure_drain_set.count >
+            WVM_CTL_DRAIN_DEPARTURE_CAP) {
+        set_error(error, error_len,
+                  "gateway drain exceeds supported one-scope ACK/rule/"
+                  "departure bounds (ack<=8 rules<=4 departure<=2)");
+        return -1;
+    }
+    /*
+     * Transport stamps manifest_generation=1 on peer ROUTE_* envelopes.
+     * Reject successors without a VM route scope; multi-generation drain must
+     * bind the dependency's real generation before widening this gate.
+     */
+    if (decoded->successor_snapshot.route_snapshot_key.scope_key.vm_id == 0 ||
+        decoded->successor_snapshot.route_snapshot_key.scope_key
+                .vm_incarnation == 0) {
+        set_error(error, error_len,
+                  "gateway drain successor lacks supported VM route scope");
+        return -1;
+    }
+    return 0;
+}
+
 static int collect_acks_after_prepare(
     struct wvm_ctl_gateway_drain *drain, const struct wvm_envelope *request,
     char *error, size_t error_len)
@@ -106,6 +154,9 @@ static int collect_acks_after_prepare(
                                  WVM_CTL_DRAIN_ACK_CAP, error, error_len) != 0) {
         return -1;
     }
+    if (validate_supported_drain_scope(&decoded, error, error_len) != 0) {
+        return -1;
+    }
     memset(&drain_request, 0, sizeof(drain_request));
     drain_request.gateway_member_key = &decoded.target_gateway_member_key;
     drain_request.successor_transaction = &decoded.successor_transaction;
@@ -121,6 +172,29 @@ static int collect_acks_after_prepare(
         error, error_len);
 }
 
+static int deliver_after_commit_or_abort(
+    struct wvm_ctl_gateway_drain *drain, const struct wvm_envelope *request,
+    enum wvm_gateway_drain_action action, char *error, size_t error_len)
+{
+    struct wvm_gateway_drain_request decoded;
+
+    memset(&decoded, 0, sizeof(decoded));
+    if (wvm_gateway_drain_request_decode(request->payload, request->payload_bytes,
+                                         &decoded, error, error_len) != 0 ||
+        decoded.action != action) {
+        set_error(error, error_len, "gateway drain commit/abort decode failed");
+        return -1;
+    }
+    if (action == WVM_GATEWAY_DRAIN_ACTION_COMMIT) {
+        return wvm_membership_drain_transport_deliver_commits(
+            &drain->transport, &drain->plane->membership_controller,
+            decoded.route_operation_id, error, error_len);
+    }
+    return wvm_membership_drain_transport_deliver_aborts(
+        &drain->transport, &drain->plane->membership_controller,
+        decoded.route_operation_id, error, error_len);
+}
+
 int wvm_ctl_gateway_drain_apply(
     void *opaque, const struct wvm_envelope *request,
     const struct wvm_member_key *authenticated_actor,
@@ -128,22 +202,38 @@ int wvm_ctl_gateway_drain_apply(
     size_t error_len)
 {
     struct wvm_ctl_gateway_drain *drain = opaque;
-    char ack_error[256];
-    int rc;
 
     if (!drain || !drain->initialized || !drain->enrollment) {
         set_error(error, error_len, "ctl gateway drain is not ready");
         return -1;
     }
-    rc = wvm_ctl_membership_enrollment_apply(
+    return wvm_ctl_membership_enrollment_apply(
         drain->enrollment, request, authenticated_actor, result, error,
         error_len);
-    if (rc != 0 || !request || !result ||
+}
+
+void wvm_ctl_gateway_drain_after_reply(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    const struct wvm_membership_control_result *result)
+{
+    struct wvm_ctl_gateway_drain *drain = opaque;
+    char peer_error[256];
+
+    if (!drain || !drain->initialized || !drain->enrollment) {
+        return;
+    }
+
+    /* Cluster enrollment only after REGISTER reply is on the wire. */
+    wvm_ctl_membership_enrollment_after_reply(
+        drain->enrollment, request, authenticated_actor, result);
+
+    if (!request || !result ||
         result->status_code != WVM_MEMBERSHIP_CONTROL_SUCCESS ||
         request->message_type != WVM_ENVELOPE_MSG_DRAIN) {
-        return rc;
+        return;
     }
-    /* Only PREPARE carries successor material for peer ROUTE_PREPARE. */
+
     {
         struct wvm_gateway_drain_request probe;
         struct wvm_required_ack_entry tx_acks[WVM_CTL_DRAIN_ACK_CAP];
@@ -164,21 +254,40 @@ int wvm_ctl_gateway_drain_apply(
         probe.successor_snapshot.required_ack_set.entries.entries = snap_acks;
         probe.successor_snapshot.required_ack_set.entries.capacity =
             WVM_CTL_DRAIN_ACK_CAP;
+        peer_error[0] = '\0';
         if (wvm_gateway_drain_request_decode(request->payload,
                                              request->payload_bytes, &probe,
-                                             ack_error, sizeof(ack_error)) != 0 ||
-            probe.action != WVM_GATEWAY_DRAIN_ACTION_PREPARE) {
-            return 0;
+                                             peer_error, sizeof(peer_error)) !=
+            0) {
+            return;
+        }
+        if (probe.action == WVM_GATEWAY_DRAIN_ACTION_PREPARE) {
+            peer_error[0] = '\0';
+            if (collect_acks_after_prepare(drain, request, peer_error,
+                                           sizeof(peer_error)) != 0) {
+                fprintf(stderr,
+                        "wvm_ctl: gateway drain peer ROUTE_PREPARE ACK failed "
+                        "(PREPARE durable; COMMIT will fail-closed until "
+                        "retry/ABORT): %s\n",
+                        peer_error[0] ? peer_error : "unknown error");
+            }
+            return;
+        }
+        if (probe.action == WVM_GATEWAY_DRAIN_ACTION_COMMIT ||
+            probe.action == WVM_GATEWAY_DRAIN_ACTION_ABORT) {
+            peer_error[0] = '\0';
+            if (deliver_after_commit_or_abort(drain, request, probe.action,
+                                              peer_error,
+                                              sizeof(peer_error)) != 0) {
+                fprintf(stderr,
+                        "wvm_ctl: gateway drain peer ROUTE_%s delivery failed "
+                        "(controller decision durable; retry same operation): "
+                        "%s\n",
+                        probe.action == WVM_GATEWAY_DRAIN_ACTION_COMMIT
+                            ? "COMMIT"
+                            : "ABORT",
+                        peer_error[0] ? peer_error : "unknown error");
+            }
         }
     }
-    ack_error[0] = '\0';
-    if (collect_acks_after_prepare(drain, request, ack_error,
-                                   sizeof(ack_error)) != 0) {
-        fprintf(stderr,
-                "wvm_ctl: gateway drain peer ROUTE_PREPARE ACK failed "
-                "(PREPARE durable; COMMIT will fail-closed until retry/ABORT): "
-                "%s\n",
-                ack_error[0] ? ack_error : "unknown error");
-    }
-    return 0;
 }

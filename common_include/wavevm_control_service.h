@@ -40,6 +40,12 @@ struct wvm_control_service_config {
      */
     wvm_control_transport_apply_fn membership_apply;
     void *membership_apply_opaque;
+    /*
+     * Optional: run after the membership CTRL result is fully written (e.g.
+     * cluster enrollment / drain peer ROUTE_*). NULL skips the hook.
+     */
+    wvm_control_transport_after_membership_fn after_membership_reply;
+    void *after_membership_reply_opaque;
 };
 
 struct wvm_control_service {

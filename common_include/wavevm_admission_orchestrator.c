@@ -187,7 +187,7 @@ static int callback_participant_commits(
  * uint16; kind 1 = compute allocation, kind 2 = gateway route). Not the
  * StartupDependency enum.
  */
-static int register_membership_route_and_dependencies(
+int wvm_admission_register_membership_route_and_dependencies(
     struct wvm_membership_controller *controller,
     const struct wvm_coordinator_transaction *transaction,
     const struct wvm_route_transaction_record *route_transaction,
@@ -663,7 +663,7 @@ int wvm_admission_orchestrator_run(
      * the live dependency without an offline seed.
      */
     if (input->membership_controller &&
-        register_membership_route_and_dependencies(
+        wvm_admission_register_membership_route_and_dependencies(
             input->membership_controller, transaction, input->route_transaction,
             input->prepared_vm, error, error_len) != 0) {
         return -1;

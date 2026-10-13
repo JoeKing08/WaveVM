@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "../common_include/wavevm_envelope.h"
 #include "../common_include/wavevm_manifest.h"
@@ -365,16 +366,22 @@ int wvm_ctl_membership_enrollment_activate_compute(
                 enrollment->ack_capacity, &resume_state, error,
                 error_len) == 0) {
             /* Resume same operation_id/proof after a prior commit failure. */
-        } else if (allocate_nonzero_operation_id(operation_id, error,
-                                                 error_len) != 0 ||
-                   wvm_membership_controller_build_cluster_admission_proof(
-                       controller, member_key, operation_id,
-                       controller->membership_revision,
-                       controller->topology_revision,
-                       controller->admission_eligibility_revision,
-                       capability_digest, topology_digest, &proof,
-                       enrollment->ack_storage, enrollment->ack_capacity, error,
-                       error_len) != 0) {
+        } else if (error && strstr(error, "no resumable enrollment for member") != NULL) {
+            /* Only explicit absence may start a new enrollment operation. */
+            if (allocate_nonzero_operation_id(operation_id, error,
+                                              error_len) != 0 ||
+                wvm_membership_controller_build_cluster_admission_proof(
+                    controller, member_key, operation_id,
+                    controller->membership_revision,
+                    controller->topology_revision,
+                    controller->admission_eligibility_revision,
+                    capability_digest, topology_digest, &proof,
+                    enrollment->ack_storage, enrollment->ack_capacity, error,
+                    error_len) != 0) {
+                return -1;
+            }
+        } else {
+            /* Ambiguity / corrupt / capacity / invalid lookup: fail-closed. */
             return -1;
         }
     }
@@ -490,16 +497,22 @@ int wvm_ctl_membership_enrollment_activate_gateway(
                 enrollment->ack_capacity, &resume_state, error,
                 error_len) == 0) {
             /* Resume same operation_id/proof after commit failure. */
-        } else if (allocate_nonzero_operation_id(operation_id, error,
-                                                 error_len) != 0 ||
-                   wvm_membership_controller_build_cluster_admission_proof(
-                       controller, member_key, operation_id,
-                       controller->membership_revision,
-                       controller->topology_revision,
-                       controller->admission_eligibility_revision,
-                       capability_digest, topology_digest, &proof,
-                       enrollment->ack_storage, enrollment->ack_capacity, error,
-                       error_len) != 0) {
+        } else if (error && strstr(error, "no resumable enrollment for member") != NULL) {
+            /* Only explicit absence may start a new enrollment operation. */
+            if (allocate_nonzero_operation_id(operation_id, error,
+                                              error_len) != 0 ||
+                wvm_membership_controller_build_cluster_admission_proof(
+                    controller, member_key, operation_id,
+                    controller->membership_revision,
+                    controller->topology_revision,
+                    controller->admission_eligibility_revision,
+                    capability_digest, topology_digest, &proof,
+                    enrollment->ack_storage, enrollment->ack_capacity, error,
+                    error_len) != 0) {
+                return -1;
+            }
+        } else {
+            /* Ambiguity / corrupt / capacity / invalid lookup: fail-closed. */
             return -1;
         }
     }
@@ -524,39 +537,84 @@ int wvm_ctl_membership_enrollment_apply(
     size_t error_len)
 {
     struct wvm_ctl_membership_enrollment *enrollment = opaque;
-    char enroll_error[256];
-    int rc;
 
     if (!enrollment || !enrollment->initialized || !enrollment->plane) {
         set_error(error, error_len, "ctl membership enrollment is not ready");
         return -1;
     }
-    rc = wvm_control_plane_membership_apply(
+    return wvm_control_plane_membership_apply(
         enrollment->plane, request, authenticated_actor, result, error,
         error_len);
-    if (rc != 0 || !request || !result ||
+}
+
+static int enrollment_stream_error_retryable(const char *enroll_error)
+{
+    return enroll_error && enroll_error[0] != '\0' &&
+           (strstr(enroll_error, "control stream") != NULL ||
+            strstr(enroll_error, "control reply") != NULL ||
+            strstr(enroll_error, "Connection refused") != NULL ||
+            strstr(enroll_error, "connect") != NULL ||
+            strstr(enroll_error, "ECONN") != NULL ||
+            strstr(enroll_error, "EAGAIN") != NULL);
+}
+
+void wvm_ctl_membership_enrollment_after_reply(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    const struct wvm_membership_control_result *result)
+{
+    struct wvm_ctl_membership_enrollment *enrollment = opaque;
+    char enroll_error[256];
+    int attempt;
+    int enroll_rc = -1;
+
+    if (!enrollment || !enrollment->initialized || !request || !result ||
+        !authenticated_actor ||
         result->status_code != WVM_MEMBERSHIP_CONTROL_SUCCESS ||
-        request->message_type != WVM_ENVELOPE_MSG_REGISTER_MEMBER ||
-        !authenticated_actor) {
-        return rc;
+        request->message_type != WVM_ENVELOPE_MSG_REGISTER_MEMBER) {
+        return;
     }
-    enroll_error[0] = '\0';
-    if (authenticated_actor->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
-        if (wvm_ctl_membership_enrollment_activate_compute(
+
+    /*
+     * Invoked only after the REGISTER accepting stream has closed (reply was
+     * already on the wire and the joiner finished its client exchange). Retry
+     * only transient stream errors — never nest enrollment inside apply.
+     */
+    for (attempt = 0; attempt < 8; attempt++) {
+        enroll_error[0] = '\0';
+        if (authenticated_actor->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
+            enroll_rc = wvm_ctl_membership_enrollment_activate_compute(
                 enrollment, authenticated_actor, enroll_error,
-                sizeof(enroll_error)) != 0) {
-            fprintf(stderr,
-                    "wvm_ctl: cluster enrollment after REGISTER deferred: %s\n",
-                    enroll_error[0] ? enroll_error : "unknown error");
+                sizeof(enroll_error));
+        } else if (authenticated_actor->role_type == WVM_MANIFEST_ROLE_GATEWAY) {
+            enroll_rc = wvm_ctl_membership_enrollment_activate_gateway(
+                enrollment, authenticated_actor, enroll_error,
+                sizeof(enroll_error));
+        } else {
+            return;
         }
-    } else if (authenticated_actor->role_type == WVM_MANIFEST_ROLE_GATEWAY) {
-        if (wvm_ctl_membership_enrollment_activate_gateway(
-                enrollment, authenticated_actor, enroll_error,
-                sizeof(enroll_error)) != 0) {
+        if (enroll_rc == 0) {
             fprintf(stderr,
-                    "wvm_ctl: gateway enrollment after REGISTER deferred: %s\n",
-                    enroll_error[0] ? enroll_error : "unknown error");
+                    "wvm_ctl: cluster enrollment after REGISTER reached ACTIVE\n");
+            fflush(stderr);
+            return;
+        }
+        fprintf(stderr,
+                "wvm_ctl: cluster enrollment attempt %d failed: %s\n",
+                attempt + 1, enroll_error[0] ? enroll_error : "unknown error");
+        fflush(stderr);
+        if (!enrollment_stream_error_retryable(enroll_error)) {
+            break;
+        }
+        {
+            struct timespec delay = {.tv_sec = 0,
+                                     .tv_nsec = 50L * 1000L * 1000L};
+
+            (void)nanosleep(&delay, NULL);
         }
     }
-    return 0;
+    fprintf(stderr,
+            "wvm_ctl: cluster enrollment after REGISTER deferred: %s\n",
+            enroll_error[0] ? enroll_error : "unknown error");
+    fflush(stderr);
 }

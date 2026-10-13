@@ -171,7 +171,25 @@ struct wvm_admission_recovery_input {
     struct wvm_route_snapshot_record *route_snapshot;
     const struct wvm_admission_orchestrator_callbacks *callbacks;
     void *callback_context;
+    /*
+     * Optional: when set, recover_activation / COMMITTED resume idempotently
+     * republish membership route + dependency_acquire before readiness opens
+     * (cluster-membership §5.4 / runtime-manifest-lifecycle).
+     */
+    struct wvm_membership_controller *membership_controller;
 };
+
+/*
+ * Idempotent membership predecessor route + dependency_acquire used by
+ * CREATE_VM post-ACTIVATE and by activation recovery. Failure must keep
+ * readiness closed.
+ */
+int wvm_admission_register_membership_route_and_dependencies(
+    struct wvm_membership_controller *controller,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_route_transaction_record *route_transaction,
+    const struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
+    size_t error_len);
 
 /*
  * Resume a durable transaction after process loss. The caller supplies
@@ -180,6 +198,8 @@ struct wvm_admission_recovery_input {
  * from the open, unfenced journal, never supplied by the caller. The candidate
  * must match its durable digest before any callback runs. ACTIVATION_DECIDED
  * is always resumed forward, while ABORTING is cleaned up toward ABORTED.
+ * When membership_controller is set, membership route/deps are restored
+ * before COMMITTED readiness opens.
  */
 int wvm_admission_orchestrator_recover(
     const struct wvm_admission_recovery_input *input, char *error,

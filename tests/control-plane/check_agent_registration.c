@@ -6,9 +6,9 @@
 int main(int argc, char **argv)
 {
     struct wvm_membership_controller controller;
-    struct wvm_membership_controller_member_entry members[2];
-    struct wvm_membership_controller_route_entry routes[2];
-    struct wvm_membership_dependency dependencies[2];
+    struct wvm_membership_controller_member_entry members[8];
+    struct wvm_membership_controller_route_entry routes[8];
+    struct wvm_membership_dependency dependencies[8];
     const struct wvm_node_record *node;
     unsigned long control_port;
     char *end;
@@ -23,8 +23,8 @@ int main(int argc, char **argv)
     if (*end != '\0' || control_port == 0 || control_port > UINT16_MAX) {
         return 2;
     }
-    wvm_membership_controller_init(&controller, members, 2, routes, 2,
-                                    dependencies, 2, NULL, NULL);
+    wvm_membership_controller_init(&controller, members, 8, routes, 8,
+                                    dependencies, 8, NULL, NULL);
     if (wvm_membership_controller_open(&controller, argv[1], error,
                                        sizeof(error)) != 0) {
         fprintf(stderr, "membership recovery failed: %s\n", error);

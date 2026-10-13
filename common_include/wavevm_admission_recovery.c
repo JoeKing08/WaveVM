@@ -249,8 +249,22 @@ static int recover_activation(
                                        input->transaction,
                                        input->route_transaction,
                                        input->route_snapshot, error,
-                                       error_len) != 0 ||
-        durable_route_state(input, WVM_ROUTE_TRANSACTION_ACTIVATED, error,
+                                       error_len) != 0) {
+        return -1;
+    }
+    /*
+     * Same fail-closed membership publication as CREATE_VM: restore
+     * predecessor route + dependency_acquire before COMMITTED/ready so
+     * gateway drain §5.4 can see the live dependency after recovery.
+     */
+    if (input->membership_controller &&
+        wvm_admission_register_membership_route_and_dependencies(
+            input->membership_controller, input->transaction,
+            input->route_transaction, input->prepared_vm, error,
+            error_len) != 0) {
+        return -1;
+    }
+    if (durable_route_state(input, WVM_ROUTE_TRANSACTION_ACTIVATED, error,
                             error_len) != 0 ||
         wvm_control_plane_transition(
             input->control_plane, input->transaction,
@@ -344,6 +358,13 @@ int wvm_admission_orchestrator_recover(
     if (entry->transaction.state == WVM_LIFECYCLE_COMMITTED) {
         if (wvm_coordinator_commit_local(input->transaction, input->prepared_vm,
                                          &activation, error, error_len) != 0) {
+            return -1;
+        }
+        if (input->membership_controller &&
+            wvm_admission_register_membership_route_and_dependencies(
+                input->membership_controller, input->transaction,
+                input->route_transaction, input->prepared_vm, error,
+                error_len) != 0) {
             return -1;
         }
         return wvm_control_plane_start_if_participants_ready(

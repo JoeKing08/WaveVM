@@ -2,10 +2,12 @@
 #define WAVEVM_MEMBERSHIP_DRAIN_TRANSPORT_H
 
 /*
- * Controller-owned transport for one-scope gateway-drain successor
- * ROUTE_PREPARE peer ACKs (cluster-membership-topology-lifecycle §5.4,
- * wire-ipc-abi §4.2.2). Does not invent drain actions; PREPARE/COMMIT/ABORT
- * remain canonical GatewayDrainRequest on the membership receiver.
+ * Controller-owned transport for one-scope gateway-drain successor peer
+ * ROUTE_PREPARE / ROUTE_COMMIT / ROUTE_ABORT (cluster-membership-topology-
+ * lifecycle §5.4, wire-ipc-abi §4.2.2). Does not invent drain actions;
+ * PREPARE/COMMIT/ABORT remain canonical GatewayDrainRequest on the membership
+ * receiver. Peer route stages keep participant state consistent with the
+ * controller's durable drain decision.
  */
 
 #include <stddef.h>
@@ -32,8 +34,8 @@ int wvm_membership_drain_transport_init(
     wvm_admission_transport_submit_fn submit, char *error, size_t error_len);
 
 /*
- * Bind coordinator drain route_prepare to authenticated peer ROUTE_PREPARE.
- * prepare_context is the transport itself.
+ * Bind coordinator drain route_prepare/commit/abort to authenticated peer
+ * ROUTE_* stages. prepare_context is the transport itself.
  */
 int wvm_membership_drain_transport_bind(
     struct wvm_membership_drain_transport *transport,
@@ -42,13 +44,35 @@ int wvm_membership_drain_transport_bind(
 
 /*
  * After durable DRAIN PREPARE, submit ROUTE_PREPARE to each RequiredAckSet
- * peer and record controller route_ack_prepare. On peer failure, aborts the
- * PREPARING drain (eligibility invalidation retained).
+ * peer and record controller route_ack_prepare. On peer failure, best-effort
+ * ROUTE_ABORT to peers that prepared, then aborts the PREPARING drain
+ * (eligibility invalidation retained).
  */
 int wvm_membership_drain_transport_collect_prepare_acks(
     struct wvm_membership_drain_transport *transport,
     struct wvm_membership_controller *controller,
     const struct wvm_membership_gateway_drain_request *request, char *error,
+    size_t error_len);
+
+/*
+ * After durable DRAIN COMMIT, submit ROUTE_COMMIT to each RequiredAckSet peer
+ * of the activated successor route (looked up by operation_id). Idempotent
+ * retries use the same operation identity.
+ */
+int wvm_membership_drain_transport_deliver_commits(
+    struct wvm_membership_drain_transport *transport,
+    struct wvm_membership_controller *controller,
+    const uint8_t route_operation_id[WVM_IDENTITY_ID_BYTES], char *error,
+    size_t error_len);
+
+/*
+ * After durable DRAIN ABORT (or prepare-path abort), submit ROUTE_ABORT to
+ * each RequiredAckSet peer of the PREPARING/ABORTED successor route.
+ */
+int wvm_membership_drain_transport_deliver_aborts(
+    struct wvm_membership_drain_transport *transport,
+    struct wvm_membership_controller *controller,
+    const uint8_t route_operation_id[WVM_IDENTITY_ID_BYTES], char *error,
     size_t error_len);
 
 #endif /* WAVEVM_MEMBERSHIP_DRAIN_TRANSPORT_H */

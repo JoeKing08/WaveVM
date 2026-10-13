@@ -43,6 +43,8 @@ struct wvm_control_owner_config {
     void *admission_apply_opaque;
     wvm_control_transport_dispatch_fn dispatch;
     void *dispatch_opaque;
+    wvm_control_transport_after_membership_fn after_membership_reply;
+    void *after_membership_reply_opaque;
 };
 
 struct wvm_control_owner {

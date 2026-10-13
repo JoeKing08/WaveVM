@@ -76,6 +76,10 @@ static long g_num_cores = 0;
 static int *g_tcg_session_fds;
 static pid_t *g_tcg_helper_pids;
 static volatile int g_tcg_proxy_listening;
+static int *g_tcg_proxy_socks;
+static long g_tcg_proxy_sock_capacity;
+static long g_tcg_proxy_sock_count;
+static pthread_mutex_t g_tcg_proxy_sock_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_ram_mb = 1024;
 static uint64_t g_slave_ram_size = 1024UL * 1024 * 1024;
 static int g_base_id = 0;
@@ -3498,6 +3502,87 @@ static int spawn_tcg_processes(int base_id) {
  * [关键逻辑] 维护 CMD（控制）、REQ（同步请求）、PUSH（异步推送）三通道的路由，并实现 VFIO 的本地拦截。
  * [后果] 解决了模拟模式下的网络竞争问题，通过物理通道隔离，保证了高频内存同步不会阻塞关键的 CPU 控制指令。
  */
+static void tcg_proxy_sock_register(int sockfd)
+{
+    pthread_mutex_lock(&g_tcg_proxy_sock_lock);
+    if (g_tcg_proxy_socks && g_tcg_proxy_sock_count < g_tcg_proxy_sock_capacity &&
+        sockfd >= 0) {
+        g_tcg_proxy_socks[g_tcg_proxy_sock_count++] = sockfd;
+    }
+    pthread_mutex_unlock(&g_tcg_proxy_sock_lock);
+}
+
+static void tcg_proxy_sock_unregister(int sockfd)
+{
+    long i;
+
+    pthread_mutex_lock(&g_tcg_proxy_sock_lock);
+    for (i = 0; i < g_tcg_proxy_sock_count; i++) {
+        if (g_tcg_proxy_socks[i] == sockfd) {
+            g_tcg_proxy_socks[i] = g_tcg_proxy_socks[g_tcg_proxy_sock_count - 1];
+            g_tcg_proxy_sock_count--;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_tcg_proxy_sock_lock);
+}
+
+static void tcg_wake_and_close_proxy_socks(void)
+{
+    long i;
+    int sock;
+    struct sockaddr_in addr;
+    uint8_t poke = 0;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((uint16_t)g_service_port);
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock >= 0) {
+        for (i = 0; i < 16; i++) {
+            (void)sendto(sock, &poke, 1, 0, (struct sockaddr *)&addr,
+                         sizeof(addr));
+        }
+        close(sock);
+    }
+
+    /* shutdown unblocks recvmmsg; owning proxy threads close the fds. */
+    pthread_mutex_lock(&g_tcg_proxy_sock_lock);
+    for (i = 0; i < g_tcg_proxy_sock_count; i++) {
+        if (g_tcg_proxy_socks[i] >= 0) {
+            (void)shutdown(g_tcg_proxy_socks[i], SHUT_RDWR);
+        }
+    }
+    pthread_mutex_unlock(&g_tcg_proxy_sock_lock);
+}
+
+static void tcg_reap_remaining_helpers(void)
+{
+    long i;
+
+    if (!g_tcg_helper_pids || g_num_cores <= 0) {
+        return;
+    }
+    for (i = 0; i < g_num_cores; i++) {
+        if (g_tcg_helper_pids[i] > 0) {
+            (void)kill(g_tcg_helper_pids[i], SIGTERM);
+        }
+        if (g_tcg_session_fds && g_tcg_session_fds[i] >= 0) {
+            close(g_tcg_session_fds[i]);
+            g_tcg_session_fds[i] = -1;
+        }
+    }
+    for (i = 0; i < g_num_cores; i++) {
+        int status = 0;
+
+        if (g_tcg_helper_pids[i] > 0) {
+            (void)waitpid(g_tcg_helper_pids[i], &status, 0);
+            g_tcg_helper_pids[i] = -1;
+        }
+    }
+}
+
 void* tcg_proxy_thread(void *arg) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
@@ -3530,6 +3615,7 @@ void* tcg_proxy_thread(void *arg) {
     }
     for(int i=0;i<BATCH_SIZE;i++) { iovecs[i].iov_base=rx_pool + (size_t)i * WVM_MAX_PACKET_SIZE; iovecs[i].iov_len=WVM_MAX_PACKET_SIZE; msgs[i].msg_hdr.msg_iov=&iovecs[i]; msgs[i].msg_hdr.msg_iovlen=1; msgs[i].msg_hdr.msg_name=&src_addrs[i]; msgs[i].msg_hdr.msg_namelen=sizeof(src_addrs[i]); }
     /* Listening is not READY: helpers must be verified by the owner thread. */
+    tcg_proxy_sock_register(sockfd);
     g_tcg_proxy_listening = 1;
 
     printf("[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.\n");
@@ -3655,6 +3741,9 @@ void* tcg_proxy_thread(void *arg) {
             }
         }
     }
+    tcg_proxy_sock_unregister(sockfd);
+    close(sockfd);
+    free(rx_pool);
     return NULL;
 }
 
@@ -3803,6 +3892,18 @@ int wavevm_executor_runtime_main(
             executor_publish_startup_state(EXECUTOR_FAILED);
             return 1;
         }
+        free(g_tcg_proxy_socks);
+        g_tcg_proxy_socks = calloc((size_t)proxy_threads, sizeof(*g_tcg_proxy_socks));
+        g_tcg_proxy_sock_capacity = proxy_threads;
+        g_tcg_proxy_sock_count = 0;
+        if (!g_tcg_proxy_socks) {
+            executor_publish_startup_state(EXECUTOR_FAILED);
+            free(threads);
+            return 1;
+        }
+        for (long si = 0; si < proxy_threads; si++) {
+            g_tcg_proxy_socks[si] = -1;
+        }
         for (long i = 0; i < proxy_threads; i++) {
             if (pthread_create(&threads[i], NULL, tcg_proxy_thread, NULL) != 0) {
                 executor_publish_startup_state(EXECUTOR_FAILED);
@@ -3851,21 +3952,35 @@ int wavevm_executor_runtime_main(
                         "executor leaves READY\n",
                         (int)died, status);
                 executor_publish_startup_state(EXECUTOR_FAILED);
+                executor_request_process_shutdown(
+                    "required TCG helper exited after READY");
+                tcg_wake_and_close_proxy_socks();
+                tcg_reap_remaining_helpers();
                 break;
             }
             if (died < 0 && errno != ECHILD) {
                 fprintf(stderr,
-                        "[Hybrid] waitpid error errno=%d; executor loop ends "
-                        "without process-wide shutdown\n",
+                        "[Hybrid] waitpid error errno=%d; requesting shutdown\n",
                         errno);
+                executor_request_process_shutdown("TCG helper waitpid error");
+                tcg_wake_and_close_proxy_socks();
+                tcg_reap_remaining_helpers();
                 break;
             }
             usleep(100000);
+        }
+        if (g_shutdown_requested) {
+            tcg_wake_and_close_proxy_socks();
+            tcg_reap_remaining_helpers();
         }
         for (long i = 0; i < proxy_threads; i++) {
             pthread_join(threads[i], NULL);
         }
         free(threads);
+        free(g_tcg_proxy_socks);
+        g_tcg_proxy_socks = NULL;
+        g_tcg_proxy_sock_capacity = 0;
+        g_tcg_proxy_sock_count = 0;
     }
     return 0;
 }

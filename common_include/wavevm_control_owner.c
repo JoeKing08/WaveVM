@@ -117,19 +117,30 @@ static void *owner_client_main(void *opaque)
         owner->config.admission_apply_opaque;
     transport_config.dispatch = owner->config.dispatch;
     transport_config.dispatch_opaque = owner->config.dispatch_opaque;
+    transport_config.after_membership_reply =
+        owner->config.after_membership_reply;
+    transport_config.after_membership_reply_opaque =
+        owner->config.after_membership_reply_opaque;
 
+    fprintf(stderr, "wvm_control_owner: client thread start tls=%d\n",
+            client->tls);
+    fflush(stderr);
     if (client->tls) {
         struct wvm_control_io io;
 
         client->ssl = SSL_new(owner->tls_context);
         if (!client->ssl || SSL_set_fd(client->ssl, client->fd) != 1 ||
             SSL_accept(client->ssl) != 1) {
+            fprintf(stderr, "wvm_control_owner: TLS accept failed\n");
+            fflush(stderr);
             if (client->ssl) {
                 SSL_free(client->ssl);
                 client->ssl = NULL;
             }
             goto close_client;
         }
+        fprintf(stderr, "wvm_control_owner: TLS accept ok\n");
+        fflush(stderr);
         io.opaque = client->ssl;
         io.read = owner_ssl_read;
         io.write = owner_ssl_write;
@@ -143,19 +154,43 @@ static void *owner_client_main(void *opaque)
                 &transport, error, sizeof(error));
 
             if (result != WVM_CONTROL_TRANSPORT_ACCEPTED) {
+                if (result != WVM_CONTROL_TRANSPORT_EOF && error[0]) {
+                    fprintf(stderr, "wvm_control_owner: serve_once rc=%d err=%s\n",
+                            result, error);
+                    fflush(stderr);
+                }
                 break;
             }
         }
+        /*
+         * Fully tear down the accepting stream before membership after-reply
+         * work (cluster enrollment / drain ROUTE_*). Peer RPCs must not share
+         * the still-open REGISTER/DRAIN connection's SSL lifetime.
+         */
+        if (client->ssl) {
+            (void)SSL_shutdown(client->ssl);
+            SSL_free(client->ssl);
+            client->ssl = NULL;
+        }
+        if (client->fd >= 0) {
+            shutdown(client->fd, SHUT_RDWR);
+            close(client->fd);
+            client->fd = -1;
+        }
+        wvm_control_transport_flush_after_membership_reply(&transport);
+        wvm_control_transport_destroy(&transport);
     }
-    wvm_control_transport_destroy(&transport);
 close_client:
     if (client->ssl) {
         (void)SSL_shutdown(client->ssl);
         SSL_free(client->ssl);
         client->ssl = NULL;
     }
-    shutdown(client->fd, SHUT_RDWR);
-    close(client->fd);
+    if (client->fd >= 0) {
+        shutdown(client->fd, SHUT_RDWR);
+        close(client->fd);
+        client->fd = -1;
+    }
 
     pthread_mutex_lock(&owner->lock);
     client->done = 1;

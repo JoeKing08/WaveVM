@@ -31,14 +31,19 @@ int wvm_ctl_gateway_drain_init(
 void wvm_ctl_gateway_drain_destroy(struct wvm_ctl_gateway_drain *drain);
 
 /*
- * Membership apply wrapper: REGISTER still goes through enrollment; after a
- * successful DRAIN PREPARE, collect RequiredAckSet peer ROUTE_PREPARE ACKs
- * before the executor may COMMIT to DRAINING.
+ * Durable membership apply only (via enrollment wrapper). Peer ROUTE_* and
+ * cluster enrollment run from after_membership_reply once the CTRL result is
+ * fully written — never nested inside the open REGISTER/DRAIN exchange.
  */
 int wvm_ctl_gateway_drain_apply(
     void *opaque, const struct wvm_envelope *request,
     const struct wvm_member_key *authenticated_actor,
     struct wvm_membership_control_result *result, char *error,
     size_t error_len);
+
+void wvm_ctl_gateway_drain_after_reply(
+    void *opaque, const struct wvm_envelope *request,
+    const struct wvm_member_key *authenticated_actor,
+    const struct wvm_membership_control_result *result);
 
 #endif /* WVM_CTL_GATEWAY_DRAIN_H */
