@@ -7,5 +7,5 @@
   "part_prefix": "grok-bot-b52fcc76-session.jsonl.gz.",
   "part_size_bytes": 47185920,
   "restore": "cat grok-bot-b52fcc76-session.jsonl.gz.[0-9][0-9][0-9] > grok-bot-b52fcc76-session.jsonl.gz",
-  "sha256": "6f2bcb80e4e71a7faba51e0f2f42bd814f2668b8fabd2b5f2ceaddd25c354bee"
+  "sha256": "afbf78dc457053accfe2dd5c289b9311609815bc8640f39e691c913d0209dfa8"
 }
