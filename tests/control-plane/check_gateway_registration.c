@@ -30,7 +30,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "membership recovery failed: %s\n", error);
         return 1;
     }
-    valid = controller.member_count == 1 && controller.route_count == 0 &&
+    valid = controller.member_count == 1 &&
             members[0].kind == WVM_MEMBERSHIP_GATEWAY &&
             members[0].member_key.role_type == WVM_MANIFEST_ROLE_GATEWAY &&
             members[0].member_key.role_id == 901 &&

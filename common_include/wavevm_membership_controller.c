@@ -4103,6 +4103,73 @@ int wvm_membership_controller_begin_drain(
     return result;
 }
 
+int wvm_membership_controller_begin_drain_apply(
+    struct wvm_membership_controller *controller,
+    const struct wvm_member_key *member_key,
+    uint64_t expected_membership_revision,
+    uint64_t expected_topology_revision,
+    uint64_t expected_admission_eligibility_revision, char *error,
+    size_t error_len)
+{
+    struct wvm_membership_controller_member_entry *entry;
+    int result = -1;
+
+    if (!controller || controller->journal_fd < 0 || !member_key ||
+        member_key->role_type != WVM_MANIFEST_ROLE_NODE_RUNTIME ||
+        wvm_member_key_validate(member_key, error, error_len) != 0 ||
+        expected_membership_revision == 0 ||
+        expected_topology_revision == 0 ||
+        expected_admission_eligibility_revision == 0) {
+        set_error(error, error_len, "compute drain action input is invalid");
+        return -1;
+    }
+
+    pthread_mutex_lock(&controller->lock);
+    entry = find_member_mutable(controller, member_key);
+    if (gateway_drain_topology_reserved(controller)) {
+        set_error(error, error_len,
+                  "compute drain cannot change a reserved topology");
+    } else if (!entry || entry->kind != WVM_MEMBERSHIP_COMPUTE) {
+        set_error(error, error_len, "compute drain names an unknown member");
+    } else if (controller->membership_revision ==
+                   expected_membership_revision &&
+               controller->topology_revision == expected_topology_revision &&
+               controller->admission_eligibility_revision ==
+                   expected_admission_eligibility_revision) {
+        if (entry_state(entry) != WVM_MANIFEST_MEMBER_CORDONED) {
+            set_error(error, error_len,
+                      "compute drain transition requires CORDONED state");
+        } else if (entry->active_dependency_count != 0) {
+            set_error(error, error_len,
+                      "compute member cannot drain with dependencies");
+        } else {
+            result = persist_member_state_locked(
+                controller, entry, WVM_MANIFEST_MEMBER_DRAINING,
+                entry_health(entry), 1, error, error_len);
+        }
+    } else if (expected_membership_revision != UINT64_MAX &&
+               expected_topology_revision != UINT64_MAX &&
+               expected_admission_eligibility_revision != UINT64_MAX &&
+               controller->membership_revision ==
+                   expected_membership_revision + 1U &&
+               controller->topology_revision ==
+                   expected_topology_revision + 1U &&
+               controller->admission_eligibility_revision ==
+                   expected_admission_eligibility_revision + 1U &&
+               entry_state(entry) == WVM_MANIFEST_MEMBER_DRAINING &&
+               entry_membership_revision(entry) ==
+                   expected_membership_revision + 1U &&
+               entry_topology_revision(entry) ==
+                   expected_topology_revision + 1U) {
+        /* Interrupted control-result journal: same fence replays success. */
+        result = 0;
+    } else {
+        set_error(error, error_len, "compute drain revision fence is stale");
+    }
+    pthread_mutex_unlock(&controller->lock);
+    return result;
+}
+
 int wvm_membership_controller_remove(
     struct wvm_membership_controller *controller,
     const struct wvm_member_key *member_key, char *error, size_t error_len)

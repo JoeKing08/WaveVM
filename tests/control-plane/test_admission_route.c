@@ -219,7 +219,7 @@ int main(void)
     struct wvm_coordinator_prepared_route prepared_route;
     struct wvm_route_transaction_record route_transaction;
     struct wvm_route_snapshot_record route_snapshot;
-    struct wvm_route_rule_record route_rules[16];
+    struct wvm_route_rule_record route_rules[32];
     struct wvm_required_ack_entry ack_entries[2];
     uint8_t snapshot_bytes[65536];
     uint8_t ack_set_bytes[4096];
@@ -233,7 +233,7 @@ int main(void)
                "build canonical route inputs") ||
         expect(wvm_admission_route_compiler_init(
                    &compiler, WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1, route_rules,
-                   16, ack_entries, 2, snapshot_bytes, sizeof(snapshot_bytes),
+                   32, ack_entries, 2, snapshot_bytes, sizeof(snapshot_bytes),
                    ack_set_bytes, sizeof(ack_set_bytes), error,
                    sizeof(error)) == 0,
                "initialize flat route compiler")) {
@@ -328,7 +328,7 @@ int main(void)
 
     if (expect(wvm_admission_route_compiler_init(
                    &compiler, WVM_ROUTE_TOPOLOGY_FRACTAL, 1, 6000, 1,
-                   route_rules, 16, ack_entries, 2, snapshot_bytes,
+                   route_rules, 32, ack_entries, 2, snapshot_bytes,
                    sizeof(snapshot_bytes), ack_set_bytes, sizeof(ack_set_bytes),
                    error, sizeof(error)) == 0,
                "initialize fractal route compiler") ||
@@ -337,14 +337,46 @@ int main(void)
                    &route_transaction, &route_snapshot, error,
                    sizeof(error)) == 0,
                "compile fractal route snapshot") ||
-        expect(compiler.route_rule_count == 1 &&
-                   route_snapshot.next_hop_rules.entries[0].destination_scope ==
-                       7,
-               "compile one prefix per active pod") ||
-        expect(wvm_route_snapshot_record_validate(&route_snapshot, error,
-                                                  sizeof(error)) == 0,
-               "validate compiled fractal records")) {
+        expect(compiler.route_rule_count == 17 &&
+                   route_snapshot.topology_kind == WVM_ROUTE_TOPOLOGY_FRACTAL,
+               "compile fractal leaf exacts plus one prefix")) {
         return 1;
+    }
+    {
+        size_t exact = 0;
+        size_t prefix = 0;
+        size_t ei;
+        int fractal_ok = 1;
+
+        for (ei = 0; ei < compiler.route_rule_count; ei++) {
+            const struct wvm_route_rule_record *r = &compiler.route_rules[ei];
+
+            if (r->destination_kind == WVM_ROUTE_DESTINATION_EXACT_VNODE) {
+                exact++;
+                if (r->destination_scope != 7 ||
+                    r->next_hop_kind != WVM_ROUTE_NEXT_HOP_ENDPOINT ||
+                    r->next_hop_endpoint.data_port != 9200) {
+                    fractal_ok = 0;
+                }
+            } else if (r->destination_kind == WVM_ROUTE_DESTINATION_PREFIX) {
+                prefix++;
+                if (r->destination_scope != 7 ||
+                    r->next_hop_kind != WVM_ROUTE_NEXT_HOP_GATEWAY ||
+                    r->next_hop_member.role_id != 3) {
+                    fractal_ok = 0;
+                }
+            } else {
+                fractal_ok = 0;
+            }
+        }
+        if (expect(exact == 16 && prefix == 1 && fractal_ok,
+                   "fractal exact leaves keep pod scope; prefix hops to "
+                   "gateway") ||
+            expect(wvm_route_snapshot_record_validate(&route_snapshot, error,
+                                                      sizeof(error)) == 0,
+                   "validate compiled fractal records")) {
+            return 1;
+        }
     }
 
     gateway.observed_health_state = WVM_MEMBERSHIP_UNREACHABLE;
@@ -364,7 +396,7 @@ int main(void)
     gateway.observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     if (expect(wvm_admission_route_compiler_init(
                    &compiler, WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1, route_rules,
-                   16, ack_entries, 2, snapshot_bytes, sizeof(snapshot_bytes),
+                   32, ack_entries, 2, snapshot_bytes, sizeof(snapshot_bytes),
                    ack_set_bytes, sizeof(ack_set_bytes), error,
                    sizeof(error)) == 0,
                "initialize single-node leaf route compiler") ||
@@ -436,7 +468,7 @@ int main(void)
     /* FRACTAL still requires a gateway even for a single ACTIVE node. */
     if (expect(wvm_admission_route_compiler_init(
                    &compiler, WVM_ROUTE_TOPOLOGY_FRACTAL, 1, 6000, 1,
-                   route_rules, 16, ack_entries, 2, snapshot_bytes,
+                   route_rules, 32, ack_entries, 2, snapshot_bytes,
                    sizeof(snapshot_bytes), ack_set_bytes, sizeof(ack_set_bytes),
                    error, sizeof(error)) == 0,
                "initialize fractal compiler for empty-gateway reject") ||

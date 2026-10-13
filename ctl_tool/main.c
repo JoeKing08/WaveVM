@@ -35,6 +35,7 @@
 #include "capability_publication.h"
 #include "runtime_profile_publication.h"
 #include "membership_enrollment.h"
+#include "gateway_drain.h"
 
 struct local_authentication;
 
@@ -115,6 +116,9 @@ struct service_options {
     uint32_t local_physical_node_id;
     uint64_t local_runtime_instance_id;
     size_t capacity;
+    /* Cluster control-plane route topology policy (identity-routing §5 /
+     * cluster-membership-topology-lifecycle §6). Default FLAT. */
+    enum wvm_route_topology_kind route_topology_kind;
 };
 
 static int read_random_bytes(uint8_t *bytes, size_t byte_count, char *error,
@@ -468,6 +472,7 @@ static void print_usage(const char *program)
             "Usage:\n"
             "  %s serve --state-dir DIR --socket PATH --local-node-id N "
             "--local-instance-id N --principals FILE --capacity N "
+            "[--route-topology flat|fractal] "
             "[--control-ca FILE --control-cert FILE --control-key FILE] "
             "[--control-address IP --control-port PORT]\n\n"
             "FILE contains one local authenticated principal per line:\n"
@@ -536,6 +541,23 @@ static int parse_role(const char *text, enum wvm_manifest_role_type *role)
     return 0;
 }
 
+static int parse_route_topology(const char *text,
+                                enum wvm_route_topology_kind *topology)
+{
+    if (!text || !topology) {
+        return -1;
+    }
+    if (strcmp(text, "flat") == 0) {
+        *topology = WVM_ROUTE_TOPOLOGY_FLAT;
+        return 0;
+    }
+    if (strcmp(text, "fractal") == 0) {
+        *topology = WVM_ROUTE_TOPOLOGY_FRACTAL;
+        return 0;
+    }
+    return -1;
+}
+
 static int parse_options(int argc, char **argv, struct service_options *options)
 {
     int i;
@@ -550,6 +572,7 @@ static int parse_options(int argc, char **argv, struct service_options *options)
         return -1;
     }
     memset(options, 0, sizeof(*options));
+    options->route_topology_kind = WVM_ROUTE_TOPOLOGY_FLAT;
     for (i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--state-dir") == 0 && i + 1 < argc &&
             !have_state_directory) {
@@ -595,6 +618,10 @@ static int parse_options(int argc, char **argv, struct service_options *options)
                    !have_capacity &&
                    parse_size(argv[++i], &options->capacity) == 0) {
             have_capacity = 1;
+        } else if (strcmp(argv[i], "--route-topology") == 0 && i + 1 < argc &&
+                   parse_route_topology(argv[++i],
+                                        &options->route_topology_kind) == 0) {
+            /* Parsed above; may override the FLAT default. */
         } else {
             return -1;
         }
@@ -1292,6 +1319,7 @@ int main(int argc, char **argv)
     struct admission_workspace admission_workspace;
     struct wvm_admission_authority_owner_config authority_config;
     struct wvm_ctl_membership_enrollment membership_enrollment;
+    struct wvm_ctl_gateway_drain gateway_drain;
     struct wvm_cluster_admission_ack_entry *enrollment_acks = NULL;
     char admission_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_journal[WVM_CONTROL_PLANE_PATH_MAX];
@@ -1319,6 +1347,7 @@ int main(int argc, char **argv)
     memset(&control_context, 0, sizeof(control_context));
     memset(&admission_workspace, 0, sizeof(admission_workspace));
     memset(&membership_enrollment, 0, sizeof(membership_enrollment));
+    memset(&gateway_drain, 0, sizeof(gateway_drain));
     shutdown_requested = 0;
     if (ensure_state_directory(options.state_directory) != 0 ||
         make_state_path(options.state_directory, "admission.journal",
@@ -1464,7 +1493,7 @@ int main(int argc, char **argv)
     }
     if (wvm_admission_route_compiler_init(
             &admission_workspace.route_compiler,
-            WVM_ROUTE_TOPOLOGY_FLAT, 1, 6000, 1,
+            options.route_topology_kind, 1, 6000, 1,
             admission_workspace.route_rules,
             admission_workspace.route_rule_capacity,
             admission_workspace.route_ack_entries, admission_workspace.route_ack_capacity,
@@ -1517,6 +1546,16 @@ int main(int argc, char **argv)
             options.capacity, error, sizeof(error)) != 0) {
         fprintf(stderr,
                 "wvm_ctl: cannot initialize cluster enrollment transport: %s\n",
+                error);
+        goto close_plane;
+    }
+    if (wvm_ctl_gateway_drain_init(
+            &gateway_drain, &plane, &membership_enrollment,
+            options.local_physical_node_id, options.local_runtime_instance_id,
+            &admission_workspace, admission_transport_submit, error,
+            sizeof(error)) != 0) {
+        fprintf(stderr,
+                "wvm_ctl: cannot initialize gateway drain transport: %s\n",
                 error);
         goto close_plane;
     }
@@ -1607,8 +1646,8 @@ int main(int argc, char **argv)
      * participant stages as ordinary CREATE_VM control requests. */
     service_config.admission_apply = NULL;
     service_config.admission_apply_opaque = NULL;
-    service_config.membership_apply = wvm_ctl_membership_enrollment_apply;
-    service_config.membership_apply_opaque = &membership_enrollment;
+    service_config.membership_apply = wvm_ctl_gateway_drain_apply;
+    service_config.membership_apply_opaque = &gateway_drain;
     if (install_signal_handlers() != 0) {
         fprintf(stderr, "wvm_ctl: cannot install signal handlers: %s\n",
                 strerror(errno));
@@ -1666,6 +1705,7 @@ out:
     wvm_ctl_runtime_profile_set_destroy(&admission_workspace.runtime_profile_set);
     wvm_ctl_capability_evidence_destroy(
         &admission_workspace.capability_evidence);
+    wvm_ctl_gateway_drain_destroy(&gateway_drain);
     wvm_ctl_membership_enrollment_destroy(&membership_enrollment);
     free(enrollment_acks);
     free(operations);

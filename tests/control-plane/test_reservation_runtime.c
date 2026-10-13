@@ -44,10 +44,11 @@ int main(void)
 {
     struct wvm_admission_node node;
     struct wvm_admission_node other_node;
-    struct wvm_resource_reservation stored[5];
+    struct wvm_resource_reservation stored[6];
     struct wvm_resource_reservation other_stored[2];
     struct wvm_resource_reservation first;
     struct wvm_resource_reservation conflicting;
+    struct wvm_resource_reservation second_mode_a;
     struct wvm_resource_reservation distinct;
     struct wvm_resource_reservation other_node_reservation;
     struct wvm_resource_reservation mode_b_first;
@@ -55,6 +56,7 @@ int main(void)
     struct wvm_resource_reservation replay_mismatch;
     struct wvm_exclusive_lease first_lease;
     struct wvm_exclusive_lease conflict_lease;
+    struct wvm_exclusive_lease second_mode_a_lease;
     struct wvm_exclusive_lease distinct_lease;
     struct wvm_local_reservation_registry registry;
     struct wvm_local_reservation_registry other_registry;
@@ -75,7 +77,7 @@ int main(void)
     memset(&first_lease, 0, sizeof(first_lease));
     first_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     first_lease.lease_generation = 1;
-    strcpy(first_lease.lease_name, "kernel-context");
+    strcpy(first_lease.lease_name, "kernel-context:vm=101:inc=1");
     fill_reservation(&first, 1, 17);
     first.exclusive_leases.entries = &first_lease;
     first.has_prepared_expiry = 1;
@@ -84,11 +86,23 @@ int main(void)
     memset(&conflict_lease, 0, sizeof(conflict_lease));
     conflict_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     conflict_lease.lease_generation = 2;
-    strcpy(conflict_lease.lease_name, "kernel-context");
+    strcpy(conflict_lease.lease_name, "kernel-context:vm=101:inc=1");
     fill_reservation(&conflicting, 2, 17);
     conflicting.exclusive_leases.entries = &conflict_lease;
     conflicting.has_prepared_expiry = 1;
     conflicting.prepared_expiry_unix_time_ms = 20;
+
+    memset(&second_mode_a_lease, 0, sizeof(second_mode_a_lease));
+    second_mode_a_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
+    second_mode_a_lease.lease_generation = 3;
+    strcpy(second_mode_a_lease.lease_name, "kernel-context:vm=102:inc=1");
+    fill_reservation(&second_mode_a, 7, 17);
+    second_mode_a.guest_vcpu_slots = 1;
+    second_mode_a.guest_memory_bytes = 4096;
+    second_mode_a.overhead_memory_bytes = 0;
+    second_mode_a.exclusive_leases.entries = &second_mode_a_lease;
+    second_mode_a.has_prepared_expiry = 1;
+    second_mode_a.prepared_expiry_unix_time_ms = 25;
 
     memset(&other_node_reservation, 0, sizeof(other_node_reservation));
     fill_reservation(&other_node_reservation, 4, 18);
@@ -129,7 +143,7 @@ int main(void)
     replay_mismatch.exclusive_leases.entries = &conflict_lease;
 
     if (expect(wvm_local_reservation_registry_init(
-                   &registry, &node, stored, 5, error, sizeof(error)) == 0,
+                   &registry, &node, stored, 6, error, sizeof(error)) == 0,
                "initialize registry") ||
         expect(wvm_local_reservation_prepare(
                    &registry, &first, &result, error, sizeof(error)) == 0 &&
@@ -144,7 +158,16 @@ int main(void)
                "reject replay with a different lease generation") ||
         expect(wvm_local_reservation_prepare(
                    &registry, &conflicting, &result, error, sizeof(error)) != 0,
-               "reject a second single-context kernel reservation") ||
+               "reject an identical kernel-context lease name") ||
+        expect(wvm_local_reservation_prepare(
+                   &registry, &second_mode_a, &result, error, sizeof(error)) ==
+                   0 &&
+                   result == WVM_RESERVATION_RUNTIME_NEW,
+               "allow a second Mode A VM with a distinct kernel-context lease") ||
+        expect(wvm_local_reservation_abort(
+                   &registry, &second_mode_a, &result, error,
+                   sizeof(error)) == 0,
+               "release second Mode A kernel-context lease") ||
         expect(wvm_local_reservation_prepare(
                    &registry, &distinct, &result, error, sizeof(error)) == 0 &&
                    result == WVM_RESERVATION_RUNTIME_NEW,

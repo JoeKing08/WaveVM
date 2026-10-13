@@ -43,14 +43,23 @@ static size_t transaction_port_index(
     const struct wvm_node_runtime_profile *profile, size_t count,
     uint32_t salt)
 {
-    uint64_t value = transaction_generation(transaction);
+    uint64_t value;
 
+    (void)profile;
     if (count == 0) {
         return 0;
     }
-
-    value ^= (uint64_t)profile->physical_node_id * UINT64_C(0x9e3779b1);
-    value ^= profile->node_instance_id + UINT64_C(0x9e3779b97f4a7c15);
+    /*
+     * Prefer admitted VM identity so concurrent VMs on one node receive
+     * distinct listener ports/leases (resource-placement-admission exclusive
+     * names; Mode A/B multi-VM). Pure admission_tx hashing made dual-VM
+     * CREATE fail-closed on random collisions of the same UDP leases.
+     */
+    if (transaction->vm_id != 0) {
+        return (size_t)(((uint64_t)transaction->vm_id + (uint64_t)salt - 1U) %
+                        count);
+    }
+    value = transaction_generation(transaction);
     value ^= (uint64_t)salt * UINT64_C(0x517cc1b727220a95);
     return (size_t)(value % count);
 }

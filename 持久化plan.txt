@@ -306,3 +306,77 @@ F04 部分修复完成。capability记录现在包含真实时间戳和唯一pro
 [2026-10-13 已验证：Oct-12 五审计项 + 多节点+gateway CREATE_VM 到 RUNNING] 同轮收口审计与跨节点竖切（本地未 commit/push）：(1) TCG READY 仅在 `slave_hybrid` 拉起并确认 live helper PID 后发布，测试用 `tcg_helper_stub` 代替真 QEMU，不宣称 guest E2E；(2) enrollment resume 在 commit 失败后复用同一 operation_id/proof（`find_resumable_enrollment` + state_directory）；(3) enrollment slot 回收与 VM slot 解耦（`enrollment_slot_capacity` + COMMITTED/ABORTED reclaim）；(4) ACTIVE 前加载真实 capability/topology evidence（agent 启动前 seed，`load_capabilities`）；(5) 测试等待真 ACTIVE（journal 副本 + `check_multi_active`，禁止截断 live journal）。跨节点：`membership capture` 从 `GatewayRecord.hosting_physical_node_id` 推导并合并 `NodeInventory.hosted_gateway_role_ids`，修复「gateway 901 has invalid host relation」；新增 `test_create_vm_multi_node.sh`（≥1 ACTIVE gateway + ≥2 ACTIVE compute，gateway-backed FLAT EXACT_VNODE→gateway 非叶路由，compact 单宿主 placement，prepare→activate→commit→readiness→RUNNING）。验证：`test_create_vm_multi_node.sh`、`test_create_vm_single_node.sh`、`test_multi_active_cluster.sh`、`test_admission_agent_registration.sh` 均 PASS（status=0 / recorded_state=RUNNING）。边界：未做 guest E2E；spread 跨节点 vCPU/无本地内存 placement 仍被 node_runtime 诚实拒绝（远程内存 executor 未闭环）；cordon/drain 生产入口、Mode A 双 VM、FRACTAL、capability/profile 生产 publish CLI 限制仍待后续。按站立规则保持本地未提交直至用户明确要求 push。
 
 [2026-10-13 用户授权：本阶段代码与 CC/Codex/Grok 会话备份一并 push（Asia/Shanghai）]
+
+[2026-10-13 已验证：compute cordon/drain 生产入口] 在现有 membership_control 接收器上收口生产路径：EXECUTOR 经 Unix/ctl serve 发送 `CORDON`（`MemberCordonRequest`）将 ACTIVE 计算成员推进为 durable `CORDONED`（membership+eligibility revision +1，topology 不变）；新增 `WVM_ENVELOPE_MSG_DRAIN_COMPUTE`（`0x0106`）复用同 fence 载荷形状，经 `begin_drain_apply` 仅允许 `CORDONED`→`DRAINING`（三 revision 各 +1），有 dependency 或 stale fence 时 fail-closed。调度侧既有 ACTIVE-only eligibility 使 cordon 后 CREATE_VM 返回 `PRECONDITION_FAILED`（status=6）。新增 `tests/control-plane/test_cordon_drain_compute.sh`（真实 mTLS enroll→ACTIVE→生产 CORDON→CREATE fail-closed→DRAIN_COMPUTE→DRAINING）及 `submit_membership_action`/`read_membership_fence` 辅助工具。验证：`test_cordon_drain_compute.sh`、`test_membership_control.sh`、`test_membership_controller.sh`、`test_create_vm_single_node.sh`、`test_admission_agent_registration.sh` PASS。边界：gateway `DRAIN`（`0x0103`）库层/接收器早已存在但未在本轮加生产竖切测试；CREATE_VM 仍未调用 `dependency_acquire`，故“有运行中 VM 则拒绝 drain”在生产依赖计数上仍可能看到空集（库层/coordinator 单测已覆盖拒绝）；未宣称 Mode A 双 VM / guest E2E / gateway refresh。按站立规则保持本地未 commit/push。
+
+[2026-10-13 已验证：gateway 生产 CORDON + DRAIN fail-closed 竖切（未发明协议）] 按纲领收口而非闭门造车：`canonical-record-schema.md` gateway drain action 仅 `PREPARE|COMMIT|ABORT`；`wire-ipc-abi.md` §4.2/`§4.2.2` 规定 gateway 换血为 `DRAIN`(`0x0103`) PREPARE 完整 successor（topology=current+1）→ peer route ACK → COMMIT→DRAINING；`§4.2.3`/`MemberCordonRequest` 明确 `CORDON`(`0x0102`) 可对 `GATEWAY` 推进 durable `CORDONED`（topology 不变）。architecture-baseline：CORDONED 阻断新放置；gateway 离开须 successor。本轮**撤回**曾误加的 IDLE=4。生产竖切：`test_gateway_drain.sh`（真实 mTLS gateway_service ACTIVE + compute ACTIVE）→ 生产 `DRAIN COMMIT` 无 PREPARE/successor 返回 status=6 fail-closed 且状态仍 ACTIVE → 生产 `CORDON` GATEWAY→durable `CORDONED` → CREATE_VM fail-closed（sole GatewayRecord 不合格，无 empty-leaf 回退）→ 新 fence 再 cordon 拒绝。辅助：`submit_gateway_drain_commit.c`。验证：`test_gateway_drain.sh`、`test_cordon_drain_compute.sh`、`test_membership_control.sh`、`test_gateway_service_enrollment_active.sh`、`test_multi_active_cluster.sh` PASS。边界：**换血**（successor PREPARE+ACK+COMMIT→DRAINING）库层/接收器已有（`test_membership_control`），生产竖切仍缺 `dependency_acquire`（CREATE 未接线）、successor builder、route_prepare 生产 transport；未宣称 Mode A / guest E2E。按站立规则保持本地未 commit/push。
+[2026-10-13 已验证：gateway 换血 PREPARE→peer ROUTE_PREPARE ACK→COMMIT→DRAINING 生产竖切] 按纲领收口而非闭门造车：`cluster-membership-topology-lifecycle.md` §5.4（单 scope、恰好一 dependency、successor topology=current+1、departing 不进 RequiredAckSet）；`canonical-record-schema.md` GatewayDrainRequest 仅 PREPARE|COMMIT|ABORT；`wire-ipc-abi.md` §4.2/§4.2.2 DRAIN(0x0103)。本轮新增：`wavevm_membership_drain_transport`（durable PREPARE 后向 RequiredAckSet 提交真实 peer `ROUTE_PREPARE` 并 `route_ack_prepare`，失败则 ABORT 保留 eligibility 单调性）；ctl `gateway_drain_apply` 包装 enrollment apply，在 DRAIN PREPARE 成功后收集 peer ACK。生产竖切 `test_gateway_drain_prepare_commit.sh`：双 gateway+compute mTLS ACTIVE → COMMIT 无 PREPARE fail-closed → 离线 seed 前驱 route+dependency（CREATE_VM 尚未 `dependency_acquire`）→ 生产 PREPARE（caller 完整 successor）→ ctl peer ACK → COMMIT→DRAINING（三 revision 按 §4.2.2 推进）及幂等 COMMIT 重放。辅助：`seed_gateway_drain_route.c`、`submit_gateway_drain_prepare.c`；COMMIT 辅助区分 envelope operation_id 与 payload route_operation_id。验证：`test_gateway_drain_prepare_commit.sh`、`test_gateway_drain.sh`、`test_membership_control.sh` PASS。边界：CREATE_VM 仍未接线 `dependency_acquire`（本测离线 seed）；ctl 无 successor planner/builder（executor 提供完整 successor）；未宣称 Mode A / guest E2E / multi-scope aggregate。按站立规则保持本地未 commit/push。
+
+[2026-10-13 已验证：Mode A 双 VM 生产竖切 prepare→activate→commit→RUNNING]
+纲领依据（未闭门造车）：
+- `docs/wavevm-architecture-baseline.md` §1（Mode A 多 VM 仅在显式 per-VM kernel context 通过后可验收；「双」为验收门槛非上限）、§14（per-VM kernel context；此前单节点独占为迁移门而非产品上限）、§16 决策项 14；
+- `docs/specs/resource-placement-admission.md`（accelerator/kernel context 为 named exclusive lease，须与既有 reservation 互异）；
+- `docs/specs/runtime-manifest-lifecycle.md` §5.2 prepare→activate→commit→identity-bound readiness；
+- `docs/wavevm-mode-boundary-audit.md` §7（第二 Mode A VM 在 per-VM context 落地前须拒绝——本轮在准入侧解除固定名门闩）。
+
+本轮收口：
+1. `wavevm_admission.c`：Mode A `KERNEL_CONTEXT` exclusive lease 从固定名 `kernel-context` 改为 per-VM `kernel-context:vm=<id>:inc=<inc>`（保留同名冲突 fail-closed）；
+2. `wavevm_admission_provider.c`：listener 端口选择优先按 `vm_id` 取模，避免并发 VM 随机 `admission_tx` 哈希撞同一 UDP lease（撞车时参与者诚实 PRECONDITION_FAILED）；
+3. `seed_create_vm_evidence` 发布 `KERNEL_ACCELERATION` 并将 listener 池扩到 4；`submit_create_vm` 支持唯一 request id 与 `require-kernel`；
+4. 新增生产竖切 `tests/control-plane/test_create_vm_dual_mode_a.sh`：单 ACTIVE compute 上两次 `REQUIRE_KERNEL` CREATE_VM → 不同 vm_id → 均 status=0 / recorded_state=RUNNING。
+
+验证 PASS：`test_create_vm_dual_mode_a.sh`、`test_admission_plan.sh`、`test_reservation_runtime.sh`、`test_create_vm_single_node.sh`、`test_create_vm_multi_node.sh`、`test_admission_provider.sh`。
+边界：未宣称 guest E2E；箱内无 `/dev/wavevm`（子进程有 Kernel Mode disabled 警告），本竖切证明的是控制面 Mode A multi-context 准入+生命周期（per-VM kernel-context lease + prepare/activate/commit/readiness），不是内核加速数据面；CREATE_VM 仍未接线 `dependency_acquire`；evidence publish 仍以空 reservation 集重建（容量/lease 占用主要靠节点侧 registry 强制）；FRACTAL、capability/profile 生产 publish CLI、gateway successor builder 仍待后续。按站立规则保持本地未 commit/push。
+
+[2026-10-13 已验证：FRACTAL 控制面 CREATE_VM 竖切 prepare→activate→commit→RUNNING]
+纲领依据（未闭门造车 / 未发明协议）：
+- `docs/specs/identity-routing.md` §5 Flat and Fractal Lookup（§5.2：leaf EXACT_VNODE 保留 nonzero Pod scope→本地 sidecar；PREFIX→GATEWAY；控制面选 flat/fractal）；
+- `docs/specs/cluster-membership-topology-lifecycle.md` §6 Flat and Fractal Route Scope（FRACTAL 与 FLAT 同 VM namespace；缺路径 fail-closed）；
+- `docs/specs/runtime-manifest-lifecycle.md` §5.2 prepare→activate→commit→identity-bound readiness；
+- `docs/specs/resource-placement-admission.md`（route scope 与 admission 阶段）；
+- `docs/wavevm-architecture-baseline.md`（flat/fractal 由控制面按连通性/聚合/预算选择；同语义）；
+- 既有库层契约：`wavevm_admission_route` FRACTAL 无 gateway 仍 fail-closed（单节点 FLAT 叶路径不可回退）。
+
+本轮收口：
+1. `wavevm_admission_route.c` `append_fractal_rules`：按 §5.2 同时编译 leaf EXACT_VNODE（destination_scope=pod_id→本地 sidecar ENDPOINT）与 PREFIX（→GATEWAY），使 `runtime_dispatch_projection_build` 的 `find_exact_route` 可完成 ACTIVATE；
+2. `ctl_tool` serve 新增 `--route-topology flat|fractal`（默认 flat），将已文档化的 `WVM_ROUTE_TOPOLOGY_*` 注入 admission route compiler（集群路由拓扑策略，非 guest_topology_policy）；
+3. 生产竖切 `tests/control-plane/test_create_vm_fractal.sh`：ctl FRACTAL → 仅 compute ACTIVE 时 CREATE_VM status=6 fail-closed → 再 enroll ACTIVE gateway → prepare→activate→commit→readiness→RUNNING；辅助 `check_fractal_cluster.c`；
+4. `test_admission_route` 更新为 16 exact + 1 prefix 验收。
+
+验证 PASS：`test_admission_route.sh`、`test_create_vm_fractal.sh`、`test_create_vm_single_node.sh`、`test_create_vm_multi_node.sh`、`test_create_vm_dual_mode_a.sh`。
+边界 / Step-4 残余：未宣称 guest E2E；箱内无 `/dev/wavevm`（KVM 数据面/guest SSH 不在本竖切）；CREATE_VM 仍未接线 `dependency_acquire`；capability/profile 生产 publish CLI、gateway successor builder、多 Pod 分层中间 gateway 图、spread 跨节点 remote memory executor 仍待后续。按站立规则保持本地未 commit/push。
+
+[2026-10-13 已验证：CREATE_VM 接线 dependency_acquire + membership 前驱 route]
+纲领：`cluster-membership-topology-lifecycle.md` §5.4（gateway drain 需恰好一 dependency + activated predecessor）；§4.1 / `runtime-manifest-lifecycle`（durable ACTIVATE 为 post-decision dependency）；`wire-ipc-abi.md` §4.2.2 DRAIN PREPARE 绑定该 predecessor。未发明 API：仅调用既有 `wvm_membership_controller_dependency_acquire` / `route_begin`+`route_ack_prepare`+`route_commit`。
+
+本轮：
+1. `wvm_admission_orchestrator`：peer ROUTE_COMMIT 成功后、control-plane ACTIVATED 前，向 membership controller 发布同事务 ACTIVATED route，并对 placement compute（kind=1）与 RequiredAckSet 中 GATEWAY（kind=2）调用 `dependency_acquire`（幂等；fail-closed）。
+2. `membership_controller` 指针在 orchestrator input 改为非 const（生产 capture 本就可变）。
+3. `test_gateway_drain_prepare_commit.sh`：去掉离线 `seed_gateway_drain_route`；先 live CREATE_VM，断言 gateway deps=1，再用真实 vm_id PREPARE→COMMIT→DRAINING。
+4. ACTIVE 探针 `check_*` 不再要求 route_count==0（CREATE 后合法存在 membership route）。
+
+验证 PASS：`test_gateway_drain_prepare_commit.sh`、`test_create_vm_single_node.sh`、`test_create_vm_multi_node.sh`、`test_create_vm_fractal.sh`、`test_create_vm_dual_mode_a.sh`、`test_gateway_drain.sh`、`test_cordon_drain_compute.sh`、`test_membership_controller.sh`、`test_membership_coordinator.sh`、`test_ctl_create_vm.sh`、`test_admission_route.sh`。
+
+边界：admission recovery 路径尚未重跑 dependency_acquire；drain transport 的 envelope manifest_generation 仍固定为 1（V1 one-scope）；ctl 无 successor planner/builder（executor 提供完整 successor）；未宣称 guest E2E。按站立规则保持本地未 commit/push。
+
+[2026-10-13 Step-4 残余探针：guest / TCG 实机验收 — 不可行，未伪造]
+探针环境（Asia/Shanghai）：WaveVM box `/workspace/WaveVM`。站立：无 commit/push；不发明 guest 成功声明。
+
+存在项（已核实）：
+1. Cirros 镜像：`artifacts/images/cirros-0.6.2-x86_64-disk.img`（约 21M）。
+2. 测试用 `tests/control-plane/tcg_helper_stub.c`：仅持有 `WVM_EXECUTOR_SESSION_FD`，注释明确「Not a guest E2E helper: no QEMU accel, no guest boot」。现行 CREATE_VM 竖切（single/multi/fractal/dual Mode A 等）均 `export WVM_TCG_QEMU_BIN=$tmpdir/tcg_helper_stub`，控制面可到 RUNNING，但非真 guest。
+3. `slave_daemon/slave_hybrid.c` `spawn_tcg_processes` 生产路径要求 helper 二进制支持 `-accel wavevm`（默认 `qemu-system-x86_64` 或 `WVM_TCG_QEMU_BIN`），并注入三通道 + executor session；stub 满足 PID/session 存活门槛而已。
+4. `wavevm-qemu/` 源码树（VERSION 5.2.0）含 `accel/wavevm/` 与 `qemu-wavevm.diff`；**无** `build/` / `build-native/`，箱内**无**任何 `qemu-system-x86_64` 可执行文件。
+5. `scripts/wavevm_manifest_qemu.sh`：manifest → node_runtime ready → 调用外部 `--qemu PATH`；依赖已构建的 WaveVM QEMU。
+6. `tests/e2e/test_guest_smoke.sh`：占位，打印 SKIP 并 `exit 77`（guest boot/SSH/remote vCPU/memory 未实现）。
+7. `/dev/kvm` 存在（`crw-rw---- root:103`），但 gid 103 在箱内无对应 group 名，`box` 不在该组 → **不可读/不可写**；无 `/dev/wavevm`（内核加速数据面不可用）。
+8. 旧路径 `scripts/ci_dual_node.sh` / `artifacts/flat-tcg-test`：依赖独立 `wavevm_node_master`/`wavevm_node_slave`/`wavevm_gateway`、NODE/ROUTE 注入、以及 `wavevm-qemu/build-native/qemu-system-x86_64`。纲领与 `goal.txt` 禁止旧独立入口与 NODE/ROUTE 注入；本箱亦无这些二进制与 QEMU 构建产物。不得当作生产 guest E2E。
+
+阻断结论（诚实停止，未实现/未跑 guest 竖切）：
+- **无 WaveVM-patched QEMU 二进制** → 无法走 `-accel wavevm` 生产 TCG helper / frontend。
+- **无文档化的生产 CREATE_VM→真 QEMU+Cirros boot/SSH 路径**可在本箱原样运行；唯一接近的 Cirros 登录/SSH 脚本是遗留 CI dual-node，违反当前纲领。
+- KVM 设备对当前用户不可用；即便装 vanilla QEMU（apt 初始源亦未提供 `qemu-system-x86`/`qemu-utils`），也不能替代 WaveVM accel，更不能宣称 TCG 实机验收。
+- `goal.txt`：不启动未经验证的最终 guest E2E。
+
+本轮动作：仅探针 + 本边界记录；**未**安装/构建 QEMU、**未**改生产路径、**未**声称 guest E2E、**未** commit/push。
+后续若要做真 guest：先构建 `wavevm-qemu`（`-accel wavevm`）、打通生产 frontend 启动（manifest/CREATE_VM 带 Cirros 或等价）、再考虑 `/dev/kvm` 权限或纯 TCG；guest smoke 从 `exit 77` 升级为生产路径验收。在此之前 CREATE_VM RUNNING ≠ guest 实机验收。

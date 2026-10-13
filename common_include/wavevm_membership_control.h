@@ -72,6 +72,7 @@ struct wvm_membership_control_dispatch_context {
 
 enum wvm_membership_control_membership_action {
     WVM_MEMBERSHIP_CONTROL_MEMBERSHIP_ACTION_CORDON = 1,
+    WVM_MEMBERSHIP_CONTROL_MEMBERSHIP_ACTION_DRAIN_COMPUTE = 2,
 };
 
 /*
@@ -88,9 +89,9 @@ typedef int (*wvm_membership_control_authorize_management_fn)(
     size_t error_len);
 
 /*
- * Cordon is a membership-management operation. It has a separate trust hook
- * from gateway drain because the target may be either a node runtime or a
- * gateway, and the policy is not a route replacement decision.
+ * Cordon and compute drain are membership-management operations. They have a
+ * separate trust hook from gateway drain because the target may be a node
+ * runtime (or gateway for cordon), and the policy is not a route replacement.
  */
 typedef int (*wvm_membership_control_authorize_membership_fn)(
     void *context, enum wvm_membership_control_membership_action action,

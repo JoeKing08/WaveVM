@@ -298,6 +298,20 @@ int wvm_membership_controller_begin_drain(
     const struct wvm_member_key *member_key, char *error, size_t error_len);
 
 /*
+ * Fenced compute drain: target must be NODE_RUNTIME in CORDONED (or already
+ * DRAINING for exact fence replay). Advances membership, topology, and
+ * admission-eligibility revisions by one. Refuses when active VM dependencies
+ * exist or a gateway-drain topology reservation is live.
+ */
+int wvm_membership_controller_begin_drain_apply(
+    struct wvm_membership_controller *controller,
+    const struct wvm_member_key *member_key,
+    uint64_t expected_membership_revision,
+    uint64_t expected_topology_revision,
+    uint64_t expected_admission_eligibility_revision, char *error,
+    size_t error_len);
+
+/*
  * Gateway drain has a stricter publication rule than compute drain. The
  * caller supplies the complete immutable successor snapshot for one affected
  * scope; it must exclude the departing gateway and carry topology revision

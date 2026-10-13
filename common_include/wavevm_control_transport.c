@@ -187,6 +187,7 @@ static int supported_request(uint16_t message_type)
            message_type == WVM_ENVELOPE_MSG_REJOIN ||
            message_type == WVM_ENVELOPE_MSG_CORDON ||
            message_type == WVM_ENVELOPE_MSG_DRAIN ||
+           message_type == WVM_ENVELOPE_MSG_DRAIN_COMPUTE ||
            typed_request(message_type);
 }
 

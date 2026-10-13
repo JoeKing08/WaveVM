@@ -6,6 +6,8 @@
 #include <string.h>
 
 #include "wavevm_membership.h"
+#include "wavevm_membership_controller.h"
+#include "wavevm_manifest.h"
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
 {
@@ -162,6 +164,113 @@ static int callback_participant_commits(
                 input->callback_context, &input->prepared_vm->candidate,
                 &input->prepared_vm->node_runtime_manifests[i],
                 input->activation, error, error_len) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+
+/*
+ * After peer ROUTE_COMMIT and before control-plane ACTIVATED, publish the same
+ * route into the membership controller and acquire durable VM dependencies.
+ *
+ * Specs:
+ * - cluster-membership-topology-lifecycle.md §5.4: gateway drain PREPARE needs
+ *   exactly one registered dependency for the VM incarnation and an activated
+ *   predecessor snapshot in the membership controller.
+ * - §4.1 / runtime-manifest-lifecycle: durable ACTIVATE is a post-decision
+ *   dependency; drain must see it.
+ * - wire-ipc-abi.md §4.2.2: DRAIN PREPARE successor binds that predecessor.
+ *
+ * dependency_kind values follow existing controller/test convention (nonzero
+ * uint16; kind 1 = compute allocation, kind 2 = gateway route). Not the
+ * StartupDependency enum.
+ */
+static int register_membership_route_and_dependencies(
+    struct wvm_membership_controller *controller,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_route_transaction_record *route_transaction,
+    const struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
+    size_t error_len)
+{
+    struct wvm_route_transaction_record preparing;
+    struct wvm_membership_dependency dependency;
+    size_t i;
+    uint16_t route_state = 0;
+
+    if (!controller || !transaction || !route_transaction || !prepared_vm) {
+        set_error(error, error_len,
+                  "membership dependency registration input is invalid");
+        return -1;
+    }
+    if (transaction->vm_id == 0 || transaction->vm_incarnation == 0 ||
+        transaction->manifest_generation == 0) {
+        set_error(error, error_len,
+                  "membership dependency requires VM identity");
+        return -1;
+    }
+
+    preparing = *route_transaction;
+    preparing.state = WVM_ROUTE_TRANSACTION_PREPARING;
+    if (wvm_membership_controller_route_begin(controller, &preparing, error,
+                                              error_len) != 0) {
+        return -1;
+    }
+    for (i = 0; i < preparing.required_ack_set.entries.count; i++) {
+        if (wvm_membership_controller_route_ack_prepare(
+                controller, preparing.operation_id,
+                &preparing.required_ack_set.entries.entries[i].member_key,
+                error, error_len) != 0) {
+            return -1;
+        }
+    }
+    if (wvm_membership_controller_route_commit(controller,
+                                               preparing.operation_id, error,
+                                               error_len) != 0) {
+        return -1;
+    }
+    if (wvm_membership_controller_route_state(controller, preparing.operation_id,
+                                              &route_state, error,
+                                              error_len) != 0 ||
+        route_state != WVM_ROUTE_TRANSACTION_ACTIVATED) {
+        set_error(error, error_len,
+                  "membership route did not reach ACTIVATED after CREATE");
+        return -1;
+    }
+
+    for (i = 0; i < prepared_vm->node_runtime_manifest_count; i++) {
+        const struct wvm_node_runtime_manifest *manifest =
+            &prepared_vm->node_runtime_manifests[i];
+
+        memset(&dependency, 0, sizeof(dependency));
+        dependency.member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+        dependency.member_key.role_id = manifest->physical_node_id;
+        dependency.member_key.instance_id = manifest->expected_node_instance_id;
+        dependency.vm_id = transaction->vm_id;
+        dependency.vm_incarnation = transaction->vm_incarnation;
+        dependency.manifest_generation = transaction->manifest_generation;
+        dependency.dependency_kind = 1; /* compute allocation dependency */
+        if (wvm_membership_controller_dependency_acquire(
+                controller, &dependency, error, error_len) != 0) {
+            return -1;
+        }
+    }
+    for (i = 0; i < route_transaction->required_ack_set.entries.count; i++) {
+        const struct wvm_required_ack_entry *ack =
+            &route_transaction->required_ack_set.entries.entries[i];
+
+        if (ack->member_key.role_type != WVM_MANIFEST_ROLE_GATEWAY) {
+            continue;
+        }
+        memset(&dependency, 0, sizeof(dependency));
+        dependency.member_key = ack->member_key;
+        dependency.vm_id = transaction->vm_id;
+        dependency.vm_incarnation = transaction->vm_incarnation;
+        dependency.manifest_generation = transaction->manifest_generation;
+        dependency.dependency_kind = 2; /* gateway route dependency */
+        if (wvm_membership_controller_dependency_acquire(
+                controller, &dependency, error, error_len) != 0) {
             return -1;
         }
     }
@@ -545,8 +654,21 @@ int wvm_admission_orchestrator_run(
     if (input->callbacks->route_commit(input->callback_context,
                                         transaction, input->route_transaction,
                                         input->route_snapshot, error,
-                                        error_len) != 0 ||
-        durable_route_state(input, WVM_ROUTE_TRANSACTION_ACTIVATED, error,
+                                        error_len) != 0) {
+        return -1;
+    }
+    /*
+     * Fail-closed: membership predecessor + dependency_acquire must succeed
+     * before control-plane ACTIVATED/COMMITTED so gateway drain §5.4 can see
+     * the live dependency without an offline seed.
+     */
+    if (input->membership_controller &&
+        register_membership_route_and_dependencies(
+            input->membership_controller, transaction, input->route_transaction,
+            input->prepared_vm, error, error_len) != 0) {
+        return -1;
+    }
+    if (durable_route_state(input, WVM_ROUTE_TRANSACTION_ACTIVATED, error,
                             error_len) != 0 ||
         wvm_control_plane_transition(
             input->control_plane, transaction, WVM_LIFECYCLE_ACTIVATION_DECIDED,

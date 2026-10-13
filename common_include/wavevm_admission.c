@@ -921,12 +921,20 @@ static const struct wvm_admission_node_listener_plan *find_listener_plan(
 }
 
 static int derive_listener_leases(
-    const struct wvm_admission_node_listener_plan *plan, char *error,
+    const struct wvm_admission_node_listener_plan *plan,
+    const struct wvm_vm_route_scope_key *route_scope_key, char *error,
     size_t error_len)
 {
     int written;
 
     if (listener_plan_validate(plan, error, error_len) != 0) {
+        return -1;
+    }
+    if (plan->kernel_accelerator_required &&
+        (!route_scope_key || route_scope_key->vm_id == 0 ||
+         route_scope_key->vm_incarnation == 0)) {
+        set_error(error, error_len,
+                  "kernel context lease requires a non-zero VM route scope");
         return -1;
     }
     memset(plan->lease_entries, 0,
@@ -956,12 +964,21 @@ static int derive_listener_leases(
         return -1;
     }
     if (plan->kernel_accelerator_required) {
+        /*
+         * Mode A multi-context (architecture-baseline §14,
+         * resource-placement-admission exclusive accelerator contexts):
+         * each VM incarnation owns a distinct KERNEL_CONTEXT lease on the
+         * node. The previous fixed "kernel-context" name was the single-VM
+         * migration gate and blocked a second concurrent Mode A VM.
+         */
         plan->lease_entries[2].lease_kind =
             WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
         plan->lease_entries[2].lease_generation = plan->lease_generation;
         written = snprintf(plan->lease_entries[2].lease_name,
                            sizeof(plan->lease_entries[2].lease_name),
-                           "kernel-context");
+                           "kernel-context:vm=%u:inc=%llu",
+                           (unsigned)route_scope_key->vm_id,
+                           (unsigned long long)route_scope_key->vm_incarnation);
         if (written < 0 || (size_t)written >=
                                sizeof(plan->lease_entries[2].lease_name)) {
             set_error(error, error_len, "kernel context lease name is too long");
@@ -1129,8 +1146,9 @@ int wvm_admission_placement_plan_build(
         listener_plan = find_listener_plan(
             options, reservation->physical_node_id,
             reservation->expected_node_instance_id, error, error_len);
-        if (!listener_plan || derive_listener_leases(listener_plan, error,
-                                                     error_len) != 0) {
+        if (!listener_plan ||
+            derive_listener_leases(listener_plan, &options->route_scope_key,
+                                   error, error_len) != 0) {
             return -1;
         }
         if (listener_plan->kernel_accelerator_required !=

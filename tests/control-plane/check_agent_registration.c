@@ -30,7 +30,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "membership recovery failed: %s\n", error);
         return 1;
     }
-    valid = controller.member_count == 1 && controller.route_count == 0 &&
+    /* route_count may be >0 after CREATE_VM publishes the VM route into the
+     * membership controller for gateway-drain predecessor lookup (§5.4). */
+    valid = controller.member_count == 1 &&
             members[0].kind == WVM_MEMBERSHIP_COMPUTE &&
             members[0].member_key.role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME &&
             members[0].member_key.role_id == 801 &&

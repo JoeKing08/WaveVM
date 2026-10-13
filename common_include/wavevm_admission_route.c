@@ -269,6 +269,57 @@ static int append_fractal_rules(
 {
     size_t i;
 
+    /*
+     * identity-routing.md §5.2 / cluster-membership-topology-lifecycle.md §6:
+     * fractal leaf EXACT_VNODE retains nonzero Pod scope and maps to the local
+     * sidecar endpoint; PREFIX aggregates nonlocal Pod scope to a GATEWAY.
+     * runtime_dispatch projection_build requires those EXACT leaf rules.
+     */
+    for (i = 0; i < records->node_count; i++) {
+        const struct wvm_node_record *node = &records->nodes[i];
+        uint64_t vnode_end;
+        uint64_t vnode;
+
+        if (node->desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
+            node->observed_health_state != WVM_MEMBERSHIP_HEALTHY ||
+            node->pod_id == 0) {
+            continue;
+        }
+        if (node->local_vnode_first == UINT32_MAX ||
+            node->local_vnode_count >
+                UINT32_MAX - node->local_vnode_first ||
+            node->local_vnode_count == 0) {
+            set_error(error, error_len, "fractal route vnode range is invalid");
+            return -1;
+        }
+        if (wvm_endpoint_validate(&node->sidecar_endpoint, error, error_len) !=
+            0) {
+            return -1;
+        }
+        vnode_end = (uint64_t)node->local_vnode_first + node->local_vnode_count;
+        for (vnode = node->local_vnode_first; vnode < vnode_end; vnode++) {
+            struct wvm_route_rule_record rule;
+
+            if (vnode > UINT32_MAX) {
+                set_error(error, error_len, "fractal route vnode exceeds u32");
+                return -1;
+            }
+            memset(&rule, 0, sizeof(rule));
+            rule.destination_kind = WVM_ROUTE_DESTINATION_EXACT_VNODE;
+            rule.destination_scope = node->pod_id;
+            rule.destination_vnode_or_endpoint = (uint32_t)vnode;
+            rule.next_hop_kind = WVM_ROUTE_NEXT_HOP_ENDPOINT;
+            rule.next_hop_member.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+            rule.next_hop_member.role_id = node->physical_node_id;
+            rule.next_hop_member.instance_id = node->node_instance_id;
+            rule.next_hop_endpoint = node->sidecar_endpoint;
+            rule.hop_limit = 1;
+            if (append_route_rule(compiler, &rule, error, error_len) != 0) {
+                return -1;
+            }
+        }
+    }
+
     for (i = 0; i < records->node_count; i++) {
         const struct wvm_node_record *node = &records->nodes[i];
         struct wvm_route_rule_record rule;
@@ -280,7 +331,9 @@ static int append_fractal_rules(
             continue;
         }
         for (j = 0; j < compiler->route_rule_count; j++) {
-            if (compiler->route_rules[j].destination_scope == node->pod_id) {
+            if (compiler->route_rules[j].destination_kind ==
+                    WVM_ROUTE_DESTINATION_PREFIX &&
+                compiler->route_rules[j].destination_scope == node->pod_id) {
                 break;
             }
         }

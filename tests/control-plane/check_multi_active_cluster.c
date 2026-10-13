@@ -29,8 +29,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "membership recovery failed: %s\n", error);
         return 1;
     }
-    if (controller.member_count != 3 || controller.route_count != 0) {
-        fprintf(stderr, "expected 3 members 0 routes, got %zu members %zu routes\n",
+    if (controller.member_count != 3) {
+        fprintf(stderr, "expected 3 members, got %zu members (%zu routes)\n",
                 controller.member_count, controller.route_count);
         wvm_membership_controller_close(&controller);
         return 1;

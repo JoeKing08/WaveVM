@@ -74,11 +74,11 @@ int main(int argc, char **argv)
     uint64_t instance_id;
     uint64_t inventory_revision;
     uint64_t profile_generation;
-    uint16_t data_ports[2];
-    uint16_t service_ports[2];
+    uint16_t data_ports[4];
+    uint16_t service_ports[4];
     uint16_t node_control_port;
     uint16_t executor_control_port;
-    struct wvm_capability_record records[3];
+    struct wvm_capability_record records[4];
     struct wvm_capability_report report;
     struct wvm_node_runtime_profile profile;
     uint8_t digest[WVM_SHA256_DIGEST_BYTES];
@@ -107,8 +107,13 @@ int main(int argc, char **argv)
     profile_generation = strtoull(argv[5], NULL, 10);
     data_ports[0] = (uint16_t)strtoul(argv[6], NULL, 10);
     data_ports[1] = (uint16_t)strtoul(argv[7], NULL, 10);
+    /* Extra ports so concurrent VMs can hash to distinct listener leases. */
+    data_ports[2] = (uint16_t)(data_ports[0] + 50U);
+    data_ports[3] = (uint16_t)(data_ports[1] + 50U);
     service_ports[0] = (uint16_t)strtoul(argv[8], NULL, 10);
     service_ports[1] = (uint16_t)strtoul(argv[9], NULL, 10);
+    service_ports[2] = (uint16_t)(service_ports[0] + 50U);
+    service_ports[3] = (uint16_t)(service_ports[1] + 50U);
     node_control_port = (uint16_t)strtoul(argv[10], NULL, 10);
     executor_control_port = node_control_port + 1U;
     if (clock_gettime(CLOCK_REALTIME, &now) != 0 || now.tv_sec <= 0) {
@@ -124,12 +129,17 @@ int main(int argc, char **argv)
                     instance_id, 302, observed_at + 1);
     fill_capability(&records[2], WVM_CAPABILITY_ID_VM_ID_U32, node_id,
                     instance_id, 303, observed_at + 2);
+    /* Mode A multi-context admission publishes kernel acceleration capability.
+     * CREATE_VM with ACCELERATOR_DISABLED still ignores it; REQUIRE_KERNEL uses it.
+     * This does not claim /dev/wavevm guest E2E. */
+    fill_capability(&records[3], WVM_CAPABILITY_ID_KERNEL_ACCELERATION, node_id,
+                    instance_id, 304, observed_at + 3);
     memset(&report, 0, sizeof(report));
     report.profile_generation = profile_generation;
     report.records = records;
-    report.record_count = 3;
+    report.record_count = 4;
     if (wvm_capability_profile_digest(node_id, instance_id, profile_generation,
-                                      records, 3, digest, error,
+                                      records, 4, digest, error,
                                       sizeof(error)) != 0 ||
         wvm_capability_report_encode(&report, report_bytes,
                                      sizeof(report_bytes), &report_size, error,
@@ -150,9 +160,9 @@ int main(int argc, char **argv)
     profile.sync_batch_size = 8;
     profile.vcpu_handoff_record_capacity = 32;
     profile.node_runtime_data_ports = data_ports;
-    profile.node_runtime_data_port_count = 2;
+    profile.node_runtime_data_port_count = 4;
     profile.local_executor_service_ports = service_ports;
-    profile.local_executor_service_port_count = 2;
+    profile.local_executor_service_port_count = 4;
     if (wvm_node_runtime_profile_encode(&profile, profile_bytes,
                                         sizeof(profile_bytes), &profile_size,
                                         error, sizeof(error)) != 0) {

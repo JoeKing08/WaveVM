@@ -126,8 +126,12 @@ struct wvm_admission_orchestrator_input {
      * immutable evidence view instead of supplying a pre-captured record set.
      * The orchestrator captures membership before prepare and recaptures it
      * before activation; pure record-level callers continue to use records.
+     * Non-const: after durable ACTIVATE the production path records VM
+     * dependencies via wvm_membership_controller_dependency_acquire and
+     * publishes the activated route into the membership controller for
+     * gateway-drain predecessor lookup (cluster-membership §5.4).
      */
-    const struct wvm_membership_controller *membership_controller;
+    struct wvm_membership_controller *membership_controller;
     struct wvm_membership_controller_capture *membership_capture;
     const struct wvm_coordinator_membership_evidence *membership_evidence;
     struct wvm_coordinator_prepared_route *prepared_route;

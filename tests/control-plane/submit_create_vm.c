@@ -104,11 +104,14 @@ int main(int argc, char **argv)
     const char *display_name = "single-node-create";
     uint32_t requested_vcpus = 1;
     uint16_t placement_policy = WVM_MANIFEST_PLACEMENT_COMPACT;
+    unsigned id_byte = 0x71;
+    int require_kernel = 0;
     char *end = NULL;
 
-    if (argc < 2 || argc > 5) {
+    if (argc < 2 || argc > 7) {
         fprintf(stderr,
-                "usage: %s SOCKET [display_name] [vcpus] [compact|spread]\n",
+                "usage: %s SOCKET [display_name] [vcpus] [compact|spread] "
+                "[id_byte_hex] [disabled|require-kernel]\n",
                 argv[0]);
         return 2;
     }
@@ -128,9 +131,27 @@ int main(int argc, char **argv)
         fprintf(stderr, "submit CREATE_VM: placement must be compact|spread\n");
         return 2;
     }
+    if (argc >= 6) {
+        unsigned long parsed = strtoul(argv[5], &end, 16);
 
-    request_id[WVM_IDENTITY_ID_BYTES - 1] = 0x71;
-    operation_id[WVM_IDENTITY_ID_BYTES - 1] = 0x72;
+        if (!end || *end != '\0' || parsed == 0 || parsed > 0xffU) {
+            fprintf(stderr, "submit CREATE_VM: id_byte must be 1..ff hex\n");
+            return 2;
+        }
+        id_byte = (unsigned)parsed;
+    }
+    if (argc >= 7) {
+        if (strcmp(argv[6], "require-kernel") == 0) {
+            require_kernel = 1;
+        } else if (strcmp(argv[6], "disabled") != 0) {
+            fprintf(stderr,
+                    "submit CREATE_VM: accel must be disabled|require-kernel\n");
+            return 2;
+        }
+    }
+
+    request_id[WVM_IDENTITY_ID_BYTES - 1] = (uint8_t)id_byte;
+    operation_id[WVM_IDENTITY_ID_BYTES - 1] = (uint8_t)(id_byte + 1U);
     memset(&request, 0, sizeof(request));
     request.api_version = WVM_CANONICAL_SCHEMA;
     memcpy(request.request_id, request_id, sizeof(request.request_id));
@@ -140,7 +161,9 @@ int main(int argc, char **argv)
     request.requested_vcpus = requested_vcpus;
     request.requested_memory_bytes = 16ULL * 1024ULL * 1024ULL;
     request.execution_backend_policy = WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG;
-    request.accelerator_policy = WVM_MANIFEST_ACCELERATOR_DISABLED;
+    request.accelerator_policy =
+        require_kernel ? WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL
+                       : WVM_MANIFEST_ACCELERATOR_DISABLED;
     request.placement_policy = placement_policy;
     request.guest_topology_policy = WVM_MANIFEST_GUEST_TOPOLOGY_FLAT;
     request.consistency_policy.dirty_batch_size = 1;

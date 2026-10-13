@@ -400,6 +400,7 @@ tags starting at one; no listed field is optional unless marked optional.
 | `0x0101` | `REGISTER_MEMBER` | Exact canonical `NodeRecord` or `GatewayRecord` payload; the receiver derives `MemberKey` from that record | `vm_id=0`, fresh member instance, authenticated registrar | Registered `PENDING`/`RECOVERING` desired-state record; retained through member removal/quarantine. |
 | `0x0102` | `CORDON` | Exact canonical `MemberCordonRequest` (`0x102c`) | Authenticated actor is an `EXECUTOR` principal accepted by the separately configured membership-management authorizer. Target is a registered `NODE_RUNTIME` or `GATEWAY`; all three expected revisions are exact. | Target enters `CORDONED`; membership and admission-eligibility revisions advance by one, topology revision is unchanged; one durable replayable result is retained through removal/quarantine. |
 | `0x0103` | `DRAIN` | Exact canonical `GatewayDrainRequest` (`0x102b`) | Authenticated actor is an `EXECUTOR` principal accepted by the receiver's separately configured management-authorizer callback. A missing callback fails closed. `PREPARE` requires exact current membership/topology/eligibility revisions and one complete successor route at `topology_revision = current + 1`; `COMMIT` and `ABORT` carry the same pre-prepare fence and the controller validates the durable post-prepare eligibility state. | One durable replayable result per operation. `PREPARE` advances eligibility only; `COMMIT` atomically activates the successor, marks the target gateway `DRAINING`, and advances all three revisions; `ABORT` leaves membership/topology unchanged but retains the monotonic eligibility invalidation from `PREPARE`. |
+| `0x0106` | `DRAIN_COMPUTE` | Exact canonical `MemberCordonRequest` (`0x102c`) fence payload (same shape as cordon; V1 compute-drain request) | Authenticated actor is an `EXECUTOR` principal accepted by the membership-management authorizer for `DRAIN_COMPUTE`. Target is a registered `NODE_RUNTIME` already `CORDONED` with empty dependency set; all three expected revisions are exact. | Target enters `DRAINING`; membership, topology, and admission-eligibility revisions advance by one; one durable replayable result is retained. Gateway drain remains `0x0103` only. |
 | `0x0201` | `PREPARE_RESERVATION` | Exact canonical `AdmissionReservationStage` (`0x102d`) with candidate and `PREPARED` reservation only | Member/capability/fence still eligible and local capacity/name lease free | Prepared reservation ID/digest/expiry; retained until abort or expiry if no activation fence. |
 | `0x0202` | `COMMIT_RESERVATION` | Exact canonical `AdmissionReservationStage` with candidate, committed reservation, and durable `ActivationRecord` | Matching unexpired prepared record and durable activation decision | Committed reservation digest; retained through VM retirement. |
 | `0x0203` | `ABORT_RESERVATION` | Exact canonical `AdmissionReservationStage` with candidate, unactivated reservation, and nonzero abort reason | No matching activation fence, or explicit compensating-teardown record | Released/teardown-pending result; retained through cleanup horizon. |
@@ -453,8 +454,9 @@ impersonating another member.
 
 ### 4.2.2 Gateway Drain Authorization, Fences, and Replay
 
-`DRAIN` is currently the canonical one-scope `GatewayDrainRequest` only; a
-generic member drain payload is not accepted through this receiver. The
+`DRAIN` (`0x0103`) remains the canonical one-scope `GatewayDrainRequest`.
+`DRAIN_COMPUTE` (`0x0106`) accepts the fenced compute-member drain using the
+`MemberCordonRequest` payload shape; a gateway target is rejected. The
 transport must authenticate an `EXECUTOR` actor before calling the receiver.
 The receiver then calls its separately provisioned management-authorizer with
 the action, authenticated executor, and target gateway. Gateway/self and

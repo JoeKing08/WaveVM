@@ -24,6 +24,7 @@ static int control_message(uint16_t message_type)
     return message_type == WVM_ENVELOPE_MSG_REGISTER_MEMBER ||
            message_type == WVM_ENVELOPE_MSG_CORDON ||
            message_type == WVM_ENVELOPE_MSG_DRAIN ||
+           message_type == WVM_ENVELOPE_MSG_DRAIN_COMPUTE ||
            message_type == WVM_ENVELOPE_MSG_REJOIN;
 }
 

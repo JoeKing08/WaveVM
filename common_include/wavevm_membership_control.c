@@ -186,7 +186,8 @@ static int control_message_supported(uint16_t message_type)
     return message_type == WVM_ENVELOPE_MSG_REGISTER_MEMBER ||
            message_type == WVM_ENVELOPE_MSG_REJOIN ||
            message_type == WVM_ENVELOPE_MSG_CORDON ||
-           message_type == WVM_ENVELOPE_MSG_DRAIN;
+           message_type == WVM_ENVELOPE_MSG_DRAIN ||
+           message_type == WVM_ENVELOPE_MSG_DRAIN_COMPUTE;
 }
 
 static void initialize_result(
@@ -1292,6 +1293,58 @@ int wvm_membership_control_apply(
             return 0;
         }
         apply_result = wvm_membership_controller_cordon_apply(
+            control->controller, &cordon_request.request.target_member_key,
+            cordon_request.request.expected_membership_revision,
+            cordon_request.request.expected_topology_revision,
+            cordon_request.request.expected_admission_eligibility_revision,
+            error, error_len);
+        if (apply_result != 0) {
+            initialize_result(&result, request,
+                              classify_controller_error(error));
+            *result_out = result;
+            pthread_mutex_unlock(&control->lock);
+            return 0;
+        }
+        if (build_success_result(
+                control->controller, &cordon_request.request.target_member_key,
+                request, &result, error, error_len) != 0 ||
+            journal_append(control, request, authenticated_actor, &result, error,
+                           error_len) != 0 ||
+            remember_operation(control, request, authenticated_actor, &result,
+                               error, error_len) != 0) {
+            pthread_mutex_unlock(&control->lock);
+            return -1;
+        }
+        *result_out = result;
+        pthread_mutex_unlock(&control->lock);
+        return 0;
+    }
+    if (request->message_type == WVM_ENVELOPE_MSG_DRAIN_COMPUTE) {
+        if (wvm_member_cordon_request_decode(
+                request->payload, request->payload_bytes,
+                &cordon_request.request, error, error_len) != 0) {
+            initialize_result(&result, request,
+                              WVM_MEMBERSHIP_CONTROL_INVALID_RECORD);
+            *result_out = result;
+            pthread_mutex_unlock(&control->lock);
+            return 0;
+        }
+        if (!control->authorize_membership ||
+            authenticated_actor->role_type != WVM_MANIFEST_ROLE_EXECUTOR ||
+            control->authorize_membership(
+                control->authorize_membership_context,
+                WVM_MEMBERSHIP_CONTROL_MEMBERSHIP_ACTION_DRAIN_COMPUTE,
+                authenticated_actor, &cordon_request.request.target_member_key,
+                error, error_len) != 0) {
+            set_error(error, error_len,
+                      "compute drain management actor is not authorized");
+            initialize_result(&result, request,
+                              WVM_MEMBERSHIP_CONTROL_UNAUTHORIZED_ROLE);
+            *result_out = result;
+            pthread_mutex_unlock(&control->lock);
+            return 0;
+        }
+        apply_result = wvm_membership_controller_begin_drain_apply(
             control->controller, &cordon_request.request.target_member_key,
             cordon_request.request.expected_membership_revision,
             cordon_request.request.expected_topology_revision,
