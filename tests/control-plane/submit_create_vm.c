@@ -64,6 +64,22 @@ static uint32_t read_be32(const uint8_t bytes[4])
            ((uint32_t)bytes[2] << 8) | bytes[3];
 }
 
+static int parse_placement(const char *text, uint16_t *policy)
+{
+    if (!text || !policy) {
+        return -1;
+    }
+    if (strcmp(text, "compact") == 0) {
+        *policy = WVM_MANIFEST_PLACEMENT_COMPACT;
+        return 0;
+    }
+    if (strcmp(text, "spread") == 0) {
+        *policy = WVM_MANIFEST_PLACEMENT_SPREAD;
+        return 0;
+    }
+    return -1;
+}
+
 int main(int argc, char **argv)
 {
     struct wvm_vm_request request;
@@ -85,11 +101,34 @@ int main(int argc, char **argv)
     size_t path_bytes;
     int fd = -1;
     int status = 1;
+    const char *display_name = "single-node-create";
+    uint32_t requested_vcpus = 1;
+    uint16_t placement_policy = WVM_MANIFEST_PLACEMENT_COMPACT;
+    char *end = NULL;
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s SOCKET\n", argv[0]);
+    if (argc < 2 || argc > 5) {
+        fprintf(stderr,
+                "usage: %s SOCKET [display_name] [vcpus] [compact|spread]\n",
+                argv[0]);
         return 2;
     }
+    if (argc >= 3 && argv[2][0] != '\0') {
+        display_name = argv[2];
+    }
+    if (argc >= 4) {
+        unsigned long parsed = strtoul(argv[3], &end, 10);
+
+        if (!end || *end != '\0' || parsed == 0 || parsed > 64U) {
+            fprintf(stderr, "submit CREATE_VM: invalid vcpus\n");
+            return 2;
+        }
+        requested_vcpus = (uint32_t)parsed;
+    }
+    if (argc >= 5 && parse_placement(argv[4], &placement_policy) != 0) {
+        fprintf(stderr, "submit CREATE_VM: placement must be compact|spread\n");
+        return 2;
+    }
+
     request_id[WVM_IDENTITY_ID_BYTES - 1] = 0x71;
     operation_id[WVM_IDENTITY_ID_BYTES - 1] = 0x72;
     memset(&request, 0, sizeof(request));
@@ -97,12 +136,12 @@ int main(int argc, char **argv)
     memcpy(request.request_id, request_id, sizeof(request.request_id));
     request.has_display_name = 1;
     snprintf(request.display_name, sizeof(request.display_name), "%s",
-             "single-node-create");
-    request.requested_vcpus = 1;
+             display_name);
+    request.requested_vcpus = requested_vcpus;
     request.requested_memory_bytes = 16ULL * 1024ULL * 1024ULL;
     request.execution_backend_policy = WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG;
     request.accelerator_policy = WVM_MANIFEST_ACCELERATOR_DISABLED;
-    request.placement_policy = WVM_MANIFEST_PLACEMENT_COMPACT;
+    request.placement_policy = placement_policy;
     request.guest_topology_policy = WVM_MANIFEST_GUEST_TOPOLOGY_FLAT;
     request.consistency_policy.dirty_batch_size = 1;
     request.consistency_policy.handoff_commit_policy = 1;

@@ -653,6 +653,37 @@ static int enrollment_slot_lookup(
         *fresh = loaded == 0;
         return 0;
     }
+    /*
+     * Reclaim terminal enrollment rows independently of VM admission slots so
+     * historical COMMITTED/ABORTED ops cannot permanently exhaust capacity.
+     */
+    for (i = 0; i < receiver->config.enrollment_slot_capacity; i++) {
+        struct wvm_admission_enrollment_slot *slot =
+            &receiver->config.enrollment_slots[i];
+        int loaded;
+
+        if (slot->state != WVM_ADMISSION_ENROLLMENT_PARTICIPANT_COMMITTED &&
+            slot->state != WVM_ADMISSION_ENROLLMENT_PARTICIPANT_ABORTED) {
+            continue;
+        }
+        memset(slot->operation_id, 0, sizeof(slot->operation_id));
+        slot->proof_bytes_count = 0;
+        slot->state = WVM_ADMISSION_ENROLLMENT_PARTICIPANT_NONE;
+        slot->state_path[0] = '\0';
+        slot->state_failed = 0;
+        loaded = enrollment_slot_load(receiver, slot, operation_id, error,
+                                      error_len);
+        if (loaded < 0) {
+            return -1;
+        }
+        if (loaded == 0) {
+            memcpy(slot->operation_id, operation_id,
+                   sizeof(slot->operation_id));
+        }
+        *slot_out = slot;
+        *fresh = loaded == 0;
+        return 0;
+    }
     set_error(error, error_len, "enrollment participant table is full");
     return -1;
 }

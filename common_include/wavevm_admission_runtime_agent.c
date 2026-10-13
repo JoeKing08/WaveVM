@@ -22,6 +22,7 @@ struct agent_owned_storage {
     struct agent_slot_storage *slot_storage;
     struct wvm_admission_receiver_slot *slots;
     struct wvm_admission_enrollment_slot *enrollment_slots;
+    size_t enrollment_slot_capacity;
     uint8_t *enrollment_proof_storage;
     uint8_t *enrollment_proof_scratch;
     struct wvm_cluster_admission_ack_entry *enrollment_ack_scratch;
@@ -352,9 +353,23 @@ static int agent_storage_init(
     owned->slots = calloc(config->slot_capacity, sizeof(*owned->slots));
     owned->slot_storage = calloc(config->slot_capacity,
                                  sizeof(*owned->slot_storage));
-    owned->enrollment_slots = calloc(config->slot_capacity,
+    /*
+     * Enrollment participant slots are independent of VM admission slots so a
+     * small --slots value cannot exhaust cluster enrollment capacity.
+     */
+    {
+        size_t enrollment_slot_capacity = config->slot_capacity;
+        if (config->max_members > enrollment_slot_capacity) {
+            enrollment_slot_capacity = config->max_members;
+        }
+        if (enrollment_slot_capacity < 4U) {
+            enrollment_slot_capacity = 4U;
+        }
+        owned->enrollment_slot_capacity = enrollment_slot_capacity;
+    }
+    owned->enrollment_slots = calloc(owned->enrollment_slot_capacity,
                                      sizeof(*owned->enrollment_slots));
-    if (checked_count(config->slot_capacity,
+    if (checked_count(owned->enrollment_slot_capacity,
                       WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES,
                       &enrollment_storage_bytes) != 0) {
         free(owned);
@@ -390,6 +405,8 @@ static int agent_storage_init(
         }
         owned->slots[i].prepared_storage = owned->slot_storage[i].prepared;
         owned->slots[i].scratch_storage = owned->slot_storage[i].scratch;
+    }
+    for (i = 0; i < owned->enrollment_slot_capacity; i++) {
         owned->enrollment_slots[i].proof_bytes =
             owned->enrollment_proof_storage +
             i * WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES;
@@ -569,7 +586,7 @@ int wvm_admission_runtime_agent_init(
     receiver_config.local_endpoint = config->network_endpoint;
     receiver_config.enrollment_state_directory = config->state_directory;
     receiver_config.enrollment_slots = owned->enrollment_slots;
-    receiver_config.enrollment_slot_capacity = config->slot_capacity;
+    receiver_config.enrollment_slot_capacity = owned->enrollment_slot_capacity; /* enrollment_slot_capacity decoupled */
     receiver_config.enrollment_proof_storage = owned->enrollment_proof_storage;
     receiver_config.enrollment_proof_capacity =
         WVM_ADMISSION_ENROLLMENT_DEFAULT_PROOF_BYTES;

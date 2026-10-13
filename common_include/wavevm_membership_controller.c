@@ -3115,6 +3115,68 @@ int wvm_membership_controller_route_abort(
     return result;
 }
 
+
+int wvm_membership_controller_find_resumable_enrollment(
+    struct wvm_membership_controller *controller,
+    const struct wvm_member_key *member_key,
+    struct wvm_cluster_admission_proof *proof_out,
+    struct wvm_cluster_admission_ack_entry *ack_storage, size_t ack_capacity,
+    uint16_t *state_out, char *error, size_t error_len)
+{
+    size_t i;
+    size_t ack_count;
+    const struct wvm_membership_controller_enrollment *found = NULL;
+    int result = -1;
+
+    if (!controller || !member_key || !proof_out || !ack_storage ||
+        ack_capacity == 0 || !state_out ||
+        wvm_member_key_validate(member_key, error, error_len) != 0) {
+        set_error(error, error_len, "resumable enrollment lookup is invalid");
+        return -1;
+    }
+    pthread_mutex_lock(&controller->lock);
+    for (i = 0; i < controller->enrollment_capacity; i++) {
+        const struct wvm_membership_controller_enrollment *enrollment =
+            &controller->enrollments[i];
+
+        if (enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_PREPARING &&
+            enrollment->state != WVM_MEMBERSHIP_ENROLLMENT_COMMITTED) {
+            continue;
+        }
+        if (!member_key_equal(&enrollment->proof.member_key, member_key)) {
+            continue;
+        }
+        if (found) {
+            set_error(error, error_len,
+                      "multiple resumable enrollments for member");
+            goto out;
+        }
+        found = enrollment;
+    }
+    if (!found) {
+        set_error(error, error_len, "no resumable enrollment for member");
+        goto out;
+    }
+    ack_count = found->proof.required_ack_set.entries.count;
+    if (ack_count > ack_capacity) {
+        set_error(error, error_len, "resumable enrollment ack storage is short");
+        goto out;
+    }
+    *proof_out = found->proof;
+    if (ack_count != 0) {
+        memcpy(ack_storage, found->proof.required_ack_set.entries.entries,
+               ack_count * sizeof(*ack_storage));
+    }
+    proof_out->required_ack_set.entries.entries = ack_storage;
+    proof_out->required_ack_set.entries.count = ack_count;
+    proof_out->required_ack_set.entries.capacity = ack_capacity;
+    *state_out = (uint16_t)found->state;
+    result = 0;
+out:
+    pthread_mutex_unlock(&controller->lock);
+    return result;
+}
+
 int wvm_membership_controller_cluster_enrollment_begin(
     struct wvm_membership_controller *controller,
     const struct wvm_cluster_admission_proof *proof, char *error,
@@ -3159,6 +3221,18 @@ int wvm_membership_controller_cluster_enrollment_begin(
     for (i = 0; i < controller->enrollment_capacity; i++) {
         if (controller->enrollments[i].state == WVM_MEMBERSHIP_ENROLLMENT_NONE) {
             break;
+        }
+    }
+    if (i == controller->enrollment_capacity) {
+        /* Reclaim aborted rows; committed proofs stay until member ACTIVE binds. */
+        for (i = 0; i < controller->enrollment_capacity; i++) {
+            if (controller->enrollments[i].state ==
+                WVM_MEMBERSHIP_ENROLLMENT_ABORTED) {
+                enrollment_free(&controller->enrollments[i]);
+                memset(&controller->enrollments[i], 0,
+                       sizeof(controller->enrollments[i]));
+                break;
+            }
         }
     }
     if (i == controller->enrollment_capacity) {
@@ -4264,6 +4338,50 @@ int wvm_membership_controller_snapshot(
     return result;
 }
 
+static size_t capture_hosted_gateway_count_for_node(
+    const struct wvm_membership_controller *controller,
+    uint32_t physical_node_id)
+{
+    size_t count = 0;
+    size_t i;
+    size_t j;
+
+    for (i = 0; i < controller->member_count; i++) {
+        const struct wvm_membership_controller_member_entry *entry =
+            &controller->members[i];
+
+        if (entry->kind != WVM_MEMBERSHIP_COMPUTE ||
+            entry->node.physical_node_id != physical_node_id) {
+            continue;
+        }
+        count = entry->node.inventory.hosted_gateway_role_id_count;
+        for (j = 0; j < controller->member_count; j++) {
+            const struct wvm_membership_controller_member_entry *gateway =
+                &controller->members[j];
+            size_t k;
+            int present = 0;
+
+            if (gateway->kind != WVM_MEMBERSHIP_GATEWAY ||
+                gateway->gateway.hosting_physical_node_id != physical_node_id) {
+                continue;
+            }
+            for (k = 0; k < entry->node.inventory.hosted_gateway_role_id_count;
+                 k++) {
+                if (entry->node.inventory.hosted_gateway_role_ids[k] ==
+                    gateway->gateway.gateway_id) {
+                    present = 1;
+                    break;
+                }
+            }
+            if (!present) {
+                count++;
+            }
+        }
+        return count;
+    }
+    return 0;
+}
+
 static int capture_unlocked(
     const struct wvm_membership_controller *controller,
     struct wvm_membership_controller_capture *capture, char *error,
@@ -4290,8 +4408,8 @@ static int capture_unlocked(
             &controller->members[i];
 
         if (entry->kind == WVM_MEMBERSHIP_COMPUTE) {
-            size_t count =
-                entry->node.inventory.hosted_gateway_role_id_count;
+            size_t count = capture_hosted_gateway_count_for_node(
+                controller, entry->node.physical_node_id);
 
             if (count > SIZE_MAX - hosted_gateway_role_id_count) {
                 set_error(error, error_len,
@@ -4337,18 +4455,46 @@ static int capture_unlocked(
 
         if (entry->kind == WVM_MEMBERSHIP_COMPUTE) {
             struct wvm_node_record *node = &capture->nodes[node_index++];
-            size_t count =
-                entry->node.inventory.hosted_gateway_role_id_count;
+            size_t count = 0;
+            size_t j;
+            uint32_t *hosted;
 
             *node = entry->node;
+            count = capture_hosted_gateway_count_for_node(
+                controller, entry->node.physical_node_id);
             if (count != 0) {
-                memcpy(capture->hosted_gateway_role_ids +
-                           hosted_gateway_role_id_index,
-                       entry->node.inventory.hosted_gateway_role_ids,
-                       count * sizeof(*capture->hosted_gateway_role_ids));
-                node->inventory.hosted_gateway_role_ids =
-                    capture->hosted_gateway_role_ids +
-                    hosted_gateway_role_id_index;
+                hosted = capture->hosted_gateway_role_ids +
+                         hosted_gateway_role_id_index;
+                if (entry->node.inventory.hosted_gateway_role_id_count != 0) {
+                    memcpy(hosted, entry->node.inventory.hosted_gateway_role_ids,
+                           entry->node.inventory.hosted_gateway_role_id_count *
+                               sizeof(*hosted));
+                    count = entry->node.inventory.hosted_gateway_role_id_count;
+                } else {
+                    count = 0;
+                }
+                for (j = 0; j < controller->member_count; j++) {
+                    const struct wvm_membership_controller_member_entry *gateway =
+                        &controller->members[j];
+                    size_t k;
+                    int present = 0;
+
+                    if (gateway->kind != WVM_MEMBERSHIP_GATEWAY ||
+                        gateway->gateway.hosting_physical_node_id !=
+                            entry->node.physical_node_id) {
+                        continue;
+                    }
+                    for (k = 0; k < count; k++) {
+                        if (hosted[k] == gateway->gateway.gateway_id) {
+                            present = 1;
+                            break;
+                        }
+                    }
+                    if (!present) {
+                        hosted[count++] = gateway->gateway.gateway_id;
+                    }
+                }
+                node->inventory.hosted_gateway_role_ids = hosted;
                 hosted_gateway_role_id_index += count;
             } else {
                 node->inventory.hosted_gateway_role_ids = NULL;

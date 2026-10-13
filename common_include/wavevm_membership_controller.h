@@ -261,6 +261,17 @@ int wvm_membership_controller_cluster_enrollment_state(
     const struct wvm_membership_controller *controller,
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], uint16_t *state_out,
     char *error, size_t error_len);
+/*
+ * Locate a non-terminal in-progress enrollment for member_key so commit-failure
+ * resume can reuse the same operation_id/proof instead of minting a new one.
+ * Copies the proof into caller storage (including ack entries scratch).
+ */
+int wvm_membership_controller_find_resumable_enrollment(
+    struct wvm_membership_controller *controller,
+    const struct wvm_member_key *member_key,
+    struct wvm_cluster_admission_proof *proof_out,
+    struct wvm_cluster_admission_ack_entry *ack_storage, size_t ack_capacity,
+    uint16_t *state_out, char *error, size_t error_len);
 int wvm_membership_controller_activate_member_from_enrollment(
     struct wvm_membership_controller *controller,
     const struct wvm_member_key *member_key,

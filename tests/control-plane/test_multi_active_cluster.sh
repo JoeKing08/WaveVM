@@ -20,6 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+export PATH="${HOME}/.local/bin:/home/box/.local/bin:${PATH}"
 make -C "$repo_root/ctl_tool" -B >/dev/null
 make -C "$repo_root/gateway_service" >/dev/null
 make -C "$repo_root/node_runtime" -j2 >/dev/null
@@ -55,6 +56,40 @@ b_side_ctrl=$((base_port + 11))
 mkdir -p "$tmpdir/ctl-state" "$tmpdir/gw-state/enrollment" \
     "$tmpdir/node-a" "$tmpdir/runtime-a" "$tmpdir/node-b" "$tmpdir/runtime-b"
 : > "$tmpdir/gw-empty.conf"
+
+# Real capability evidence before ACTIVE (audit).
+common_objs=(
+    "$repo_root/common_include/wavevm_sha256.c"
+    "$repo_root/common_include/wavevm_canonical.c"
+    "$repo_root/common_include/wavevm_identity.c"
+    "$repo_root/common_include/wavevm_runtime_names.c"
+    "$repo_root/common_include/wavevm_manifest.c"
+    "$repo_root/common_include/wavevm_control.c"
+    "$repo_root/common_include/wavevm_capability.c"
+    "$repo_root/common_include/wavevm_lifecycle.c"
+    "$repo_root/common_include/wavevm_admission.c"
+    "$repo_root/common_include/wavevm_cluster.c"
+    "$repo_root/common_include/wavevm_reservation_runtime.c"
+    "$repo_root/common_include/wavevm_fault_engine.c"
+    "$repo_root/common_include/wavevm_coordinator.c"
+    "$repo_root/common_include/wavevm_envelope.c"
+    "$repo_root/common_include/wavevm_membership_controller.c"
+    "$repo_root/common_include/wavevm_membership_control.c"
+    "$repo_root/common_include/wavevm_control_transport.c"
+    "$repo_root/common_include/wavevm_runtime_profile.c"
+)
+mkdir -p "$tmpdir/evidence"
+gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+    -I"$repo_root/common_include" "${common_objs[@]}" \
+    "$repo_root/tests/control-plane/seed_create_vm_evidence.c" \
+    -pthread -o "$tmpdir/seed_evidence"
+digest_a=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 801 802 1 1 \
+    $((base_port + 20)) $((base_port + 21)) $((base_port + 22)) $((base_port + 23)) \
+    "$a_control")
+digest_b=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 811 812 1 1 \
+    $((base_port + 24)) $((base_port + 25)) $((base_port + 26)) $((base_port + 27)) \
+    "$b_control")
+cp "$tmpdir/evidence/"*.record "$tmpdir/ctl-state/"
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -subj /CN=WaveVMTestCA -keyout "$tmpdir/ca.key" \
@@ -130,7 +165,8 @@ start_node() {
     local state=$7 runtime=$8 sock=$9
     local cert=${10}
     local log=${11}
-    local digest=1111111111111111111111111111111111111111111111111111111111111111
+    local digest=${12}
+    local vnode_first=${13}
 
     "$repo_root/wavevm_node_runtime" agent \
         --state-dir "$state" --runtime-dir "$runtime" --socket "$sock" \
@@ -146,7 +182,7 @@ start_node() {
         --tls-key "$tmpdir/$cert.key" \
         --register-controller-address 127.0.0.1 \
         --register-controller-port "$ctl_port" \
-        --failure-domain-id 1 --pod-id 1 --vnode-first 1 --vnode-count 16 \
+        --failure-domain-id 1 --pod-id 1 --vnode-first "$vnode_first" --vnode-count 16 \
         --sidecar-address 127.0.0.1 --sidecar-data-port "$side_d" \
         --sidecar-control-port "$side_c" --role-bits 1 \
         --capability-profile-generation 1 \
@@ -160,7 +196,7 @@ start_node() {
 
 agent_a_pid=$(start_node 801 802 "$a_control" "$a_data" "$a_side_data" \
     "$a_side_ctrl" "$tmpdir/node-a" "$tmpdir/runtime-a" "$tmpdir/node-a.sock" \
-    nodea "$tmpdir/agent-a.log")
+    nodea "$tmpdir/agent-a.log" "$digest_a" 0)
 for ((i = 0; i < 200; i++)); do
     [[ -S "$tmpdir/node-a.sock" ]] && kill -0 "$agent_a_pid" 2>/dev/null && break
     sleep 0.05
@@ -177,7 +213,7 @@ fi
 
 agent_b_pid=$(start_node 811 812 "$b_control" "$b_data" "$b_side_data" \
     "$b_side_ctrl" "$tmpdir/node-b" "$tmpdir/runtime-b" "$tmpdir/node-b.sock" \
-    nodeb "$tmpdir/agent-b.log")
+    nodeb "$tmpdir/agent-b.log" "$digest_b" 16)
 for ((i = 0; i < 200; i++)); do
     [[ -S "$tmpdir/node-b.sock" ]] && kill -0 "$agent_b_pid" 2>/dev/null && break
     sleep 0.05

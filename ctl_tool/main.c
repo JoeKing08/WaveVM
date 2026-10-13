@@ -401,6 +401,11 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
                entry->transaction.state != WVM_LIFECYCLE_RUNNING) {
         pthread_mutex_unlock(&context->lock);
         result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+        fprintf(stderr,
+                "wvm_ctl: CREATE_VM precondition failed admission_result=%d "
+                "state=%u error=%s\n",
+                admission_result, (unsigned)entry->transaction.state,
+                error && error[0] ? error : "(none)");
         free(storage_assignments);
         free(constraints);
         return 0;
@@ -1507,9 +1512,9 @@ int main(int argc, char **argv)
     memset(&membership_enrollment, 0, sizeof(membership_enrollment));
     if (wvm_ctl_membership_enrollment_init(
             &membership_enrollment, &plane, options.local_physical_node_id,
-            options.local_runtime_instance_id, &admission_workspace,
-            admission_transport_submit, enrollment_acks, options.capacity,
-            error, sizeof(error)) != 0) {
+            options.local_runtime_instance_id, options.state_directory,
+            &admission_workspace, admission_transport_submit, enrollment_acks,
+            options.capacity, error, sizeof(error)) != 0) {
         fprintf(stderr,
                 "wvm_ctl: cannot initialize cluster enrollment transport: %s\n",
                 error);

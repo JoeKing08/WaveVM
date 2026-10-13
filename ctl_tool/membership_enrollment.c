@@ -1,4 +1,5 @@
 #include "membership_enrollment.h"
+#include "capability_publication.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -216,12 +217,13 @@ static int topology_assignment_digest_from_gateway(
 int wvm_ctl_membership_enrollment_init(
     struct wvm_ctl_membership_enrollment *enrollment,
     struct wvm_control_plane *plane, uint32_t controller_physical_node_id,
-    uint64_t controller_instance_id, void *submit_context,
-    wvm_admission_transport_submit_fn submit,
+    uint64_t controller_instance_id, const char *state_directory,
+    void *submit_context, wvm_admission_transport_submit_fn submit,
     struct wvm_cluster_admission_ack_entry *ack_storage, size_t ack_capacity,
     char *error, size_t error_len)
 {
-    if (!enrollment || !plane || !ack_storage || ack_capacity == 0) {
+    if (!enrollment || !plane || !state_directory || !state_directory[0] ||
+        !ack_storage || ack_capacity == 0) {
         set_error(error, error_len,
                   "ctl membership enrollment configuration is invalid");
         return -1;
@@ -236,6 +238,7 @@ int wvm_ctl_membership_enrollment_init(
     enrollment->plane = plane;
     enrollment->ack_storage = ack_storage;
     enrollment->ack_capacity = ack_capacity;
+    enrollment->state_directory = state_directory;
     enrollment->controller_physical_node_id = controller_physical_node_id;
     enrollment->controller_instance_id = controller_instance_id;
     enrollment->initialized = 1;
@@ -336,21 +339,44 @@ int wvm_ctl_membership_enrollment_activate_compute(
         return 0;
     }
     node_copy = entry->node;
-    if (capability_evidence_digest_from_node(&node_copy, capability_digest,
-                                             error, error_len) != 0 ||
-        topology_assignment_digest_from_node(&node_copy, topology_digest, error,
-                                             error_len) != 0 ||
-        allocate_nonzero_operation_id(operation_id, error, error_len) != 0) {
-        return -1;
-    }
-    memset(&proof, 0, sizeof(proof));
-    if (wvm_membership_controller_build_cluster_admission_proof(
-            controller, member_key, operation_id, controller->membership_revision,
-            controller->topology_revision,
-            controller->admission_eligibility_revision, capability_digest,
-            topology_digest, &proof, enrollment->ack_storage,
-            enrollment->ack_capacity, error, error_len) != 0) {
-        return -1;
+    {
+        struct wvm_capability_report evidence_report = {0};
+        uint16_t resume_state = 0;
+
+        /*
+         * ACTIVE requires durable capability evidence that still matches the
+         * member CapabilityRef — not a digest of the ref alone.
+         */
+        if (wvm_ctl_load_capabilities(enrollment->state_directory,
+                                      &node_copy.capability, &evidence_report,
+                                      error, error_len) != 0) {
+            return -1;
+        }
+        wvm_capability_report_destroy(&evidence_report);
+        if (capability_evidence_digest_from_node(&node_copy, capability_digest,
+                                                 error, error_len) != 0 ||
+            topology_assignment_digest_from_node(&node_copy, topology_digest,
+                                                 error, error_len) != 0) {
+            return -1;
+        }
+        memset(&proof, 0, sizeof(proof));
+        if (wvm_membership_controller_find_resumable_enrollment(
+                controller, member_key, &proof, enrollment->ack_storage,
+                enrollment->ack_capacity, &resume_state, error,
+                error_len) == 0) {
+            /* Resume same operation_id/proof after a prior commit failure. */
+        } else if (allocate_nonzero_operation_id(operation_id, error,
+                                                 error_len) != 0 ||
+                   wvm_membership_controller_build_cluster_admission_proof(
+                       controller, member_key, operation_id,
+                       controller->membership_revision,
+                       controller->topology_revision,
+                       controller->admission_eligibility_revision,
+                       capability_digest, topology_digest, &proof,
+                       enrollment->ack_storage, enrollment->ack_capacity, error,
+                       error_len) != 0) {
+            return -1;
+        }
     }
     memset(&request, 0, sizeof(request));
     request.member_kind = WVM_MEMBERSHIP_COMPUTE;
@@ -447,21 +473,35 @@ int wvm_ctl_membership_enrollment_activate_gateway(
         return 0;
     }
     gateway_copy = entry->gateway;
-    if (capability_evidence_digest_from_gateway(&gateway_copy, capability_digest,
-                                                error, error_len) != 0 ||
-        topology_assignment_digest_from_gateway(&gateway_copy, topology_digest,
-                                                error, error_len) != 0 ||
-        allocate_nonzero_operation_id(operation_id, error, error_len) != 0) {
-        return -1;
-    }
-    memset(&proof, 0, sizeof(proof));
-    if (wvm_membership_controller_build_cluster_admission_proof(
-            controller, member_key, operation_id, controller->membership_revision,
-            controller->topology_revision,
-            controller->admission_eligibility_revision, capability_digest,
-            topology_digest, &proof, enrollment->ack_storage,
-            enrollment->ack_capacity, error, error_len) != 0) {
-        return -1;
+    {
+        uint16_t resume_state = 0;
+
+        if (capability_evidence_digest_from_gateway(&gateway_copy,
+                                                    capability_digest, error,
+                                                    error_len) != 0 ||
+            topology_assignment_digest_from_gateway(&gateway_copy,
+                                                    topology_digest, error,
+                                                    error_len) != 0) {
+            return -1;
+        }
+        memset(&proof, 0, sizeof(proof));
+        if (wvm_membership_controller_find_resumable_enrollment(
+                controller, member_key, &proof, enrollment->ack_storage,
+                enrollment->ack_capacity, &resume_state, error,
+                error_len) == 0) {
+            /* Resume same operation_id/proof after commit failure. */
+        } else if (allocate_nonzero_operation_id(operation_id, error,
+                                                 error_len) != 0 ||
+                   wvm_membership_controller_build_cluster_admission_proof(
+                       controller, member_key, operation_id,
+                       controller->membership_revision,
+                       controller->topology_revision,
+                       controller->admission_eligibility_revision,
+                       capability_digest, topology_digest, &proof,
+                       enrollment->ack_storage, enrollment->ack_capacity, error,
+                       error_len) != 0) {
+            return -1;
+        }
     }
     memset(&request, 0, sizeof(request));
     request.member_kind = WVM_MEMBERSHIP_GATEWAY;

@@ -12,6 +12,7 @@ struct wvm_ctl_membership_enrollment {
     struct wvm_membership_enrollment_transport transport;
     struct wvm_cluster_admission_ack_entry *ack_storage;
     size_t ack_capacity;
+    const char *state_directory;
     uint32_t controller_physical_node_id;
     uint64_t controller_instance_id;
     int initialized;
@@ -20,8 +21,8 @@ struct wvm_ctl_membership_enrollment {
 int wvm_ctl_membership_enrollment_init(
     struct wvm_ctl_membership_enrollment *enrollment,
     struct wvm_control_plane *plane, uint32_t controller_physical_node_id,
-    uint64_t controller_instance_id, void *submit_context,
-    wvm_admission_transport_submit_fn submit,
+    uint64_t controller_instance_id, const char *state_directory,
+    void *submit_context, wvm_admission_transport_submit_fn submit,
     struct wvm_cluster_admission_ack_entry *ack_storage, size_t ack_capacity,
     char *error, size_t error_len);
 

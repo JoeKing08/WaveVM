@@ -19,8 +19,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+export PATH="${HOME}/.local/bin:/home/box/.local/bin:${PATH}"
 make -C "$repo_root/ctl_tool" -B -j2 >/dev/null
 make -C "$repo_root/node_runtime" -j2 >/dev/null
+gcc -Wall -Wextra -Werror -std=c11 \
+    "$repo_root/tests/control-plane/tcg_helper_stub.c" \
+    -o "$tmpdir/tcg_helper_stub"
+export WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"
 
 common_objs=(
     "$repo_root/common_include/wavevm_sha256.c"
@@ -153,7 +158,11 @@ agent_args=(agent
     --accelerator-fault-capabilities-digest 3333333333333333333333333333333333333333333333333333333333333333
     --exclusive-resource-digest 4444444444444444444444444444444444444444444444444444444444444444)
 
-"$repo_root/wavevm_node_runtime" "${agent_args[@]}" >"$tmpdir/agent.log" 2>&1 &
+# Durable evidence must exist before compute enrollment reaches ACTIVE.
+cp "$tmpdir/evidence/capabilities-801.record" "$tmpdir/ctl-state/"
+cp "$tmpdir/evidence/runtime-profile-801.record" "$tmpdir/ctl-state/"
+
+env WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"     "$repo_root/wavevm_node_runtime" "${agent_args[@]}" >"$tmpdir/agent.log" 2>&1 &
 agent_pid=$!
 for ((attempt = 0; attempt < 100; attempt++)); do
     if [[ -S "$tmpdir/node.sock" ]] && kill -0 "$agent_pid" 2>/dev/null; then
@@ -184,10 +193,6 @@ if ! kill -0 "$agent_pid" 2>/dev/null || ! kill -0 "$ctl_pid" 2>/dev/null; then
     tail -n 80 "$tmpdir/agent.log" >&2 || true
     exit 1
 fi
-
-# Durable publication matching the ACTIVE member's capability ref.
-cp "$tmpdir/evidence/capabilities-801.record" "$tmpdir/ctl-state/"
-cp "$tmpdir/evidence/runtime-profile-801.record" "$tmpdir/ctl-state/"
 
 # Replay CREATE_VM until live ready promotes COMMITTED→RUNNING, or timeout.
 create_out=""

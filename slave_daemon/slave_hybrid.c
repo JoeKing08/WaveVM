@@ -74,6 +74,8 @@ static int g_service_port = 9000;
 static int g_nonblock_recv = 0;
 static long g_num_cores = 0;
 static int *g_tcg_session_fds;
+static pid_t *g_tcg_helper_pids;
+static volatile int g_tcg_proxy_listening;
 static int g_ram_mb = 1024;
 static uint64_t g_slave_ram_size = 1024UL * 1024 * 1024;
 static int g_base_id = 0;
@@ -3283,7 +3285,7 @@ static int is_local_tcg_endpoint_port(uint16_t port_net)
  * [关键逻辑] 为每个逻辑核心孵化一个独立的 QEMU-TCG 实例，并通过环境变量注入“三通道” Socket 句柄。
  * [后果] 提供了极致的兼容性。即便是在廉价的 ARM 树莓派或锁定内核的容器里，也能作为 Slave 贡献算力。
  */
-void spawn_tcg_processes(int base_id) {
+static int spawn_tcg_processes(int base_id) {
     printf("[Hybrid] Spawning %ld QEMU-TCG instances (Tri-Channel Isolation)...\n", g_num_cores);
     const char *qemu_bin = getenv("WVM_TCG_QEMU_BIN");
     if (!qemu_bin || !*qemu_bin) {
@@ -3291,11 +3293,22 @@ void spawn_tcg_processes(int base_id) {
     }
     
     tcg_endpoints = malloc(sizeof(slave_endpoint_t) * g_num_cores);
-    if (!tcg_endpoints) { perror("malloc endpoints"); return; }
+    if (!tcg_endpoints) { perror("malloc endpoints"); return -1; }
     g_tcg_session_fds = malloc(sizeof(*g_tcg_session_fds) * g_num_cores);
-    if (!g_tcg_session_fds) { perror("malloc executor sessions"); free(tcg_endpoints); tcg_endpoints = NULL; return; }
+    if (!g_tcg_session_fds) { perror("malloc executor sessions"); free(tcg_endpoints); tcg_endpoints = NULL; return -1; }
+    free(g_tcg_helper_pids);
+    g_tcg_helper_pids = malloc(sizeof(*g_tcg_helper_pids) * g_num_cores);
+    if (!g_tcg_helper_pids) {
+        perror("malloc helper pids");
+        free(g_tcg_session_fds);
+        g_tcg_session_fds = NULL;
+        free(tcg_endpoints);
+        tcg_endpoints = NULL;
+        return -1;
+    }
     for (long i = 0; i < g_num_cores; i++) {
         g_tcg_session_fds[i] = -1;
+        g_tcg_helper_pids[i] = -1;
     }
     
     /*
@@ -3345,7 +3358,7 @@ void spawn_tcg_processes(int base_id) {
             if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
                            session_pair) != 0) {
                 perror("[Hybrid] create executor session");
-                continue;
+                return -1;
             }
 
             child_pid = fork();
@@ -3442,13 +3455,42 @@ void spawn_tcg_processes(int base_id) {
                 perror("[Hybrid] fork qemu");
                 close(session_pair[0]);
                 close(session_pair[1]);
-                continue;
+                return -1;
             }
             close(session_pair[1]);
             g_tcg_session_fds[i] = session_pair[0];
+            g_tcg_helper_pids[i] = child_pid;
         }
-        // parent: sockets are only created in child branch
     }
+    /*
+     * Required helpers must stay alive before EXECUTOR_READY. A missing QEMU
+     * binary or immediate helper exit leaves the executor STARTING/FAILED so
+     * CREATE_VM cannot forge RUNNING. Session FDs alone are not readiness.
+     */
+    usleep(100000);
+    for (long i = 0; i < g_num_cores; i++) {
+        int status = 0;
+        pid_t waited;
+
+        if (g_tcg_session_fds[i] < 0 || g_tcg_helper_pids[i] <= 0) {
+            fprintf(stderr,
+                    "[Hybrid] TCG helper slot %ld missing session/pid\n", i);
+            return -1;
+        }
+        waited = waitpid(g_tcg_helper_pids[i], &status, WNOHANG);
+        if (waited == g_tcg_helper_pids[i]) {
+            fprintf(stderr,
+                    "[Hybrid] TCG helper pid=%d exited before READY status=%d\n",
+                    (int)g_tcg_helper_pids[i], status);
+            g_tcg_helper_pids[i] = -1;
+            return -1;
+        }
+        if (waited < 0 && errno != ECHILD) {
+            perror("[Hybrid] waitpid helper");
+            return -1;
+        }
+    }
+    return 0;
 }
 
 /* 
@@ -3487,7 +3529,8 @@ void* tcg_proxy_thread(void *arg) {
         return NULL;
     }
     for(int i=0;i<BATCH_SIZE;i++) { iovecs[i].iov_base=rx_pool + (size_t)i * WVM_MAX_PACKET_SIZE; iovecs[i].iov_len=WVM_MAX_PACKET_SIZE; msgs[i].msg_hdr.msg_iov=&iovecs[i]; msgs[i].msg_hdr.msg_iovlen=1; msgs[i].msg_hdr.msg_name=&src_addrs[i]; msgs[i].msg_hdr.msg_namelen=sizeof(src_addrs[i]); }
-    executor_publish_startup_state(EXECUTOR_READY);
+    /* Listening is not READY: helpers must be verified by the owner thread. */
+    g_tcg_proxy_listening = 1;
 
     printf("[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.\n");
 
@@ -3768,45 +3811,47 @@ int wavevm_executor_runtime_main(
                 return 1;
             }
         }
-        /* Create the per-vCPU typed sessions before publishing executor
-         * readiness, so the bridge cannot accept a TCG handoff without a
-         * corresponding helper endpoint. */
         /*
-         * Session socketpairs are created here; QEMU-TCG helpers are best-effort
-         * for later guest handoff. CREATE_VM RUNNING only requires the local
-         * proxy listener (EXECUTOR_READY), not a verified guest E2E attach.
+         * Required TCG helpers must be live before EXECUTOR_READY. Proxy listen
+         * alone must not forge readiness. Guest E2E attach is still out of scope.
          */
-        spawn_tcg_processes(g_base_id);
-        if (wvm_executor_runtime_wait_ready() != 0) {
-            /*
-             * Do not set g_shutdown_requested here: it is shared with the
-             * co-located master role. Node-runtime already gates on wait_ready
-             * before starting master; tearing down the process-wide flag would
-             * drop a published ready record and leave CREATE_VM IN_PROGRESS.
-             */
+        if (spawn_tcg_processes(g_base_id) != 0) {
             fprintf(stderr,
-                    "[Hybrid] TCG proxy did not reach EXECUTOR_READY "
-                    "(state=%d); leaving master shutdown flag untouched\n",
-                    (int)g_executor_startup_state);
+                    "[Hybrid] required TCG helpers unavailable; not READY\n");
+            executor_publish_startup_state(EXECUTOR_FAILED);
             for (long i = 0; i < proxy_threads; i++) {
                 pthread_join(threads[i], NULL);
             }
             free(threads);
             return 1;
         }
+        for (int wait_i = 0; wait_i < 100 && !g_tcg_proxy_listening; wait_i++) {
+            usleep(10000);
+        }
+        if (!g_tcg_proxy_listening) {
+            fprintf(stderr, "[Hybrid] TCG proxy did not listen; not READY\n");
+            executor_publish_startup_state(EXECUTOR_FAILED);
+            for (long i = 0; i < proxy_threads; i++) {
+                pthread_join(threads[i], NULL);
+            }
+            free(threads);
+            return 1;
+        }
+        executor_publish_startup_state(EXECUTOR_READY);
         fprintf(stderr,
-                "[Hybrid] local executor READY; staying up for control-plane "
-                "RUNNING (TCG helpers best-effort)\n");
+                "[Hybrid] local executor READY with live TCG helpers "
+                "(no guest E2E claim)\n");
         while (!g_shutdown_requested) {
             int status;
             pid_t died = waitpid(-1, &status, WNOHANG);
 
             if (died > 0) {
                 fprintf(stderr,
-                        "[Hybrid] TCG helper pid=%d exited status=%d "
-                        "(proxy remains ready for control-plane RUNNING)\n",
+                        "[Hybrid] required TCG helper pid=%d exited status=%d; "
+                        "executor leaves READY\n",
                         (int)died, status);
-                continue;
+                executor_publish_startup_state(EXECUTOR_FAILED);
+                break;
             }
             if (died < 0 && errno != ECHILD) {
                 fprintf(stderr,

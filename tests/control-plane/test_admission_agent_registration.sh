@@ -19,6 +19,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+export PATH="${HOME}/.local/bin:/home/box/.local/bin:${PATH}"
 make -C "$repo_root/ctl_tool" -B >/dev/null
 make -C "$repo_root/node_runtime" -j2 >/dev/null
 gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
@@ -42,7 +43,34 @@ agent_data_port=$((base_port + 2))
 sidecar_data_port=$((base_port + 3))
 sidecar_control_port=$((base_port + 4))
 
-mkdir "$tmpdir/ctl-state" "$tmpdir/node-state" "$tmpdir/runtime"
+mkdir "$tmpdir/ctl-state" "$tmpdir/node-state" "$tmpdir/runtime" "$tmpdir/evidence"
+# Compile seed helper (same objects as create-vm tests).
+gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+    -I"$repo_root/common_include" \
+    "$repo_root/common_include/wavevm_sha256.c" \
+    "$repo_root/common_include/wavevm_canonical.c" \
+    "$repo_root/common_include/wavevm_identity.c" \
+    "$repo_root/common_include/wavevm_runtime_names.c" \
+    "$repo_root/common_include/wavevm_manifest.c" \
+    "$repo_root/common_include/wavevm_control.c" \
+    "$repo_root/common_include/wavevm_capability.c" \
+    "$repo_root/common_include/wavevm_lifecycle.c" \
+    "$repo_root/common_include/wavevm_admission.c" \
+    "$repo_root/common_include/wavevm_cluster.c" \
+    "$repo_root/common_include/wavevm_reservation_runtime.c" \
+    "$repo_root/common_include/wavevm_fault_engine.c" \
+    "$repo_root/common_include/wavevm_coordinator.c" \
+    "$repo_root/common_include/wavevm_envelope.c" \
+    "$repo_root/common_include/wavevm_membership_controller.c" \
+    "$repo_root/common_include/wavevm_membership_control.c" \
+    "$repo_root/common_include/wavevm_control_transport.c" \
+    "$repo_root/common_include/wavevm_runtime_profile.c" \
+    "$repo_root/tests/control-plane/seed_create_vm_evidence.c" \
+    -pthread -o "$tmpdir/seed_evidence"
+digest=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 801 802 1 1 \
+    $((base_port + 10)) $((base_port + 11)) $((base_port + 12)) $((base_port + 13)) \
+    "$agent_control_port")
+cp "$tmpdir/evidence/"*.record "$tmpdir/ctl-state/"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -subj /CN=WaveVMTestCA -keyout "$tmpdir/ca.key" \
     -out "$tmpdir/ca.crt" >/dev/null 2>&1
@@ -103,7 +131,7 @@ agent_args=(agent
     --sidecar-address 127.0.0.1 --sidecar-data-port "$sidecar_data_port"
     --sidecar-control-port "$sidecar_control_port" --role-bits 1
     --capability-profile-generation 1
-    --capability-profile-digest 1111111111111111111111111111111111111111111111111111111111111111
+    --capability-profile-digest "$digest"
     --storage-capabilities-digest 2222222222222222222222222222222222222222222222222222222222222222
     --accelerator-fault-capabilities-digest 3333333333333333333333333333333333333333333333333333333333333333
     --exclusive-resource-digest 4444444444444444444444444444444444444444444444444444444444444444)
@@ -127,6 +155,19 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 [[ -s "$tmpdir/ctl-state/membership.journal" ]]
 [[ -s "$tmpdir/ctl-state/membership-control.journal" ]]
+# Wait for true ACTIVE via journal copy (never open live journal for recovery).
+active_ok=0
+for ((attempt = 0; attempt < 100; attempt++)); do
+    cp -f "$tmpdir/ctl-state/membership.journal" "$tmpdir/membership.snap" 2>/dev/null || true
+    if [[ -s "$tmpdir/membership.snap" ]] &&
+       "$tmpdir/check_registration" "$tmpdir/membership.snap" "$agent_control_port" \
+           >/dev/null 2>&1; then
+        active_ok=1
+        break
+    fi
+    sleep 0.05
+done
+[[ "$active_ok" -eq 1 ]]
 first_control_bytes=$(stat -c %s "$tmpdir/ctl-state/membership-control.journal")
 
 kill -TERM "$agent_pid"
