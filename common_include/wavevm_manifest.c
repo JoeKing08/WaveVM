@@ -1345,6 +1345,13 @@ static int assignment_lists_validate(const struct wvm_placement_plan *plan,
                       "placement plan has gapped memory assignments");
             return -1;
         }
+        if (assignment->directory_physical_node_id !=
+            assignment->executor_physical_node_id) {
+            set_error(error, error_len,
+                      "placement plan splits memory directory from executor "
+                      "(remote memory placement not admitted)");
+            return -1;
+        }
         expected_gpa += assignment->bytes;
     }
 
@@ -1376,15 +1383,18 @@ int wvm_placement_plan_validate(const struct wvm_placement_plan *plan,
                        sizeof(plan->eligibility_fence_digest)) ||
         plan->inventory_revision == 0 || plan->membership_revision == 0 ||
         plan->topology_revision == 0 ||
-        plan->capability_profile_generation == 0 || plan->host_node == 0 ||
-        wvm_vm_route_scope_key_validate(&plan->route_scope_key, error,
+        plan->capability_profile_generation == 0 || plan->host_node == 0) {
+        set_error(error, error_len, "placement plan has invalid metadata");
+        return -1;
+    }
+    if (wvm_vm_route_scope_key_validate(&plan->route_scope_key, error,
                                         error_len) != 0 ||
         wvm_guest_topology_validate(&plan->guest_topology, error, error_len) !=
             0 ||
         reservation_requirement_list_validate(&plan->reservation_requirements,
                                               error, error_len) != 0 ||
         assignment_lists_validate(plan, error, error_len) != 0) {
-        set_error(error, error_len, "placement plan has invalid metadata");
+        /* Keep the first specific validation error. */
         return -1;
     }
 

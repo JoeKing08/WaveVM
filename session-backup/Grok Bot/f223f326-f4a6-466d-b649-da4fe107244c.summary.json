@@ -1,0 +1,18 @@
+{
+  "info": {
+    "id": "f223f326-f4a6-466d-b649-da4fe107244c",
+    "cwd": "/home/joeking"
+  },
+  "session_summary": "WaveVM 纲领落地 2026-10-14",
+  "generated_title": "WaveVM 纲领落地 2026-10-14",
+  "created_at": "2026-10-12T08:27:00.000000Z",
+  "updated_at": "2026-10-14T13:45:27.250002Z",
+  "last_active_at": "2026-10-14T13:45:27.250002Z",
+  "num_messages": 2233,
+  "num_chat_messages": 586,
+  "current_model_id": "grok-4.7",
+  "chat_format_version": 1,
+  "grok_home": "/home/joeking/.grok",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off"
+}

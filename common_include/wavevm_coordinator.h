@@ -266,4 +266,15 @@ int wvm_coordinator_abort_local(
     const struct wvm_activation_record *activation, char *error,
     size_t error_len);
 
+/*
+ * Release COMMITTED local reservations and clear runtime projections during
+ * lifecycle RETIRING after route retirement. Uses wvm_local_reservation_release
+ * when registries are attached. Does not touch other VMs' registries or
+ * reservations. Fail-closed if any reservation is not COMMITTED/RELEASED.
+ */
+int wvm_coordinator_teardown_local(
+    const struct wvm_coordinator_transaction *transaction,
+    struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
+    size_t error_len);
+
 #endif /* WAVEVM_COORDINATOR_H */

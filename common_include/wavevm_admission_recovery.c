@@ -356,10 +356,13 @@ int wvm_admission_orchestrator_recover(
         return -1;
     }
     if (entry->transaction.state == WVM_LIFECYCLE_COMMITTED) {
-        if (wvm_coordinator_commit_local(input->transaction, input->prepared_vm,
-                                         &activation, error, error_len) != 0) {
-            return -1;
-        }
+        /*
+         * Durable COMMITTED already finished local reservation/participant
+         * commits and recorded runtime manifests. Cold restart must not require
+         * reconstructing the ephemeral eligibility fence solely to re-enter
+         * commit_local; republish membership deps (fail-closed) and resume
+         * readiness against durable projections instead.
+         */
         if (input->membership_controller &&
             wvm_admission_register_membership_route_and_dependencies(
                 input->membership_controller, input->transaction,

@@ -382,6 +382,16 @@ int wvm_membership_controller_mark_monitor_health(
     enum wvm_membership_health_state health_state, char *error,
     size_t error_len);
 
+/*
+ * Phase 7 / membership §5.6: a RUNNING VM must not be reported healthy when
+ * any recorded required dependency member is SUSPECT or UNREACHABLE (or the
+ * member is missing). Zero recorded dependencies is fail-closed (not healthy).
+ * Does not invent MIGRATE/RECOVERY_REBIND; callers refuse healthy SUCCESS.
+ */
+int wvm_membership_controller_vm_required_members_healthy(
+    const struct wvm_membership_controller *controller, uint32_t vm_id,
+    uint64_t vm_incarnation, int *healthy_out, char *error, size_t error_len);
+
 int wvm_membership_controller_dependency_acquire(
     struct wvm_membership_controller *controller,
     const struct wvm_membership_dependency *dependency, char *error,

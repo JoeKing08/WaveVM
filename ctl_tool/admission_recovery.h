@@ -1,0 +1,35 @@
+#ifndef WVM_CTL_ADMISSION_RECOVERY_H
+#define WVM_CTL_ADMISSION_RECOVERY_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "../common_include/wavevm_control_plane.h"
+#include "../common_include/wavevm_admission_orchestrator.h"
+#include "../common_include/wavevm_membership_controller.h"
+
+/*
+ * After durable journals are open, resume mid-flight CREATE_VM admissions
+ * via wvm_admission_orchestrator_recover (runtime-manifest-lifecycle §5.3).
+ * RUNNING/ABORTED/terminal states are skipped. Failures are fail-closed:
+ * the entry stays durable and readiness is not opened. Does not invent
+ * live migration, RECOVERY_REBIND, or coordinator HA.
+ *
+ * ACTIVATION_DECIDED without durable runtime manifests rebuilds projections
+ * from on-disk node runtime profiles → launch plans (same port binding as
+ * live prepare). Missing profiles/plans remain fail-closed.
+ * COMMITTED still requires durable runtime manifests.
+ *
+ * member_capacity / max_vcpus / route_rule_capacity / route_ack_capacity size
+ * reconstruction scratch; use the same serve --capacity bounds.
+ */
+int wvm_ctl_recover_midflight_admissions(
+    struct wvm_control_plane *plane,
+    struct wvm_membership_controller *membership_controller,
+    const struct wvm_admission_authority *authority,
+    const char *state_directory,
+    const struct wvm_membership_controller_capture *membership_capture,
+    size_t member_capacity, uint32_t max_vcpus, size_t route_rule_capacity,
+    size_t route_ack_capacity, char *error, size_t error_len);
+
+#endif

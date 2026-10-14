@@ -90,6 +90,7 @@ compile_helper submit_membership_action "${common_objs[@]}" \
 compile_helper submit_gateway_drain_commit "${common_objs[@]}" \
     "$repo_root/tests/control-plane/submit_gateway_drain_commit.c"
 compile_helper submit_gateway_drain_prepare "${common_objs[@]}" \
+    "$repo_root/ctl_tool/gateway_drain_successor.c" \
     "$repo_root/tests/control-plane/submit_gateway_drain_prepare.c"
 compile_helper read_membership_fence \
     "$repo_root/common_include/wavevm_sha256.c" \
@@ -375,8 +376,9 @@ pre_mem=$mem_rev
 pre_topo=$topo_rev
 pre_elig=$elig_rev
 
+# Successor built by ctl gateway_drain_successor (caller names SUCC 911 only).
 prep_out=$("$tmpdir/submit_gateway_drain_prepare" "$tmpdir/ctl.sock" \
-    "$tmpdir/membership.journal.snap" 901 902 911 912 801 802 "$vm_id")
+    "$tmpdir/membership.journal.snap" 901 902 911 912)
 echo "DRAIN PREPARE: $prep_out"
 [[ "$prep_out" == status=0* ]]
 op_hex=$(echo "$prep_out" | sed -n 's/.* op=\([0-9a-fA-F]*\)$/\1/p')
@@ -454,7 +456,7 @@ stop_ctl
 
 echo "production gateway DRAIN PREPARE+peer ACK+COMMIT→DRAINING: PASS"
 echo "CREATE_VM dependency_acquire + membership predecessor route: wired"
-echo "boundary: successor builder/planner not in ctl (caller-supplied successor);"
-echo "  recovery path does not yet re-run dependency_acquire;"
-echo "  drain transport manifest_generation still fixed at 1 for V1 one-scope;"
+echo "boundary: one-scope successor builder in ctl (EXECUTOR names successor GW);"
+echo "  cold recover republishes membership route+dependency_acquire (mid-flight);"
+echo "  drain peer ROUTE_* manifest_generation binds membership dependency;"
 echo "  Mode A / guest E2E not started."

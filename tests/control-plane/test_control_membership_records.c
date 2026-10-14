@@ -75,6 +75,7 @@ static void fill_node(struct wvm_node_record *node, uint32_t gateway_ids[1])
     node->observed_health_state = 1;
     node->membership_revision = 4;
     node->topology_revision = 5;
+    wvm_node_record_init_single_host_defaults(node);
 }
 
 int main(void)

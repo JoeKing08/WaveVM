@@ -84,6 +84,7 @@ int main(void) {
     nodes[0].observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     nodes[0].membership_revision = 5;
     nodes[0].topology_revision = 6;
+    wvm_node_record_init_single_host_defaults(&nodes[0]);
 
     printf("  ✓ Node 17: KVM + Mode B (executor)\n");
 
@@ -124,6 +125,7 @@ int main(void) {
     nodes[1].observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     nodes[1].membership_revision = 5;
     nodes[1].topology_revision = 6;
+    wvm_node_record_init_single_host_defaults(&nodes[1]);
 
     printf("  ✓ Node 18: TCG + Mode B (executor)\n");
 
@@ -163,6 +165,7 @@ int main(void) {
     nodes[2].observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     nodes[2].membership_revision = 5;
     nodes[2].topology_revision = 6;
+    wvm_node_record_init_single_host_defaults(&nodes[2]);
 
     printf("  ✓ Node 19: Mode B only (memory-only)\n");
 

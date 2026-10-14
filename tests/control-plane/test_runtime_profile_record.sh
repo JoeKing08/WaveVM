@@ -9,6 +9,11 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     -I"$repo_root/common_include" \
     "$repo_root/common_include/wavevm_sha256.c" \
     "$repo_root/common_include/wavevm_canonical.c" \
+    "$repo_root/common_include/wavevm_identity.c" \
+    "$repo_root/common_include/wavevm_manifest.c" \
+    "$repo_root/common_include/wavevm_lifecycle.c" \
+    "$repo_root/common_include/wavevm_control.c" \
+    "$repo_root/common_include/wavevm_capability.c" \
     "$repo_root/common_include/wavevm_runtime_profile.c" \
     "$repo_root/tests/control-plane/test_runtime_profile_record.c" \
     -o "$tmpdir/test_runtime_profile_record"

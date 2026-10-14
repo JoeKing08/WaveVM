@@ -457,6 +457,10 @@ int wvm_cluster_snapshot_build(
             goto out;
         }
     }
+    if (wvm_physical_host_aggregate_validate(records->nodes, records->node_count,
+                                             error, error_len) != 0) {
+        goto out;
+    }
     if (validate_gateway_graph(records, error, error_len) != 0) {
         goto out;
     }

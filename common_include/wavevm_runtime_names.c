@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -495,4 +496,33 @@ int wvm_runtime_ready_remove(
 out:
     close(lock_fd);
     return result;
+}
+
+int wvm_runtime_name_set_retire(const struct wvm_runtime_name_set *names,
+                                char *error, size_t error_len)
+{
+    const char *paths[5];
+    size_t i;
+
+    if (wvm_runtime_name_set_validate(names, error, error_len) != 0) {
+        return -1;
+    }
+    paths[0] = names->runtime_socket;
+    paths[1] = names->executor_socket;
+    paths[2] = names->worker_socket;
+    paths[3] = names->monitor_socket;
+    paths[4] = names->ready_file;
+    for (i = 0; i < 5; i++) {
+        if (unlink(paths[i]) != 0 && errno != ENOENT) {
+            set_error(error, error_len, "cannot retire runtime path %s: %s",
+                      paths[i], strerror(errno));
+            return -1;
+        }
+    }
+    if (shm_unlink(names->shm_name) != 0 && errno != ENOENT) {
+        set_error(error, error_len, "cannot retire runtime SHM %s: %s",
+                  names->shm_name, strerror(errno));
+        return -1;
+    }
+    return 0;
 }

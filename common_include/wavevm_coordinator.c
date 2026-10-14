@@ -140,6 +140,24 @@ static int release_derived_reservation(
     return 0;
 }
 
+static int release_committed_derived_reservation(
+    struct wvm_resource_reservation *reservation, char *error,
+    size_t error_len)
+{
+    if (reservation && reservation->state == WVM_RESERVATION_RELEASED) {
+        return 0;
+    }
+    if (!reservation || reservation->state != WVM_RESERVATION_COMMITTED ||
+        wvm_resource_reservation_begin_release(reservation, error,
+                                               error_len) != 0 ||
+        wvm_resource_reservation_release(reservation, error, error_len) != 0) {
+        set_error(error, error_len,
+                  "committed derived reservation cannot be released");
+        return -1;
+    }
+    return 0;
+}
+
 static int bytes_are_zero(const uint8_t *bytes, size_t byte_count)
 {
     size_t i;
@@ -1346,6 +1364,51 @@ int wvm_coordinator_abort_local(
                              registry, reservation, NULL, error,
                              error_len) != 0) ||
             release_derived_reservation(reservation, error, error_len) != 0) {
+            return -1;
+        }
+        clear_prepared_runtime(&prepared_vm->node_runtime_manifests[i]);
+    }
+    return 0;
+}
+
+int wvm_coordinator_teardown_local(
+    const struct wvm_coordinator_transaction *transaction,
+    struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
+    size_t error_len)
+{
+    size_t i;
+
+    if (!transaction || !prepared_vm ||
+        prepared_candidate_validate(transaction, prepared_vm, error,
+                                   error_len) != 0 ||
+        prepared_vm->node_runtime_manifest_count !=
+            prepared_vm->reservation_count ||
+        !prepared_vm->node_runtime_manifests) {
+        set_error(error, error_len, "cannot teardown committed VM locally");
+        return -1;
+    }
+    for (i = 0; i < prepared_vm->reservation_count; i++) {
+        struct wvm_resource_reservation *reservation =
+            &prepared_vm->reservations[i];
+        struct wvm_local_reservation_registry *registry = NULL;
+
+        if (reservation->state != WVM_RESERVATION_COMMITTED &&
+            reservation->state != WVM_RESERVATION_RELEASED) {
+            set_error(error, error_len,
+                      "teardown can release only COMMITTED reservations");
+            return -1;
+        }
+        if (reservation_registry_for(prepared_vm, reservation, &registry, error,
+                                     error_len) != 0) {
+            return -1;
+        }
+        if (registry &&
+            wvm_local_reservation_release(registry, reservation, NULL, error,
+                                          error_len) != 0) {
+            return -1;
+        }
+        if (release_committed_derived_reservation(reservation, error,
+                                                  error_len) != 0) {
             return -1;
         }
         clear_prepared_runtime(&prepared_vm->node_runtime_manifests[i]);

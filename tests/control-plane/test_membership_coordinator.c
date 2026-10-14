@@ -117,6 +117,7 @@ static void fill_node(struct wvm_node_record *node)
            sizeof(node->inventory.exclusive_resource_inventory_digest));
     fill_capability(&node->capability, node->physical_node_id,
                     node->node_instance_id);
+    wvm_node_record_init_single_host_defaults(node);
 }
 
 static void fill_gateway(struct wvm_gateway_record *gateway)
@@ -902,6 +903,119 @@ int main(void)
     dependency.dependency_kind = 2;
     memset(&compute_drain, 0, sizeof(compute_drain));
     compute_drain.member_key = node_member;
+    {
+        struct wvm_membership_dependency mode_b_a = {0};
+        struct wvm_membership_dependency mode_b_b = {0};
+        struct wvm_membership_dependency gateway_a = {0};
+        struct wvm_membership_dependency gateway_b = {0};
+        struct wvm_route_transaction_record dual_successor_tx;
+        struct wvm_route_snapshot_record dual_successor_snap;
+        struct wvm_route_rule_record dual_successor_rule;
+        struct wvm_required_ack_entry dual_snap_acks[2];
+        struct wvm_required_ack_entry dual_tx_acks[2];
+        struct wvm_required_ack_entry dual_decoded_acks[2];
+        struct wvm_required_ack_set dual_ack_set;
+        struct wvm_required_ack_entry dual_departure[1];
+        struct wvm_membership_gateway_drain_request dual_gateway_drain;
+
+        mode_b_a.member_key = node_member;
+        mode_b_a.vm_id = 256;
+        mode_b_a.vm_incarnation = 1;
+        mode_b_a.manifest_generation = 1;
+        mode_b_a.dependency_kind = 1;
+        mode_b_b = mode_b_a;
+        mode_b_b.vm_id = 257;
+        gateway_a.member_key = gateway_member;
+        gateway_a.vm_id = 256;
+        gateway_a.vm_incarnation = 1;
+        gateway_a.manifest_generation = 1;
+        gateway_a.dependency_kind = 2;
+        gateway_b = gateway_a;
+        gateway_b.vm_id = 257;
+        if (expect(wvm_membership_controller_dependency_acquire(
+                       &controller, &mode_b_a, error, sizeof(error)) == 0 &&
+                       wvm_membership_controller_dependency_acquire(
+                           &controller, &mode_b_b, error, sizeof(error)) == 0 &&
+                       wvm_membership_controller_dependency_acquire(
+                           &controller, &gateway_a, error, sizeof(error)) ==
+                           0 &&
+                       wvm_membership_controller_dependency_acquire(
+                           &controller, &gateway_b, error, sizeof(error)) ==
+                           0 &&
+                       wvm_membership_controller_find(&controller, &node_member)
+                               ->active_dependency_count == 2 &&
+                       wvm_membership_controller_find(&controller,
+                                                      &gateway_member)
+                               ->active_dependency_count == 2,
+                   "two Mode B VM deps on compute and gateway") ||
+            expect(wvm_membership_coordinator_drain_compute(
+                       &controller, &compute_drain, error, sizeof(error)) != 0,
+                   "reject compute drain under dual Mode B VM deps") ||
+            expect(build_gateway_successor_transaction(
+                       &dual_successor_tx, &dual_successor_snap,
+                       &dual_successor_rule, dual_snap_acks, dual_tx_acks,
+                       dual_decoded_acks, &dual_ack_set, dual_departure,
+                       controller.topology_revision + 1U,
+                       controller.membership_revision, 2, 0x50,
+                       &successful_transaction.route_snapshot_key, &node_member,
+                       &node.control_endpoint, &gateway_member, &gateway.endpoint,
+                       &successor_gateway_member, &successor_gateway.endpoint,
+                       error, sizeof(error)) == 0,
+                   "build one-scope successor under dual-VM deps") ||
+            expect((memset(&dual_gateway_drain, 0, sizeof(dual_gateway_drain)),
+                    dual_gateway_drain.gateway_member_key = &gateway_member,
+                    dual_gateway_drain.successor_transaction = &dual_successor_tx,
+                    dual_gateway_drain.successor_snapshot = &dual_successor_snap,
+                    dual_gateway_drain.expected_membership_revision =
+                        controller.membership_revision,
+                    dual_gateway_drain.expected_topology_revision =
+                        controller.topology_revision,
+                    dual_gateway_drain.expected_admission_eligibility_revision =
+                        controller.admission_eligibility_revision,
+                    dual_gateway_drain.route_prepare = route_prepare,
+                    dual_gateway_drain.route_commit = route_commit,
+                    dual_gateway_drain.route_abort = route_abort,
+                    dual_gateway_drain.route_prepare_context = &capture,
+                    capture.calls = 0, capture.fail_on_call = 0,
+                    wvm_membership_coordinator_drain_gateway(
+                        &controller, &dual_gateway_drain, error,
+                        sizeof(error)) != 0 &&
+                        (strstr(error, "exactly one") != NULL ||
+                         strstr(error, "multi-scope") != NULL ||
+                         strstr(error, "dual-VM") != NULL ||
+                         strstr(error, "not safe") != NULL)),
+                   "fail-closed gateway drain with two Mode B deps (no black hole)") ||
+            expect(wvm_membership_controller_dependency_release(
+                       &controller, &mode_b_a, error, sizeof(error)) == 0 &&
+                       wvm_membership_controller_dependency_release(
+                           &controller, &gateway_a, error, sizeof(error)) ==
+                           0 &&
+                       wvm_membership_controller_find(&controller, &node_member)
+                               ->active_dependency_count == 1 &&
+                       wvm_membership_controller_find(&controller,
+                                                      &gateway_member)
+                               ->active_dependency_count == 1,
+                   "VM A teardown leaves VM B deps intact") ||
+            expect(wvm_membership_coordinator_drain_compute(
+                       &controller, &compute_drain, error, sizeof(error)) != 0,
+                   "still reject compute drain while VM B dep remains") ||
+            expect(wvm_membership_controller_dependency_release(
+                       &controller, &mode_b_b, error, sizeof(error)) == 0 &&
+                       wvm_membership_controller_dependency_release(
+                           &controller, &gateway_b, error, sizeof(error)) ==
+                           0 &&
+                       wvm_membership_controller_find(&controller, &node_member)
+                               ->active_dependency_count == 0 &&
+                       wvm_membership_controller_find(&controller,
+                                                      &gateway_member)
+                               ->active_dependency_count == 0,
+                   "release remaining Mode B VM B deps")) {
+            fprintf(stderr, " dual-VM drain detail: %s\n", error);
+            wvm_membership_controller_close(&controller);
+            unlink(journal_path);
+            return 1;
+        }
+    }
     if (expect(wvm_membership_controller_dependency_acquire(
                    &controller, &dependency, error, sizeof(error)) == 0,
                "record gateway dependency before drain") ||

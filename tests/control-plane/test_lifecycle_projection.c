@@ -271,6 +271,7 @@ static void fill_dispatch_node(struct wvm_node_record *node,
     node->observed_health_state = 1;
     node->membership_revision = 1;
     node->topology_revision = 1;
+    wvm_node_record_init_single_host_defaults(node);
 }
 
 static void fill_dispatch_route_rule(struct wvm_route_rule_record *rule,

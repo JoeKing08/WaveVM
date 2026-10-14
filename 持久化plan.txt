@@ -429,3 +429,230 @@ F04 部分修复完成。capability记录现在包含真实时间戳和唯一pro
 | `test_gateway_drain_prepare_commit.sh` | PASS PREPARE+ACK+COMMIT→DRAINING；gateway deps=1 |
 
 边界：未宣称 guest E2E；drain transport `manifest_generation` 仍固定 1；未 commit/push。停止等待用户。
+
+[2026-10-14 已验证：Step-5 首刀 — CREATE_VM coordinator restart recovery 生产接线（未发明迁移/HA）]
+纲领：`runtime-manifest-lifecycle.md` §5.3（V1 无 coordinator failover，但 restart 必须恢复同一 durable transaction 或 fail-closed）；`architecture-baseline` Extended hardening 入口。本地仍叠在 tip `4abe360a8` 之上、**未 commit/push**。
+
+本轮落地（生产路径，非仅单测）：
+1. `ctl_tool/admission_recovery.[ch]`：`wvm_ctl serve` 冷启动在 admission journal open、listener 前扫描 mid-flight（`ACTIVATION_DECIDED`/`COMMITTED`/`ABORTING`），从 durable candidate/runtime/route 重建投影，调用既有 `wvm_admission_orchestrator_recover` + `membership_controller`。
+2. `ctl_tool/main.c`：recover 前 `wvm_membership_controller_capture`（transport resolve 依赖 capture）；**recover 失败则 fail-closed 拒启动**，不报假 `RUNNING`。
+3. `common_include/wavevm_admission_recovery.c`：`COMMITTED` 冷恢复跳过需 ephemeral fence 的 `commit_local`，只幂等 republish membership route/deps + readiness（deps+readiness only）。
+4. `ctl_tool/Makefile` 链接 `admission_recovery.c` + `wavevm_admission_recovery.c`。
+5. 竖切 `tests/control-plane/test_create_vm_recover.sh`：A) `RUNNING`→kill ctl→restart→scan→replay `RUNNING`；B) `COMMITTED`（无 TCG helper）→kill ctl→restart→mid-flight recover log→replay 仍 `IN_PROGRESS`/`status=14`（无假 `RUNNING`）。
+
+验证 PASS：`test_coordinator.sh`、`test_create_vm_single_node.sh`、`test_create_vm_recover.sh`。
+
+**未宣称 / 不得据此写成 HA complete：** live migration、multi-coordinator HA / durable coordinator failover、自动 resharding、透明恢复丢失的 compute guest state。本刀只证明 CREATE_VM mid-flight 的 coordinator restart recovery 生产接线。
+
+本轨剩余缺口（下一步仍不得发明 MIGRATE_VM）：
+- `ACTIVATION_DECIDED` 尚无 durable runtime manifest 时的完整前向投影（需 launch-plan 再投影，fail-closed 边界仍在）。
+- Agent / `RECOVERY_REBIND`：进程替换后把 `COMMITTED` 诚实推进到 `RUNNING`（本地 child 重注册 + readiness），非 live migration。
+- guest E2E / WaveVM-patched QEMU 仍属 Step-4 残余，不阻塞本轨下一刀。
+
+[2026-10-14 已验证：Step-5 次刀 — ACTIVATION_DECIDED 无 durable runtime manifest 时 launch-plan 前向投影]
+纲领：`runtime-manifest-lifecycle.md` §5.3（coordinator restart 恢复同一 durable 事务；ACTIVATION_DECIDED 后须 replay 缺失 activate/start 或显式补偿）；上条 Step-5 首刀残余「尚无 durable runtime manifest 时的完整前向投影」。未发明 MIGRATE_VM / RECOVERY_REBIND / HA。本地仍叠在 tip `4abe360a8` 之上、**未 commit/push**。
+
+缺口根因：live 路径在 `record_activation`→`ACTIVATION_DECIDED` 之后才 `commit_local` + `record_runtime_manifest`；若崩溃落在二者之间，冷启动仅有 candidate/activation/route，无 durable node runtime projection，旧 recover 直接 fail-closed。
+
+本轮落地：
+1. `ctl_tool/admission_recovery.c`：`load_runtime_manifests` 先读 durable；若缺失且 state=`ACTIVATION_DECIDED`，从 `--state-dir` 加载 runtime profile，按与 live prepare 相同的 vm_id 端口绑定合成 launch plan，再 `wvm_node_runtime_manifest_project`（prepare 风格，activation=NULL）；随后既有 `recover_activation`→`commit_local` 盖 activation fence 并落盘 projection。
+2. `COMMITTED` 仍强制 durable runtime manifest（不得用 launch-plan 伪造已提交投影）。
+3. profile/launch-plan 缺失保持 fail-closed；日志：`ACTIVATION_DECIDED recovery projected N runtime manifest(s) from launch plans`。
+4. `wvm_ctl_recover_midflight_admissions` 增加 `state_directory` + `membership_capture`（冷启动 capture 已在 listener 前完成）。
+
+验证 PASS：`test_coordinator.sh`、`test_create_vm_recover.sh`（RUNNING/COMMITTED 冷恢复回归）、`test_create_vm_single_node.sh`、`make -C ctl_tool -B`。
+
+边界 / 仍未宣称：
+- 未做「故意卡在 record_activation 与 record_runtime_manifest 之间」的专用竖切 fixture（窗口极短；本刀以生产接线 + 既有 recover 回归为主）。
+- Agent/`RECOVERY_REBIND`（进程替换后 COMMITTED→RUNNING）仍为下一刀；非 live migration。
+- guest E2E / WaveVM-patched QEMU 仍属 Step-4 残余。
+- HA/迁移仍 Extended later。未 commit/push。
+
+[2026-10-14 已验证：同 node_instance_id 本地 admitted child 重拉 — COMMITTED→RUNNING；agent 死 fail-closed]
+纲领：`runtime-manifest-lifecycle.md` §6.2「Noncritical local child restart with unchanged registered node instance」——可按 exact manifest/local role 重启，新进程以 readiness owner PID / `caller_process_instance_id` 重登记后再服务；**未**发明 `RECOVERY_REBIND`/`0x0502`、live migration、multi-coordinator HA。agent/`node_instance_id` 变更仍 fail-closed（无假 RUNNING）。本地仍叠在 tip `4abe360a8` 之上、**未 commit/push**。
+
+本轮落地：
+1. `wavevm_admission_receiver`：`QUERY_RUNTIME_READY` 在 identity 已激活且 `ready_validate==-EAGAIN` 时调用既有 `start_runtime`（无新 wire）；始终回 `NOT_READY` 直至 live ready 重发。
+2. `wavevm_admission_runtime_agent`：`start_runtime` 在确认旧 pid 已死后、`posix_spawn` 前清理 stale unix endpoints（runtime/executor/worker/monitor sockets），避免 SIGKILL 残留导致「socket already owned」。
+3. 竖切 `test_create_vm_recover.sh`：C) COMMITTED 窗口 KILL admitted child → 新 child pid → RUNNING；D) KILL agent → 无 status=0。
+
+验证 PASS：`test_coordinator.sh`、`test_create_vm_single_node.sh`、`test_create_vm_recover.sh`（A/B/C/D）、`make -C node_runtime` / `make -C ctl_tool -B`。
+
+边界 / 仍未宣称：
+- 已 RUNNING 后 child 死亡不会自动降级生命周期（本刀只闭合 pre-RUNNING CREATE readiness 重拉）。
+- Required executor/QEMU **运行中**丢状态仍按 §6.2 pause/fail；本刀限于同 agent、同 `node_instance_id`、exact manifest 的 admitted child 重拉。
+- 完整 agent 替换 / `RECOVERY_REBIND`、guest E2E、HA/迁移仍 Extended later。未 commit/push。
+
+[2026-10-14 已验证：drain peer ROUTE_* manifest_generation 绑定 membership dependency]
+纲领：wire-ipc-abi ROUTE_* envelope manifest_generation；cluster-membership-topology-lifecycle §5.4。peer ROUTE_PREPARE/COMMIT/ABORT 信封的 manifest_generation 须为 successor VM 已承认的 admission generation，不得用 transport 常量撒谎。one-scope 首代语义仍可为 1（dependency 本身为 1），但禁止无视 dependency 的硬编码。未发明 multi-scope / HA / MIGRATE_VM / RECOVERY_REBIND。本地仍叠在 tip 4abe360a8 之上、未 commit/push。
+
+缺口根因：wavevm_membership_drain_transport 曾把 peer ROUTE_* 的 envelope.manifest_generation 固定为 1（或 WVM_CTL_DRAIN_SUPPORTED_MANIFEST_GENERATION），与 CREATE_VM dependency_acquire 写入的 wvm_membership_dependency.manifest_generation 脱钩。
+
+本轮落地：
+1. wavevm_membership_drain_transport：init 持有 membership_controller*；resolve_dependency_manifest_generation 按 vm_id+incarnation 从 dependencies 解析；缺失/冲突/零值 fail-closed；submit_route_stage 写入解析结果。
+2. ctl_tool/gateway_drain：init 传入 plane membership_controller；去掉 transport-wide supported-generation 常量。
+3. 竖切 tests/control-plane/test_membership_drain_transport.c/.sh：dependency gen=7 时信封为 7；无 dependency fail-closed；dependency gen=1 仍诚实取自 dependency。
+4. test_gateway_drain_prepare_commit.sh 边界说明同步更新。
+
+验证 PASS：test_membership_drain_transport.sh、test_membership_coordinator.sh、test_gateway_drain.sh、test_gateway_drain_prepare_commit.sh、test_create_vm_single_node.sh、test_create_vm_recover.sh（A/B/C/D）、make -C ctl_tool -B。
+
+边界 / 仍未宣称：
+- 未发明 multi-scope 聚合；one-scope 仍是一次 drain 一个 VM route scope。
+- recovery 冷路径仍不自动 re-run dependency_acquire（既有边界）。
+- successor builder/planner 仍 caller-supplied；Mode A / guest E2E / HA / 迁移 / RECOVERY_REBIND 仍 Extended later。未 commit/push。
+
+[2026-10-14 已验证：cold-recovery mid-flight dependency_acquire 已接线 + 竖切证据]
+纲领：cluster-membership-topology-lifecycle §5.4（drain 须见 VM dependency）；runtime-manifest-lifecycle §5.3（coordinator restart 恢复同一 durable 事务）。未发明 HA / MIGRATE_VM / RECOVERY_REBIND。本地仍叠在 tip 4abe360a8 之上、未 commit/push。
+
+结论：库层与 ctl 生产冷启动**此前已接线**，本轮不重复实现，只补竖切证据并纠正过期边界文案。
+- wvm_admission_orchestrator_recover：ACTIVATION_DECIDED / COMMITTED 在 membership_controller 非空时幂等调用 wvm_admission_register_membership_route_and_dependencies（route_begin+ACK+commit + dependency_acquire）；失败 fail-closed，不打开 readiness。
+- ctl admission_recovery / main：冷启动 listener 前传入 plane.membership_controller；RUNNING 不进 mid-flight scan——依赖 membership.journal DEPENDENCY 回放保活。
+- 缺失成员或 acquire 不允许 → fail-closed（既有 apply_dependency 语义）。
+
+本轮落地：
+1. test_create_vm_recover.sh：编译 read_membership_fence；part A RUNNING 重启后 assert deps sum>=1（journal 回放）；part B COMMITTED 恢复后 assert deps + 校验 ctl 日志 republished membership route+dependencies。
+2. ctl_tool/admission_recovery.c：recover 成功后打 republish 日志（便于竖切 grep；不二次 acquire）。
+3. test_gateway_drain_prepare_commit.sh：边界文案改为 cold recover 已 republish。
+
+验证 PASS：test_create_vm_recover.sh（A/B/C/D）、test_create_vm_single_node.sh、test_membership_coordinator.sh、test_membership_drain_transport.sh、test_gateway_drain.sh、test_gateway_drain_prepare_commit.sh、test_coordinator.sh。
+
+边界 / 仍未宣称：
+- RUNNING 冷启动不经 admission recover 重跑 acquire（靠 membership journal）；mid-flight 才 admission 侧 republish。
+- successor builder/planner 仍 caller-supplied；capability/profile 生产 publish CLI、Mode A spread、guest E2E、HA/迁移/RECOVERY_REBIND 仍 Extended later。未 commit/push。
+
+[2026-10-14 已验证：ctl one-scope gateway drain successor builder（EXECUTOR PREPARE）]
+纲领：cluster-membership-topology-lifecycle §5.4（one-scope、topo=current+1、departing 不进 RequiredAckSet、optional_departure 恰一次）；wire-ipc-abi §4.2.2（PREPARE 须携带完整 successor；receiver 不从残缺请求发明拓扑）。未发明 multi-scope 聚合 / HA / MIGRATE_VM / RECOVERY_REBIND。本地仍叠在 tip 4abe360a8 之上、未 commit/push。
+
+设计边界（未越权）：
+- DRAIN receiver 仍只接受 EXECUTOR 完整 GatewayDrainRequest；ctl 不在 PREPARE 残缺时猜成员或拓扑。
+- Builder 是 EXECUTOR 侧 helper：调用方显式命名 departing + successor gateway；VM/前驱/NODE_RUNTIME ACK 从 membership controller 权威状态解析。
+- 失败 fail-closed：同 key、非 ACTIVE/healthy、deps≠1、无 current-topology ACTIVATED 前驱、多前驱、无 NODE_RUNTIME peer、ACK 超容。
+
+本轮落地：
+1. ctl_tool/gateway_drain_successor.[ch]：wvm_ctl_gateway_drain_successor_build；链入 ctl Makefile。
+2. tests/control-plane/submit_gateway_drain_prepare.c：改用 builder（CLI 仅 SOCKET/JOURNAL/DEPART/SUCC）。
+3. test_gateway_drain_successor.c/.sh：fail-closed 单测；test_gateway_drain_prepare_commit.sh 竖切证明 ctl-built successor → PREPARE+ACK+COMMIT→DRAINING。
+
+验证 PASS：test_gateway_drain_successor.sh、test_gateway_drain_prepare_commit.sh、test_gateway_drain.sh、test_membership_drain_transport.sh、test_membership_coordinator.sh、test_create_vm_single_node.sh、test_create_vm_recover.sh（A/B/C/D）、test_coordinator.sh、make -C ctl_tool -B。
+
+边界 / 仍未宣称：FRACTAL/多跳 successor、multi-scope aggregate、capability/profile 生产 publish CLI、Mode A spread、guest E2E、HA/迁移/RECOVERY_REBIND。未 commit/push。停止本刀。
+
+[2026-10-14 已验证：Mode A 第二 VM fail-closed 门闩恢复 + Mode B 同节点双 VM CREATE 竖切]
+纲领：`docs/wavevm-refactor-roadmap.md` §12（短周期：每物理节点仅一 Mode A，直至 isolation 验收）；`docs/specs/kernel-accelerator.md` §7（未有显式 context/teardown 证据前 admission 必须拒绝第二 Mode A，即使两进程可 open `/dev/wavevm`）；`resource-placement-admission` exclusive KERNEL_CONTEXT lease；Mode B 侧 Phase 6 acceptance（同物理节点两 Mode B 无端口/lease 冲突）。未发明 HA / MIGRATE_VM / RECOVERY_REBIND；未宣称 guest E2E 或 `/dev/wavevm` 双 context 隔离。本地仍叠在 tip `4abe360a8` +既有 Step-5 未提交工作之上、**未 commit/push**。
+
+缺口根因：tip/`c058f2f6c` 将 `derive_listener_leases` 的固定 `"kernel-context"` 改为 per-VM `"kernel-context:vm=:inc="`，仅靠控制面 lease 名打开双 Mode A；这不等于真实内核 isolation，违反 §12 短周期门闩。
+
+本轮落地（Mode A 门闩）：
+1. `common_include/wavevm_admission.c`：`derive_listener_leases` 恢复固定 exclusive 名 `"kernel-context"`（仍要求非零 VM route scope）；注释标明须待真实 `/dev/wavevm` isolation 证据后再解门。
+2. `tests/control-plane/test_admission_plan.c`：断言固定名。
+3. `tests/control-plane/test_reservation_runtime.c`：同固定名第二 Mode A prepare 必须拒绝。
+4. `tests/control-plane/test_create_vm_dual_mode_a.sh`：首 Mode A CREATE→RUNNING；第二 Mode A CREATE fail-closed（status=6）；库存 4 vCPU 以排除 host_overhead 容量误杀。
+5. `tests/control-plane/check_agent_registration.c`：可选 VCPU/MEMORY 参数（默认仍 2/1GiB），供双 VM 竖切使用。
+
+本轮落地（下一纲领项已开始：Mode B isolation/placement）：
+6. 新增 `tests/control-plane/test_create_vm_dual_mode_b.sh`：同 ACTIVE compute 上两 Mode B（`ACCELERATOR_DISABLED`）CREATE→RUNNING，distinct `vm_id`（256/257），依赖 provider 按 VM identity 派生 UDP/executor lease。
+
+验证 PASS：`test_admission_plan.sh`、`test_reservation_runtime.sh`、`test_create_vm_dual_mode_a.sh`、`test_create_vm_dual_mode_b.sh`、`test_create_vm_single_node.sh`。
+
+边界 / 仍未宣称：
+- Mode A 多 context / `/dev/wavevm` isolation+teardown 未验收；门闩不得仅因 per-VM lease 名解除。
+- Mode B 竖切证明控制面双 VM admission+lease；不宣称 GPA/directory 运行时隔离或 guest E2E。
+- HA / 迁移 / RECOVERY_REBIND 仍 Extended later。未 commit/push。
+
+[2026-10-14 已验证：Mode B 同节点双 VM 隔离加深 — 本地名/SHM/socket + 一 VM teardown 不毁另一 VM]
+纲领：`wavevm-refactor-roadmap.md` Phase 6（两 Mode B 无 port/SHM/socket 冲突；删除一 VM 不得 unlink/truncate 另一 VM 资源）；`resource-placement-admission` exclusive local names；`runtime-manifest-lifecycle` §5.2 / §6.2（admitted child 身份隔离，非 RECOVERY_REBIND）。未解除 Mode A §12 门闩；未发明 HA/MIGRATE_VM；未宣称 guest E2E / GPA·directory 运行时隔离 / `/dev/wavevm`。本地仍叠在 tip `4abe360a8` +既有未提交工作之上、**未 commit/push**。
+
+缺口：既有 `test_create_vm_dual_mode_b.sh` 仅证明双 CREATE→RUNNING+distinct vm_id；`test_multivm_isolation.c` 仅覆盖部分 socket（无 monitor）、未断言跨 VM 全名字集不相交、未写 SHM marker 证明 teardown 不截断 survivor。
+
+本轮落地（扩展既有测试，非新发明协议）：
+1. `tests/control-plane/test_multivm_isolation.c`：monitor socket 纳入 bind/exists；`wvm_runtime_name_set_validate`；跨 VM 八路径全不相交；同 identity `validate_unique` fail-closed；SHM marker；teardown A 后 B 资源+marker 仍在。
+2. `tests/control-plane/test_create_vm_dual_mode_b.sh`：RUNNING 后断言 distinct runtime manifest、SHM（`/dev/shm`）、runtime unix socket；KILL 仅 VM1 admitted child；VM2 child/SHM/socket/manifest 仍在；VM2 CREATE replay 仍 status=0/RUNNING 同 vm_id。
+
+验证 PASS：`test_multivm_isolation.sh`、`test_create_vm_dual_mode_b.sh`。Mode A 固定 `"kernel-context"` 门闩未改。
+
+边界 / 仍未宣称：
+- 非 guest/QEMU E2E；非 Mode B GPA/page-version/directory 运行时行为。
+- placement 异构 spread、physical_host 同机多 node-instance、membership 深化为下一刀候选。
+- Mode A 多 context 门闩保持至真实 `/dev/wavevm` isolation 证据。未 commit/push。
+
+[2026-10-14 已验证：physical_host 同机多 node_instance — 持久化 schema + 聚合记账 fail-closed]
+纲领：baseline §7–8；`cluster-membership-topology-lifecycle` §3.1；`resource-placement-admission` §1/§3；roadmap Phase 7（`physical_host_id` 分组，禁止同机双计）。未发明 HA/MIGRATE；未解除 Mode A §12 门闩；未宣称同机双 agent 生产竖切。本地仍叠在 tip `4abe360a8` +既有未提交工作之上、**未 commit/push**。
+
+缺口：NodeRecord/NodeRuntimeProfile 规范已有 field 16/17 与 `NodeInstanceNamespace`(0x1031)，代码此前未落地；admission 无 host 聚合校验，同 `physical_host_id` 可对 registered 容量双计。
+
+本轮落地（最小诚实切片）：
+1. `wavevm_control.h/.c`：`struct wvm_node_instance_namespace` + encode/decode/validate；NodeRecord 增 `physical_host_id` + namespace；`wvm_node_record_init_single_host_defaults`（单 provider：host_id:=physical_node_id）；`wvm_physical_host_aggregate_validate`（同 host：distinct node/instance/namespace/ports；相同 registered；sum(allocatable)≤registered）。
+2. `wavevm_runtime_profile.h/.c`：profile field 13/14 同步；与 NodeRecord host/namespace 对齐（ctl `profile_matches_node`）。
+3. `wavevm_cluster.c` snapshot_build 调聚合校验；`membership_controller` REGISTER 对既有 compute+candidate 聚合（跳过同 MemberKey 重放）。
+4. `node_runtime/admission_main` 注册路径套 single-host defaults。
+5. 测试：`test_physical_host_aggregate.c/.sh`；fixtures 批量 `init_single_host_defaults`；profile seed/record 补 host 字段。
+
+验证 PASS：`test_physical_host_aggregate`、`test_control_membership_records`、`test_runtime_profile_record`、`test_cluster_snapshot`、`test_membership_controller`、`test_create_vm_single_node`、`test_create_vm_dual_mode_a`（Mode A 门闩仍关）、`test_create_vm_dual_mode_b`、`test_admission_plan`。
+
+边界 / 仍未宣称：
+- 未做同机双 `wavevm_node_runtime` agent 竖切（显式 `--physical-host-id` CLI / 分实例 namespace 生产参数仍可下一刀）。
+- placement spread / membership dual-VM drain 未在本刀展开。
+- Mode A 门闩保持。未 commit/push。
+
+[2026-10-14 已验证：same-host dual agent vertical — REGISTER→ACTIVE + 聚合记账]
+纲领：roadmap Phase 7；membership §3.1；placement §1；叠在 physical_host schema/aggregate 之上。未发明 HA；Mode A §12 门闩保持；未 commit/push。
+
+本轮：
+1. Agent CLI：`--physical-host-id` / `--registered-vcpu-slots` / `--registered-memory-bytes` / `--node-instance-namespace`（`node_runtime/admission_main.c`）；registered≥allocatable，reserved_host = registered−allocatable。
+2. `seed_create_vm_evidence` 可选 PHYSICAL_HOST_ID（profile 与 NodeRecord 对齐）。
+3. 控制面竖切 `test_same_host_dual_agent.c/.sh`：同 host 双 node_instance → enroll ACTIVE；distinct namespace/ports；aggregate 不双计；over-budget / namespace 碰撞 REGISTER fail-closed。
+4. 活体竖切 `test_same_host_dual_agent_live.sh` + `check_same_host_dual_agent.c`：gateway + 两 agent 共享 host_id=9001、registered 4/2GiB、各 allocatable 2/1GiB → 双 ACTIVE + journal aggregate PASS。
+
+验证 PASS：same-host dual (C + live)、physical_host_aggregate、membership_controller、CREATE single、dual Mode A（门闩仍关）、dual Mode B。
+
+边界：未宣称 guest E2E / placement spread / dual-VM drain。未 commit/push。
+
+[2026-10-14 已验证：placement spread 诚实切片 — 同置内存 + exclusive lease + remote fail-closed]
+纲领：`resource-placement-admission` §4 / §5.3；roadmap Phase 7 compact/spread；先前计划「spread 跨节点无本地内存被 node_runtime 诚实拒绝」。未发明 HA/guest；Mode A §12 门闩保持；未 commit/push。
+
+缺口：SPREAD 可把 vCPU 放到无 guest memory 的节点（需远程 memory executor）；placement validate 覆盖具体目录/executor 分裂错误；同节点 exclusive listener lease 双计未在 build 路径显式 fail-closed。
+
+本轮落地：
+1. `wvm_admission_plan_propose`：在 spread/compact 内存循环前，对每个已持有 vCPU 的节点 pin 至少一块本地 guest memory；不足则 fail-closed（remote memory not admitted）。
+2. SPREAD `select_assignment_node`：内存赋值优先已有本 VM vCPU 的节点。
+3. `wvm_admission_plan_validate`：拒绝 `guest_vcpu_slots>0 && guest_memory_bytes==0`。
+4. `wvm_placement_plan_validate`：拒绝 directory≠executor；保留具体错误文案。
+5. `placement_exclusive_leases_disjoint`：同节点 exclusive lease 名称/kind 不得双计。
+6. 测试：`test_placement_spread.c/.sh`（稳定 digest、co-locate、remote/split/lease fail-closed）。
+
+验证 PASS：placement_spread、admission_plan、placement_plan、reservation_runtime、dual Mode A（门闩仍关）。
+
+边界：未宣称 live multi-node SPREAD CREATE RUNNING / 远程 memory executor E2E；membership dual-VM drain 未在本刀展开。未 commit/push。停止本刀交 parent。
+
+[2026-10-14 已验证：membership dual-VM drain (Mode B) — fail-closed / 无黑洞]
+纲领：cluster-membership-topology-lifecycle §5.3–§5.4（compute 有依赖不可 drain；gateway V1 单 scope，multi-scope 须显式聚合，禁止部分替换造成 black hole）。未发明 HA / multi-scope aggregate / MIGRATE；Mode A §12 门闩保持；未 commit/push。
+
+缺口：双 Mode B VM 同挂 compute/gateway 时，单测未覆盖「释放其一不得清另一依赖」与 gateway 双依赖 drain 的明确 fail-closed 文案。
+
+本轮落地：
+1. `gateway_drain_successor_validate`：`active_dependency_count != 1` 提前 fail-closed，错误明确 multi-scope dual-VM；matching dependency_count 文案同步。
+2. `test_membership_route`：两 Mode B compute deps → drain 拒绝；释放 VM A 后 count=1 且仍拒绝 drain；释放 VM B 后才可 drain/remove。
+3. `test_membership_coordinator`：compute+gateway 各挂 VM 256/257 → dual drain 拒绝（含 gateway successor 尝试）；释放 A 后 B 仍在；再清 B。
+
+验证 PASS：membership_route、membership_coordinator、membership_controller、gateway_drain、membership_drain_transport、dual Mode A（门闩仍关）。
+
+边界：未实现 multi-scope 聚合 drain；未宣称 live dual-VM + gateway drain 竖切 guest E2E。未 commit/push。停止交 parent（Mode A kernel 前暂停点）。
+
+[2026-10-14 已验证：goal step 1 收口 — Phase 7 并发/节点丢失/半张表 + 资源释放 + 换血 fail-closed 回归]
+纲领：goal.txt §1；roadmap Phase 7（四并发不双分配、节点丢失不误报 healthy RUNNING、活流量 snapshot 不得半张表）；membership §5.6；resource-placement-admission §6.3；runtime-manifest-lifecycle 补偿释放。未发明 HA/MIGRATE/RECOVERY_REBIND；未开 goal §2 STOP 编排/Mode A kernel/guest E2E。本地仍叠 tip `4abe360a8` +既有未提交工作，**未 commit/push**（交 parent 批量）。
+
+本轮相对 step 1 的缺口与落地：
+1. **并发不双分配（最小诚实切片）**：`wvm_local_reservation_prepare` 在 registry 锁下原子校验容量；`test_reservation_runtime` 四线程各要 2 vCPU、节点 allocatable=4 → 恰 2 成功、prepared_vcpu=4。
+2. **COMMITTED 资源释放**：新增 `wvm_local_reservation_release`（仅 COMMITTED/RELEASED；幂等 tombstone）；`wvm_coordinator_teardown_local` 供生命周期 RETIRING 后释放（本轮未接完整 STOP 编排）。单测：commit 赢家后 release 清零 committed_vcpu + replay。
+3. **活流量半张表**：`test_route_runtime` 在 activate 替换期间并发 lookup；旧 key 不得解析到新 next-hop 端口；替换后旧 generation 拒绝、新 generation 完整 next-hop。
+4. **RUNNING 期间节点丢失不误报 healthy**：`wvm_membership_controller_vm_required_members_healthy`（无 dep / SUSPECT|UNREACHABLE / DRAINING|REMOVED|FAILED → 非 healthy）；`ctl` CREATE_VM 在 durable RUNNING 宣称 SUCCESS 前必过该门，否则 PRECONDITION_FAILED。`test_membership_controller`：UNREACHABLE 后 healthy=0，self-health 恢复后=1。
+5. **换血/依赖/恢复回归**：dual-VM gateway drain 仍 fail-closed；peer PREPARE+ACK+COMMIT；cold recover A/B/C/D；CREATE single + dual Mode A 门闩 + dual Mode B。
+
+顺带保留（上轮 STOP 未完成切片，非本步编排）：`wvm_runtime_name_set_retire`（ENOENT 成功的 per-VM socket/SHM/ready unlink）。**未**实现 `orchestrator_stop` / STOP_VM wire。
+
+验证 PASS：`test_reservation_runtime`、`test_route_runtime`、`test_membership_controller`、`test_membership_coordinator`、`test_membership_route`、`test_membership_drain_transport`、`test_gateway_drain`、`test_gateway_drain_prepare_commit`、`test_create_vm_single_node`、`test_create_vm_dual_mode_a`、`test_create_vm_dual_mode_b`、`test_create_vm_recover`(A/B/C/D)、`test_coordinator`、`make -C ctl_tool -B`。
+
+边界 / 仍未宣称：
+- 非四路并发 live CREATE_VM 竖切（证据在 node-local reservation 原子门，与 §6.3 一致）。
+- 节点丢失尚未自动把 durable lifecycle 写成 DEGRADED（仅拒绝 healthy SUCCESS；完整 STOPPING/DEGRADED 属 goal §2）。
+- 未开 Mode A multi-context、guest E2E、multi-scope aggregate drain。未 commit/push。**step 1 收口；本日停止，不启动 step 2。**

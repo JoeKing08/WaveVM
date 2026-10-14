@@ -16,8 +16,6 @@
 #define WVM_CTL_DRAIN_ACK_CAP 8U
 #define WVM_CTL_DRAIN_RULE_CAP 4U
 #define WVM_CTL_DRAIN_DEPARTURE_CAP 2U
-/* Supported CREATE_VM / one-scope drain fixtures use manifest_generation 1. */
-#define WVM_CTL_DRAIN_SUPPORTED_MANIFEST_GENERATION 1ULL
 
 static void set_error(char *error, size_t error_len, const char *message)
 {
@@ -40,14 +38,13 @@ int wvm_ctl_gateway_drain_init(
     }
     memset(drain, 0, sizeof(*drain));
     /*
-     * Peer ROUTE_* envelopes require nonzero manifest_generation. Supported
-     * one-scope drain fixtures and CREATE_VM first-generation VMs use
-     * generation 1; a multi-generation drain transport must bind the
-     * dependency's real generation before widening PREPARE acceptance.
+     * Peer ROUTE_* stamp manifest_generation from the successor VM's
+     * membership dependency (CREATE_VM dependency_acquire). One-scope drain
+     * remains one VM route scope; generation is not a transport constant.
      */
     if (wvm_membership_drain_transport_init(
             &drain->transport, controller_physical_node_id,
-            controller_instance_id, WVM_CTL_DRAIN_SUPPORTED_MANIFEST_GENERATION,
+            controller_instance_id, &plane->membership_controller,
             submit_context, submit, error, error_len) != 0) {
         return -1;
     }
@@ -122,9 +119,8 @@ static int validate_supported_drain_scope(
         return -1;
     }
     /*
-     * Transport stamps manifest_generation=1 on peer ROUTE_* envelopes.
-     * Reject successors without a VM route scope; multi-generation drain must
-     * bind the dependency's real generation before widening this gate.
+     * One-scope drain: require a concrete VM route scope. Peer ROUTE_*
+     * generation is resolved from membership dependencies for that scope.
      */
     if (decoded->successor_snapshot.route_snapshot_key.scope_key.vm_id == 0 ||
         decoded->successor_snapshot.route_snapshot_key.scope_key

@@ -4,8 +4,10 @@ LDFLAGS ?= -pthread
 
 TARGET = wvm_ctl
 COMMON_DIR = ../common_include
-SRCS = main.c admission_workspace.c admission_readiness.c capability_publication.c \
+SRCS = main.c admission_workspace.c admission_readiness.c admission_recovery.c \
+	capability_publication.c \
 	runtime_profile_publication.c membership_enrollment.c gateway_drain.c \
+	gateway_drain_successor.c \
 	$(COMMON_DIR)/wavevm_sha256.c \
 	$(COMMON_DIR)/wavevm_canonical.c \
 	$(COMMON_DIR)/wavevm_identity.c \
@@ -33,6 +35,7 @@ SRCS = main.c admission_workspace.c admission_readiness.c capability_publication
 	$(COMMON_DIR)/wavevm_membership_enrollment_transport.c \
 	$(COMMON_DIR)/wavevm_membership_drain_transport.c \
 	$(COMMON_DIR)/wavevm_admission_orchestrator.c \
+	$(COMMON_DIR)/wavevm_admission_recovery.c \
 	$(COMMON_DIR)/wavevm_control_plane.c \
 	$(COMMON_DIR)/wavevm_envelope.c \
 	$(COMMON_DIR)/wavevm_membership_controller.c \

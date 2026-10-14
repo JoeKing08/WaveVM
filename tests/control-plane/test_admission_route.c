@@ -166,6 +166,7 @@ static int fill_records(struct wvm_node_record *node,
     node->observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     node->membership_revision = 5;
     node->topology_revision = 6;
+    wvm_node_record_init_single_host_defaults(node);
 
     memset(gateway, 0, sizeof(*gateway));
     gateway->gateway_id = 3;

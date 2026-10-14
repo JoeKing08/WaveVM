@@ -366,5 +366,5 @@ ctl_pid=
 
 echo "production gateway CORDON + DRAIN fail-closed entry: PASS"
 echo "boundary: 换血 PREPARE+ACK+COMMIT covered by test_gateway_drain_prepare_commit.sh"
-echo "  (CREATE_VM now wires dependency_acquire). Successor builder still caller-supplied;"
+echo "  (CREATE_VM now wires dependency_acquire). one-scope successor builder in ctl PREPARE path;"
 echo "  Mode A / guest E2E not started."

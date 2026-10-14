@@ -2269,6 +2269,248 @@ static int node_inventory_encode_adapter(const void *value, uint8_t *bytes,
                                             encoded_bytes, error, error_len);
 }
 
+
+int wvm_node_instance_namespace_validate(
+    const struct wvm_node_instance_namespace *namespace_value, char *error,
+    size_t error_len)
+{
+    size_t name_bytes;
+
+    if (!namespace_value) {
+        set_error(error, error_len, "node instance namespace is missing");
+        return -1;
+    }
+    name_bytes = strnlen(namespace_value->namespace_name,
+                         sizeof(namespace_value->namespace_name));
+    if (name_bytes == 0 ||
+        name_bytes >= sizeof(namespace_value->namespace_name) ||
+        memchr(namespace_value->namespace_name, '\0', name_bytes) != NULL ||
+        namespace_value->name_generation == 0) {
+        set_error(error, error_len, "node instance namespace is invalid");
+        return -1;
+    }
+    return 0;
+}
+
+int wvm_node_instance_namespace_encode(
+    const struct wvm_node_instance_namespace *namespace_value, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len)
+{
+    struct wvm_canonical_builder builder;
+    size_t name_bytes;
+
+    if (wvm_node_instance_namespace_validate(namespace_value, error,
+                                             error_len) != 0) {
+        return -1;
+    }
+    name_bytes = strlen(namespace_value->namespace_name);
+    if (wvm_canonical_record_begin(&builder, bytes, capacity,
+                                   WVM_RECORD_NODE_INSTANCE_NAMESPACE) != 0 ||
+        wvm_canonical_field_append(&builder, 1,
+                                   namespace_value->namespace_name,
+                                   (uint32_t)name_bytes) != 0 ||
+        wvm_canonical_field_append(
+            &builder, 2, namespace_value->derivation_salt_digest,
+            sizeof(namespace_value->derivation_salt_digest)) != 0 ||
+        wvm_canonical_field_append_u64(&builder, 3,
+                                       namespace_value->name_generation) != 0 ||
+        wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
+        set_error(error, error_len, "cannot encode node instance namespace");
+        return -1;
+    }
+    return 0;
+}
+
+int wvm_node_instance_namespace_decode(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_node_instance_namespace *namespace_value, char *error,
+    size_t error_len)
+{
+    struct wvm_canonical_field fields[4];
+    unsigned char present[4];
+
+    if (!namespace_value ||
+        parse_record_fields(bytes, encoded_bytes,
+                            WVM_RECORD_NODE_INSTANCE_NAMESPACE, fields, present,
+                            3, error, error_len) != 0 ||
+        !present[1] || !present[2] || !present[3] ||
+        fields[1].value_bytes == 0 ||
+        fields[1].value_bytes > WVM_LOCAL_NAMESPACE_MAX_BYTES ||
+        memchr(fields[1].value, '\0', fields[1].value_bytes) != NULL ||
+        fields[2].value_bytes != WVM_SHA256_DIGEST_BYTES ||
+        fields[3].value_bytes != 8) {
+        set_error(error, error_len, "node instance namespace has invalid fields");
+        return -1;
+    }
+    memset(namespace_value, 0, sizeof(*namespace_value));
+    memcpy(namespace_value->namespace_name, fields[1].value,
+           fields[1].value_bytes);
+    memcpy(namespace_value->derivation_salt_digest, fields[2].value,
+           sizeof(namespace_value->derivation_salt_digest));
+    namespace_value->name_generation = read_be64(fields[3].value);
+    return wvm_node_instance_namespace_validate(namespace_value, error,
+                                                error_len);
+}
+
+static int node_instance_namespace_size(
+    const struct wvm_node_instance_namespace *namespace_value, size_t *encoded_size)
+{
+    size_t fields[3];
+    size_t name_bytes;
+
+    if (!namespace_value || !encoded_size ||
+        wvm_node_instance_namespace_validate(namespace_value, NULL, 0) != 0) {
+        return -1;
+    }
+    name_bytes = strlen(namespace_value->namespace_name);
+    fields[0] = name_bytes;
+    fields[1] = WVM_SHA256_DIGEST_BYTES;
+    fields[2] = 8;
+    return canonical_record_size(fields, 3, encoded_size);
+}
+
+static int node_instance_namespace_encode_adapter(const void *value,
+                                                  uint8_t *bytes,
+                                                  size_t capacity,
+                                                  size_t *encoded_bytes,
+                                                  char *error,
+                                                  size_t error_len)
+{
+    return wvm_node_instance_namespace_encode(value, bytes, capacity,
+                                              encoded_bytes, error, error_len);
+}
+
+void wvm_node_record_init_single_host_defaults(struct wvm_node_record *node)
+{
+    int written;
+
+    if (!node || node->physical_node_id == 0 || node->node_instance_id == 0) {
+        return;
+    }
+    if (node->physical_host_id == 0) {
+        node->physical_host_id = node->physical_node_id;
+    }
+    if (node->node_instance_namespace.namespace_name[0] == '\0') {
+        written = snprintf(node->node_instance_namespace.namespace_name,
+                           sizeof(node->node_instance_namespace.namespace_name),
+                           "ni-%u-%llu", (unsigned)node->physical_node_id,
+                           (unsigned long long)node->node_instance_id);
+        if (written < 0 ||
+            (size_t)written >=
+                sizeof(node->node_instance_namespace.namespace_name)) {
+            node->node_instance_namespace.namespace_name[0] = '\0';
+            return;
+        }
+        memset(node->node_instance_namespace.derivation_salt_digest, 0xa5,
+               sizeof(node->node_instance_namespace.derivation_salt_digest));
+        node->node_instance_namespace.name_generation = 1;
+    }
+}
+
+static int endpoint_port_collision(const struct wvm_endpoint *left,
+                                   const struct wvm_endpoint *right)
+{
+    if (!left || !right) {
+        return 0;
+    }
+    if (left->data_port != 0 &&
+        (left->data_port == right->data_port ||
+         left->data_port == right->control_port)) {
+        return 1;
+    }
+    if (left->control_port != 0 &&
+        (left->control_port == right->data_port ||
+         left->control_port == right->control_port)) {
+        return 1;
+    }
+    return 0;
+}
+
+int wvm_node_record_validate(const struct wvm_node_record *node, char *error,
+                             size_t error_len);
+
+int wvm_physical_host_aggregate_validate(const struct wvm_node_record *nodes,
+                                         size_t node_count, char *error,
+                                         size_t error_len)
+{
+    size_t i;
+    size_t j;
+
+    if (!nodes && node_count != 0) {
+        set_error(error, error_len, "physical host aggregate input is invalid");
+        return -1;
+    }
+    for (i = 0; i < node_count; i++) {
+        if (wvm_node_record_validate(&nodes[i], error, error_len) != 0) {
+            return -1;
+        }
+    }
+    for (i = 0; i < node_count; i++) {
+        uint64_t host = nodes[i].physical_host_id;
+        uint64_t sum_vcpu = 0;
+        uint64_t sum_memory = 0;
+        uint32_t registered_vcpu = nodes[i].inventory.registered_vcpu_slots;
+        uint64_t registered_memory = nodes[i].inventory.registered_memory_bytes;
+        size_t peers = 0;
+
+        for (j = 0; j < node_count; j++) {
+            const struct wvm_node_record *peer = &nodes[j];
+
+            if (peer->physical_host_id != host) {
+                continue;
+            }
+            peers++;
+            if (j > i) {
+                if (peer->physical_node_id == nodes[i].physical_node_id ||
+                    peer->node_instance_id == nodes[i].node_instance_id) {
+                    set_error(error, error_len,
+                              "same-host node instances must use distinct "
+                              "physical_node_id and node_instance_id");
+                    return -1;
+                }
+                if (strcmp(peer->node_instance_namespace.namespace_name,
+                           nodes[i].node_instance_namespace.namespace_name) ==
+                    0) {
+                    set_error(error, error_len,
+                              "same-host node instances must use distinct "
+                              "node_instance_namespace");
+                    return -1;
+                }
+                if (endpoint_port_collision(&peer->control_endpoint,
+                                            &nodes[i].control_endpoint) ||
+                    endpoint_port_collision(&peer->control_endpoint,
+                                            &nodes[i].sidecar_endpoint) ||
+                    endpoint_port_collision(&peer->sidecar_endpoint,
+                                            &nodes[i].control_endpoint) ||
+                    endpoint_port_collision(&peer->sidecar_endpoint,
+                                            &nodes[i].sidecar_endpoint)) {
+                    set_error(error, error_len,
+                              "same-host node instances must use distinct "
+                              "listener ports");
+                    return -1;
+                }
+            }
+            if (peer->inventory.registered_vcpu_slots != registered_vcpu ||
+                peer->inventory.registered_memory_bytes != registered_memory) {
+                set_error(error, error_len,
+                          "same-host node instances must share identical "
+                          "registered host capacity");
+                return -1;
+            }
+            sum_vcpu += peer->inventory.allocatable_vcpu_slots;
+            sum_memory += peer->inventory.allocatable_memory_bytes;
+        }
+        if (peers > 1U &&
+            (sum_vcpu > registered_vcpu || sum_memory > registered_memory)) {
+            set_error(error, error_len,
+                      "same-host allocatable capacity exceeds registered "
+                      "host budget (double-count rejected)");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int wvm_node_record_validate(const struct wvm_node_record *node, char *error,
                              size_t error_len)
 {
@@ -2289,7 +2531,10 @@ int wvm_node_record_validate(const struct wvm_node_record *node, char *error,
         node->capability.node_instance_id != node->node_instance_id ||
         !valid_membership_state(node->desired_membership_state) ||
         !valid_health_state(node->observed_health_state) ||
-        node->membership_revision == 0 || node->topology_revision == 0) {
+        node->membership_revision == 0 || node->topology_revision == 0 ||
+        node->physical_host_id == 0 ||
+        wvm_node_instance_namespace_validate(&node->node_instance_namespace,
+                                             error, error_len) != 0) {
         set_error(error, error_len, "node record is invalid");
         return -1;
     }
@@ -2305,12 +2550,15 @@ int wvm_node_record_encode(const struct wvm_node_record *node, uint8_t *bytes,
     size_t sidecar_endpoint_bytes;
     size_t inventory_bytes;
     size_t capability_bytes;
+    size_t namespace_bytes;
 
     if (wvm_node_record_validate(node, error, error_len) != 0 ||
         endpoint_size(&node->control_endpoint, &control_endpoint_bytes) != 0 ||
         endpoint_size(&node->sidecar_endpoint, &sidecar_endpoint_bytes) != 0 ||
         node_inventory_size(&node->inventory, &inventory_bytes) != 0 ||
         capability_ref_size(&capability_bytes) != 0 ||
+        node_instance_namespace_size(&node->node_instance_namespace,
+                                     &namespace_bytes) != 0 ||
         wvm_canonical_record_begin(&builder, bytes, capacity,
                                    WVM_RECORD_NODE_RECORD) != 0 ||
         wvm_canonical_field_append_u32(&builder, 1, node->physical_node_id) !=
@@ -2345,6 +2593,12 @@ int wvm_node_record_encode(const struct wvm_node_record *node, uint8_t *bytes,
                                        node->membership_revision) != 0 ||
         wvm_canonical_field_append_u64(&builder, 15,
                                        node->topology_revision) != 0 ||
+        wvm_canonical_field_append_u64(&builder, 16, node->physical_host_id) !=
+            0 ||
+        append_nested_record(&builder, 17, namespace_bytes,
+                             node_instance_namespace_encode_adapter,
+                             &node->node_instance_namespace, error,
+                             error_len) != 0 ||
         wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
         set_error(error, error_len, "cannot encode node record");
         return -1;
@@ -2356,17 +2610,18 @@ int wvm_node_record_decode(const uint8_t *bytes, size_t encoded_bytes,
                            struct wvm_node_record *node, char *error,
                            size_t error_len)
 {
-    struct wvm_canonical_field fields[16];
-    unsigned char present[16];
+    struct wvm_canonical_field fields[18];
+    unsigned char present[18];
     struct wvm_node_inventory_record inventory;
 
     if (!node ||
         parse_record_fields(bytes, encoded_bytes, WVM_RECORD_NODE_RECORD,
-                            fields, present, 15, error, error_len) != 0 ||
+                            fields, present, 17, error, error_len) != 0 ||
         !present[1] || !present[2] || !present[3] || !present[4] ||
         !present[5] || !present[6] || !present[7] || !present[8] ||
         !present[9] || !present[10] || !present[11] || !present[12] ||
-        !present[13] || !present[14] || !present[15] ||
+        !present[13] || !present[14] || !present[15] || !present[16] ||
+        !present[17] ||
         fields[1].value_bytes != 4 || fields[2].value_bytes != 8 ||
         fields[3].value_bytes != 8 || fields[6].value_bytes != 8 ||
         fields[7].value_bytes != 8 || fields[8].value_bytes != 4 ||
@@ -2391,6 +2646,11 @@ int wvm_node_record_decode(const uint8_t *bytes, size_t encoded_bytes,
     node->observed_health_state = read_be16(fields[13].value);
     node->membership_revision = read_be64(fields[14].value);
     node->topology_revision = read_be64(fields[15].value);
+    if (fields[16].value_bytes != 8) {
+        set_error(error, error_len, "node record physical_host_id is invalid");
+        return -1;
+    }
+    node->physical_host_id = read_be64(fields[16].value);
     if (wvm_endpoint_decode(fields[4].value, fields[4].value_bytes,
                             &node->control_endpoint, error, error_len) != 0 ||
         wvm_endpoint_decode(fields[5].value, fields[5].value_bytes,
@@ -2400,7 +2660,10 @@ int wvm_node_record_decode(const uint8_t *bytes, size_t encoded_bytes,
                                          &node->inventory, error, error_len) !=
             0 ||
         wvm_capability_ref_decode(fields[11].value, fields[11].value_bytes,
-                                  &node->capability, error, error_len) != 0) {
+                                  &node->capability, error, error_len) != 0 ||
+        wvm_node_instance_namespace_decode(
+            fields[17].value, fields[17].value_bytes,
+            &node->node_instance_namespace, error, error_len) != 0) {
         return -1;
     }
     return wvm_node_record_validate(node, error, error_len);

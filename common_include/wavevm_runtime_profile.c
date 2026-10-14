@@ -53,7 +53,7 @@ static void write_be32(uint8_t *bytes, uint32_t value)
 }
 
 static int parse_fields(const uint8_t *bytes, size_t byte_count,
-                        struct wvm_canonical_field fields[12])
+                        struct wvm_canonical_field fields[14])
 {
     struct wvm_canonical_record record;
     struct wvm_canonical_field field;
@@ -65,16 +65,16 @@ static int parse_fields(const uint8_t *bytes, size_t byte_count,
         return -1;
     }
     while ((next = wvm_canonical_record_next(&record, &offset, &field)) == 1) {
-        if (count >= 12 || field.tag != count + 1U) {
+        if (count >= 14 || field.tag != count + 1U) {
             return -1;
         }
         fields[count] = field;
         count++;
-        if (count == 12 && offset != record.body_bytes) {
+        if (count == 14 && offset != record.body_bytes) {
             return -1;
         }
     }
-    return next == 0 && count == 12 ? 0 : -1;
+    return next == 0 && count == 14 ? 0 : -1;
 }
 
 static int port_in_pool(uint16_t port, const uint16_t *ports, size_t count)
@@ -135,7 +135,10 @@ int wvm_node_runtime_profile_validate(
                      profile->local_executor_service_port_count) ||
         port_in_pool(profile->local_executor_control_port,
                      profile->local_executor_service_ports,
-                     profile->local_executor_service_port_count)) {
+                     profile->local_executor_service_port_count) ||
+        profile->physical_host_id == 0 ||
+        wvm_node_instance_namespace_validate(&profile->node_instance_namespace,
+                                             error, error_len) != 0) {
         set_error(error, error_len, "node runtime profile is invalid");
         return -1;
     }
@@ -148,6 +151,28 @@ int wvm_node_runtime_profile_validate(
             return -1;
         }
     }
+    return 0;
+}
+
+
+static int append_nested_namespace(struct wvm_canonical_builder *builder,
+                                   uint16_t tag,
+                                   const struct wvm_node_instance_namespace *ns)
+{
+    uint8_t nested[512];
+    size_t nested_bytes = 0;
+    char nest_error[128];
+    uint8_t *value;
+
+    if (wvm_node_instance_namespace_encode(ns, nested, sizeof(nested),
+                                           &nested_bytes, nest_error,
+                                           sizeof(nest_error)) != 0 ||
+        nested_bytes > UINT32_MAX ||
+        wvm_canonical_field_reserve(builder, tag, (uint32_t)nested_bytes,
+                                    &value) != 0) {
+        return -1;
+    }
+    memcpy(value, nested, nested_bytes);
     return 0;
 }
 
@@ -204,6 +229,10 @@ int wvm_node_runtime_profile_encode(
         append_port_pool(&builder, 12,
                          profile->local_executor_service_ports,
                          profile->local_executor_service_port_count) != 0 ||
+        wvm_canonical_field_append_u64(&builder, 13,
+                                       profile->physical_host_id) != 0 ||
+        append_nested_namespace(&builder, 14,
+                                &profile->node_instance_namespace) != 0 ||
         wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
         set_error(error, error_len, "cannot encode node runtime profile");
         return -1;
@@ -244,7 +273,7 @@ int wvm_node_runtime_profile_decode(
     const uint8_t *bytes, size_t byte_count,
     struct wvm_node_runtime_profile *profile, char *error, size_t error_len)
 {
-    struct wvm_canonical_field fields[12];
+    struct wvm_canonical_field fields[14];
     struct wvm_node_runtime_profile decoded = {0};
 
     if (!profile || byte_count > WVM_NODE_RUNTIME_PROFILE_MAX_BYTES ||
@@ -253,7 +282,8 @@ int wvm_node_runtime_profile_decode(
         fields[2].value_bytes != 8 || fields[3].value_bytes != 8 ||
         fields[4].value_bytes != 8 || fields[5].value_bytes != 2 ||
         fields[6].value_bytes != 2 || fields[7].value_bytes != 4 ||
-        fields[8].value_bytes != 4 || fields[9].value_bytes != 4) {
+        fields[8].value_bytes != 4 || fields[9].value_bytes != 4 ||
+        fields[12].value_bytes != 8) {
         set_error(error, error_len, "node runtime profile record is malformed");
         return -1;
     }
@@ -267,10 +297,14 @@ int wvm_node_runtime_profile_decode(
     decoded.executor_worker_count = read_be32(fields[7].value);
     decoded.sync_batch_size = read_be32(fields[8].value);
     decoded.vcpu_handoff_record_capacity = read_be32(fields[9].value);
+    decoded.physical_host_id = read_be64(fields[12].value);
     if (decode_port_pool(&fields[10], &decoded.node_runtime_data_ports,
                          &decoded.node_runtime_data_port_count) != 0 ||
         decode_port_pool(&fields[11], &decoded.local_executor_service_ports,
                          &decoded.local_executor_service_port_count) != 0 ||
+        wvm_node_instance_namespace_decode(
+            fields[13].value, fields[13].value_bytes,
+            &decoded.node_instance_namespace, error, error_len) != 0 ||
         wvm_node_runtime_profile_validate(&decoded, error, error_len) != 0) {
         wvm_node_runtime_profile_destroy(&decoded);
         if (error && error_len && error[0] == '\0') {

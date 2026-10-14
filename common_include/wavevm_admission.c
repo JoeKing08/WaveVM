@@ -399,6 +399,19 @@ int wvm_admission_plan_validate(const struct wvm_admission_snapshot *snapshot,
                       reservation->physical_node_id);
             return -1;
         }
+        /*
+         * Fail-closed: a vCPU executor without co-located guest memory requires
+         * remote memory directory/executor support that is not yet admitted.
+         * Memory-only participants (vcpu==0) remain legal for Mode B.
+         */
+        if (reservation->guest_vcpu_slots != 0 &&
+            reservation->guest_memory_bytes == 0) {
+            set_error(error, error_len,
+                      "admission plan places vCPU on node %u without local "
+                      "guest memory (remote memory placement not admitted)",
+                      reservation->physical_node_id);
+            return -1;
+        }
         if (reservation->guest_memory_bytes % WVM_ADMISSION_PAGE_BYTES != 0 ||
             reservation->host_overhead_memory_bytes %
                     WVM_ADMISSION_PAGE_BYTES != 0) {
@@ -673,6 +686,8 @@ static int select_assignment_node(
             uint64_t current_cpu_used;
             uint64_t current_memory_used;
             int comparison;
+            int has_vcpu = guest_vcpus[node_index] != 0;
+            int best_has_vcpu = guest_vcpus[best] != 0;
 
             (void)node_available_capacity(current, &current_available_cpu,
                                           &current_available_memory);
@@ -684,6 +699,17 @@ static int select_assignment_node(
                                   ((uint32_t)best == (uint32_t)host_index
                                        ? request->host_overhead_memory_bytes
                                        : 0);
+            /*
+             * Spread memory prefers nodes that already hold this VM's vCPUs so
+             * the plan stays locally co-located until remote memory executors
+             * are admitted. Memory-only spill remains allowed afterward.
+             */
+            if (memory_assignment && has_vcpu != best_has_vcpu) {
+                if (has_vcpu) {
+                    best = (int)node_index;
+                }
+                continue;
+            }
             comparison = projected_max_utilization_compare(
                 cpu_used + (memory_assignment ? 0U : 1U), available_cpu,
                 memory_used + (memory_assignment ? memory_bytes : 0U),
@@ -760,6 +786,60 @@ int wvm_admission_plan_propose(
     }
 
     remaining_memory = request->requested_memory_bytes;
+    /*
+     * Pin one memory chunk onto every node that already received a vCPU so
+     * spread cannot leave a vCPU executor without local guest RAM (remote
+     * memory executors are not admitted yet). Remaining bytes then follow
+     * normal compact/spread scoring, still preferring vCPU nodes.
+     */
+    for (i = 0; i < snapshot->node_count && remaining_memory != 0; i++) {
+        const uint32_t node_index = indices[i];
+        uint64_t chunk;
+        uint32_t available_cpu;
+        uint64_t available_memory;
+        uint64_t memory_used;
+        const struct wvm_admission_node *node = &snapshot->nodes[node_index];
+
+        if (guest_vcpus[node_index] == 0) {
+            continue;
+        }
+        if (!node_is_memory_eligible(node) ||
+            node_available_capacity(node, &available_cpu, &available_memory) !=
+                0) {
+            set_error(error, error_len,
+                      "admission plan places vCPU on node %u without local "
+                      "guest memory (remote memory placement not admitted)",
+                      node->physical_node_id);
+            goto out;
+        }
+        memory_used = guest_memory[node_index] +
+                      (node_index == (uint32_t)host_index
+                           ? request->host_overhead_memory_bytes
+                           : 0);
+        if (memory_used >= available_memory) {
+            set_error(error, error_len,
+                      "admission plan places vCPU on node %u without local "
+                      "guest memory (remote memory placement not admitted)",
+                      node->physical_node_id);
+            goto out;
+        }
+        chunk = request->memory_chunk_bytes;
+        if (chunk > remaining_memory) {
+            chunk = remaining_memory;
+        }
+        if (chunk > available_memory - memory_used) {
+            chunk = available_memory - memory_used;
+        }
+        if (chunk == 0 || chunk % WVM_ADMISSION_PAGE_BYTES != 0) {
+            set_error(error, error_len,
+                      "admission plan places vCPU on node %u without local "
+                      "guest memory (remote memory placement not admitted)",
+                      node->physical_node_id);
+            goto out;
+        }
+        guest_memory[node_index] += chunk;
+        remaining_memory -= chunk;
+    }
     while (remaining_memory != 0) {
         uint64_t chunk = remaining_memory;
         int node_index;
@@ -965,24 +1045,87 @@ static int derive_listener_leases(
     }
     if (plan->kernel_accelerator_required) {
         /*
-         * Mode A multi-context (architecture-baseline §14,
-         * resource-placement-admission exclusive accelerator contexts):
-         * each VM incarnation owns a distinct KERNEL_CONTEXT lease on the
-         * node. The previous fixed "kernel-context" name was the single-VM
-         * migration gate and blocked a second concurrent Mode A VM.
+         * Roadmap §12 / kernel-accelerator.md §7 short-term gate:
+         * until real /dev/wavevm per-VM isolation+teardown evidence exists,
+         * admission must reject a second Mode A VM on the same physical
+         * node. A fixed exclusive KERNEL_CONTEXT lease name is that
+         * fail-closed gate. Per-VM lease names alone are NOT enough to
+         * open dual Mode A (control-plane naming ≠ kernel isolation).
+         * Lift only after isolation acceptance tests pass; then distinct
+         * names (e.g. kernel-context:vm=:inc=) may return.
          */
         plan->lease_entries[2].lease_kind =
             WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
         plan->lease_entries[2].lease_generation = plan->lease_generation;
         written = snprintf(plan->lease_entries[2].lease_name,
                            sizeof(plan->lease_entries[2].lease_name),
-                           "kernel-context:vm=%u:inc=%llu",
-                           (unsigned)route_scope_key->vm_id,
-                           (unsigned long long)route_scope_key->vm_incarnation);
+                           "kernel-context");
         if (written < 0 || (size_t)written >=
                                sizeof(plan->lease_entries[2].lease_name)) {
             set_error(error, error_len, "kernel context lease name is too long");
             return -1;
+        }
+    }
+    return 0;
+}
+
+
+static int placement_exclusive_leases_disjoint(
+    const struct wvm_reservation_requirement_list *requirements, char *error,
+    size_t error_len)
+{
+    size_t i;
+    size_t j;
+    size_t a;
+    size_t b;
+
+    if (!requirements) {
+        set_error(error, error_len, "placement lease set is invalid");
+        return -1;
+    }
+    for (i = 0; i < requirements->count; i++) {
+        const struct wvm_reservation_requirement *left =
+            &requirements->entries[i];
+
+        for (a = 0; a < left->exclusive_leases.count; a++) {
+            for (b = a + 1U; b < left->exclusive_leases.count; b++) {
+                if (left->exclusive_leases.entries[a].lease_kind ==
+                        left->exclusive_leases.entries[b].lease_kind &&
+                    strcmp(left->exclusive_leases.entries[a].lease_name,
+                           left->exclusive_leases.entries[b].lease_name) == 0) {
+                    set_error(error, error_len,
+                              "placement double-books exclusive lease %s on "
+                              "node %u",
+                              left->exclusive_leases.entries[a].lease_name,
+                              left->physical_node_id);
+                    return -1;
+                }
+            }
+        }
+        for (j = i + 1U; j < requirements->count; j++) {
+            const struct wvm_reservation_requirement *right =
+                &requirements->entries[j];
+
+            /* Leases are node-local; identical names on distinct nodes are OK. */
+            if (left->physical_node_id != right->physical_node_id) {
+                continue;
+            }
+            for (a = 0; a < left->exclusive_leases.count; a++) {
+                for (b = 0; b < right->exclusive_leases.count; b++) {
+                    if (left->exclusive_leases.entries[a].lease_kind ==
+                            right->exclusive_leases.entries[b].lease_kind &&
+                        strcmp(left->exclusive_leases.entries[a].lease_name,
+                               right->exclusive_leases.entries[b]
+                                   .lease_name) == 0) {
+                        set_error(error, error_len,
+                                  "placement double-books exclusive lease %s "
+                                  "on node %u",
+                                  left->exclusive_leases.entries[a].lease_name,
+                                  left->physical_node_id);
+                        return -1;
+                    }
+                }
+            }
         }
     }
     return 0;
@@ -1161,6 +1304,10 @@ int wvm_admission_placement_plan_build(
         requirement->exclusive_leases.count =
             listener_plan->kernel_accelerator_required ? 3 : 2;
         requirement->exclusive_leases.capacity = listener_plan->lease_capacity;
+    }
+    if (placement_exclusive_leases_disjoint(
+            &placement_plan->reservation_requirements, error, error_len) != 0) {
+        return -1;
     }
     sort_requirements_by_id(placement_plan->reservation_requirements.entries,
                             placement_plan->reservation_requirements.count);

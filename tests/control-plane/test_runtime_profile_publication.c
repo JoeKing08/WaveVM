@@ -84,6 +84,7 @@ static void fill_node(struct wvm_node_record *node, uint32_t node_id,
     node->observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     node->membership_revision = 1;
     node->topology_revision = 1;
+    wvm_node_record_init_single_host_defaults(node);
 }
 
 static void fill_profile(struct wvm_node_runtime_profile *profile,
@@ -106,6 +107,8 @@ static void fill_profile(struct wvm_node_runtime_profile *profile,
     profile->node_runtime_data_port_count = 2;
     profile->local_executor_service_ports = service_ports;
     profile->local_executor_service_port_count = 2;
+    profile->physical_host_id = node->physical_host_id;
+    profile->node_instance_namespace = node->node_instance_namespace;
 }
 
 static int encode_request(const struct wvm_node_runtime_profile *profile,

@@ -49,6 +49,18 @@ static void fill_profile(struct wvm_node_runtime_profile *profile,
     profile->node_runtime_data_port_count = 2;
     profile->local_executor_service_ports = service_ports;
     profile->local_executor_service_port_count = 2;
+    profile->physical_host_id = node->physical_host_id ? node->physical_host_id : node->physical_node_id;
+    if (node->node_instance_namespace.namespace_name[0] != '\0') {
+        profile->node_instance_namespace = node->node_instance_namespace;
+    } else {
+        snprintf(profile->node_instance_namespace.namespace_name,
+                 sizeof(profile->node_instance_namespace.namespace_name),
+                 "ni-%u-%llu", (unsigned)node->physical_node_id,
+                 (unsigned long long)node->node_instance_id);
+        memset(profile->node_instance_namespace.derivation_salt_digest, 0xa5,
+               sizeof(profile->node_instance_namespace.derivation_salt_digest));
+        profile->node_instance_namespace.name_generation = 1;
+    }
 }
 
 int main(void)

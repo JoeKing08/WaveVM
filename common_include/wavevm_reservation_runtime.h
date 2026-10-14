@@ -76,6 +76,18 @@ int wvm_local_reservation_abort(
     enum wvm_reservation_runtime_result *result, char *error,
     size_t error_len);
 
+/*
+ * Lifecycle / compensating teardown release for COMMITTED reservations.
+ * EXPECTED must match the durable COMMITTED record (including activation
+ * fence). Releases capacity and exclusive leases; idempotent on an exact
+ * RELEASED tombstone. Never used for pre-activation abort.
+ */
+int wvm_local_reservation_release(
+    struct wvm_local_reservation_registry *registry,
+    const struct wvm_resource_reservation *expected,
+    enum wvm_reservation_runtime_result *result, char *error,
+    size_t error_len);
+
 size_t wvm_local_reservation_reap_expired(
     struct wvm_local_reservation_registry *registry,
     uint64_t now_unix_time_ms);

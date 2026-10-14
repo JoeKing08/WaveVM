@@ -13,6 +13,7 @@
 #define WVM_RECORD_ROUTE_SNAPSHOT 0x100aU
 #define WVM_RECORD_NODE_INVENTORY 0x100bU
 #define WVM_RECORD_NODE_RECORD 0x100cU
+#define WVM_RECORD_NODE_INSTANCE_NAMESPACE 0x1031U
 #define WVM_RECORD_GATEWAY_RECORD 0x100dU
 #define WVM_RECORD_ADMISSION_ELIGIBILITY_FENCE 0x100eU
 #define WVM_RECORD_ROUTE_TRANSACTION 0x1020U
@@ -144,6 +145,17 @@ struct wvm_route_snapshot_record {
     uint16_t retirement_policy;
 };
 
+/*
+ * Canonical NodeInstanceNamespace (0x1031). Same field shape as
+ * LocalNameNamespace (0x101b) but a distinct record type for node-agent
+ * instance scoping (baseline §7 / membership §3.1).
+ */
+struct wvm_node_instance_namespace {
+    char namespace_name[WVM_LOCAL_NAMESPACE_MAX_BYTES + 1U];
+    uint8_t derivation_salt_digest[WVM_SHA256_DIGEST_BYTES];
+    uint64_t name_generation;
+};
+
 struct wvm_node_inventory_record {
     uint32_t physical_node_id;
     uint64_t node_instance_id;
@@ -181,6 +193,8 @@ struct wvm_node_record {
     uint16_t observed_health_state;
     uint64_t membership_revision;
     uint64_t topology_revision;
+    uint64_t physical_host_id;
+    struct wvm_node_instance_namespace node_instance_namespace;
 };
 
 struct wvm_gateway_record {
@@ -313,6 +327,32 @@ int wvm_node_inventory_record_encode(
 int wvm_node_inventory_record_decode(
     const uint8_t *bytes, size_t encoded_bytes,
     struct wvm_node_inventory_record *inventory, char *error, size_t error_len);
+
+int wvm_node_instance_namespace_validate(
+    const struct wvm_node_instance_namespace *namespace_value, char *error,
+    size_t error_len);
+int wvm_node_instance_namespace_encode(
+    const struct wvm_node_instance_namespace *namespace_value, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len);
+int wvm_node_instance_namespace_decode(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_node_instance_namespace *namespace_value, char *error,
+    size_t error_len);
+
+/*
+ * One-provider-per-host migration default: physical_host_id := physical_node_id
+ * and a distinct ni-<node>-<instance> namespace when unset. Not endpoint-derived.
+ */
+void wvm_node_record_init_single_host_defaults(struct wvm_node_record *node);
+
+/*
+ * Same-host multi-instance accounting (membership §3.1 / placement §1):
+ * nodes sharing physical_host_id must not double-count host registered
+ * capacity, must use distinct instance ids/namespaces/ports.
+ */
+int wvm_physical_host_aggregate_validate(const struct wvm_node_record *nodes,
+                                         size_t node_count, char *error,
+                                         size_t error_len);
 
 int wvm_node_record_validate(const struct wvm_node_record *node, char *error,
                              size_t error_len);

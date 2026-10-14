@@ -11,17 +11,33 @@ int main(int argc, char **argv)
     struct wvm_membership_dependency dependencies[8];
     const struct wvm_node_record *node;
     unsigned long control_port;
+    unsigned long expected_vcpu_slots = 2;
+    unsigned long long expected_memory_bytes = 1073741824ULL;
     char *end;
     char error[256] = {0};
     int valid;
     uint16_t enrollment_state = 0;
 
-    if (argc != 3) {
+    /* JOURNAL CONTROL_PORT [VCPU_SLOTS] [MEMORY_BYTES] — defaults 2 / 1GiB. */
+    if (argc < 3 || argc > 5) {
         return 2;
     }
     control_port = strtoul(argv[2], &end, 10);
     if (*end != '\0' || control_port == 0 || control_port > UINT16_MAX) {
         return 2;
+    }
+    if (argc >= 4) {
+        expected_vcpu_slots = strtoul(argv[3], &end, 10);
+        if (*end != '\0' || expected_vcpu_slots == 0 ||
+            expected_vcpu_slots > 1024UL) {
+            return 2;
+        }
+    }
+    if (argc >= 5) {
+        expected_memory_bytes = strtoull(argv[4], &end, 10);
+        if (*end != '\0' || expected_memory_bytes == 0) {
+            return 2;
+        }
     }
     wvm_membership_controller_init(&controller, members, 8, routes, 8,
                                     dependencies, 8, NULL, NULL);
@@ -42,8 +58,10 @@ int main(int argc, char **argv)
         valid = node->desired_membership_state == WVM_MANIFEST_MEMBER_ACTIVE &&
                 node->observed_health_state == WVM_MEMBERSHIP_HEALTHY &&
                 node->control_endpoint.control_port == control_port &&
-                node->inventory.registered_vcpu_slots == 2 &&
-                node->inventory.registered_memory_bytes == 1073741824ULL &&
+                node->inventory.registered_vcpu_slots ==
+                    (uint32_t)expected_vcpu_slots &&
+                node->inventory.registered_memory_bytes ==
+                    expected_memory_bytes &&
                 members[0].has_activation_enrollment_operation_id &&
                 !members[0].has_activation_route_operation_id;
     }

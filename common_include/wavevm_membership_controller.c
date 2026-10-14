@@ -2527,6 +2527,42 @@ static int register_node_locked(
             actor, &member_key, error, error_len) != 0) {
         return -1;
     }
+    {
+        struct wvm_node_record *host_nodes = NULL;
+        size_t host_count = 0;
+        size_t mi;
+
+        host_nodes = calloc(controller->member_count + 1U, sizeof(*host_nodes));
+        if (!host_nodes) {
+            set_error(error, error_len, "cannot allocate host aggregate check");
+            return -1;
+        }
+        for (mi = 0; mi < controller->member_count; mi++) {
+            const struct wvm_membership_controller_member_entry *entry =
+                &controller->members[mi];
+
+            if (entry->kind != WVM_MEMBERSHIP_COMPUTE) {
+                continue;
+            }
+            if (entry_state(entry) == WVM_MANIFEST_MEMBER_REMOVED ||
+                entry_state(entry) == WVM_MANIFEST_MEMBER_FAILED) {
+                continue;
+            }
+            /* Replacing/replaying this MemberKey must not look like a
+             * same-host duplicate of itself. */
+            if (member_key_equal(&entry->member_key, &member_key)) {
+                continue;
+            }
+            host_nodes[host_count++] = entry->node;
+        }
+        host_nodes[host_count++] = normalized;
+        if (wvm_physical_host_aggregate_validate(host_nodes, host_count, error,
+                                                 error_len) != 0) {
+            free(host_nodes);
+            return -1;
+        }
+        free(host_nodes);
+    }
     existing = find_member_role(controller, &member_key);
     if (existing && member_key_equal(&existing->member_key, &member_key)) {
         normalized.desired_membership_state = entry_state(existing);
@@ -3481,9 +3517,22 @@ static int gateway_drain_successor_validate_locked(
     gateway = find_member_mutable(controller, gateway_member_key);
     if (!gateway || gateway->kind != WVM_MEMBERSHIP_GATEWAY ||
         entry_state(gateway) != WVM_MANIFEST_MEMBER_ACTIVE ||
-        entry_health(gateway) != WVM_MEMBERSHIP_HEALTHY ||
-        gateway->active_dependency_count != 1 ||
-        successor_transaction->state != WVM_ROUTE_TRANSACTION_PREPARING ||
+        entry_health(gateway) != WVM_MEMBERSHIP_HEALTHY) {
+        set_error(error, error_len, "gateway drain successor is not safe");
+        return -1;
+    }
+    /*
+     * V1 one-scope primitive: exactly one VM dependency. Two Mode B VMs on the
+     * same gateway must not partially drain (black-hole the other scope);
+     * multi-scope needs an explicit aggregate transaction (spec §5.4).
+     */
+    if (gateway->active_dependency_count != 1) {
+        set_error(error, error_len,
+                  "gateway drain requires exactly one VM dependency "
+                  "(multi-scope dual-VM drain not admitted)");
+        return -1;
+    }
+    if (successor_transaction->state != WVM_ROUTE_TRANSACTION_PREPARING ||
         !successor_transaction->has_predecessor_snapshot_key ||
         successor_transaction->route_snapshot_key.topology_revision !=
             controller->topology_revision + 1U ||
@@ -3545,7 +3594,8 @@ static int gateway_drain_successor_validate_locked(
     }
     if (dependency_count != 1) {
         set_error(error, error_len,
-                  "gateway drain dependency accounting is inconsistent");
+                  "gateway drain requires exactly one matching VM dependency "
+                  "(refusing multi-scope dual-VM drain)");
         return -1;
     }
     return 0;
@@ -4302,6 +4352,67 @@ int wvm_membership_controller_mark_monitor_health(
     }
     pthread_mutex_unlock(&controller->lock);
     return result;
+}
+
+int wvm_membership_controller_vm_required_members_healthy(
+    const struct wvm_membership_controller *controller, uint32_t vm_id,
+    uint64_t vm_incarnation, int *healthy_out, char *error, size_t error_len)
+{
+    size_t i;
+    size_t matched = 0;
+
+    if (!controller || !healthy_out || vm_id == 0 || vm_incarnation == 0) {
+        set_error(error, error_len,
+                  "VM required-member health input is invalid");
+        return -1;
+    }
+    *healthy_out = 0;
+    pthread_mutex_lock((pthread_mutex_t *)&controller->lock);
+    for (i = 0; i < controller->dependency_count; i++) {
+        const struct wvm_membership_dependency *dependency =
+            &controller->dependencies[i];
+        const struct wvm_membership_controller_member_entry *entry;
+        enum wvm_membership_health_state health;
+        enum wvm_manifest_member_state state;
+
+        if (dependency->vm_id != vm_id ||
+            dependency->vm_incarnation != vm_incarnation) {
+            continue;
+        }
+        matched++;
+        entry = wvm_membership_controller_find(controller,
+                                               &dependency->member_key);
+        if (!entry) {
+            pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+            set_error(error, error_len,
+                      "required dependency member is missing");
+            return 0;
+        }
+        health = entry_health(entry);
+        state = entry_state(entry);
+        if (health != WVM_MEMBERSHIP_HEALTHY) {
+            pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+            set_error(error, error_len,
+                      "required dependency member is not healthy");
+            return 0;
+        }
+        if (state == WVM_MANIFEST_MEMBER_DRAINING ||
+            state == WVM_MANIFEST_MEMBER_REMOVED ||
+            state == WVM_MANIFEST_MEMBER_FAILED) {
+            pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+            set_error(error, error_len,
+                      "required dependency member left active service");
+            return 0;
+        }
+    }
+    pthread_mutex_unlock((pthread_mutex_t *)&controller->lock);
+    if (matched == 0) {
+        set_error(error, error_len,
+                  "VM has no recorded required membership dependencies");
+        return 0;
+    }
+    *healthy_out = 1;
+    return 0;
 }
 
 int wvm_membership_controller_dependency_acquire(

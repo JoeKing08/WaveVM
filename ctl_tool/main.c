@@ -32,6 +32,7 @@
 #include "../common_include/wavevm_tls_control_connector.h"
 #include "admission_workspace.h"
 #include "admission_readiness.h"
+#include "admission_recovery.h"
 #include "capability_publication.h"
 #include "runtime_profile_publication.h"
 #include "membership_enrollment.h"
@@ -413,6 +414,31 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         free(storage_assignments);
         free(constraints);
         return 0;
+    } else if (entry->transaction.state == WVM_LIFECYCLE_RUNNING) {
+        /*
+         * Phase 7: node loss must not leave the VM falsely reported healthy
+         * RUNNING (membership §5.6). Refuse SUCCESS when any required
+         * dependency member is SUSPECT/UNREACHABLE/missing.
+         */
+        int members_healthy = 0;
+        char health_error[256] = {0};
+
+        if (wvm_membership_controller_vm_required_members_healthy(
+                &context->plane->membership_controller, transaction.vm_id,
+                transaction.vm_incarnation, &members_healthy, health_error,
+                sizeof(health_error)) != 0 ||
+            !members_healthy) {
+            pthread_mutex_unlock(&context->lock);
+            result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+            result->recorded_state = (uint16_t)entry->transaction.state;
+            fprintf(stderr,
+                    "wvm_ctl: CREATE_VM refuse healthy RUNNING: %s\n",
+                    health_error[0] ? health_error
+                                    : "required members unhealthy");
+            free(storage_assignments);
+            free(constraints);
+            return 0;
+        }
     }
     if (result->status_code != WVM_CONTROL_RESULT_IN_PROGRESS) {
         result->status_code = WVM_CONTROL_RESULT_SUCCESS;
@@ -1633,6 +1659,47 @@ int main(int argc, char **argv)
         fprintf(stderr, "wvm_ctl: cannot open admission journal: %s\n",
                 error[0] ? error : "unknown error");
         goto close_plane;
+    }
+
+    /*
+     * Step-5 first slice: coordinator restart recovery for mid-flight CREATE_VM
+     * (runtime-manifest-lifecycle §5.3). Fail-closed leaves durable state and
+     * refuses readiness rather than reporting false RUNNING.
+     */
+    {
+        const struct wvm_admission_authority *authority =
+            wvm_admission_authority_owner_binding(
+                &admission_workspace.authority_owner);
+        uint32_t recover_max_vcpus =
+            options.capacity > 64U ? (uint32_t)options.capacity : 64U;
+
+        /* Transport resolve uses the workspace capture, not a live walk. */
+        if (wvm_membership_controller_capture(
+                &plane.membership_controller,
+                &admission_workspace.membership_capture, error,
+                sizeof(error)) != 0) {
+            fprintf(stderr,
+                    "wvm_ctl: cannot capture membership for admission recovery: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
+
+        if (wvm_ctl_recover_midflight_admissions(
+                &plane, &plane.membership_controller, authority,
+                options.state_directory, &admission_workspace.membership_capture,
+                options.capacity, recover_max_vcpus,
+                admission_workspace.route_rule_capacity
+                    ? admission_workspace.route_rule_capacity
+                    : options.capacity * 64U,
+                admission_workspace.route_ack_capacity
+                    ? admission_workspace.route_ack_capacity
+                    : options.capacity,
+                error, sizeof(error)) != 0) {
+            fprintf(stderr,
+                    "wvm_ctl: mid-flight admission recovery fail-closed: %s\n",
+                    error[0] ? error : "unknown error");
+            goto close_plane;
+        }
     }
 
     memset(&service_config, 0, sizeof(service_config));

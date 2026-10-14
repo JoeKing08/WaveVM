@@ -67,9 +67,14 @@ static int profile_matches_node(
         profile->node_instance_id != node->node_instance_id ||
         profile->inventory_revision != node->inventory.inventory_revision ||
         profile->capability_profile_generation !=
-            node->capability.profile_generation) {
+            node->capability.profile_generation ||
+        profile->physical_host_id != node->physical_host_id ||
+        strcmp(profile->node_instance_namespace.namespace_name,
+               node->node_instance_namespace.namespace_name) != 0 ||
+        profile->node_instance_namespace.name_generation !=
+            node->node_instance_namespace.name_generation) {
         snprintf(error, error_len,
-                 "runtime profile differs from registered node revisions");
+                 "runtime profile differs from registered node host/instance");
         return -1;
     }
     return 0;

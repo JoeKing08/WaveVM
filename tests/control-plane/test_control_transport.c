@@ -305,6 +305,7 @@ static void fill_node(struct wvm_node_record *node)
     node->observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     node->membership_revision = 1;
     node->topology_revision = 1;
+    wvm_node_record_init_single_host_defaults(node);
 }
 
 static void make_register_request(struct wvm_envelope *request,

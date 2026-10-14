@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "wavevm_control.h"
+
 #define WVM_RECORD_NODE_RUNTIME_PROFILE 0x1030U
 #define WVM_NODE_RUNTIME_PROFILE_MAX_BYTES (1024U * 1024U)
 
@@ -23,6 +25,8 @@ struct wvm_node_runtime_profile {
     size_t node_runtime_data_port_count;
     uint16_t *local_executor_service_ports;
     size_t local_executor_service_port_count;
+    uint64_t physical_host_id;
+    struct wvm_node_instance_namespace node_instance_namespace;
 };
 
 int wvm_node_runtime_profile_validate(

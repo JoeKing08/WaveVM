@@ -8,6 +8,12 @@
  * PREPARE/COMMIT/ABORT remain canonical GatewayDrainRequest on the membership
  * receiver. Peer route stages keep participant state consistent with the
  * controller's durable drain decision.
+ *
+ * Peer ROUTE_* envelopes carry the successor VM's admission
+ * manifest_generation from the matching membership dependency (not a
+ * transport-wide constant). Missing/conflicting dependency generations
+ * fail closed. One-scope still means one VM route scope per drain; it does
+ * not invent multi-scope aggregation.
  */
 
 #include <stddef.h>
@@ -19,10 +25,8 @@
 struct wvm_membership_drain_transport {
     uint32_t controller_physical_node_id;
     uint64_t controller_instance_id;
-    /* Manifest generation carried on ROUTE_* envelopes; drain is not a VM
-     * admission reservation, but peer admission/route receivers require a
-     * nonzero generation matching the successor scope identity. */
-    uint64_t route_manifest_generation;
+    /* Used to resolve successor VM manifest_generation from dependencies. */
+    struct wvm_membership_controller *controller;
     void *context;
     wvm_admission_transport_submit_fn submit;
 };
@@ -30,7 +34,7 @@ struct wvm_membership_drain_transport {
 int wvm_membership_drain_transport_init(
     struct wvm_membership_drain_transport *transport,
     uint32_t controller_physical_node_id, uint64_t controller_instance_id,
-    uint64_t route_manifest_generation, void *context,
+    struct wvm_membership_controller *controller, void *context,
     wvm_admission_transport_submit_fn submit, char *error, size_t error_len);
 
 /*

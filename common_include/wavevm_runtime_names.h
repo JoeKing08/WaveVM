@@ -62,4 +62,13 @@ int wvm_runtime_ready_remove(
     const struct wvm_node_runtime_manifest *manifest, char *error,
     size_t error_len);
 
+/*
+ * Retire one VM's derived local names after its owner has stopped.
+ * Unlinks sockets, ready file, and SHM for THIS name set only. Missing
+ * paths (ENOENT) are success; other unlink errors fail closed. Never
+ * derives or touches another VM's namespace.
+ */
+int wvm_runtime_name_set_retire(const struct wvm_runtime_name_set *names,
+                                char *error, size_t error_len);
+
 #endif /* WAVEVM_RUNTIME_NAMES_H */

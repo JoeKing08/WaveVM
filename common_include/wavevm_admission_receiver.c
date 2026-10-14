@@ -1289,6 +1289,29 @@ static int apply_participant_stage(
             scratch.runtime_manifest, receiver->config.local_node_instance_id,
             error, error_len);
         if (ready_status == -EAGAIN) {
+            /*
+             * runtime-manifest-lifecycle §6.2: noncritical local child restart
+             * with unchanged registered node_instance_id may relaunch against
+             * the exact retained manifest/role. Pre-RUNNING CREATE readiness
+             * polls reuse QUERY_RUNTIME_READY + existing start_runtime; no new
+             * wire opcode and no RECOVERY_REBIND. Agent death / instance change
+             * still fail closed (no false RUNNING).
+             */
+            if (receiver->config.start_runtime && slot->has_activation_decision &&
+                !slot->has_aborted) {
+                char relaunch_error[256];
+
+                relaunch_error[0] = '\0';
+                if (receiver->config.start_runtime(
+                        receiver->config.context, slot,
+                        &slot->prepared_storage.runtime_manifest, relaunch_error,
+                        sizeof(relaunch_error)) != 0 &&
+                    relaunch_error[0] != '\0') {
+                    fprintf(stderr,
+                            "[admission-receiver] admitted child relaunch deferred: %s\n",
+                            relaunch_error);
+                }
+            }
             result->status_code = WVM_CONTROL_RESULT_NOT_READY;
             result->recorded_state = WVM_LIFECYCLE_COMMITTED;
             return 0;

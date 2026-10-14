@@ -1,3 +1,5 @@
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -115,6 +117,56 @@ static void envelope_for_snapshot(struct wvm_envelope *envelope,
     envelope->route.destination_vnode_or_endpoint = vnode;
     envelope->route.hop_limit = 8;
     envelope->route.hop_count = 0;
+}
+
+
+struct route_lookup_race {
+    struct wvm_route_runtime *runtime;
+    struct wvm_envelope envelope_old;
+    struct wvm_envelope envelope_new;
+    uint16_t old_port;
+    uint16_t new_port;
+    atomic_int stop;
+    atomic_int mixed;
+    atomic_int samples;
+};
+
+static void *route_lookup_race_main(void *opaque)
+{
+    struct route_lookup_race *race = opaque;
+    struct wvm_route_runtime_next_hop next_hop;
+    char error[128];
+
+    while (!atomic_load(&race->stop)) {
+        int old_ok = wvm_route_runtime_lookup(race->runtime, &race->envelope_old,
+                                              &next_hop, error,
+                                              sizeof(error)) == 0;
+        int new_ok = wvm_route_runtime_lookup(race->runtime, &race->envelope_new,
+                                              &next_hop, error,
+                                              sizeof(error)) == 0;
+        /* Exactly one generation may match for a given packet key. Mixing
+         * success for both keys in one atomic observe is fine; mixing the
+         * NEXT-HOP of old key with new port (or vice versa) is a half table. */
+        if (old_ok) {
+            if (next_hop.next_hop_endpoint.data_port != race->old_port &&
+                next_hop.next_hop_endpoint.data_port != race->new_port) {
+                atomic_store(&race->mixed, 1);
+            }
+            /* Old envelope key must never resolve to new-only port while old
+             * snapshot is still the looked-up key — lookup binds full key. */
+            if (next_hop.next_hop_endpoint.data_port == race->new_port) {
+                atomic_store(&race->mixed, 1);
+            }
+            atomic_fetch_add(&race->samples, 1);
+        }
+        if (new_ok) {
+            if (next_hop.next_hop_endpoint.data_port != race->new_port) {
+                atomic_store(&race->mixed, 1);
+            }
+            atomic_fetch_add(&race->samples, 1);
+        }
+    }
+    return NULL;
 }
 
 int main(void)
@@ -279,6 +331,117 @@ int main(void)
         return 1;
     }
     wvm_route_runtime_destroy(&runtime);
+
+    /* Phase 7: live snapshot replacement — lookups never observe a half table. */
+    {
+        struct wvm_route_runtime race_runtime;
+        struct wvm_route_snapshot_record gen1;
+        struct wvm_route_snapshot_record gen2;
+        struct wvm_route_rule_record rules1[1];
+        struct wvm_route_rule_record rules2[1];
+        struct wvm_required_ack_entry acks1[1];
+        struct wvm_required_ack_entry acks2[1];
+        struct route_lookup_race race;
+        pthread_t threads[4];
+        size_t t;
+        char race_error[256] = {0};
+
+        wvm_route_runtime_init(&race_runtime);
+        fill_rule(&rules1[0], WVM_ROUTE_DESTINATION_EXACT_VNODE, 0, 7, 11,
+                  18001, 4);
+        fill_rule(&rules2[0], WVM_ROUTE_DESTINATION_EXACT_VNODE, 0, 7, 12,
+                  18002, 4);
+        if (finalize_snapshot(&gen1, rules1, 1, acks1, 1, 256, 1, 10, 4, 1, 1,
+                              race_error, sizeof(race_error)) != 0 ||
+            finalize_snapshot(&gen2, rules2, 1, acks2, 1, 256, 1, 10, 4, 2, 1,
+                              race_error, sizeof(race_error)) != 0) {
+            fprintf(stderr, "route-runtime: cannot build race snapshots: %s\n",
+                    race_error);
+            wvm_route_runtime_destroy(&race_runtime);
+            return 1;
+        }
+        gen2.predecessor_snapshot_key = gen1.route_snapshot_key;
+        gen2.has_predecessor_snapshot_key = 1;
+        if (expect(wvm_route_runtime_prepare(&race_runtime, &gen1, race_error,
+                                             sizeof(race_error)) == 0 &&
+                       wvm_route_runtime_activate(
+                           &race_runtime, &gen1.route_snapshot_key, race_error,
+                           sizeof(race_error)) == 0,
+                   "activate generation-1 before race")) {
+            wvm_route_runtime_destroy(&race_runtime);
+            return 1;
+        }
+        memset(&race, 0, sizeof(race));
+        race.runtime = &race_runtime;
+        envelope_for_snapshot(&race.envelope_old, &gen1.route_snapshot_key,
+                              WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE, 0, 7);
+        envelope_for_snapshot(&race.envelope_new, &gen2.route_snapshot_key,
+                              WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE, 0, 7);
+        race.old_port = 18001;
+        race.new_port = 18002;
+        atomic_store(&race.stop, 0);
+        atomic_store(&race.mixed, 0);
+        atomic_store(&race.samples, 0);
+        for (t = 0; t < 4; t++) {
+            if (pthread_create(&threads[t], NULL, route_lookup_race_main,
+                               &race) != 0) {
+                fprintf(stderr, "route-runtime: lookup race pthread_create\n");
+                atomic_store(&race.stop, 1);
+                while (t > 0) {
+                    t--;
+                    pthread_join(threads[t], NULL);
+                }
+                wvm_route_runtime_destroy(&race_runtime);
+                return 1;
+            }
+        }
+        /* Flip active generation under concurrent lookups. */
+        if (wvm_route_runtime_prepare(&race_runtime, &gen2, race_error,
+                                      sizeof(race_error)) != 0 ||
+            wvm_route_runtime_activate(&race_runtime, &gen2.route_snapshot_key,
+                                       race_error, sizeof(race_error)) != 0) {
+            fprintf(stderr, "route-runtime: activate gen2 failed: %s\n",
+                    race_error);
+            atomic_store(&race.stop, 1);
+            for (t = 0; t < 4; t++) {
+                pthread_join(threads[t], NULL);
+            }
+            wvm_route_runtime_destroy(&race_runtime);
+            return 1;
+        }
+        atomic_store(&race.stop, 1);
+        for (t = 0; t < 4; t++) {
+            pthread_join(threads[t], NULL);
+        }
+        if (expect(atomic_load(&race.mixed) == 0,
+                   "lookups never observe half-table next-hop mix") ||
+            expect(atomic_load(&race.samples) > 0,
+                   "lookup race collected samples")) {
+            wvm_route_runtime_destroy(&race_runtime);
+            return 1;
+        }
+        /* Post-activate: old key rejected or predecessor-only; new key exact. */
+        {
+            struct wvm_route_runtime_next_hop hop;
+            int old_lookup = wvm_route_runtime_lookup(
+                &race_runtime, &race.envelope_old, &hop, race_error,
+                sizeof(race_error));
+            int new_lookup = wvm_route_runtime_lookup(
+                &race_runtime, &race.envelope_new, &hop, race_error,
+                sizeof(race_error));
+            if (expect(old_lookup != 0,
+                       "stale generation key rejected after replacement") ||
+                expect(new_lookup == 0 && hop.next_hop_endpoint.data_port ==
+                                             18002,
+                       "successor generation resolves complete next hop")) {
+                wvm_route_runtime_destroy(&race_runtime);
+                return 1;
+            }
+        }
+        wvm_route_runtime_destroy(&race_runtime);
+    }
+
     puts("route-runtime tests: PASS");
+    puts("NOTE: Phase 7 live snapshot replacement — no half-table lookups.");
     return 0;
 }

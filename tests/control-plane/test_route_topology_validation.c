@@ -90,6 +90,7 @@ int main(void) {
     node.observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     node.membership_revision = 5;
     node.topology_revision = 6;
+    wvm_node_record_init_single_host_defaults(&node);
     
     memset(&records, 0, sizeof(records));
     records.nodes = &node;

@@ -94,10 +94,12 @@ int main(int argc, char **argv)
     uint64_t observed_at;
     FILE *digest_file;
 
-    if (argc != 11) {
+    uint64_t physical_host_id;
+
+    if (argc != 11 && argc != 12) {
         fprintf(stderr,
                 "usage: %s STATE_DIR NODE INSTANCE INV_REV PROFILE_GEN "
-                "DATA0 DATA1 SVC0 SVC1 NODE_CTRL\n",
+                "DATA0 DATA1 SVC0 SVC1 NODE_CTRL [PHYSICAL_HOST_ID]\n",
                 argv[0]);
         return 2;
     }
@@ -163,6 +165,18 @@ int main(int argc, char **argv)
     profile.node_runtime_data_port_count = 4;
     profile.local_executor_service_ports = service_ports;
     profile.local_executor_service_port_count = 4;
+    physical_host_id = (argc == 12) ? strtoull(argv[11], NULL, 10) : node_id;
+    if (physical_host_id == 0) {
+        fprintf(stderr, "seed evidence: physical_host_id must be non-zero\n");
+        return 1;
+    }
+    profile.physical_host_id = physical_host_id;
+    snprintf(profile.node_instance_namespace.namespace_name,
+             sizeof(profile.node_instance_namespace.namespace_name),
+             "ni-%u-%llu", (unsigned)node_id, (unsigned long long)instance_id);
+    memset(profile.node_instance_namespace.derivation_salt_digest, 0xa5,
+           sizeof(profile.node_instance_namespace.derivation_salt_digest));
+    profile.node_instance_namespace.name_generation = 1;
     if (wvm_node_runtime_profile_encode(&profile, profile_bytes,
                                         sizeof(profile_bytes), &profile_size,
                                         error, sizeof(error)) != 0) {

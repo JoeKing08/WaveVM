@@ -674,6 +674,107 @@ int wvm_local_reservation_abort(
     return 0;
 }
 
+int wvm_local_reservation_release(
+    struct wvm_local_reservation_registry *registry,
+    const struct wvm_resource_reservation *expected,
+    enum wvm_reservation_runtime_result *result, char *error,
+    size_t error_len)
+{
+    struct wvm_resource_reservation *reservation;
+    struct wvm_resource_reservation accounted_reservation;
+    struct wvm_resource_reservation updated;
+    struct wvm_resource_reservation expected_release;
+
+    if (!registry || !registry->initialized || !expected ||
+        wvm_resource_reservation_validate(expected, error, error_len) != 0 ||
+        expected->physical_node_id != registry->physical_node_id ||
+        expected->node_instance_id != registry->node_instance_id ||
+        expected->inventory_revision != registry->inventory_revision) {
+        set_error(error, error_len, "reservation release input is invalid");
+        return -1;
+    }
+    if (expected->state == WVM_RESERVATION_COMMITTED) {
+        if (!expected->has_activation_fence) {
+            set_error(error, error_len,
+                      "committed reservation release requires activation fence");
+            return -1;
+        }
+    } else if (expected->state != WVM_RESERVATION_RELEASED) {
+        set_error(error, error_len,
+                  "reservation release requires COMMITTED or RELEASED state");
+        return -1;
+    }
+
+    expected_release = *expected;
+    if (expected_release.state == WVM_RESERVATION_COMMITTED &&
+        (wvm_resource_reservation_begin_release(&expected_release, error,
+                                                error_len) != 0 ||
+         wvm_resource_reservation_release(&expected_release, error,
+                                          error_len) != 0)) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&registry->lock);
+    if (registry->journal_failed) {
+        pthread_mutex_unlock(&registry->lock);
+        set_error(error, error_len, "reservation journal requires recovery");
+        return -1;
+    }
+    reservation = find_mutable(registry, expected->reservation_id);
+    if (!reservation) {
+        pthread_mutex_unlock(&registry->lock);
+        set_error(error, error_len,
+                  "reservation release target was not found locally");
+        return -1;
+    }
+    if (reservation->state == WVM_RESERVATION_RELEASED) {
+        int matches = reservation_equal(reservation, &expected_release);
+
+        pthread_mutex_unlock(&registry->lock);
+        if (!matches) {
+            set_error(error, error_len,
+                      "reservation release conflicts with retained marker");
+            return -1;
+        }
+        if (result) {
+            *result = WVM_RESERVATION_RUNTIME_REPLAY;
+        }
+        return 0;
+    }
+    if (reservation->state != WVM_RESERVATION_COMMITTED ||
+        !reservation_equal(reservation, expected)) {
+        pthread_mutex_unlock(&registry->lock);
+        set_error(error, error_len,
+                  "reservation release does not match local COMMITTED record");
+        return -1;
+    }
+    accounted_reservation = *reservation;
+    if (account_remove_possible(registry, &accounted_reservation) != 0) {
+        pthread_mutex_unlock(&registry->lock);
+        set_error(error, error_len, "reservation accounting is inconsistent");
+        return -1;
+    }
+    updated = *reservation;
+    if (wvm_resource_reservation_begin_release(&updated, error, error_len) !=
+            0 ||
+        wvm_resource_reservation_release(&updated, error, error_len) != 0 ||
+        persist_reservation(registry, &updated, error, error_len) != 0) {
+        pthread_mutex_unlock(&registry->lock);
+        return -1;
+    }
+    *reservation = updated;
+    if (account_remove(registry, &accounted_reservation) != 0) {
+        pthread_mutex_unlock(&registry->lock);
+        set_error(error, error_len, "reservation accounting is inconsistent");
+        return -1;
+    }
+    pthread_mutex_unlock(&registry->lock);
+    if (result) {
+        *result = WVM_RESERVATION_RUNTIME_NEW;
+    }
+    return 0;
+}
+
 size_t wvm_local_reservation_reap_expired(
     struct wvm_local_reservation_registry *registry,
     uint64_t now_unix_time_ms)

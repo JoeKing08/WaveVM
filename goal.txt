@@ -1,1 +1,21 @@
-按 docs 纲领依赖顺序继续把 WaveVM 从当前中间态落地到完整架构并完成对应验证。执行约束：manifest/typed runtime 是唯一生产路径；没有存量业务，不保留旧 master/slave 独立入口、旧 48-byte legacy wire header、NODE/ROUTE 注入、旧 field-by-field IOCTL 或兼容部署；不添加硬编码或测试专用 workaround，不启动未经验证的最终 guest E2E。依次完成：移除兼容优先约束并收口纲领；将manifest- driven typed dispatch 接入统一 node_runtime/executor 边界；接入基础 membership join、compute cordon/drain、gateway replacement 控制面入口；完成 Mode B 多 VM 隔离与生命周期验证；实现 per-VM Mode A kernel context 并验证双 VM 隔离；最后按 flat/fractal 与 TCG/KVM 语义合同执行分层验证。
+按 docs 纲领（baseline + roadmap + docs/specs）依赖顺序，从当前中间态把 WaveVM 落到完整架构并完成对应验证。goal.txt 只是执行口令，不能替代纲领。执行约束：manifest/typed runtime 是唯一生产路径；没有存量业务，不保留旧 master/slave 独立入口、旧 48-byte legacy wire header、NODE/ROUTE 注入、旧 field-by-field IOCTL 或兼容部署；不添加硬编码或测试专用 workaround；不启动未经验证的最终 guest E2E（完整 guest 登录/SSH 放到第 7 步）。单活协调器冷启动恢复、持久化 ACTIVATION_DECIDED 对账/重放/补偿属 Minimum，不得因「不含 Extended」而砍掉。不发明 HA/透明恢复/RECOVERY_REBIND/MIGRATE_VM（Extended later）。Mode A「双」是验收门槛不是上限：隔离证据通过前必须拒绝第二个 Mode A VM。
+
+依次完成（CC 顺序 + Codex 补充）：
+
+0. 恢复 Mode A 准入拒绝门：隔离测试通过前拒绝第二个 Mode A VM（仅控制面 per-VM lease 不算通过），与 roadmap §12 短期自限一致。
+
+1. drain/换血 fail-closed：compute 有依赖不可 drain；gateway V1 单 scope；双 VM 共享 gateway 时安全拒绝不支持的换血（勿提前做 Extended 多 scope 联合事务）；附带 Phase 7 验收点：并发 CREATE 不双分配、RUNNING 期间不误报节点丢失、活流量 snapshot 路由不得半张表。事务失败恢复（覆盖本步与第 2 步）：peer COMMIT/ABORT、基础重启对账、部分启动补偿、依赖资源释放。
+
+2. STOP 与清理：VM STOP 后控制面/runtime/executor 资源与依赖干净释放，无残留 lease/socket/SHM/依赖记账。
+
+3. Mode A 内核真隔离：真实 per-VM kernel context（非仅控制面 lease）；隔离证据通过后才可放开多 Mode A VM。
+
+4. 多节点 SPREAD + 同机多计算节点：physical_host_id 聚合记账、同机多 node_instance（实例身份、port/socket 隔离）、并发 CREATE 不双分配；Mode A 前端准入保持真隔离。真砍证据边界：用真 executor + 远程内存路径，禁止用 RUNNING stub 冒充；完整 guest 登录/SSH 仍放到第 7 步。同机多计算节点可与第 2 步前后交叉落地，但本步须收口证据。
+
+5. 受限 TCG fallback + KVM dirty/resync（及能力探测）：属 Minimum；完整故障引擎可延期。
+
+6. flat/fractal × TCG/KVM 分层验证矩阵。
+
+7. 最终 guest 冒烟（含登录/SSH 等完整验收）。
+
+优先顺序提醒：guest 放最后；先把 Mode B 真隔离、同机多计算节点等隔离做好，再专心修 TCG/KVM 本身和真 guest。

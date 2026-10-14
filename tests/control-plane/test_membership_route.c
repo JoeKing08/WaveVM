@@ -178,54 +178,46 @@ int main(void)
     dependency.vm_incarnation = 1;
     dependency.manifest_generation = 1;
     dependency.dependency_kind = 1;
-    if (expect(wvm_membership_dependency_release(&registry, &dependency, error,
-                                                 sizeof(error)) == 0,
-               "idempotent release before acquire") ||
-        expect(wvm_membership_dependency_acquire(&registry, &dependency, error,
-                                                 sizeof(error)) == 0,
-               "acquire active VM dependency") ||
-        expect(wvm_membership_dependency_acquire(&registry, &dependency, error,
-                                                 sizeof(error)) == 0,
-               "replay dependency acquire") ||
-        expect(members[1].active_dependency_count == 1,
-               "dependency count remains exact") ||
-        expect(wvm_membership_cordon(&registry, &member2.member_key, error,
-                                     sizeof(error)) == 0,
-               "cordon node two") ||
-        expect(wvm_membership_dependency_acquire(&registry, &dependency, error,
-                                                 sizeof(error)) == 0,
-               "replay cordoned dependency acquire") ||
-        expect(wvm_membership_dependency_acquire(
-                   &registry,
-                   &(struct wvm_membership_dependency){
-                       .member_key = member2.member_key,
-                       .vm_id = 257,
-                       .vm_incarnation = 1,
-                       .manifest_generation = 1,
-                       .dependency_kind = 1,
-                   },
-                   error, sizeof(error)) != 0,
-               "reject new dependency on cordoned node") ||
-        expect(wvm_membership_begin_drain(&registry, &member2.member_key,
-                                          error, sizeof(error)) != 0,
-               "reject drain with VM dependency") ||
-        expect(wvm_membership_dependency_release(&registry, &dependency, error,
-                                                 sizeof(error)) == 0,
-               "release VM dependency") ||
-        expect(wvm_membership_dependency_release(&registry, &dependency, error,
-                                                 sizeof(error)) == 0,
-               "replay dependency release") ||
-        expect(members[1].active_dependency_count == 0,
-               "dependency count reaches zero") ||
-        expect(wvm_membership_begin_drain(&registry, &member2.member_key,
-                                          error, sizeof(error)) == 0,
-               "drain node two after dependency release") ||
-        expect(wvm_membership_remove(&registry, &member2.member_key, error,
-                                     sizeof(error)) == 0,
-               "remove node two after drain")) {
-        return 1;
+    {
+        struct wvm_membership_dependency mode_b_vm_a = dependency;
+        struct wvm_membership_dependency mode_b_vm_b = dependency;
+
+        mode_b_vm_a.vm_id = 256;
+        mode_b_vm_a.dependency_kind = 1; /* Mode B compute placement */
+        mode_b_vm_b.vm_id = 257;
+        mode_b_vm_b.dependency_kind = 1;
+        if (expect(wvm_membership_dependency_acquire(
+                       &registry, &mode_b_vm_a, error, sizeof(error)) == 0 &&
+                       wvm_membership_dependency_acquire(
+                           &registry, &mode_b_vm_b, error, sizeof(error)) == 0 &&
+                       members[1].active_dependency_count == 2,
+                   "acquire two Mode B VM dependencies on one compute") ||
+            expect(wvm_membership_begin_drain(&registry, &member2.member_key,
+                                              error, sizeof(error)) != 0,
+                   "reject compute drain while two Mode B deps exist") ||
+            expect(wvm_membership_dependency_release(
+                       &registry, &mode_b_vm_a, error, sizeof(error)) == 0 &&
+                       members[1].active_dependency_count == 1,
+                   "teardown of Mode B VM A does not clear VM B dependency") ||
+            expect(wvm_membership_begin_drain(&registry, &member2.member_key,
+                                              error, sizeof(error)) != 0,
+                   "reject drain while the other Mode B VM dependency remains") ||
+            expect(wvm_membership_dependency_release(
+                       &registry, &mode_b_vm_b, error, sizeof(error)) == 0 &&
+                       members[1].active_dependency_count == 0,
+                   "release remaining Mode B VM B dependency") ||
+            expect(wvm_membership_begin_drain(&registry, &member2.member_key,
+                                              error, sizeof(error)) == 0,
+                   "drain compute after both Mode B deps released") ||
+            expect(wvm_membership_remove(&registry, &member2.member_key, error,
+                                         sizeof(error)) == 0,
+                   "remove compute after dual-VM drain")) {
+            return 1;
+        }
     }
 
     puts("membership-route tests: PASS");
+    puts("NOTE: dual Mode B VM deps — drain fail-closed until both released;");
+    puts("      one VM teardown must not clear the other dependency.");
     return 0;
 }

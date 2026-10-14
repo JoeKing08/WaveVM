@@ -192,6 +192,7 @@ static int fill_node(struct wvm_node_record *node, uint32_t node_id,
     node->observed_health_state = 1;
     node->membership_revision = 5;
     node->topology_revision = 6;
+    wvm_node_record_init_single_host_defaults(node);
     return refresh_node_profile(node, capabilities, capability_count);
 }
 

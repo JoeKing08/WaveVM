@@ -1,4 +1,5 @@
 #include "wavevm_admission_runtime_agent.h"
+#include "wavevm_runtime_names.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -190,6 +191,33 @@ static int resolve_slot(void *context, uint32_t vm_id,
         manifest_generation, slot_out, error, error_len);
 }
 
+
+/*
+ * §6.2 noncritical local child restart: previous admitted child may have been
+ * SIGKILL'd and left unix endpoints behind. Only call after confirming the
+ * prior pid is gone; do not invent RECOVERY_REBIND or change node_instance_id.
+ */
+static void clear_stale_admitted_endpoints(
+    const struct wvm_node_runtime_manifest *runtime_manifest)
+{
+    struct wvm_runtime_name_set names;
+    char derive_error[256];
+
+    if (!runtime_manifest) {
+        return;
+    }
+    memset(&names, 0, sizeof(names));
+    derive_error[0] = '\0';
+    if (wvm_runtime_name_set_derive(&runtime_manifest->local_names, &names,
+                                    derive_error, sizeof(derive_error)) != 0) {
+        return;
+    }
+    (void)unlink(names.runtime_socket);
+    (void)unlink(names.executor_socket);
+    (void)unlink(names.worker_socket);
+    (void)unlink(names.monitor_socket);
+}
+
 static int start_runtime(
     void *context, const struct wvm_admission_receiver_slot *slot,
     const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
@@ -247,6 +275,7 @@ static int start_runtime(
     argv[6] = "--node-instance";
     argv[7] = node_instance;
     argv[8] = NULL;
+    clear_stale_admitted_endpoints(runtime_manifest);
     status = posix_spawnattr_init(&attributes);
     if (status == 0) {
         status = sigemptyset(&empty_signals);

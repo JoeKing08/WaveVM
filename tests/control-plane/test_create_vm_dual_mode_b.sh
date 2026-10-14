@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+# Mode B dual-VM CREATE_VM + local isolation/teardown on one physical node.
+# Two Mode B VMs (ACCELERATOR_DISABLED) share one ACTIVE compute member with
+# distinct UDP/executor leases and runtime namespaces. After RUNNING, assert
+# live socket/SHM/manifest collision absence; kill one admitted child and prove
+# the other VM's resources and CREATE replay stay intact (roadmap Phase 6).
+# Complements Mode A §12 gate (test_create_vm_dual_mode_a.sh) and the unit
+# slice in test_multivm_isolation.c.
+# Cites: wavevm-refactor-roadmap.md Phase 6; resource-placement-admission
+# exclusive names; runtime-manifest-lifecycle §5.2 / §6.2 child isolation.
+# Does NOT claim guest E2E, Mode A multi-context, GPA/directory runtime, or
+# /dev/wavevm isolation.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/wavevm-create-vm-dual-mode-b.XXXXXX")
+ctl_pid=
+agent_pid=
+
+cleanup() {
+    if [[ -n "${agent_pid:-}" ]]; then
+        kill -TERM "$agent_pid" 2>/dev/null || true
+        wait "$agent_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${ctl_pid:-}" ]]; then
+        kill -TERM "$ctl_pid" 2>/dev/null || true
+        wait "$ctl_pid" 2>/dev/null || true
+    fi
+    rm -rf -- "$tmpdir"
+}
+trap cleanup EXIT
+
+export PATH="${HOME}/.local/bin:/home/box/.local/bin:${PATH}"
+make -C "$repo_root/ctl_tool" -B -j2 >/dev/null
+make -C "$repo_root/node_runtime" -j2 >/dev/null
+gcc -Wall -Wextra -Werror -std=c11 \
+    "$repo_root/tests/control-plane/tcg_helper_stub.c" \
+    -o "$tmpdir/tcg_helper_stub"
+export WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"
+
+common_objs=(
+    "$repo_root/common_include/wavevm_sha256.c"
+    "$repo_root/common_include/wavevm_canonical.c"
+    "$repo_root/common_include/wavevm_identity.c"
+    "$repo_root/common_include/wavevm_runtime_names.c"
+    "$repo_root/common_include/wavevm_manifest.c"
+    "$repo_root/common_include/wavevm_control.c"
+    "$repo_root/common_include/wavevm_capability.c"
+    "$repo_root/common_include/wavevm_lifecycle.c"
+    "$repo_root/common_include/wavevm_admission.c"
+    "$repo_root/common_include/wavevm_cluster.c"
+    "$repo_root/common_include/wavevm_reservation_runtime.c"
+    "$repo_root/common_include/wavevm_fault_engine.c"
+    "$repo_root/common_include/wavevm_coordinator.c"
+    "$repo_root/common_include/wavevm_envelope.c"
+    "$repo_root/common_include/wavevm_membership_controller.c"
+    "$repo_root/common_include/wavevm_membership_control.c"
+    "$repo_root/common_include/wavevm_control_transport.c"
+    "$repo_root/common_include/wavevm_runtime_profile.c"
+)
+
+gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+    -I"$repo_root/common_include" \
+    "${common_objs[@]}" \
+    "$repo_root/tests/control-plane/seed_create_vm_evidence.c" \
+    -pthread -o "$tmpdir/seed_evidence"
+
+gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+    -I"$repo_root/common_include" \
+    "${common_objs[@]}" \
+    "$repo_root/tests/control-plane/submit_create_vm.c" \
+    -pthread -o "$tmpdir/submit_create_vm"
+
+gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+    -I"$repo_root/common_include" \
+    "$repo_root/common_include/wavevm_sha256.c" \
+    "$repo_root/common_include/wavevm_canonical.c" \
+    "$repo_root/common_include/wavevm_identity.c" \
+    "$repo_root/common_include/wavevm_runtime_names.c" \
+    "$repo_root/common_include/wavevm_manifest.c" \
+    "$repo_root/common_include/wavevm_lifecycle.c" \
+    "$repo_root/common_include/wavevm_control.c" \
+    "$repo_root/common_include/wavevm_envelope.c" \
+    "$repo_root/common_include/wavevm_membership_controller.c" \
+    "$repo_root/tests/control-plane/check_agent_registration.c" \
+    -pthread -o "$tmpdir/check_registration"
+
+base_port=$(shuf -i 22000-50000 -n 1)
+ctl_port=$base_port
+agent_control_port=$((base_port + 1))
+agent_data_port=$((base_port + 2))
+sidecar_data_port=$((base_port + 3))
+sidecar_control_port=$((base_port + 4))
+profile_data0=$((base_port + 5))
+profile_data1=$((base_port + 6))
+profile_svc0=$((base_port + 7))
+profile_svc1=$((base_port + 8))
+
+mkdir "$tmpdir/ctl-state" "$tmpdir/node-state" "$tmpdir/runtime" "$tmpdir/evidence"
+
+digest=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 801 802 1 1 \
+    "$profile_data0" "$profile_data1" "$profile_svc0" "$profile_svc1" \
+    "$agent_control_port")
+[[ ${#digest} -eq 64 ]]
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -subj /CN=WaveVMTestCA -keyout "$tmpdir/ca.key" \
+    -out "$tmpdir/ca.crt" >/dev/null 2>&1
+
+make_cert() {
+    local name=$1
+    local common_name=$2
+
+    openssl req -newkey rsa:2048 -nodes -subj "/CN=$common_name" \
+        -keyout "$tmpdir/$name.key" -out "$tmpdir/$name.csr" \
+        >/dev/null 2>&1
+    openssl x509 -req -days 1 -in "$tmpdir/$name.csr" \
+        -CA "$tmpdir/ca.crt" -CAkey "$tmpdir/ca.key" \
+        -CAcreateserial -out "$tmpdir/$name.crt" >/dev/null 2>&1
+}
+
+make_cert controller node-runtime:701:702
+make_cert node node-runtime:801:802
+# Unix CREATE_VM client authenticates as executor; TLS carries node/controller.
+printf '%s executor 9001 9002\n' "$(id -u)" > "$tmpdir/principals"
+
+"$repo_root/ctl_tool/wvm_ctl" serve \
+    --state-dir "$tmpdir/ctl-state" \
+    --socket "$tmpdir/ctl.sock" \
+    --local-node-id 701 --local-instance-id 702 \
+    --principals "$tmpdir/principals" --capacity 8 \
+    --control-address 127.0.0.1 --control-port "$ctl_port" \
+    --control-ca "$tmpdir/ca.crt" \
+    --control-cert "$tmpdir/controller.crt" \
+    --control-key "$tmpdir/controller.key" \
+    >"$tmpdir/ctl.log" 2>&1 &
+ctl_pid=$!
+for ((attempt = 0; attempt < 100; attempt++)); do
+    if [[ -S "$tmpdir/ctl.sock" ]] && kill -0 "$ctl_pid" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
+done
+[[ -S "$tmpdir/ctl.sock" ]]
+kill -0 "$ctl_pid"
+
+agent_args=(agent
+    --state-dir "$tmpdir/node-state"
+    --runtime-dir "$tmpdir/runtime"
+    --socket "$tmpdir/node.sock"
+    --node-id 801 --instance-id 802 --inventory-revision 1
+    --vcpu-slots 4 --memory-bytes 1073741824
+    --controller-node-id 701 --controller-instance-id 702
+    --controller-uid "$(id -u)"
+    --slots 4 --max-vcpus 4 --max-memory-chunks 4
+    --max-storage 1 --max-members 8 --max-leases 8
+    --control-address 127.0.0.1 --control-port "$agent_control_port"
+    --data-port "$agent_data_port"
+    --tls-ca "$tmpdir/ca.crt" --tls-cert "$tmpdir/node.crt"
+    --tls-key "$tmpdir/node.key"
+    --register-controller-address 127.0.0.1
+    --register-controller-port "$ctl_port"
+    --failure-domain-id 1 --pod-id 1 --vnode-first 1 --vnode-count 16
+    --sidecar-address 127.0.0.1 --sidecar-data-port "$sidecar_data_port"
+    --sidecar-control-port "$sidecar_control_port" --role-bits 1
+    --capability-profile-generation 1
+    --capability-profile-digest "$digest"
+    --storage-capabilities-digest 2222222222222222222222222222222222222222222222222222222222222222
+    --accelerator-fault-capabilities-digest 3333333333333333333333333333333333333333333333333333333333333333
+    --exclusive-resource-digest 4444444444444444444444444444444444444444444444444444444444444444)
+
+# Durable evidence must exist before compute enrollment reaches ACTIVE.
+cp "$tmpdir/evidence/capabilities-801.record" "$tmpdir/ctl-state/"
+cp "$tmpdir/evidence/runtime-profile-801.record" "$tmpdir/ctl-state/"
+
+env WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"     "$repo_root/wavevm_node_runtime" "${agent_args[@]}" >"$tmpdir/agent.log" 2>&1 &
+agent_pid=$!
+for ((attempt = 0; attempt < 100; attempt++)); do
+    if [[ -S "$tmpdir/node.sock" ]] && kill -0 "$agent_pid" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
+done
+[[ -S "$tmpdir/node.sock" ]]
+kill -0 "$agent_pid"
+
+# Wait for durable registration+enrollment journals without opening them under the
+# live ctl writer (check_registration recovers offline after CREATE).
+for ((attempt = 0; attempt < 200; attempt++)); do
+    if [[ -s "$tmpdir/ctl-state/membership.journal" ]] &&
+       [[ -s "$tmpdir/ctl-state/membership-control.journal" ]] &&
+       [[ $(stat -c %s "$tmpdir/ctl-state/membership-control.journal") -gt 64 ]]; then
+        break
+    fi
+    sleep 0.05
+done
+[[ -s "$tmpdir/ctl-state/membership.journal" ]]
+[[ -s "$tmpdir/ctl-state/membership-control.journal" ]]
+# Poll until the single Mode B compute member is ACTIVE before CREATE_VM.
+# (Dual = two Mode B VMs on one agent; not two nodes.)
+active_ok=0
+for ((attempt = 0; attempt < 200; attempt++)); do
+    cp -f "$tmpdir/ctl-state/membership.journal" "$tmpdir/membership.journal.snap" 2>/dev/null || true
+    if "$tmpdir/check_registration" "$tmpdir/membership.journal.snap"         "$agent_control_port" 4 1073741824 >/dev/null 2>&1; then
+        active_ok=1
+        break
+    fi
+    sleep 0.05
+done
+if [[ "$active_ok" -ne 1 ]]; then
+    echo "Mode B compute member did not reach ACTIVE before CREATE_VM" >&2
+    tail -n 80 "$tmpdir/ctl.log" >&2 || true
+    exit 1
+fi
+if ! kill -0 "$agent_pid" 2>/dev/null || ! kill -0 "$ctl_pid" 2>/dev/null; then
+    echo "ctl or agent exited before CREATE_VM" >&2
+    tail -n 80 "$tmpdir/ctl.log" >&2 || true
+    tail -n 80 "$tmpdir/agent.log" >&2 || true
+    exit 1
+fi
+
+wait_create_running() {
+    local name=$1
+    local id_byte=$2
+    local out=""
+    local attempt
+    for ((attempt = 0; attempt < 80; attempt++)); do
+        out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" "$name" 1 compact \
+            "$id_byte" disabled || true)
+        echo "vm=$name attempt=$attempt $out" >&2
+        if [[ "$out" == status=0* ]]; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        if [[ "$out" != status=14* ]]; then
+            printf '%s\n' "$out"
+            return 1
+        fi
+        sleep 0.25
+    done
+    printf '%s\n' "$out"
+    return 1
+}
+
+dump_failure() {
+    local label=$1
+    local out=$2
+    echo "CREATE_VM $label did not reach SUCCESS(0)/RUNNING (got: $out)" >&2
+    echo "--- ctl.log ---" >&2
+    cat "$tmpdir/ctl.log" >&2 || true
+    echo "--- agent.log ---" >&2
+    cat "$tmpdir/agent.log" >&2 || true
+    echo "--- child runtime logs ---" >&2
+    find "$tmpdir/runtime" -type f \( -name '*.log' -o -name 'stderr*' -o -name 'stdout*' \) \
+        -print -exec cat {} \; >&2 2>/dev/null || true
+}
+
+create1_out=$(wait_create_running mode-b-vm1 71) || true
+if [[ "$create1_out" != status=0* ]]; then
+    dump_failure vm1 "$create1_out"
+    exit 1
+fi
+create2_out=$(wait_create_running mode-b-vm2 81) || true
+if [[ "$create2_out" != status=0* ]]; then
+    dump_failure vm2 "$create2_out"
+    exit 1
+fi
+
+vm1_id=$(printf '%s\n' "$create1_out" | sed -n 's/.*vm_id=\([0-9]*\).*/\1/p')
+vm2_id=$(printf '%s\n' "$create2_out" | sed -n 's/.*vm_id=\([0-9]*\).*/\1/p')
+if [[ -z "$vm1_id" || -z "$vm2_id" || "$vm1_id" == "0" || "$vm2_id" == "0" ]]; then
+    echo "dual Mode B CREATE_VM missing vm_id ($create1_out / $create2_out)" >&2
+    exit 1
+fi
+if [[ "$vm1_id" == "$vm2_id" ]]; then
+    echo "dual Mode B CREATE_VM reused vm_id=$vm1_id" >&2
+    exit 1
+fi
+
+# --- Live isolation evidence (no guest/QEMU claim) ---
+manifest1="$tmpdir/runtime/vm-${vm1_id}-1-1.manifest"
+manifest2="$tmpdir/runtime/vm-${vm2_id}-1-1.manifest"
+if [[ ! -f "$manifest1" || ! -f "$manifest2" ]]; then
+    echo "dual Mode B missing runtime manifests ($manifest1 / $manifest2)" >&2
+    find "$tmpdir/runtime" -maxdepth 2 -type f -print >&2 || true
+    exit 1
+fi
+if cmp -s "$manifest1" "$manifest2"; then
+    echo "dual Mode B runtime manifests are identical (collision)" >&2
+    exit 1
+fi
+
+mapfile -t shm_names < <(grep -oE '/wavevm_ram_wvm-v[0-9]+[^[:space:]]+' "$tmpdir/agent.log" | sort -u)
+if [[ ${#shm_names[@]} -lt 2 ]]; then
+    echo "dual Mode B expected ≥2 distinct SHM names in agent.log (got ${#shm_names[@]})" >&2
+    printf '  %s\n' "${shm_names[@]}" >&2
+    exit 1
+fi
+shm1=""
+shm2=""
+for name in "${shm_names[@]}"; do
+    if [[ "$name" == *"-v${vm1_id}-"* ]]; then
+        shm1=$name
+    fi
+    if [[ "$name" == *"-v${vm2_id}-"* ]]; then
+        shm2=$name
+    fi
+done
+if [[ -z "$shm1" || -z "$shm2" || "$shm1" == "$shm2" ]]; then
+    echo "dual Mode B SHM names not distinct per vm_id (shm1=$shm1 shm2=$shm2)" >&2
+    printf '  %s\n' "${shm_names[@]}" >&2
+    exit 1
+fi
+# POSIX shm appears under /dev/shm without the leading slash.
+dev_shm1="/dev/shm/${shm1#/}"
+dev_shm2="/dev/shm/${shm2#/}"
+if [[ ! -e "$dev_shm1" || ! -e "$dev_shm2" ]]; then
+    echo "dual Mode B live SHM missing ($dev_shm1 / $dev_shm2)" >&2
+    ls -la /dev/shm/wavevm_ram_wvm-v* 2>/dev/null >&2 || true
+    exit 1
+fi
+
+mapfile -t runtime_socks < <(grep -oE '/tmp/wvm_user_wvm-v[0-9]+[^[:space:]]+\.sock' "$tmpdir/agent.log" | sort -u)
+sock1=""
+sock2=""
+for name in "${runtime_socks[@]}"; do
+    if [[ "$name" == *"-v${vm1_id}-"* ]]; then
+        sock1=$name
+    fi
+    if [[ "$name" == *"-v${vm2_id}-"* ]]; then
+        sock2=$name
+    fi
+done
+if [[ -z "$sock1" || -z "$sock2" || "$sock1" == "$sock2" ]]; then
+    echo "dual Mode B runtime sockets not distinct (sock1=$sock1 sock2=$sock2)" >&2
+    printf '  %s\n' "${runtime_socks[@]}" >&2
+    exit 1
+fi
+if [[ ! -S "$sock1" || ! -S "$sock2" ]]; then
+    echo "dual Mode B live runtime sockets missing ($sock1 / $sock2)" >&2
+    exit 1
+fi
+
+# Exclusive UDP listener leases must not collide across the two Mode B VMs.
+mapfile -t data_leases < <(grep -oE 'udp:any:node-runtime-data:[0-9]+' "$tmpdir/ctl.log" "$tmpdir/agent.log" 2>/dev/null | sort -u)
+mapfile -t svc_leases < <(grep -oE 'udp:loopback:local-executor-service:[0-9]+' "$tmpdir/ctl.log" "$tmpdir/agent.log" 2>/dev/null | sort -u)
+if [[ ${#data_leases[@]} -ge 2 ]]; then
+    # If we observed ≥2 data leases, they must be unique (already via sort -u).
+    :
+elif [[ ${#data_leases[@]} -eq 1 ]]; then
+    echo "dual Mode B only one data UDP lease observed — possible port collision ($data_leases)" >&2
+    exit 1
+fi
+# Prefer reservation journal exclusive lease names when present.
+if [[ -f "$tmpdir/node-state/reservations.journal" ]]; then
+    mapfile -t journal_leases < <(grep -aoE 'udp:(any:node-runtime-data|loopback:local-executor-service):[0-9]+' \
+        "$tmpdir/node-state/reservations.journal" 2>/dev/null | sort | uniq -c)
+    # uniq -c with count>1 would indicate collision in journal bytes; also require ≥4 unique.
+    mapfile -t journal_unique < <(grep -aoE 'udp:(any:node-runtime-data|loopback:local-executor-service):[0-9]+' \
+        "$tmpdir/node-state/reservations.journal" 2>/dev/null | sort -u)
+    if [[ ${#journal_unique[@]} -gt 0 && ${#journal_unique[@]} -lt 4 ]]; then
+        echo "dual Mode B reservation journal has <4 distinct UDP leases (${#journal_unique[@]})" >&2
+        printf '  %s\n' "${journal_unique[@]}" >&2
+        exit 1
+    fi
+fi
+
+find_admitted_child() {
+    local want_vm=$1
+    local pid cmd
+    while read -r pid; do
+        [[ -z "$pid" ]] && continue
+        cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+        if [[ "$cmd" == *" child "* || "$cmd" == *" child" ]] &&
+           [[ "$cmd" == *"/vm-${want_vm}-"* ]]; then
+            printf '%s\n' "$pid"
+            return 0
+        fi
+    done < <(pgrep -P "$agent_pid" || true)
+    return 1
+}
+
+child1=$(find_admitted_child "$vm1_id" || true)
+child2=$(find_admitted_child "$vm2_id" || true)
+if [[ -z "$child1" || -z "$child2" || "$child1" == "$child2" ]]; then
+    echo "dual Mode B could not find distinct admitted children (c1=$child1 c2=$child2)" >&2
+    pgrep -P "$agent_pid" -a >&2 || true
+    exit 1
+fi
+
+# Teardown VM1 admitted child only — VM2 must survive (Phase 6 / local isolation).
+echo "killing Mode B vm1 admitted child=$child1 (preserve vm2 child=$child2)" >&2
+kill -KILL "$child1"
+for ((wait_i = 0; wait_i < 50; wait_i++)); do
+    if ! kill -0 "$child1" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
+done
+if kill -0 "$child1" 2>/dev/null; then
+    echo "vm1 admitted child $child1 did not die" >&2
+    exit 1
+fi
+if ! kill -0 "$child2" 2>/dev/null; then
+    echo "FAIL: killing vm1 child also destroyed vm2 child=$child2" >&2
+    exit 1
+fi
+if [[ ! -e "$dev_shm2" || ! -S "$sock2" || ! -f "$manifest2" ]]; then
+    echo "FAIL: vm2 SHM/socket/manifest damaged after vm1 child kill" >&2
+    exit 1
+fi
+
+# CREATE replay for surviving Mode B VM must still report RUNNING.
+create2_replay=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" mode-b-vm2 1 compact \
+    81 disabled || true)
+echo "vm2_replay $create2_replay" >&2
+if [[ "$create2_replay" != status=0* ]]; then
+    echo "FAIL: surviving Mode B CREATE replay not RUNNING (got: $create2_replay)" >&2
+    dump_failure vm2-replay "$create2_replay"
+    exit 1
+fi
+replay_id=$(printf '%s\n' "$create2_replay" | sed -n 's/.*vm_id=\([0-9]*\).*/\1/p')
+if [[ "$replay_id" != "$vm2_id" ]]; then
+    echo "FAIL: vm2 replay changed vm_id ($replay_id vs $vm2_id)" >&2
+    exit 1
+fi
+
+kill -TERM "$agent_pid"
+wait "$agent_pid" || true
+agent_pid=
+kill -TERM "$ctl_pid"
+wait "$ctl_pid" || true
+ctl_pid=
+
+echo "dual Mode B CREATE + isolation/teardown (distinct names; one-VM kill preserves other): PASS"
+echo "  vm1=$create1_out"
+echo "  vm2=$create2_out"
+echo "  shm1=$shm1 shm2=$shm2"
+echo "  sock1=$sock1 sock2=$sock2"
+echo "  killed_child=$child1 preserved_child=$child2"
+echo "  vm2_replay=$create2_replay"

@@ -282,8 +282,8 @@ int main(void)
                        WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT &&
                    strcmp(placement_plan.reservation_requirements.entries[0]
                               .exclusive_leases.entries[2].lease_name,
-                          "kernel-context:vm=256:inc=1") == 0,
-               "kernel profile reserves one per-VM local context lease")) {
+                          "kernel-context") == 0,
+               "kernel profile reserves fixed single-VM context lease (roadmap §12 gate)")) {
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
     }

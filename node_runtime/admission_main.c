@@ -58,6 +58,10 @@ enum agent_option {
     OPT_STORAGE_CAPABILITIES_DIGEST,
     OPT_ACCELERATOR_FAULT_CAPABILITIES_DIGEST,
     OPT_EXCLUSIVE_RESOURCE_DIGEST,
+    OPT_PHYSICAL_HOST_ID,
+    OPT_REGISTERED_VCPU_SLOTS,
+    OPT_REGISTERED_MEMORY_BYTES,
+    OPT_NODE_INSTANCE_NAMESPACE,
 };
 
 struct agent_options {
@@ -99,6 +103,11 @@ struct agent_options {
     uint8_t storage_capabilities_digest[WVM_SHA256_DIGEST_BYTES];
     uint8_t accelerator_fault_capabilities_digest[WVM_SHA256_DIGEST_BYTES];
     uint8_t exclusive_resource_inventory_digest[WVM_SHA256_DIGEST_BYTES];
+    uint64_t physical_host_id;
+    uint64_t registered_vcpu_slots;
+    uint64_t registered_memory_bytes;
+    char node_instance_namespace[64];
+    int has_node_instance_namespace;
 };
 
 struct agent_authentication {
@@ -244,6 +253,13 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
          OPT_ACCELERATOR_FAULT_CAPABILITIES_DIGEST},
         {"exclusive-resource-digest", required_argument, NULL,
          OPT_EXCLUSIVE_RESOURCE_DIGEST},
+        {"physical-host-id", required_argument, NULL, OPT_PHYSICAL_HOST_ID},
+        {"registered-vcpu-slots", required_argument, NULL,
+         OPT_REGISTERED_VCPU_SLOTS},
+        {"registered-memory-bytes", required_argument, NULL,
+         OPT_REGISTERED_MEMORY_BYTES},
+        {"node-instance-namespace", required_argument, NULL,
+         OPT_NODE_INSTANCE_NAMESPACE},
         {0, 0, 0, 0},
     };
     const uint64_t local_network_options =
@@ -273,7 +289,7 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
         uint64_t *number = NULL;
         uint64_t bit;
 
-        if (option < OPT_STATE_DIR || option > OPT_EXCLUSIVE_RESOURCE_DIGEST) {
+        if (option < OPT_STATE_DIR || option > OPT_NODE_INSTANCE_NAMESPACE) {
             return -1;
         }
         bit = OPTION_SEEN(option);
@@ -348,6 +364,24 @@ static int parse_options(int argc, char **argv, struct agent_options *options)
                 0) {
                 return -1;
             }
+            break;
+        case OPT_PHYSICAL_HOST_ID:
+            number = &options->physical_host_id;
+            break;
+        case OPT_REGISTERED_VCPU_SLOTS:
+            number = &options->registered_vcpu_slots;
+            break;
+        case OPT_REGISTERED_MEMORY_BYTES:
+            number = &options->registered_memory_bytes;
+            break;
+        case OPT_NODE_INSTANCE_NAMESPACE:
+            if (strlen(optarg) == 0 ||
+                strlen(optarg) >= sizeof(options->node_instance_namespace)) {
+                return -1;
+            }
+            memcpy(options->node_instance_namespace, optarg,
+                   strlen(optarg) + 1U);
+            options->has_node_instance_namespace = 1;
             break;
         default: return -1;
         }
@@ -527,8 +561,27 @@ static int build_registration_record(
     node->inventory.node_instance_id = node->node_instance_id;
     node->inventory.failure_domain_id = node->failure_domain_id;
     node->inventory.inventory_revision = options->inventory_revision;
-    node->inventory.registered_vcpu_slots = (uint32_t)options->vcpu_slots;
-    node->inventory.registered_memory_bytes = options->memory_bytes;
+    if (options->registered_vcpu_slots != 0) {
+        if (options->registered_vcpu_slots < options->vcpu_slots ||
+            options->registered_vcpu_slots > UINT32_MAX ||
+            options->registered_memory_bytes == 0 ||
+            options->registered_memory_bytes < options->memory_bytes) {
+            (void)snprintf(error, error_len,
+                           "registered host capacity must cover allocatable");
+            return -1;
+        }
+        node->inventory.registered_vcpu_slots =
+            (uint32_t)options->registered_vcpu_slots;
+        node->inventory.registered_memory_bytes =
+            options->registered_memory_bytes;
+        node->inventory.reserved_host_cpu_slots =
+            (uint32_t)(options->registered_vcpu_slots - options->vcpu_slots);
+        node->inventory.reserved_host_memory_bytes =
+            options->registered_memory_bytes - options->memory_bytes;
+    } else {
+        node->inventory.registered_vcpu_slots = (uint32_t)options->vcpu_slots;
+        node->inventory.registered_memory_bytes = options->memory_bytes;
+    }
     node->inventory.allocatable_vcpu_slots = (uint32_t)options->vcpu_slots;
     node->inventory.allocatable_memory_bytes = options->memory_bytes;
     memcpy(node->inventory.storage_capabilities_digest,
@@ -550,6 +603,19 @@ static int build_registration_record(
     /* Registration normalizes revisions under the controller's durable lock. */
     node->membership_revision = 1;
     node->topology_revision = 1;
+    if (options->physical_host_id != 0) {
+        node->physical_host_id = options->physical_host_id;
+    }
+    if (options->has_node_instance_namespace) {
+        memcpy(node->node_instance_namespace.namespace_name,
+               options->node_instance_namespace,
+               sizeof(node->node_instance_namespace.namespace_name));
+        memset(node->node_instance_namespace.derivation_salt_digest, 0xa5,
+               sizeof(node->node_instance_namespace.derivation_salt_digest));
+        node->node_instance_namespace.name_generation = 1;
+    }
+    /* One-provider-per-host default when physical_host_id / namespace omitted. */
+    wvm_node_record_init_single_host_defaults(node);
     return wvm_node_record_validate(node, error, error_len);
 }
 

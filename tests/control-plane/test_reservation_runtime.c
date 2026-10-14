@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -40,6 +41,28 @@ static void fill_reservation(struct wvm_resource_reservation *reservation,
     reservation->exclusive_leases.capacity = 1;
 }
 
+
+struct concurrent_prepare_arg {
+    struct wvm_local_reservation_registry *registry;
+    struct wvm_resource_reservation reservation;
+    int outcome;
+};
+
+static void *concurrent_prepare_main(void *opaque)
+{
+    struct concurrent_prepare_arg *arg = opaque;
+    enum wvm_reservation_runtime_result result;
+    char error[128];
+
+    if (wvm_local_reservation_prepare(arg->registry, &arg->reservation, &result,
+                                      error, sizeof(error)) == 0) {
+        arg->outcome = 1;
+    } else {
+        arg->outcome = 0;
+    }
+    return NULL;
+}
+
 int main(void)
 {
     struct wvm_admission_node node;
@@ -77,7 +100,7 @@ int main(void)
     memset(&first_lease, 0, sizeof(first_lease));
     first_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     first_lease.lease_generation = 1;
-    strcpy(first_lease.lease_name, "kernel-context:vm=101:inc=1");
+    strcpy(first_lease.lease_name, "kernel-context");
     fill_reservation(&first, 1, 17);
     first.exclusive_leases.entries = &first_lease;
     first.has_prepared_expiry = 1;
@@ -86,7 +109,7 @@ int main(void)
     memset(&conflict_lease, 0, sizeof(conflict_lease));
     conflict_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     conflict_lease.lease_generation = 2;
-    strcpy(conflict_lease.lease_name, "kernel-context:vm=101:inc=1");
+    strcpy(conflict_lease.lease_name, "kernel-context");
     fill_reservation(&conflicting, 2, 17);
     conflicting.exclusive_leases.entries = &conflict_lease;
     conflicting.has_prepared_expiry = 1;
@@ -95,7 +118,10 @@ int main(void)
     memset(&second_mode_a_lease, 0, sizeof(second_mode_a_lease));
     second_mode_a_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     second_mode_a_lease.lease_generation = 3;
-    strcpy(second_mode_a_lease.lease_name, "kernel-context:vm=102:inc=1");
+    /* Same fixed gate name as first: admission emits "kernel-context" until
+     * /dev/wavevm isolation evidence lifts roadmap §12. Distinct per-VM names
+     * alone must not open dual Mode A. */
+    strcpy(second_mode_a_lease.lease_name, "kernel-context");
     fill_reservation(&second_mode_a, 7, 17);
     second_mode_a.guest_vcpu_slots = 1;
     second_mode_a.guest_memory_bytes = 4096;
@@ -160,14 +186,9 @@ int main(void)
                    &registry, &conflicting, &result, error, sizeof(error)) != 0,
                "reject an identical kernel-context lease name") ||
         expect(wvm_local_reservation_prepare(
-                   &registry, &second_mode_a, &result, error, sizeof(error)) ==
-                   0 &&
-                   result == WVM_RESERVATION_RUNTIME_NEW,
-               "allow a second Mode A VM with a distinct kernel-context lease") ||
-        expect(wvm_local_reservation_abort(
-                   &registry, &second_mode_a, &result, error,
-                   sizeof(error)) == 0,
-               "release second Mode A kernel-context lease") ||
+                   &registry, &second_mode_a, &result, error, sizeof(error)) !=
+                   0,
+               "reject a second Mode A VM on the fixed kernel-context lease") ||
         expect(wvm_local_reservation_prepare(
                    &registry, &distinct, &result, error, sizeof(error)) == 0 &&
                    result == WVM_RESERVATION_RUNTIME_NEW,
@@ -270,6 +291,152 @@ int main(void)
     }
     wvm_local_reservation_registry_destroy(&other_registry);
     wvm_local_reservation_registry_destroy(&registry);
+
+    /* Phase 7: concurrent prepares must not double-allocate capacity. */
+    {
+        struct wvm_admission_node race_node;
+        struct wvm_resource_reservation race_stored[8];
+        struct wvm_local_reservation_registry race_registry;
+        struct concurrent_prepare_arg args[4];
+        pthread_t threads[4];
+        size_t i;
+        int successes = 0;
+
+        memset(&race_node, 0, sizeof(race_node));
+        race_node.physical_node_id = 17;
+        race_node.node_instance_id = 9;
+        race_node.inventory_revision = 4;
+        race_node.allocatable_vcpu_slots = 4;
+        race_node.allocatable_memory_bytes = 65536;
+        if (wvm_local_reservation_registry_init(
+                &race_registry, &race_node, race_stored, 8, error,
+                sizeof(error)) != 0) {
+            fprintf(stderr, "reservation-runtime: race registry init\n");
+            return 1;
+        }
+        for (i = 0; i < 4; i++) {
+            args[i].registry = &race_registry;
+            args[i].outcome = -1;
+            fill_reservation(&args[i].reservation, (uint8_t)(50 + i), 17);
+            args[i].reservation.guest_vcpu_slots = 2;
+            args[i].reservation.guest_memory_bytes = 4096;
+            args[i].reservation.overhead_memory_bytes = 4096;
+            args[i].reservation.exclusive_leases.count = 0;
+            args[i].reservation.exclusive_leases.capacity = 0;
+            args[i].reservation.exclusive_leases.entries = NULL;
+            args[i].reservation.has_prepared_expiry = 1;
+            args[i].reservation.prepared_expiry_unix_time_ms = 1000;
+        }
+        for (i = 0; i < 4; i++) {
+            if (pthread_create(&threads[i], NULL, concurrent_prepare_main,
+                               &args[i]) != 0) {
+                fprintf(stderr, "reservation-runtime: pthread_create\n");
+                wvm_local_reservation_registry_destroy(&race_registry);
+                return 1;
+            }
+        }
+        for (i = 0; i < 4; i++) {
+            pthread_join(threads[i], NULL);
+            if (args[i].outcome < 0) {
+                fprintf(stderr, "reservation-runtime: concurrent prepare error\n");
+                wvm_local_reservation_registry_destroy(&race_registry);
+                return 1;
+            }
+            if (args[i].outcome == 1) {
+                successes++;
+            }
+        }
+        if (expect(successes == 2 && race_registry.prepared_vcpu_slots == 4,
+                   "concurrent oversubscribe: exactly two 2-vCPU prepares")) {
+            wvm_local_reservation_registry_destroy(&race_registry);
+            return 1;
+        }
+
+        {
+            struct wvm_activation_record race_activation;
+            struct wvm_route_snapshot_key race_route_key;
+            enum wvm_reservation_runtime_result race_result;
+            const struct wvm_resource_reservation *prepared = NULL;
+            const struct wvm_resource_reservation *committed = NULL;
+            struct wvm_resource_reservation expected;
+
+            for (i = 0; i < 4; i++) {
+                if (args[i].outcome != 1) {
+                    continue;
+                }
+                prepared = wvm_local_reservation_find(
+                    &race_registry, args[i].reservation.reservation_id);
+                break;
+            }
+            if (!prepared) {
+                fprintf(stderr, "reservation-runtime: no concurrent winner\n");
+                wvm_local_reservation_registry_destroy(&race_registry);
+                return 1;
+            }
+            memset(&race_activation, 0, sizeof(race_activation));
+            memcpy(race_activation.admission_tx_id, prepared->admission_tx_id,
+                   sizeof(race_activation.admission_tx_id));
+            memcpy(race_activation.candidate_manifest_digest,
+                   prepared->candidate_manifest_digest,
+                   sizeof(race_activation.candidate_manifest_digest));
+            fill_id(race_activation.activation_fence, 82);
+            race_activation.has_activation_fence = 1;
+            race_activation.coordinator_instance_id = 1;
+            fill_id(race_activation.required_participant_set_digest, 83);
+            race_activation.decision = WVM_ACTIVATION_ACTIVATE;
+            race_activation.durable_decision_sequence = 1;
+            race_activation.decided_at = 1;
+            memset(&race_route_key, 0, sizeof(race_route_key));
+            race_route_key.scope_key.vm_id = prepared->vm_id;
+            race_route_key.scope_key.vm_incarnation = prepared->vm_incarnation;
+            race_route_key.scope_key.route_scope_id = 1;
+            race_route_key.topology_revision = 1;
+            race_route_key.route_generation = 1;
+            memset(race_route_key.snapshot_digest, 9,
+                   sizeof(race_route_key.snapshot_digest));
+            race_activation.required_route_snapshot_keys = &race_route_key;
+            race_activation.required_route_snapshot_count = 1;
+            race_activation.required_route_snapshot_capacity = 1;
+            expected = *prepared;
+            if (wvm_local_reservation_commit(
+                    &race_registry, &expected, &race_activation, &race_result,
+                    error, sizeof(error)) != 0) {
+                fprintf(stderr,
+                        "reservation-runtime test: commit one concurrent "
+                        "winner failed: %s\n",
+                        error);
+                wvm_local_reservation_registry_destroy(&race_registry);
+                return 1;
+            }
+            committed = wvm_local_reservation_find(&race_registry,
+                                                   expected.reservation_id);
+            if (!committed ||
+                expect(committed->state == WVM_RESERVATION_COMMITTED,
+                       "registry shows COMMITTED after commit") ||
+                expect(wvm_local_reservation_release(
+                           &race_registry, committed, &race_result, error,
+                           sizeof(error)) == 0 &&
+                           race_registry.committed_vcpu_slots == 0,
+                       "release COMMITTED reservation frees capacity")) {
+                wvm_local_reservation_registry_destroy(&race_registry);
+                return 1;
+            }
+            committed = wvm_local_reservation_find(&race_registry,
+                                                   expected.reservation_id);
+            if (expect(committed != NULL &&
+                           wvm_local_reservation_release(
+                               &race_registry, committed, &race_result, error,
+                               sizeof(error)) == 0 &&
+                           race_result == WVM_RESERVATION_RUNTIME_REPLAY,
+                       "committed release is idempotent")) {
+                wvm_local_reservation_registry_destroy(&race_registry);
+                return 1;
+            }
+        }
+        wvm_local_reservation_registry_destroy(&race_registry);
+    }
+
     puts("reservation-runtime tests: PASS");
+    puts("NOTE: Phase 7 concurrent prepare fail-closed + COMMITTED release.");
     return 0;
 }

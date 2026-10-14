@@ -135,6 +135,7 @@ static void fill_node(struct wvm_node_record *node, uint32_t *gateway_ids,
     node->observed_health_state = WVM_MEMBERSHIP_HEALTHY;
     node->membership_revision = 1;
     node->topology_revision = 1;
+    wvm_node_record_init_single_host_defaults(node);
 }
 
 static void fill_gateway(struct wvm_gateway_record *gateway,
@@ -923,10 +924,47 @@ int main(void)
 
     memset(&dependency, 0, sizeof(dependency));
     dependency.member_key = node_member;
-    dependency.vm_id = 256;
+    dependency.vm_id = 300;
     dependency.vm_incarnation = 1;
     dependency.manifest_generation = 1;
     dependency.dependency_kind = 1;
+    {
+        int members_healthy = 0;
+
+        if (expect(wvm_membership_controller_dependency_acquire(
+                       &controller, &dependency, error, sizeof(error)) == 0,
+                   "acquire compute dependency before node-loss health check") ||
+            expect(wvm_membership_controller_vm_required_members_healthy(
+                       &controller, 300, 1, &members_healthy, error,
+                       sizeof(error)) == 0 &&
+                       members_healthy == 1,
+                   "RUNNING deps report healthy while members HEALTHY") ||
+            expect(wvm_membership_controller_mark_monitor_health(
+                       &controller, &node_member, WVM_MEMBERSHIP_UNREACHABLE,
+                       error, sizeof(error)) == 0,
+                   "monitor marks required compute UNREACHABLE") ||
+            expect(wvm_membership_controller_vm_required_members_healthy(
+                       &controller, 300, 1, &members_healthy, error,
+                       sizeof(error)) == 0 &&
+                       members_healthy == 0,
+                   "node loss must not leave VM required-members healthy") ||
+            expect(wvm_membership_controller_report_self_health(
+                       &controller, &node_member, WVM_MEMBERSHIP_HEALTHY,
+                       error, sizeof(error)) == 0 &&
+                       wvm_membership_controller_vm_required_members_healthy(
+                           &controller, 300, 1, &members_healthy, error,
+                           sizeof(error)) == 0 &&
+                       members_healthy == 1,
+                   "self-health restore returns required members healthy") ||
+            expect(wvm_membership_controller_dependency_release(
+                       &controller, &dependency, error, sizeof(error)) == 0,
+                   "release node-loss health-check dependency")) {
+            wvm_membership_controller_close(&controller);
+            unlink(journal_path);
+            return 1;
+        }
+    }
+    dependency.vm_id = 256;
     if (expect(wvm_membership_controller_dependency_acquire(
                    &controller, &dependency, error, sizeof(error)) == 0 &&
                    wvm_membership_controller_cordon(
