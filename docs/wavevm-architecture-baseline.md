@@ -65,9 +65,11 @@ drain, and gateway replacement through acknowledged route snapshots.
 
 **Extended hardening:** coordinator high availability, automatic migration or
 resharding, transparent recovery after loss of required compute state, full
-fault-engine plugin coverage, and exhaustive network/lifecycle fault injection.
-These are later operational improvements, not prerequisites for proving that
-the distributed VM path works.
+fault-engine plugin coverage, exhaustive network/lifecycle fault injection, and
+hosted host-OS portability (a hypervisor adapter running the same Linux host
+appliance on a non-Linux physical host; not a WaveVM guest and not a native
+non-Linux port). These are later operational improvements, not prerequisites
+for proving that the distributed VM path works. See roadmap §1.1 and §14.1.
 
 The two horizons do not define two products or two semantic paths. Extended
 features must preserve the same manifest, identity, routing, memory, and vCPU

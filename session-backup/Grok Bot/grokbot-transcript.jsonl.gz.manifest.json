@@ -1,11 +1,11 @@
 {
   "archive": "grokbot-transcript.jsonl.gz",
-  "compressed_size_bytes": 430745,
+  "compressed_size_bytes": 511726,
   "compression": "gzip",
   "format": "wavevm-session-archive-shards",
   "part_count": 1,
   "part_prefix": "grokbot-transcript.jsonl.gz.",
   "part_size_bytes": 47185920,
   "restore": "cat grokbot-transcript.jsonl.gz.[0-9][0-9][0-9] > grokbot-transcript.jsonl.gz",
-  "sha256": "0d5ce5a72b5af106983b5784cab2285c18ec7cd5e5bb1848b3352e16f8d6a6f3"
+  "sha256": "e0739bbe8f5603cdadeaaefb996e9b8d4b4dd4b3ad969c7f792303f02801b25e"
 }

@@ -58,6 +58,24 @@ fault engines, deterministic network/lifecycle fault injection, and broad
 failure/recovery CI. These improve operational resilience but are not required
 to establish that the distributed VM itself works.
 
+Host OS portability is also Extended, not Minimum. The Minimum profile stays on
+Linux with the existing QEMU/KVM/TCG and `wavevm.ko` paths. The first Extended
+goal here is **hosted portability**: run the same Linux host appliance (WaveVM
+control plane, node runtime, gateway/sidecar, and executor) inside a hypervisor
+adapter on a non-Linux host—or on a host where native deployment is impractical—
+rather than rewriting Kernel or Mode A paths for every OS. That appliance is a
+host adapter, not a WaveVM guest. Native non-Linux user-space ports and native
+Mode A/kernel ports are separate Extended work and are not implied by the
+appliance. Capabilities are whatever the appliance actually probes, with no
+inheritance assumed from the outer host. Missing nested KVM permits only a TCG
+execution plan. Missing or unusable `wavevm.ko` disables Mode A and selects
+Mode B, but does not prohibit a KVM Mode B plan when nested KVM passes its
+probe. Each unavailable capability fails or records the policy-allowed
+pre-admission fallback independently. The adapter is not tied to any particular
+commercial hypervisor; concrete backends are defined by an adapter contract plus
+capability reports and acceptance tests. This work must not change or block Minimum. Acceptance criteria
+live in section 14.1.
+
 The minimum profile deliberately assumes one active coordinator and bounded
 single-scope control operations. It must fail closed when that coordinator or a
 required member disappears; it does not need transparent recovery, aggregate
@@ -713,6 +731,54 @@ Acceptance criteria:
 Risk:
 
 - More test infrastructure work before feature work.
+
+## 14.1 Extended: Hosted Host-OS Portability Acceptance
+
+This section is Extended only. It does not raise Minimum gates or reorder the
+established Minimum implementation sequence. Implementing hosted portability
+still requires a written hypervisor-adapter specification before code lands.
+That future adapter specification must take each appliance's real
+`physical_host_id` and correlated failure domain as a trusted operator
+inventory/configuration or hypervisor/provider attestation input; it must not
+derive those facts from an endpoint, hostname, or appliance-local observation.
+Where that trusted mapping is unavailable, the adapter must not claim
+cross-appliance aggregate capacity or correlated-host failure coverage it
+cannot establish. This is not a demand to implement cross-platform support now.
+
+Acceptance criteria:
+
+1. On at least one non-Linux host, a declared hypervisor adapter starts a Linux
+   host appliance that carries WaveVM control plane, node runtime,
+   gateway/sidecar, and executor—not a substitute WaveVM guest.
+2. Without nested KVM, only a TCG execution plan is admitted. Without a
+   usable `wavevm.ko`, Mode A is disabled and Mode B is selected, but KVM
+   Mode B remains allowed when nested KVM has passed its probe. With those
+   independent fallbacks, the appliance completes the same manifest-bound
+   control-plane path and a minimum guest smoke; unsupported capabilities
+   fail closed or record an explicit pre-admission downgrade.
+3. Nested KVM may be advertised only after a KVM probe inside the appliance
+   succeeds. Mode A may be advertised only after kernel-accelerator probing and
+   per-VM context/teardown checks succeed. The Mode A context requirement must
+   not be imposed on KVM Mode B. Outer host capabilities are never assumed to
+   be inherited.
+4. Flat/fractal routing, membership, route generation, resource accounting,
+   stop/cleanup, manifest identity/incarnation, and lifecycle semantics match
+   the native Linux path. Outer NAT/bridging is an adapter responsibility and
+   must not change manifest endpoints, port/socket leases, identity, or mTLS
+   bindings.
+5. Evidence records the outer hypervisor, appliance image/profile, capability
+   probes, actual resource parameters, and failure reasons, without hidden
+   workarounds. Outer CPU, memory, and hypervisor overhead are accounted
+   honestly. `physical_host_id` and correlated failure domains still name the
+   real physical host via the adapter's declared trusted mapping, so multiple
+   appliances on one machine must not be treated as independent physical hosts
+   that double-count CPU, memory, or host overhead.
+6. Adapter or capability failure must not let the control plane report a false
+   VM `RUNNING`; bounded diagnostics and cleanup evidence remain.
+
+Native non-Linux user-space ports and native Mode A/kernel accelerator ports
+remain separate Extended items with their own contracts; they are out of scope
+for this hosted-portability acceptance set.
 
 ## 15. Suggested Near-Term Order
 
