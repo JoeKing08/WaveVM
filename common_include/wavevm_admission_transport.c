@@ -537,9 +537,35 @@ static int transport_reservation_abort(
     const struct wvm_resource_reservation *reservation, char *error,
     size_t error_len)
 {
-    return transport_reservation_stage(context, candidate, reservation,
-                                       WVM_ENVELOPE_MSG_ABORT_RESERVATION,
-                                       error, error_len);
+    struct wvm_admission_transport *transport = context;
+    struct wvm_admission_transport_target target;
+    struct wvm_admission_reservation_stage stage;
+
+    if (!reservation ||
+        (reservation->state != WVM_RESERVATION_COMMITTED &&
+         reservation->state != WVM_RESERVATION_RELEASED)) {
+        return transport_reservation_stage(context, candidate, reservation,
+                                           WVM_ENVELOPE_MSG_ABORT_RESERVATION,
+                                           error, error_len);
+    }
+    if (candidate_matches_reservation(candidate, reservation, error,
+                                      error_len) != 0 ||
+        resolve_node_target(transport, reservation->physical_node_id,
+                            reservation->node_instance_id, &target, error,
+                            error_len) != 0) {
+        return -1;
+    }
+    memset(&stage, 0, sizeof(stage));
+    stage.message_type = WVM_ENVELOPE_MSG_ABORT_RESERVATION;
+    stage.candidate = candidate;
+    stage.reservation = reservation;
+    stage.abort_reason = WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP;
+    return submit_record(transport, &target, WVM_ENVELOPE_MSG_ABORT_RESERVATION,
+                         candidate->admission_tx_id, candidate->vm_id,
+                         candidate->vm_incarnation,
+                         candidate->manifest_generation,
+                         &candidate->prepared_route_snapshot_key,
+                         encode_reservation_stage, &stage, error, error_len);
 }
 
 static int transport_participant_stage(
@@ -660,6 +686,35 @@ static int transport_participant_abort(
     const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
     size_t error_len)
 {
+    /*
+     * Post-activation STOP uses LIFECYCLE_STOP so the receiver may kill the
+     * admitted child (§6.1). Pre-activation abort keeps the historical reason.
+     */
+    if (runtime_manifest && runtime_manifest->has_activation_fence) {
+        struct wvm_admission_transport *transport = context;
+        struct wvm_admission_transport_target target;
+        struct wvm_admission_participant_stage stage;
+
+        if (candidate_matches_runtime(candidate, runtime_manifest, error,
+                                      error_len) != 0 ||
+            resolve_node_target(transport, runtime_manifest->physical_node_id,
+                                runtime_manifest->expected_node_instance_id,
+                                &target, error, error_len) != 0) {
+            return -1;
+        }
+        memset(&stage, 0, sizeof(stage));
+        stage.message_type = WVM_ENVELOPE_MSG_ABORT_MANIFEST;
+        stage.candidate = candidate;
+        stage.runtime_manifest = runtime_manifest;
+        stage.abort_reason = WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP;
+        return submit_record(transport, &target, WVM_ENVELOPE_MSG_ABORT_MANIFEST,
+                             candidate->admission_tx_id, candidate->vm_id,
+                             candidate->vm_incarnation,
+                             candidate->manifest_generation,
+                             &runtime_manifest->required_route_snapshot_key,
+                             encode_participant_stage, &stage, error,
+                             error_len);
+    }
     return transport_participant_stage(context, candidate, runtime_manifest,
                                        NULL, WVM_ENVELOPE_MSG_ABORT_MANIFEST,
                                        error, error_len);

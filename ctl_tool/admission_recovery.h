@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "../common_include/wavevm_control_plane.h"
+#include "../common_include/wavevm_control_transport.h"
 #include "../common_include/wavevm_admission_orchestrator.h"
 #include "../common_include/wavevm_membership_controller.h"
 
@@ -31,5 +32,25 @@ int wvm_ctl_recover_midflight_admissions(
     const struct wvm_membership_controller_capture *membership_capture,
     size_t member_capacity, uint32_t max_vcpus, size_t route_rule_capacity,
     size_t route_ack_capacity, char *error, size_t error_len);
+
+/*
+ * STOP_VM production entry (goal §2 / runtime-manifest-lifecycle §6.1):
+ * locate durable RUNNING|STOPPING|RETIRING|STOPPED by vm_id+incarnation
+ * (+ optional manifest_generation), rebuild prepared_vm/route from journals,
+ * promote reservations to COMMITTED via durable activation, then call
+ * wvm_admission_orchestrator_stop. STOPPED is idempotent SUCCESS.
+ * Unknown VM / wrong incarnation → NOT_FOUND / PRECONDITION fail-closed.
+ */
+int wvm_ctl_stop_vm(
+    struct wvm_control_plane *plane,
+    struct wvm_vm_namespace_allocator *namespace_allocator,
+    struct wvm_membership_controller *membership_controller,
+    const struct wvm_admission_authority *authority,
+    const char *state_directory,
+    const struct wvm_membership_controller_capture *membership_capture,
+    uint32_t vm_id, uint64_t vm_incarnation, uint64_t manifest_generation,
+    size_t member_capacity, uint32_t max_vcpus, size_t route_rule_capacity,
+    size_t route_ack_capacity, struct wvm_control_result *result, char *error,
+    size_t error_len);
 
 #endif

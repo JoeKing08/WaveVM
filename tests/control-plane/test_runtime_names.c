@@ -1,4 +1,7 @@
+#include <fcntl.h>
 #include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <string.h>
 
 #include "wavevm_identity.h"
@@ -65,6 +68,43 @@ int main(void)
                                              sizeof(error)) != 0,
                "invalid derived set is rejected")) {
         return 1;
+    }
+    {
+        struct wvm_runtime_name_set retire_names;
+        int ready_fd;
+        int shm_fd;
+
+        if (expect(wvm_runtime_name_set_derive(&first, &retire_names, error,
+                                               sizeof(error)) == 0,
+                   "re-derive valid set for retire")) {
+            return 1;
+        }
+        ready_fd = open(retire_names.ready_file,
+                        O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if (ready_fd < 0) {
+            fprintf(stderr, "runtime-names test: cannot create ready file\n");
+            return 1;
+        }
+        close(ready_fd);
+        shm_fd = shm_open(retire_names.shm_name, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (shm_fd < 0) {
+            fprintf(stderr, "runtime-names test: cannot create SHM\n");
+            unlink(retire_names.ready_file);
+            return 1;
+        }
+        close(shm_fd);
+        if (expect(wvm_runtime_name_set_retire(&retire_names, error,
+                                               sizeof(error)) == 0,
+                   "retire removes ready+SHM") ||
+            expect(access(retire_names.ready_file, F_OK) != 0,
+                   "ready fence gone after retire") ||
+            expect(shm_open(retire_names.shm_name, O_RDONLY, 0) < 0,
+                   "SHM gone after retire") ||
+            expect(wvm_runtime_name_set_retire(&retire_names, error,
+                                               sizeof(error)) == 0,
+                   "retire is ENOENT-idempotent")) {
+            return 1;
+        }
     }
     puts("runtime-names tests: PASS");
     return 0;

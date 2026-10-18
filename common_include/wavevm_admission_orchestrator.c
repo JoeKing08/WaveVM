@@ -8,6 +8,10 @@
 #include "wavevm_membership.h"
 #include "wavevm_membership_controller.h"
 #include "wavevm_manifest.h"
+#include "wavevm_runtime_names.h"
+#include "wavevm_coordinator.h"
+#include "wavevm_identity.h"
+#include "wavevm_sha256.h"
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
 {
@@ -687,6 +691,349 @@ int wvm_admission_orchestrator_run(
         if (ready_status != 0) {
             return ready_status == -EAGAIN ? -EAGAIN : -1;
         }
+    }
+    return 0;
+}
+
+int wvm_admission_release_membership_dependencies(
+    struct wvm_membership_controller *controller,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_route_transaction_record *route_transaction,
+    const struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
+    size_t error_len)
+{
+    struct wvm_membership_dependency dependency;
+    size_t i;
+
+    if (!controller || !transaction || !route_transaction || !prepared_vm) {
+        set_error(error, error_len,
+                  "membership dependency release input is invalid");
+        return -1;
+    }
+    if (transaction->vm_id == 0 || transaction->vm_incarnation == 0 ||
+        transaction->manifest_generation == 0) {
+        set_error(error, error_len,
+                  "membership dependency release requires VM identity");
+        return -1;
+    }
+
+    for (i = 0; i < prepared_vm->node_runtime_manifest_count; i++) {
+        const struct wvm_node_runtime_manifest *manifest =
+            &prepared_vm->node_runtime_manifests[i];
+
+        memset(&dependency, 0, sizeof(dependency));
+        dependency.member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+        dependency.member_key.role_id = manifest->physical_node_id;
+        dependency.member_key.instance_id = manifest->expected_node_instance_id;
+        dependency.vm_id = transaction->vm_id;
+        dependency.vm_incarnation = transaction->vm_incarnation;
+        dependency.manifest_generation = transaction->manifest_generation;
+        dependency.dependency_kind = 1; /* compute allocation dependency */
+        if (wvm_membership_controller_dependency_release(
+                controller, &dependency, error, error_len) != 0) {
+            return -1;
+        }
+    }
+    for (i = 0; i < route_transaction->required_ack_set.entries.count; i++) {
+        const struct wvm_required_ack_entry *ack =
+            &route_transaction->required_ack_set.entries.entries[i];
+
+        if (ack->member_key.role_type != WVM_MANIFEST_ROLE_GATEWAY) {
+            continue;
+        }
+        memset(&dependency, 0, sizeof(dependency));
+        dependency.member_key = ack->member_key;
+        dependency.vm_id = transaction->vm_id;
+        dependency.vm_incarnation = transaction->vm_incarnation;
+        dependency.manifest_generation = transaction->manifest_generation;
+        dependency.dependency_kind = 2; /* gateway route dependency */
+        if (wvm_membership_controller_dependency_release(
+                controller, &dependency, error, error_len) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int stop_persist_route_state(
+    struct wvm_control_plane *plane,
+    struct wvm_route_transaction_record *route_transaction, uint16_t state,
+    char *error, size_t error_len)
+{
+    route_transaction->state = state;
+    return wvm_control_plane_record_route_transaction(plane, route_transaction,
+                                                      error, error_len);
+}
+
+static int stop_retire_runtime_names(
+    const struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
+    size_t error_len)
+{
+    size_t i;
+
+    if (!prepared_vm || !prepared_vm->node_runtime_manifests) {
+        set_error(error, error_len, "runtime name retirement lacks manifests");
+        return -1;
+    }
+    for (i = 0; i < prepared_vm->node_runtime_manifest_count; i++) {
+        struct wvm_runtime_name_set names;
+
+        if (wvm_runtime_name_set_derive(
+                &prepared_vm->node_runtime_manifests[i].local_names, &names,
+                error, error_len) != 0 ||
+            wvm_runtime_name_set_retire(&names, error, error_len) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int stop_quarantine_namespace(
+    struct wvm_vm_namespace_allocator *allocator,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_route_transaction_record *route_transaction, char *error,
+    size_t error_len)
+{
+    uint8_t retirement_digest[WVM_SHA256_DIGEST_BYTES];
+    struct wvm_sha256_ctx ctx;
+    const struct wvm_vm_namespace_record *record;
+
+    if (!allocator) {
+        return 0;
+    }
+    record = wvm_vm_namespace_find(allocator, transaction->vm_id);
+    if (!record) {
+        set_error(error, error_len, "STOP namespace record was not found");
+        return -1;
+    }
+    if (record->state == WVM_VM_NAMESPACE_QUARANTINED ||
+        record->state == WVM_VM_NAMESPACE_FREE) {
+        return 0;
+    }
+    if (record->state == WVM_VM_NAMESPACE_ACTIVE ||
+        record->state == WVM_VM_NAMESPACE_ALLOCATED) {
+        if (wvm_vm_namespace_begin_retire(allocator, transaction->vm_id,
+                                          transaction->vm_incarnation, error,
+                                          error_len) != 0) {
+            return -1;
+        }
+    } else if (record->state != WVM_VM_NAMESPACE_RETIRING) {
+        set_error(error, error_len,
+                  "STOP namespace is not in a retirement-capable state");
+        return -1;
+    }
+    wvm_sha256_init(&ctx);
+    wvm_sha256_update(&ctx, transaction->admission_tx_id,
+                      sizeof(transaction->admission_tx_id));
+    wvm_sha256_update(&ctx, route_transaction->operation_id,
+                      sizeof(route_transaction->operation_id));
+    wvm_sha256_final(&ctx, retirement_digest);
+    return wvm_vm_namespace_quarantine(allocator, transaction->vm_id,
+                                       transaction->vm_incarnation,
+                                       retirement_digest, 1, error,
+                                       error_len);
+}
+
+int wvm_admission_orchestrator_stop(
+    const struct wvm_admission_stop_input *input, char *error, size_t error_len)
+{
+    const struct wvm_control_plane_entry *entry;
+    enum wvm_lifecycle_state state;
+    uint16_t membership_route_state = 0;
+
+    if (!input || !input->control_plane || !input->transaction ||
+        !input->prepared_vm || !input->route_transaction) {
+        set_error(error, error_len, "STOP input is invalid");
+        return -1;
+    }
+    entry = wvm_control_plane_find_request(input->control_plane,
+                                           input->transaction->request_id);
+    if (!entry || entry->transaction.vm_id != input->transaction->vm_id ||
+        entry->transaction.vm_incarnation !=
+            input->transaction->vm_incarnation ||
+        memcmp(entry->transaction.admission_tx_id,
+               input->transaction->admission_tx_id,
+               sizeof(input->transaction->admission_tx_id)) != 0) {
+        set_error(error, error_len,
+                  "STOP does not match a durable control-plane transaction");
+        return -1;
+    }
+    state = entry->transaction.state;
+    if (state == WVM_LIFECYCLE_STOPPED) {
+        return 0;
+    }
+    if (state != WVM_LIFECYCLE_RUNNING && state != WVM_LIFECYCLE_STOPPING &&
+        state != WVM_LIFECYCLE_RETIRING) {
+        set_error(error, error_len,
+                  "STOP requires RUNNING, STOPPING, or RETIRING lifecycle");
+        return -1;
+    }
+
+    if (state == WVM_LIFECYCLE_RUNNING) {
+        if (wvm_control_plane_transition(
+                input->control_plane, input->transaction,
+                WVM_LIFECYCLE_RUNNING, WVM_LIFECYCLE_STOPPING, error,
+                error_len) != 0) {
+            return -1;
+        }
+        state = WVM_LIFECYCLE_STOPPING;
+    }
+
+    if (state == WVM_LIFECYCLE_STOPPING) {
+        /*
+         * §6.1 steps 1–3: after durable STOPPING, stop participants (admitted
+         * children) and prepare remote reservation release. Name unlink and
+         * local teardown follow route RETIRING below.
+         */
+        if (input->callbacks) {
+            size_t pi;
+
+            if (!input->callbacks->participant_abort) {
+                set_error(error, error_len,
+                          "STOP callbacks lack participant abort");
+                return -1;
+            }
+            for (pi = 0; pi < input->prepared_vm->node_runtime_manifest_count;
+                 pi++) {
+                if (input->callbacks->participant_abort(
+                        input->callback_context,
+                        &input->prepared_vm->candidate,
+                        &input->prepared_vm->node_runtime_manifests[pi], error,
+                        error_len) != 0) {
+                    return -1;
+                }
+            }
+        }
+        if (input->route_transaction->state != WVM_ROUTE_TRANSACTION_RETIRING) {
+            if (input->route_transaction->state !=
+                WVM_ROUTE_TRANSACTION_ACTIVATED) {
+                set_error(error, error_len,
+                          "STOP route must be ACTIVATED before retirement");
+                return -1;
+            }
+            if (input->membership_controller) {
+                if (wvm_membership_controller_route_state(
+                        input->membership_controller,
+                        input->route_transaction->operation_id,
+                        &membership_route_state, error, error_len) != 0) {
+                    return -1;
+                }
+                if (membership_route_state == WVM_ROUTE_TRANSACTION_ACTIVATED) {
+                    if (wvm_membership_controller_route_begin_retire(
+                            input->membership_controller,
+                            input->route_transaction->operation_id, 0, 1, error,
+                            error_len) != 0) {
+                        return -1;
+                    }
+                } else if (membership_route_state !=
+                           WVM_ROUTE_TRANSACTION_RETIRING &&
+                           membership_route_state !=
+                               WVM_ROUTE_TRANSACTION_RETIRED) {
+                    set_error(error, error_len,
+                              "STOP membership route is not retirement-ready");
+                    return -1;
+                }
+            }
+            if (stop_persist_route_state(
+                    input->control_plane, input->route_transaction,
+                    WVM_ROUTE_TRANSACTION_RETIRING, error, error_len) != 0) {
+                return -1;
+            }
+        }
+        if (wvm_control_plane_transition(
+                input->control_plane, input->transaction,
+                WVM_LIFECYCLE_STOPPING, WVM_LIFECYCLE_RETIRING, error,
+                error_len) != 0) {
+            return -1;
+        }
+        state = WVM_LIFECYCLE_RETIRING;
+    }
+
+    if (state != WVM_LIFECYCLE_RETIRING) {
+        set_error(error, error_len, "STOP failed to reach RETIRING");
+        return -1;
+    }
+
+    /*
+     * Local names before reservation teardown: teardown_local clears runtime
+     * projections including local_names.
+     */
+    if (stop_retire_runtime_names(input->prepared_vm, error, error_len) != 0) {
+        return -1;
+    }
+    if (input->callbacks) {
+        size_t ri;
+
+        if (!input->callbacks->reservation_abort) {
+            set_error(error, error_len,
+                      "STOP callbacks lack reservation abort");
+            return -1;
+        }
+        for (ri = 0; ri < input->prepared_vm->reservation_count; ri++) {
+            if (input->callbacks->reservation_abort(
+                    input->callback_context, &input->prepared_vm->candidate,
+                    &input->prepared_vm->reservations[ri], error,
+                    error_len) != 0) {
+                return -1;
+            }
+        }
+    }
+    if (input->membership_controller &&
+        wvm_admission_release_membership_dependencies(
+            input->membership_controller, input->transaction,
+            input->route_transaction, input->prepared_vm, error,
+            error_len) != 0) {
+        return -1;
+    }
+    if (wvm_coordinator_teardown_local(input->transaction, input->prepared_vm,
+                                       error, error_len) != 0) {
+        return -1;
+    }
+
+    if (input->route_transaction->state != WVM_ROUTE_TRANSACTION_RETIRED) {
+        if (input->route_transaction->state !=
+            WVM_ROUTE_TRANSACTION_RETIRING) {
+            set_error(error, error_len,
+                      "STOP route must be RETIRING before final retirement");
+            return -1;
+        }
+        if (input->membership_controller) {
+            if (wvm_membership_controller_route_state(
+                    input->membership_controller,
+                    input->route_transaction->operation_id,
+                    &membership_route_state, error, error_len) != 0) {
+                return -1;
+            }
+            if (membership_route_state == WVM_ROUTE_TRANSACTION_RETIRING) {
+                if (wvm_membership_controller_route_retire(
+                        input->membership_controller,
+                        input->route_transaction->operation_id, error,
+                        error_len) != 0) {
+                    return -1;
+                }
+            } else if (membership_route_state !=
+                       WVM_ROUTE_TRANSACTION_RETIRED) {
+                set_error(error, error_len,
+                          "STOP membership route did not reach RETIRED");
+                return -1;
+            }
+        }
+        if (stop_persist_route_state(input->control_plane,
+                                     input->route_transaction,
+                                     WVM_ROUTE_TRANSACTION_RETIRED, error,
+                                     error_len) != 0) {
+            return -1;
+        }
+    }
+    if (wvm_control_plane_transition(
+            input->control_plane, input->transaction, WVM_LIFECYCLE_RETIRING,
+            WVM_LIFECYCLE_STOPPED, error, error_len) != 0) {
+        return -1;
+    }
+    if (stop_quarantine_namespace(input->namespace_allocator,
+                                  input->transaction, input->route_transaction,
+                                  error, error_len) != 0) {
+        return -1;
     }
     return 0;
 }

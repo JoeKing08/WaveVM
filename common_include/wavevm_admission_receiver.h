@@ -81,6 +81,15 @@ typedef int (*wvm_admission_receiver_start_runtime_fn)(
     const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
     size_t error_len);
 
+/*
+ * Lifecycle STOP (§6.1): stop the admitted local child for this slot before
+ * local names are retired. Idempotent when no child is running.
+ */
+typedef int (*wvm_admission_receiver_stop_runtime_fn)(
+    void *context, const struct wvm_admission_receiver_slot *slot,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len);
+
 struct wvm_admission_receiver_config {
     struct wvm_member_key controller_member_key;
     uint32_t controller_physical_node_id;
@@ -115,6 +124,7 @@ struct wvm_admission_receiver_config {
     wvm_admission_receiver_resolve_slot_fn resolve_slot;
     wvm_admission_receiver_delivery_inputs_fn delivery_inputs;
     wvm_admission_receiver_start_runtime_fn start_runtime;
+    wvm_admission_receiver_stop_runtime_fn stop_runtime;
 };
 
 struct wvm_admission_receiver {

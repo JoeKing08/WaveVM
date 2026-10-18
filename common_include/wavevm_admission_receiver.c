@@ -1036,18 +1036,44 @@ static int apply_reservation_stage(
         }
         result->recorded_state = WVM_RESERVATION_COMMITTED;
     } else {
+        const struct wvm_resource_reservation *local;
+        int lifecycle_stop =
+            stage.abort_reason == WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP;
+
         equal = prepared_slot_uses_reservation(
             receiver, request, stage.reservation->reservation_id, error,
             error_len);
-        if (equal != 0 ||
-            wvm_local_reservation_abort(receiver->config.reservation_registry,
-                                        stage.reservation,
-                                        &reservation_result, error,
-                                        error_len) != 0) {
-            if (equal > 0) {
-                set_error(error, error_len,
-                          "runtime manifest must abort before reservation release");
+        if (equal > 0 && !lifecycle_stop) {
+            set_error(error, error_len,
+                      "runtime manifest must abort before reservation release");
+            goto fail;
+        }
+        if (equal < 0) {
+            goto fail;
+        }
+        local = wvm_local_reservation_find(
+            receiver->config.reservation_registry,
+            stage.reservation->reservation_id);
+        if (lifecycle_stop) {
+            struct wvm_resource_reservation expected = *stage.reservation;
+
+            if (local) {
+                expected = *local;
             }
+            if (expected.state != WVM_RESERVATION_COMMITTED &&
+                expected.state != WVM_RESERVATION_RELEASED) {
+                set_error(error, error_len,
+                          "lifecycle STOP reservation release requires COMMITTED");
+                goto fail;
+            }
+            if (wvm_local_reservation_release(
+                    receiver->config.reservation_registry, &expected,
+                    &reservation_result, error, error_len) != 0) {
+                goto fail;
+            }
+        } else if (wvm_local_reservation_abort(
+                       receiver->config.reservation_registry, stage.reservation,
+                       &reservation_result, error, error_len) != 0) {
             goto fail;
         }
         result->recorded_state = WVM_RESERVATION_RELEASED;
@@ -1400,25 +1426,68 @@ static int apply_participant_stage(
         slot->has_activated = 1;
         result->recorded_state = WVM_LIFECYCLE_COMMITTED;
     } else {
-        if (slot->has_activation_decision ||
-            !local_reservation_allows_abort(receiver,
-                                            scratch.runtime_manifest->reservation_id) ||
-            ((slot->has_prepared || slot->has_aborted) &&
-             (canonical_equal(encode_candidate, &slot->prepared_storage.candidate,
-                             scratch.candidate, error, error_len) != 1 ||
-             runtime_projection_equal(&slot->prepared_storage.runtime_manifest,
-                                      scratch.runtime_manifest, 1, error,
-                                      error_len) != 1))) {
+        int lifecycle_stop =
+            scratch.abort_reason == WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP;
+
+        if (lifecycle_stop) {
+            /*
+             * runtime-manifest-lifecycle §6.1 step 3: stop admitted child
+             * before names/reservations retire. Idempotent when already
+             * aborted; fail-closed on identity mismatch.
+             */
+            if ((slot->has_prepared || slot->has_aborted ||
+                 slot->has_activation_decision) &&
+                (canonical_equal(encode_candidate,
+                                 &slot->prepared_storage.candidate,
+                                 scratch.candidate, error, error_len) != 1 ||
+                 runtime_projection_equal(
+                     &slot->prepared_storage.runtime_manifest,
+                     scratch.runtime_manifest, 1, error, error_len) != 1)) {
+                set_error(error, error_len,
+                          "lifecycle STOP identity does not match participant");
+                return -1;
+            }
+            if (receiver->config.stop_runtime &&
+                receiver->config.stop_runtime(
+                    receiver->config.context, slot, scratch.runtime_manifest,
+                    error, error_len) != 0) {
+                return -1;
+            }
+            if (!slot->has_aborted &&
+                (restore_participant_stage(receiver, slot, request, error,
+                                           error_len) != 0 ||
+                 persist_participant_stage(slot, request, error, error_len) !=
+                     0)) {
+                slot->state_failed = 1;
+                return -1;
+            }
+            slot->has_activated = 0;
+            result->recorded_state = WVM_LIFECYCLE_STOPPING;
+        } else if (slot->has_activation_decision ||
+                   !local_reservation_allows_abort(
+                       receiver, scratch.runtime_manifest->reservation_id) ||
+                   ((slot->has_prepared || slot->has_aborted) &&
+                    (canonical_equal(encode_candidate,
+                                     &slot->prepared_storage.candidate,
+                                     scratch.candidate, error, error_len) !=
+                         1 ||
+                     runtime_projection_equal(
+                         &slot->prepared_storage.runtime_manifest,
+                         scratch.runtime_manifest, 1, error, error_len) !=
+                         1))) {
             set_error(error, error_len, "cannot abort local runtime projection");
             return -1;
+        } else {
+            if (!slot->has_aborted &&
+                (restore_participant_stage(receiver, slot, request, error,
+                                           error_len) != 0 ||
+                 persist_participant_stage(slot, request, error, error_len) !=
+                     0)) {
+                slot->state_failed = 1;
+                return -1;
+            }
+            result->recorded_state = WVM_LIFECYCLE_ABORTED;
         }
-        if (!slot->has_aborted &&
-            (restore_participant_stage(receiver, slot, request, error, error_len) != 0 ||
-             persist_participant_stage(slot, request, error, error_len) != 0)) {
-            slot->state_failed = 1;
-            return -1;
-        }
-        result->recorded_state = WVM_LIFECYCLE_ABORTED;
     }
     result->status_code = WVM_CONTROL_RESULT_SUCCESS;
     return 0;

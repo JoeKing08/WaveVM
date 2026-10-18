@@ -658,3 +658,38 @@ F04 部分修复完成。capability记录现在包含真实时间戳和唯一pro
 - 非四路并发 live CREATE_VM 竖切（证据在 node-local reservation 原子门，与 §6.3 一致）。
 - 节点丢失尚未自动把 durable lifecycle 写成 DEGRADED（仅拒绝 healthy SUCCESS；完整 STOPPING/DEGRADED 属 goal §2）。
 - 未开 Mode A multi-context、guest E2E、multi-scope aggregate drain。未 commit/push。**step 1 收口；本日停止，不启动 step 2。**
+
+[2026-10-18 已验证：goal step 2 Minimum — orchestrator_stop 资源释放切片]
+纲领：goal.txt §2（STOP 后控制面/runtime/executor 资源与依赖干净释放，无残留 lease/socket/SHM/依赖记账）；runtime-manifest-lifecycle §6.1 Pause/Stop；baseline lifecycle teardown；roadmap Phase 7 stop/cleanup。未发明 HA/RECOVERY_REBIND/MIGRATE/multi-scope aggregate drain；Mode A §12 门闩保持；未做 guest E2E（goal §7）。本地叠 tip `753aa3cd1`，**未 commit/push**。
+
+变更前缺口：
+- 已有 `wvm_local_reservation_release` / `wvm_coordinator_teardown_local` / `wvm_runtime_name_set_retire`，但无完整 STOP 编排；生命周期可手工 STOPPING→RETIRING→STOPPED 而泄漏 reservation/socket/SHM/membership 依赖。
+- 无 `orchestrator_stop` / STOP_VM wire；CREATE 注册的 membership 依赖无对称释放入口。
+
+本轮落地（最小诚实切片）：
+1. `wvm_admission_release_membership_dependencies`：镜像 CREATE 的 register，仅释放本 VM incarnation 的 compute(kind1)/gateway(kind2) 依赖；缺席幂等；不碰兄弟 VM。
+2. `wvm_admission_orchestrator_stop` + `wvm_admission_stop_input`：RUNNING|STOPPING|RETIRING→STOPPED fail-closed 编排——durable STOPPING → route RETIRING（控制面 + 可选 membership begin_retire）→ RETIRING → 先 retire 本地名(socket/SHM/ready) → 释放 membership 依赖 → `wvm_coordinator_teardown_local` → route RETIRED → STOPPED → 可选 namespace begin_retire+quarantine。STOPPED 重放成功。
+3. 测试：`test_coordinator` 用 orchestrator_stop 替代手工 STOP，断言 committed_vcpu=0、socket/ready/SHM 消失、namespace QUARANTINED、幂等；`test_membership_coordinator` 双 Mode B 用 release API 只卸 VM A；`test_runtime_names` 覆盖 retire ENOENT 幂等。
+
+验证 PASS：`test_runtime_names`、`test_reservation_runtime`、`test_coordinator`、`test_membership_controller`、`test_membership_coordinator`、`test_membership_route`、`test_create_vm_single_node`、`test_create_vm_dual_mode_a`（门闩仍关）、`test_create_vm_dual_mode_b`、`test_create_vm_recover`、`make -C ctl_tool -B`。
+
+边界 / step 2 仍未宣称（下一刀候选）：
+- **未**落地 `STOP_VM` envelope / ctl 生产入口（需从 durable journal 重建 prepared_vm 再调 orchestrator_stop）。
+- **未**在 STOP 路径杀 QEMU/executor/admitted child 进程（guest/进程生命周期属后续；本切片保证控制面记账与本地名释放）。
+- 节点丢失自动写入 DEGRADED/STOPPING 仍非本刀；未开 Mode A multi-context / guest E2E。未 commit/push。
+
+[2026-10-18 已验证：goal §2 STOP_VM 生产入口 + admitted-child 拆除]
+在 tip `753aa3cd1` 脏树上续接（未 reset 前序 orchestrator_stop / membership dep release）。
+
+本轮接线：
+1. Envelope `WVM_ENVELOPE_MSG_STOP_VM=0x0602`（`wavevm_envelope.[ch]`）；`wavevm_control_transport` typed_request + `request_metadata_valid`：STOP 必须带 vm_id/incarnation/manifest_generation（CREATE 仍为 vm_id==0）。
+2. ctl `apply_stop_vm` → `wvm_ctl_stop_vm`（`ctl_tool/main.c` / `admission_recovery.[ch]`）：从 durable candidate/runtime manifests/activation/route 重建 prepared_vm，调 `wvm_admission_orchestrator_stop`；STOPPED 幂等 SUCCESS；未知 VM / 错误 incarnation → NOT_FOUND fail-closed；非 RUNNING|STOPPING|RETIRING → PRECONDITION_FAILED。
+3. Abort 原因 `WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP`：participant ABORT_MANIFEST 后 `stop_runtime`（`admission_runtime_agent.stop_one_runtime` SIGKILL+waitpid+清 stale unix）；COMMITTED reservation 走 `wvm_local_reservation_release`（非 pre-activation abort）；仅 LIFECYCLE_STOP 允许对 COMMITTED 放行依赖释放门闩。
+
+进程拆除边界（对照 `docs/specs/runtime-manifest-lifecycle.md` §6.1）：
+- **本 Minimum 切片包含** §6.1 步骤 3 的 admitted child / executor 资源拆除：`stop_runtime` 杀掉本 VM 的 admitted runtime 子进程，随后 `runtime_name_set_retire` 卸 socket/ready/SHM，reservation RELEASED + membership dep release。竖切证明无残留 SHM/本 incarnation 路径/子 PID，且 ctl 提交 ABORT_RESERVATION(0x203) 成功。
+- **仍不宣称** 真 WaveVM-patched QEMU guest 进程/guest E2E（箱内无该二进制；测试用 `tcg_helper_stub`）。guest 耦合拆除与登录验收属 goal 后续步，不在本刀伪造。
+
+验证 PASS：`test_stop_vm.sh`（CREATE→STOP→STOPPED + 未知/错 incarnation fail-closed + STOPPED 重放 + residual）；`test_membership_coordinator` / `test_runtime_names` / `test_reservation_runtime`；`test_create_vm_single_node`；`test_create_vm_recover`；`test_control_transport`；`make -C ctl_tool -B`。
+
+goal §2 收口判断：单节点生产 STOP_VM 入口与 executor/控制面残留清理可标 Minimum 闭合。残余非阻塞项：多节点/共享 gateway 上的 STOP 竖切未单开；CREATE 仍未接线 `dependency_acquire`（STOP 对称释放在已 acquire 时生效）；未 commit/push；Mode A 门闩仍开；无 guest E2E。

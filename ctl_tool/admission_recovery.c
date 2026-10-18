@@ -12,6 +12,7 @@
 #include "../common_include/wavevm_membership_controller.h"
 #include "../common_include/wavevm_runtime_gate.h"
 #include "runtime_profile_publication.h"
+#include "../common_include/wavevm_control_transport.h"
 
 struct runtime_lists {
     struct wvm_vcpu_assignment *vcpus;
@@ -963,4 +964,350 @@ int wvm_ctl_recover_midflight_admissions(
         error[0] = '\0';
     }
     return 0;
+}
+
+static const struct wvm_control_plane_entry *find_entry_by_vm_identity(
+    const struct wvm_control_plane *plane, uint32_t vm_id,
+    uint64_t vm_incarnation, uint64_t manifest_generation)
+{
+    size_t i;
+    const struct wvm_control_plane_entry *found = NULL;
+
+    if (!plane || vm_id == 0 || vm_incarnation == 0) {
+        return NULL;
+    }
+    for (i = 0; i < plane->entry_count; i++) {
+        const struct wvm_control_plane_entry *entry = &plane->entries[i];
+
+        if (entry->transaction.vm_id != vm_id ||
+            entry->transaction.vm_incarnation != vm_incarnation) {
+            continue;
+        }
+        if (manifest_generation != 0 &&
+            entry->transaction.manifest_generation != manifest_generation) {
+            continue;
+        }
+        if (found) {
+            return NULL; /* ambiguous */
+        }
+        found = entry;
+    }
+    return found;
+}
+
+static int load_route_transaction_for_snapshot(
+    const struct wvm_control_plane *plane,
+    const struct wvm_route_snapshot_key *snapshot_key,
+    struct wvm_route_transaction_record *route_out,
+    struct wvm_required_ack_entry *acks, size_t ack_capacity,
+    struct wvm_required_ack_entry *drain, size_t drain_capacity, char *error,
+    size_t error_len)
+{
+    size_t i;
+    int found = 0;
+
+    if (!plane || !snapshot_key || !route_out || !acks || ack_capacity == 0) {
+        if (error && error_len) {
+            snprintf(error, error_len, "STOP route load input is invalid");
+        }
+        return -1;
+    }
+    for (i = 0; i < plane->route_entry_count; i++) {
+        struct wvm_route_transaction_record decoded;
+        const struct wvm_control_plane_route_entry *entry =
+            &plane->route_entries[i];
+        char decode_error[256];
+
+        if (!entry->record_bytes || entry->record_byte_count == 0) {
+            continue;
+        }
+        memset(&decoded, 0, sizeof(decoded));
+        decoded.required_ack_set.entries.entries = acks;
+        decoded.required_ack_set.entries.capacity = ack_capacity;
+        decoded.optional_departure_drain_set.entries = drain;
+        decoded.optional_departure_drain_set.capacity = drain_capacity;
+        decode_error[0] = '\0';
+        if (wvm_route_transaction_record_decode(
+                entry->record_bytes, entry->record_byte_count, &decoded,
+                decode_error, sizeof(decode_error)) != 0) {
+            continue;
+        }
+        if (decoded.route_snapshot_key.scope_key.vm_id ==
+                snapshot_key->scope_key.vm_id &&
+            decoded.route_snapshot_key.scope_key.vm_incarnation ==
+                snapshot_key->scope_key.vm_incarnation &&
+            decoded.route_snapshot_key.scope_key.route_scope_id ==
+                snapshot_key->scope_key.route_scope_id &&
+            decoded.route_snapshot_key.topology_revision ==
+                snapshot_key->topology_revision &&
+            decoded.route_snapshot_key.route_generation ==
+                snapshot_key->route_generation &&
+            memcmp(decoded.route_snapshot_key.snapshot_digest,
+                   snapshot_key->snapshot_digest,
+                   WVM_SHA256_DIGEST_BYTES) == 0) {
+            if (found) {
+                if (error && error_len) {
+                    snprintf(error, error_len,
+                             "STOP route snapshot is ambiguous");
+                }
+                return -1;
+            }
+            *route_out = decoded;
+            /* Prefer durable entry state if present. */
+            route_out->state = entry->state ? entry->state : decoded.state;
+            found = 1;
+        }
+    }
+    if (!found) {
+        if (error && error_len) {
+            snprintf(error, error_len, "STOP route transaction was not found");
+        }
+        return -1;
+    }
+    return 0;
+}
+
+int wvm_ctl_stop_vm(
+    struct wvm_control_plane *plane,
+    struct wvm_vm_namespace_allocator *namespace_allocator,
+    struct wvm_membership_controller *membership_controller,
+    const struct wvm_admission_authority *authority,
+    const char *state_directory,
+    const struct wvm_membership_controller_capture *membership_capture,
+    uint32_t vm_id, uint64_t vm_incarnation, uint64_t manifest_generation,
+    size_t member_capacity, uint32_t max_vcpus, size_t route_rule_capacity,
+    size_t route_ack_capacity, struct wvm_control_result *result, char *error,
+    size_t error_len)
+{
+    const struct wvm_control_plane_entry *entry;
+    struct recovery_projection projection = {0};
+    struct wvm_coordinator_transaction transaction;
+    struct wvm_admission_stop_input stop_input;
+    struct wvm_activation_record activation;
+    struct wvm_route_snapshot_key activation_keys[4];
+    uint8_t *activation_bytes = NULL;
+    size_t activation_byte_count = 0;
+    uint8_t *candidate_record = NULL;
+    size_t record_bytes = 0;
+    size_t i;
+    int status = -1;
+
+    (void)route_rule_capacity;
+    if (!result) {
+        if (error && error_len) {
+            snprintf(error, error_len, "STOP_VM result storage is missing");
+        }
+        return -EINVAL;
+    }
+    memset(result, 0, sizeof(*result));
+    result->status_code = WVM_CONTROL_RESULT_INTERNAL_FAILURE;
+    if (!plane || !namespace_allocator || vm_id == 0 || vm_incarnation == 0) {
+        result->status_code = WVM_CONTROL_RESULT_INVALID_REQUEST;
+        return 0;
+    }
+    entry = find_entry_by_vm_identity(plane, vm_id, vm_incarnation,
+                                      manifest_generation);
+    if (!entry) {
+        result->status_code = WVM_CONTROL_RESULT_NOT_FOUND;
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "STOP_VM target VM was not found in durable control plane");
+        }
+        return 0;
+    }
+    result->vm_id = entry->transaction.vm_id;
+    result->vm_incarnation = entry->transaction.vm_incarnation;
+    result->manifest_generation = entry->transaction.manifest_generation;
+    result->route_scope_id = entry->transaction.route_scope_key.route_scope_id;
+    result->recorded_state = (uint16_t)entry->transaction.state;
+    memcpy(result->admission_tx_id, entry->transaction.admission_tx_id,
+           sizeof(result->admission_tx_id));
+    memcpy(result->manifest_id, entry->transaction.manifest_id,
+           sizeof(result->manifest_id));
+    if (entry->transaction.state == WVM_LIFECYCLE_STOPPED) {
+        result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+        return 0;
+    }
+    if (entry->transaction.state != WVM_LIFECYCLE_RUNNING &&
+        entry->transaction.state != WVM_LIFECYCLE_STOPPING &&
+        entry->transaction.state != WVM_LIFECYCLE_RETIRING) {
+        result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "STOP_VM requires RUNNING/STOPPING/RETIRING (state=%u)",
+                     (unsigned)entry->transaction.state);
+        }
+        return 0;
+    }
+    if (!entry->transaction.has_candidate_manifest_digest ||
+        !entry->transaction.has_prepared_route_snapshot_key ||
+        !entry->transaction.has_activation_record_digest) {
+        result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "STOP_VM lacks durable candidate/route/activation");
+        }
+        return 0;
+    }
+
+    memset(&transaction, 0, sizeof(transaction));
+    memcpy(transaction.request_id, entry->transaction.request_id,
+           sizeof(transaction.request_id));
+    transaction.vm_id = entry->transaction.vm_id;
+    transaction.vm_incarnation = entry->transaction.vm_incarnation;
+    transaction.manifest_generation = entry->transaction.manifest_generation;
+    memcpy(transaction.admission_tx_id, entry->transaction.admission_tx_id,
+           sizeof(transaction.admission_tx_id));
+    memcpy(transaction.manifest_id, entry->transaction.manifest_id,
+           sizeof(transaction.manifest_id));
+    transaction.route_scope_key = entry->transaction.route_scope_key;
+
+    projection.member_capacity = member_capacity;
+    projection.max_vcpus = max_vcpus;
+    candidate_record = malloc(WVM_CONTROL_PLANE_MAX_RECORD_BYTES);
+    activation_bytes = malloc(WVM_CONTROL_PLANE_MAX_RECORD_BYTES);
+    if (!candidate_record || !activation_bytes ||
+        candidate_storage_init(&projection, member_capacity, max_vcpus) != 0) {
+        if (error && error_len) {
+            snprintf(error, error_len, "cannot allocate STOP projection");
+        }
+        goto out;
+    }
+    projection.candidate_record = candidate_record;
+    projection.candidate_record_capacity = WVM_CONTROL_PLANE_MAX_RECORD_BYTES;
+    candidate_record = NULL;
+    if (wvm_control_plane_read_candidate(
+            plane, &transaction, projection.candidate_record,
+            projection.candidate_record_capacity, &record_bytes, error,
+            error_len) != 0 ||
+        wvm_candidate_vm_manifest_decode(
+            projection.candidate_record, record_bytes,
+            &projection.prepared_vm.candidate, error, error_len) != 0) {
+        goto out;
+    }
+    {
+        uint8_t reencode_digest[WVM_SHA256_DIGEST_BYTES];
+        size_t reencode_bytes = 0;
+
+        if (wvm_candidate_vm_manifest_encode(
+                &projection.prepared_vm.candidate, projection.candidate_record,
+                projection.candidate_record_capacity, &reencode_bytes,
+                reencode_digest, error, error_len) != 0) {
+            goto out;
+        }
+        if (memcmp(reencode_digest, entry->transaction.candidate_manifest_digest,
+                   sizeof(reencode_digest)) != 0) {
+            if (error && error_len) {
+                snprintf(error, error_len,
+                         "STOP candidate digest differs from durable journal");
+            }
+            goto out;
+        }
+        memcpy(projection.prepared_vm.candidate.manifest_digest, reencode_digest,
+               sizeof(reencode_digest));
+        memcpy(projection.prepared_vm.candidate_manifest_digest, reencode_digest,
+               sizeof(reencode_digest));
+        projection.candidate_record_bytes = reencode_bytes;
+        projection.prepared_vm.candidate_manifest_record =
+            projection.candidate_record;
+        projection.prepared_vm.candidate_manifest_record_capacity =
+            projection.candidate_record_capacity;
+        projection.prepared_vm.candidate_manifest_bytes = reencode_bytes;
+    }
+    if (bind_plan_and_admission_request(
+            &projection, &transaction,
+            membership_controller ? membership_controller->membership_revision
+                                  : 1,
+            membership_controller ? membership_controller->topology_revision : 1,
+            error, error_len) != 0) {
+        goto out;
+    }
+    if (load_runtime_manifests(plane, &transaction, entry->transaction.state,
+                               &projection, state_directory, membership_capture,
+                               error, error_len) != 0) {
+        goto out;
+    }
+
+    memset(&activation, 0, sizeof(activation));
+    activation.required_route_snapshot_keys = activation_keys;
+    activation.required_route_snapshot_capacity =
+        sizeof(activation_keys) / sizeof(activation_keys[0]);
+    if (wvm_control_plane_read_activation(
+            plane, &transaction, activation_bytes,
+            WVM_CONTROL_PLANE_MAX_RECORD_BYTES, &activation_byte_count, error,
+            error_len) != 0 ||
+        wvm_activation_record_decode(activation_bytes, activation_byte_count,
+                                     &activation, error, error_len) != 0 ||
+        activation.decision != WVM_ACTIVATION_ACTIVATE) {
+        if (error && error_len && error[0] == '\0') {
+            snprintf(error, error_len, "STOP lacks durable ACTIVATE decision");
+        }
+        goto out;
+    }
+    for (i = 0; i < projection.prepared_vm.reservation_count; i++) {
+        if (projection.prepared_vm.reservations[i].state !=
+                WVM_RESERVATION_COMMITTED &&
+            wvm_resource_reservation_commit(
+                &projection.prepared_vm.reservations[i], &activation, error,
+                error_len) != 0) {
+            goto out;
+        }
+    }
+
+    projection.route_acks = calloc(route_ack_capacity, sizeof(*projection.route_acks));
+    projection.route_tx_acks =
+        calloc(route_ack_capacity, sizeof(*projection.route_tx_acks));
+    projection.route_tx_drain =
+        calloc(route_ack_capacity, sizeof(*projection.route_tx_drain));
+    if (!projection.route_acks || !projection.route_tx_acks ||
+        !projection.route_tx_drain) {
+        if (error && error_len) {
+            snprintf(error, error_len, "cannot allocate STOP route ack storage");
+        }
+        goto out;
+    }
+    memset(&projection.route_transaction, 0, sizeof(projection.route_transaction));
+    if (load_route_transaction_for_snapshot(
+            plane, &entry->transaction.prepared_route_snapshot_key,
+            &projection.route_transaction, projection.route_tx_acks,
+            route_ack_capacity, projection.route_tx_drain, route_ack_capacity,
+            error, error_len) != 0) {
+        goto out;
+    }
+
+    memset(&stop_input, 0, sizeof(stop_input));
+    stop_input.control_plane = plane;
+    stop_input.transaction = &transaction;
+    stop_input.prepared_vm = &projection.prepared_vm;
+    stop_input.route_transaction = &projection.route_transaction;
+    stop_input.membership_controller = membership_controller;
+    stop_input.namespace_allocator = namespace_allocator;
+    if (authority) {
+        stop_input.callbacks = &authority->callbacks;
+        stop_input.callback_context = authority->context;
+    }
+    if (wvm_admission_orchestrator_stop(&stop_input, error, error_len) != 0) {
+        result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+        goto out;
+    }
+    entry = wvm_control_plane_find_request(plane, transaction.request_id);
+    if (!entry || entry->transaction.state != WVM_LIFECYCLE_STOPPED) {
+        result->status_code = WVM_CONTROL_RESULT_INTERNAL_FAILURE;
+        if (error && error_len) {
+            snprintf(error, error_len, "STOP_VM did not reach durable STOPPED");
+        }
+        goto out;
+    }
+    result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+    result->recorded_state = (uint16_t)entry->transaction.state;
+    result->applied_revision = entry->transaction.transaction_sequence;
+    status = 0;
+    if (error && error_len) {
+        error[0] = '\0';
+    }
+out:
+    free(activation_bytes);
+    free(candidate_record);
+    projection_destroy(&projection);
+    return status == 0 ? 0 : (result->status_code == WVM_CONTROL_RESULT_INTERNAL_FAILURE ? -EIO : 0);
 }

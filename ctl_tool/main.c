@@ -462,6 +462,60 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
     return 0;
 }
 
+
+static int apply_stop_vm(void *opaque, const struct wvm_envelope *request,
+                         const struct wvm_member_key *authenticated_actor,
+                         struct wvm_control_result *result, char *error,
+                         size_t error_len)
+{
+    struct control_context *context = opaque;
+    const struct wvm_admission_authority *authority;
+    int rc;
+
+    if (!result) {
+        snprintf(error, error_len, "STOP_VM result storage is missing");
+        return -EINVAL;
+    }
+    initialize_control_result(request, WVM_CONTROL_RESULT_INTERNAL_FAILURE,
+                              result);
+    if (!context || !context->plane || !context->namespace_allocator ||
+        !request || !authenticated_actor ||
+        authenticated_actor->role_type != WVM_MANIFEST_ROLE_EXECUTOR ||
+        wvm_member_key_validate(authenticated_actor, error, error_len) != 0) {
+        result->status_code = WVM_CONTROL_RESULT_UNAUTHORIZED_ROLE;
+        return 0;
+    }
+    if (request->message_type != WVM_ENVELOPE_MSG_STOP_VM ||
+        request->vm_id == 0 || request->vm_incarnation == 0 ||
+        request->manifest_generation == 0) {
+        result->status_code = WVM_CONTROL_RESULT_INVALID_ENVELOPE;
+        return 0;
+    }
+    authority = context->plane->admission_authority;
+    /*
+     * RUNNING STOP rebuilds from durable manifests; launch-plan rebuild is
+     * not required. Pass NULL capture (fail-closed if manifests missing).
+     */
+    pthread_mutex_lock(&context->lock);
+    rc = wvm_ctl_stop_vm(
+        context->plane, context->namespace_allocator,
+        &context->plane->membership_controller, authority,
+        context->state_directory, NULL, request->vm_id,
+        request->vm_incarnation, request->manifest_generation,
+        context->request_list_capacity > 0 ? context->request_list_capacity : 8U,
+        context->request_list_capacity > 64U
+            ? (uint32_t)context->request_list_capacity
+            : 64U,
+        context->request_list_capacity > 0
+            ? context->request_list_capacity * 64U
+            : 64U,
+        context->request_list_capacity > 0 ? context->request_list_capacity
+                                            : 8U,
+        result, error, error_len);
+    pthread_mutex_unlock(&context->lock);
+    return rc;
+}
+
 static int apply_control_request(
     void *opaque, const struct wvm_envelope *request,
     const struct wvm_member_key *actor, struct wvm_control_result *result,
@@ -486,6 +540,9 @@ static int apply_control_request(
         }
         pthread_mutex_unlock(&context->lock);
         return rc;
+    }
+    if (request->message_type == WVM_ENVELOPE_MSG_STOP_VM) {
+        return apply_stop_vm(opaque, request, actor, result, error, error_len);
     }
     return apply_create_vm(opaque, request, actor, result, error, error_len);
 }

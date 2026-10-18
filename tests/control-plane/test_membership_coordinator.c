@@ -8,6 +8,9 @@
 
 #include "wavevm_canonical.h"
 #include "wavevm_membership_coordinator.h"
+#include "wavevm_admission_orchestrator.h"
+#include "wavevm_coordinator.h"
+#include "wavevm_lifecycle.h"
 
 #define MIB (1024ULL * 1024ULL)
 
@@ -706,6 +709,50 @@ static int activate_gateway(struct wvm_membership_controller *controller,
     return 0;
 }
 
+static int stop_release_vm_a_deps(struct wvm_membership_controller *controller,
+                                  const struct wvm_member_key *node_member,
+                                  const struct wvm_member_key *gateway_member,
+                                  char *error, size_t error_len)
+{
+    struct wvm_node_runtime_manifest stop_manifests[1];
+    struct wvm_coordinator_prepared_vm stop_prepared;
+    struct wvm_coordinator_transaction stop_tx;
+    struct wvm_required_ack_entry stop_acks[1];
+    struct wvm_route_transaction_record stop_route;
+
+    memset(stop_manifests, 0, sizeof(stop_manifests));
+    stop_manifests[0].physical_node_id = node_member->role_id;
+    stop_manifests[0].expected_node_instance_id = node_member->instance_id;
+    memset(&stop_prepared, 0, sizeof(stop_prepared));
+    stop_prepared.node_runtime_manifests = stop_manifests;
+    stop_prepared.node_runtime_manifest_count = 1;
+    memset(&stop_tx, 0, sizeof(stop_tx));
+    stop_tx.vm_id = 256;
+    stop_tx.vm_incarnation = 1;
+    stop_tx.manifest_generation = 1;
+    memset(&stop_acks, 0, sizeof(stop_acks));
+    stop_acks[0].member_key = *gateway_member;
+    memset(&stop_route, 0, sizeof(stop_route));
+    stop_route.required_ack_set.entries.entries = stop_acks;
+    stop_route.required_ack_set.entries.count = 1;
+    stop_route.required_ack_set.entries.capacity = 1;
+    if (wvm_admission_release_membership_dependencies(
+            controller, &stop_tx, &stop_route, &stop_prepared, error,
+            error_len) != 0) {
+        return -1;
+    }
+    if (wvm_membership_controller_find(controller, node_member)
+                ->active_dependency_count != 1 ||
+        wvm_membership_controller_find(controller, gateway_member)
+                ->active_dependency_count != 1) {
+        snprintf(error, error_len,
+                 "VM A STOP release left unexpected dependency counts");
+        return -1;
+    }
+    return 0;
+}
+
+
 int main(void)
 {
     char journal_path[] = "/tmp/wavevm-membership-coordinator.XXXXXX";
@@ -985,17 +1032,10 @@ int main(void)
                          strstr(error, "dual-VM") != NULL ||
                          strstr(error, "not safe") != NULL)),
                    "fail-closed gateway drain with two Mode B deps (no black hole)") ||
-            expect(wvm_membership_controller_dependency_release(
-                       &controller, &mode_b_a, error, sizeof(error)) == 0 &&
-                       wvm_membership_controller_dependency_release(
-                           &controller, &gateway_a, error, sizeof(error)) ==
-                           0 &&
-                       wvm_membership_controller_find(&controller, &node_member)
-                               ->active_dependency_count == 1 &&
-                       wvm_membership_controller_find(&controller,
-                                                      &gateway_member)
-                               ->active_dependency_count == 1,
-                   "VM A teardown leaves VM B deps intact") ||
+            expect(stop_release_vm_a_deps(
+                       &controller, &node_member, &gateway_member, error,
+                       sizeof(error)) == 0,
+                   "STOP release API tears down VM A deps only") ||
             expect(wvm_membership_coordinator_drain_compute(
                        &controller, &compute_drain, error, sizeof(error)) != 0,
                    "still reject compute drain while VM B dep remains") ||

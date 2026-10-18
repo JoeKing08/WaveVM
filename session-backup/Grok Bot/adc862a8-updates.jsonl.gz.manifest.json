@@ -1,0 +1,11 @@
+{
+  "archive": "adc862a8-updates.jsonl.gz",
+  "compressed_size_bytes": 542983,
+  "compression": "gzip",
+  "format": "wavevm-session-archive-shards",
+  "part_count": 1,
+  "part_prefix": "adc862a8-updates.jsonl.gz.",
+  "part_size_bytes": 47185920,
+  "restore": "cat adc862a8-updates.jsonl.gz.[0-9][0-9][0-9] > adc862a8-updates.jsonl.gz",
+  "sha256": "9cf427a1f200b5323a246cc03fa3355c731052da0b9b8458025222b80b29a3a1"
+}

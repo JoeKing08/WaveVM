@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/un.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "wavevm_canonical.h"
@@ -1739,6 +1742,8 @@ int main(void)
     size_t replayed_runtime_manifest_byte_count;
     size_t expected_runtime_manifest_byte_count;
     size_t i;
+    uint32_t stopped_runtime_node_id = 0;
+    uint64_t stopped_runtime_instance_id = 0;
 
     fill_capability(&capabilities[0], WVM_CAPABILITY_ID_EXECUTION_KVM, 17, 101,
                     1);
@@ -2312,45 +2317,149 @@ int main(void)
                    &control_plane, &transaction,
                    prepared.node_runtime_manifests,
                    prepared.node_runtime_manifest_count, error,
-                   sizeof(error)) == 0 &&
-                   wvm_control_plane_transition(
-                       &control_plane, &transaction, WVM_LIFECYCLE_RUNNING,
-                       WVM_LIFECYCLE_STOPPING, error, sizeof(error)) == 0,
-               "start only after all runtime readiness evidence")) {
+                   sizeof(error)) == 0,
+               "start only after all runtime readiness evidence") ||
+        expect(wvm_control_plane_transition(
+                   &control_plane, &transaction, WVM_LIFECYCLE_RUNNING,
+                   WVM_LIFECYCLE_STOPPING, error, sizeof(error)) == 0,
+               "enter STOPPING before route-gated retirement checks")) {
         return 1;
-    }
-    for (i = 0; i < prepared.node_runtime_manifest_count; i++) {
-        if (expect(wvm_runtime_ready_remove(
-                       &prepared.node_runtime_manifests[i], error,
-                       sizeof(error)) == 0,
-                   "remove runtime readiness after stop path begins")) {
-            return 1;
-        }
     }
     if (expect(wvm_control_plane_transition(
                    &control_plane, &transaction, WVM_LIFECYCLE_STOPPING,
                    WVM_LIFECYCLE_RETIRING, error, sizeof(error)) != 0,
-               "reject retirement before exact route retirement") ||
-        expect(persist_route_transaction_state(
-                   &control_plane, &route_transaction,
-                   WVM_ROUTE_TRANSACTION_RETIRING, error,
-                   sizeof(error)) == 0 &&
-                   wvm_control_plane_transition(
-                       &control_plane, &transaction, WVM_LIFECYCLE_STOPPING,
-                       WVM_LIFECYCLE_RETIRING, error, sizeof(error)) == 0 &&
-                   wvm_control_plane_transition(
-                       &control_plane, &transaction, WVM_LIFECYCLE_RETIRING,
-                       WVM_LIFECYCLE_STOPPED, error, sizeof(error)) != 0,
-               "persist route retirement before stopping lifecycle") ||
-        expect(persist_route_transaction_state(
-                   &control_plane, &route_transaction,
-                   WVM_ROUTE_TRANSACTION_RETIRED, error,
-                   sizeof(error)) == 0 &&
-                   wvm_control_plane_transition(
-                       &control_plane, &transaction, WVM_LIFECYCLE_RETIRING,
-                       WVM_LIFECYCLE_STOPPED, error, sizeof(error)) == 0,
-               "complete lifecycle only after exact route retirement")) {
+               "reject retirement before exact route retirement")) {
         return 1;
+    }
+    {
+        struct wvm_runtime_name_set stop_names[4];
+        int stop_sockets[4][4];
+        int stop_shm[4];
+        size_t stop_name_count = prepared.node_runtime_manifest_count;
+        struct wvm_admission_stop_input stop_input;
+        const struct wvm_control_plane_entry *stopped_entry;
+        const struct wvm_vm_namespace_record *ns_record;
+        size_t ni;
+        size_t si;
+
+        if (stop_name_count > 4) {
+            fprintf(stderr, "coordinator test: too many runtime manifests\n");
+            return 1;
+        }
+        memset(stop_sockets, -1, sizeof(stop_sockets));
+        for (ni = 0; ni < 4; ni++) {
+            stop_shm[ni] = -1;
+        }
+        for (ni = 0; ni < stop_name_count; ni++) {
+            const char *socket_paths[4];
+            int ready_fd;
+
+            if (expect(wvm_runtime_name_set_derive(
+                           &prepared.node_runtime_manifests[ni].local_names,
+                           &stop_names[ni], error, sizeof(error)) == 0,
+                       "derive STOP runtime name set")) {
+                return 1;
+            }
+            socket_paths[0] = stop_names[ni].runtime_socket;
+            socket_paths[1] = stop_names[ni].executor_socket;
+            socket_paths[2] = stop_names[ni].worker_socket;
+            socket_paths[3] = stop_names[ni].monitor_socket;
+            for (si = 0; si < 4; si++) {
+                struct sockaddr_un address;
+                int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+                if (fd < 0) {
+                    fprintf(stderr, "coordinator test: socket create failed\n");
+                    return 1;
+                }
+                memset(&address, 0, sizeof(address));
+                address.sun_family = AF_UNIX;
+                if (strlen(socket_paths[si]) >= sizeof(address.sun_path) ||
+                    (strcpy(address.sun_path, socket_paths[si]),
+                     bind(fd, (const struct sockaddr *)&address,
+                          sizeof(address)) != 0)) {
+                    close(fd);
+                    fprintf(stderr, "coordinator test: bind %s failed\n",
+                            socket_paths[si]);
+                    return 1;
+                }
+                stop_sockets[ni][si] = fd;
+            }
+            (void)mkdir(stop_names[ni].log_directory, 0700);
+            (void)mkdir(stop_names[ni].temporary_directory, 0700);
+            ready_fd = open(stop_names[ni].ready_file,
+                            O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
+            if (ready_fd >= 0) {
+                close(ready_fd);
+            }
+            stop_shm[ni] = shm_open(stop_names[ni].shm_name,
+                                    O_RDWR | O_CREAT, 0600);
+            if (stop_shm[ni] < 0) {
+                fprintf(stderr, "coordinator test: shm_open failed\n");
+                return 1;
+            }
+        }
+        for (ni = 0; ni < stop_name_count; ni++) {
+            for (si = 0; si < 4; si++) {
+                if (stop_sockets[ni][si] >= 0) {
+                    close(stop_sockets[ni][si]);
+                    stop_sockets[ni][si] = -1;
+                }
+            }
+            if (stop_shm[ni] >= 0) {
+                close(stop_shm[ni]);
+                stop_shm[ni] = -1;
+            }
+        }
+
+        stopped_runtime_node_id =
+            prepared.node_runtime_manifests[0].physical_node_id;
+        stopped_runtime_instance_id =
+            prepared.node_runtime_manifests[0].expected_node_instance_id;
+        memset(&stop_input, 0, sizeof(stop_input));
+        stop_input.control_plane = &control_plane;
+        stop_input.transaction = &transaction;
+        stop_input.prepared_vm = &prepared;
+        stop_input.route_transaction = &route_transaction;
+        stop_input.membership_controller = NULL;
+        stop_input.namespace_allocator = &namespace_allocator;
+        if (expect(wvm_admission_orchestrator_stop(&stop_input, error,
+                                                   sizeof(error)) == 0,
+                   "orchestrator_stop releases resources to STOPPED")) {
+            fprintf(stderr, "coordinator test: orchestrator_stop: %s\n",
+                    error);
+            return 1;
+        }
+        stopped_entry =
+            wvm_control_plane_find_request(&control_plane, transaction.request_id);
+        ns_record =
+            wvm_vm_namespace_find(&namespace_allocator, transaction.vm_id);
+        if (expect(stopped_entry != NULL &&
+                       stopped_entry->transaction.state == WVM_LIFECYCLE_STOPPED,
+                   "durable lifecycle is STOPPED after orchestrator_stop") ||
+            expect(registry_17.committed_vcpu_slots == 0 &&
+                       registry_99.committed_vcpu_slots == 0,
+                   "STOP releases committed local reservation capacity") ||
+            expect(ns_record != NULL &&
+                       ns_record->state == WVM_VM_NAMESPACE_QUARANTINED,
+                   "STOP quarantines VM namespace") ||
+            expect(wvm_admission_orchestrator_stop(&stop_input, error,
+                                                   sizeof(error)) == 0,
+                   "orchestrator_stop replay on STOPPED is idempotent")) {
+            return 1;
+        }
+        for (ni = 0; ni < stop_name_count; ni++) {
+            if (expect(access(stop_names[ni].runtime_socket, F_OK) != 0 &&
+                           access(stop_names[ni].executor_socket, F_OK) != 0 &&
+                           access(stop_names[ni].worker_socket, F_OK) != 0 &&
+                           access(stop_names[ni].monitor_socket, F_OK) != 0 &&
+                           access(stop_names[ni].ready_file, F_OK) != 0,
+                       "STOP retires per-VM sockets and ready fence") ||
+                expect(shm_open(stop_names[ni].shm_name, O_RDONLY, 0) < 0,
+                       "STOP retires per-VM SHM")) {
+                return 1;
+            }
+        }
     }
 
     {
@@ -2755,9 +2864,7 @@ int main(void)
                    &recovered_namespace_allocator, error, sizeof(error)) == 0 &&
                    wvm_control_plane_read_runtime_manifest(
                        &recovered_control_plane, &transaction,
-                       prepared.node_runtime_manifests[0].physical_node_id,
-                       prepared.node_runtime_manifests[0]
-                           .expected_node_instance_id,
+                       stopped_runtime_node_id, stopped_runtime_instance_id,
                        replayed_runtime_manifest_bytes,
                        sizeof(replayed_runtime_manifest_bytes),
                        &replayed_runtime_manifest_byte_count, error,

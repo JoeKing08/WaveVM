@@ -176,6 +176,7 @@ static int admission_request(uint16_t message_type)
 static int typed_request(uint16_t message_type)
 {
     return message_type == WVM_ENVELOPE_MSG_CREATE_VM ||
+           message_type == WVM_ENVELOPE_MSG_STOP_VM ||
            message_type == WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES ||
            message_type == WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE ||
            admission_request(message_type);
@@ -232,6 +233,17 @@ static int request_metadata_valid(const struct wvm_envelope *request)
                    route_metadata_is_empty(request);
         }
         return request->vm_id != 0 && forwarding_metadata_is_empty(request);
+    }
+    /*
+     * CREATE_VM allocates identity (vm_id==0 on the request). STOP_VM names an
+     * existing incarnation and must carry vm_id/incarnation/manifest_generation
+     * like admission stages, without forwarding/route metadata on the local
+     * control stream.
+     */
+    if (request->message_type == WVM_ENVELOPE_MSG_STOP_VM) {
+        return request->vm_id != 0 && request->vm_incarnation != 0 &&
+               request->manifest_generation != 0 &&
+               forwarding_metadata_is_empty(request);
     }
     return request->vm_id == 0 && route_metadata_is_empty(request);
 }

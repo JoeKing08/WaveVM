@@ -303,6 +303,47 @@ static int start_runtime(
     return 0;
 }
 
+static int stop_one_runtime(
+    void *context, const struct wvm_admission_receiver_slot *slot,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len)
+{
+    struct wvm_admission_runtime_agent *agent = context;
+    struct agent_owned_storage *owned;
+    size_t index;
+    pid_t pid;
+    int status;
+
+    (void)runtime_manifest;
+    if (!agent || !slot) {
+        set_error(error, error_len, "admitted runtime stop input is invalid");
+        return -EINVAL;
+    }
+    owned = agent->owned_storage;
+    for (index = 0; index < agent->slot_capacity; index++) {
+        if (&agent->slots[index] == slot) {
+            break;
+        }
+    }
+    if (index == agent->slot_capacity || !owned || !owned->runtime_pids) {
+        set_error(error, error_len, "admitted runtime slot is not owned by agent");
+        return -EINVAL;
+    }
+    pid = owned->runtime_pids[index];
+    if (pid <= 0) {
+        return 0;
+    }
+    if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
+        set_error(error, error_len, "cannot signal admitted runtime child");
+        return -errno;
+    }
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    owned->runtime_pids[index] = 0;
+    clear_stale_admitted_endpoints(runtime_manifest);
+    return 0;
+}
+
 static void reap_runtime_children(struct wvm_admission_runtime_agent *agent)
 {
     struct agent_owned_storage *owned = agent ? agent->owned_storage : NULL;
@@ -628,6 +669,7 @@ int wvm_admission_runtime_agent_init(
     receiver_config.resolve_slot = resolve_slot;
     receiver_config.delivery_inputs = delivery_inputs;
     receiver_config.start_runtime = start_runtime;
+    receiver_config.stop_runtime = stop_one_runtime;
     memset(&service_config, 0, sizeof(service_config));
     service_config.socket_path = config->socket_path;
     service_config.network_endpoint = config->network_endpoint;

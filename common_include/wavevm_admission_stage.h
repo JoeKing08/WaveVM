@@ -19,6 +19,8 @@
 
 enum wvm_admission_abort_reason {
     WVM_ADMISSION_ABORT_REASON_PRE_ACTIVATION_FAILURE = 1,
+    /* Post-activation STOP / compensating teardown (manifest-lifecycle §6.1). */
+    WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP = 2,
 };
 
 struct wvm_admission_reservation_stage {

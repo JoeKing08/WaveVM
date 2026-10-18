@@ -134,6 +134,12 @@ static int reservation_stage_validate(
             !stage->activation && stage->abort_reason != 0) {
             return 0;
         }
+        if ((stage->reservation->state == WVM_RESERVATION_COMMITTED ||
+             stage->reservation->state == WVM_RESERVATION_RELEASED) &&
+            !stage->activation &&
+            stage->abort_reason == WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP) {
+            return 0;
+        }
         break;
     default:
         break;
@@ -196,6 +202,11 @@ static int participant_stage_validate(
     case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
         if (!stage->runtime_manifest->has_activation_fence &&
             !stage->activation && stage->abort_reason != 0) {
+            return 0;
+        }
+        if (stage->runtime_manifest->has_activation_fence &&
+            !stage->activation &&
+            stage->abort_reason == WVM_ADMISSION_ABORT_REASON_LIFECYCLE_STOP) {
             return 0;
         }
         break;

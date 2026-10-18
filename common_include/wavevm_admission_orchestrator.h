@@ -205,4 +205,56 @@ int wvm_admission_orchestrator_recover(
     const struct wvm_admission_recovery_input *input, char *error,
     size_t error_len);
 
+/*
+ * Mirror of wvm_admission_register_membership_route_and_dependencies for STOP.
+ * Releases compute (kind 1) and gateway (kind 2) dependencies for this VM
+ * incarnation only. Idempotent for already-absent dependencies. Does not
+ * touch another VM's dependency rows.
+ */
+int wvm_admission_release_membership_dependencies(
+    struct wvm_membership_controller *controller,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_route_transaction_record *route_transaction,
+    const struct wvm_coordinator_prepared_vm *prepared_vm, char *error,
+    size_t error_len);
+
+/*
+ * Minimum STOP orchestration (runtime-manifest-lifecycle §6.1 / goal §2):
+ * RUNNING|STOPPING|RETIRING -> STOPPED with fail-closed cleanup:
+ *   1) durable STOPPING
+ *   2) route RETIRING (control-plane + optional membership begin_retire)
+ *   3) durable RETIRING
+ *   4) retire per-VM runtime names (socket/SHM/ready; ENOENT ok)
+ *   5) release membership dependencies for this VM only
+ *   6) wvm_coordinator_teardown_local (COMMITTED reservation release)
+ *   7) route RETIRED then durable STOPPED
+ *   8) optional namespace begin_retire + quarantine
+ * Does not kill QEMU/executor processes (guest E2E is goal §7) and does not
+ * invent HA/RECOVERY_REBIND/MIGRATE. Replay of STOPPED is success.
+ */
+struct wvm_admission_stop_input {
+    struct wvm_control_plane *control_plane;
+    const struct wvm_coordinator_transaction *transaction;
+    struct wvm_coordinator_prepared_vm *prepared_vm;
+    struct wvm_route_transaction_record *route_transaction;
+    /*
+     * Optional: when set, membership route must be ACTIVATED for this
+     * operation_id so begin_retire/retire can run, and compute/gateway deps
+     * for this VM incarnation are released.
+     */
+    struct wvm_membership_controller *membership_controller;
+    /* Optional: after STOPPED, begin_retire + quarantine the VM namespace. */
+    struct wvm_vm_namespace_allocator *namespace_allocator;
+    /*
+     * Optional production transport callbacks. When set, STOP issues
+     * participant_abort (admitted-child stop) then reservation_abort
+     * (COMMITTED lease release) before local name/reservation teardown.
+     */
+    const struct wvm_admission_orchestrator_callbacks *callbacks;
+    void *callback_context;
+};
+
+int wvm_admission_orchestrator_stop(
+    const struct wvm_admission_stop_input *input, char *error, size_t error_len);
+
 #endif /* WAVEVM_ADMISSION_ORCHESTRATOR_H */
