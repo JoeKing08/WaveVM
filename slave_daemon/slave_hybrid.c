@@ -3264,16 +3264,34 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
 static void handle_block_io_send_ack(int sockfd, struct sockaddr_in *client,
                                        struct wvm_header *hdr, int error);
 
-/* R02: small semantic operation cache for MSG_BLOCK_TYPED dedup (per executor). */
+/* R02: small semantic operation cache for MSG_BLOCK_TYPED dedup (per executor).
+ *
+ * A retry of a successful READ must observe the original bytes, not just the
+ * original status: the initiator correlates a replay by operation id and
+ * expects the same completion payload.  The wire reply is therefore retained
+ * verbatim (already encoded) and re-sent unchanged.
+ *
+ * Retention is bounded.  When the budget is exhausted the oldest replay
+ * buffers are released, but the operation/status record stays so duplicate
+ * requests are still deduplicated; a duplicate whose replay buffer was
+ * released falls back to the status-only completion instead of re-reading the
+ * backend and pretending the fresh bytes are the original result.
+ */
 #define WVM_BLOCK_OP_CACHE_SLOTS 128
+#define WVM_BLOCK_OP_CACHE_REPLAY_BUDGET (8u * 1024u * 1024u)
 struct wvm_block_op_cache_entry {
     uint64_t operation_id;
     uint32_t operation;
     uint32_t status;
     uint8_t digest[32];
+    uint8_t *reply;          /* verbatim wire reply; owned by the cache */
+    uint32_t reply_len;
+    uint64_t store_order;
     int occupied;
 };
 static struct wvm_block_op_cache_entry g_block_op_cache[WVM_BLOCK_OP_CACHE_SLOTS];
+static size_t g_block_op_cache_reply_bytes;
+static uint64_t g_block_op_cache_store_order;
 static pthread_mutex_t g_block_op_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static struct wvm_block_op_cache_entry *block_op_cache_lookup(uint64_t op_id)
@@ -3285,11 +3303,57 @@ static struct wvm_block_op_cache_entry *block_op_cache_lookup(uint64_t op_id)
     return NULL;
 }
 
+/* Caller holds g_block_op_cache_lock. */
+static void block_op_cache_drop_reply_locked(struct wvm_block_op_cache_entry *e)
+{
+    if (!e->reply)
+        return;
+    free(e->reply);
+    e->reply = NULL;
+    if (g_block_op_cache_reply_bytes >= e->reply_len)
+        g_block_op_cache_reply_bytes -= e->reply_len;
+    else
+        g_block_op_cache_reply_bytes = 0;
+    e->reply_len = 0;
+}
+
+/* Caller holds g_block_op_cache_lock. */
+static void block_op_cache_release_locked(struct wvm_block_op_cache_entry *e)
+{
+    block_op_cache_drop_reply_locked(e);
+    memset(e, 0, sizeof(*e));
+}
+
+/* Caller holds g_block_op_cache_lock. */
+static void block_op_cache_reserve_locked(size_t bytes)
+{
+    if (bytes > WVM_BLOCK_OP_CACHE_REPLAY_BUDGET)
+        return;
+    while (g_block_op_cache_reply_bytes + bytes >
+           WVM_BLOCK_OP_CACHE_REPLAY_BUDGET) {
+        struct wvm_block_op_cache_entry *oldest = NULL;
+        int i;
+
+        for (i = 0; i < WVM_BLOCK_OP_CACHE_SLOTS; i++) {
+            struct wvm_block_op_cache_entry *e = &g_block_op_cache[i];
+            if (e->occupied && e->reply &&
+                (!oldest || e->store_order < oldest->store_order))
+                oldest = e;
+        }
+        if (!oldest)
+            return;
+        block_op_cache_drop_reply_locked(oldest);
+    }
+}
+
 static void block_op_cache_store(uint64_t op_id, uint32_t operation,
-                                 uint32_t status, const uint8_t digest[32])
+                                 uint32_t status, const uint8_t digest[32],
+                                 const uint8_t *reply, uint32_t reply_len)
 {
     struct wvm_block_op_cache_entry *e =
         &g_block_op_cache[op_id % WVM_BLOCK_OP_CACHE_SLOTS];
+
+    block_op_cache_release_locked(e);
     e->operation_id = op_id;
     e->operation = operation;
     e->status = status;
@@ -3297,7 +3361,47 @@ static void block_op_cache_store(uint64_t op_id, uint32_t operation,
         memcpy(e->digest, digest, 32);
     else
         memset(e->digest, 0, 32);
+
+    if (reply && reply_len && reply_len <= WVM_MAX_PACKET_SIZE) {
+        block_op_cache_reserve_locked(reply_len);
+        if (g_block_op_cache_reply_bytes + reply_len <=
+            WVM_BLOCK_OP_CACHE_REPLAY_BUDGET) {
+            uint8_t *copy = malloc(reply_len);
+            if (copy) {
+                memcpy(copy, reply, reply_len);
+                e->reply = copy;
+                e->reply_len = reply_len;
+                g_block_op_cache_reply_bytes += reply_len;
+            }
+        }
+    }
+    e->store_order = ++g_block_op_cache_store_order;
     e->occupied = 1;
+}
+
+/*
+ * R02: the ACK must carry the request's wire identity unchanged.  The receive
+ * path converted the request header to host order, so every multi-byte field
+ * needs exactly one conversion here.  Copying the raw struct and then fixing
+ * only magic/type/length byte-swapped req_id, slave_id, target_id and epoch,
+ * which broke request/result correlation on the initiator.
+ */
+static void block_typed_init_ack_header(struct wvm_header *out,
+                                        const struct wvm_header *request,
+                                        size_t payload_len)
+{
+    memset(out, 0, sizeof(*out));
+    out->magic = htonl(WVM_MAGIC);
+    out->msg_type = htons(MSG_BLOCK_ACK);
+    out->payload_len = htons((uint16_t)payload_len);
+    out->slave_id = htonl(request->slave_id);
+    out->target_id = htonl(request->target_id);
+    out->req_id = WVM_HTONLL(request->req_id);
+    out->qos_level = request->qos_level;
+    out->flags = (uint8_t)(request->flags & (uint8_t)~WVM_FLAG_ERROR);
+    out->mode_tcg = request->mode_tcg;
+    out->node_state = request->node_state;
+    out->epoch = htonl(request->epoch);
 }
 
 static void handle_block_typed_phys(int sockfd, struct sockaddr_in *client,
@@ -3309,6 +3413,9 @@ static void handle_block_typed_phys(int sockfd, struct sockaddr_in *client,
     int rc = 0;
     uint32_t status = 0;
     struct wvm_block_op_cache_entry *cached;
+    const uint8_t *reply_bytes = NULL;
+    uint8_t *reply_allocation = NULL;
+    uint32_t reply_bytes_len = 0;
 
     if (payload_len < sizeof(*req)) {
         handle_block_io_send_ack(sockfd, client, hdr, 1);
@@ -3322,6 +3429,32 @@ static void handle_block_typed_phys(int sockfd, struct sockaddr_in *client,
         memcmp(cached->digest, req->semantic_payload_digest, 32) == 0 &&
         cached->operation == req->operation) {
         status = cached->status;
+        if (cached->reply && cached->reply_len) {
+            /*
+             * Replay the retained semantic payload (READ data), not the old
+             * datagram.  Correlation fields belong to this request: a retry
+             * carries a fresh transport id, while the operation id and the
+             * result bytes stay the same.
+             */
+            uint32_t replay_len = cached->reply_len;
+            size_t wire_len = sizeof(struct wvm_header) + replay_len;
+            uint8_t *wire = malloc(wire_len);
+            if (wire) {
+                struct wvm_header *rh = (struct wvm_header *)wire;
+                block_typed_init_ack_header(rh, hdr, replay_len);
+                memcpy(wire + sizeof(*rh), cached->reply, replay_len);
+                rh->crc32 = 0;
+                rh->crc32 = htonl(calculate_crc32(wire, wire_len));
+            }
+            pthread_mutex_unlock(&g_block_op_cache_lock);
+            if (wire) {
+                robust_sendto(sockfd, wire, wire_len, client);
+                free(wire);
+            } else {
+                handle_block_io_send_ack(sockfd, client, hdr, status != 0);
+            }
+            return;
+        }
         pthread_mutex_unlock(&g_block_op_cache_lock);
         handle_block_io_send_ack(sockfd, client, hdr, status != 0);
         return;
@@ -3343,41 +3476,58 @@ static void handle_block_typed_phys(int sockfd, struct sockaddr_in *client,
         handle_block_io_send_ack(sockfd, client, hdr, status);
     } else if (req->operation == WVM_BLOCK_OP_READ) {
         size_t need = (size_t)req->sector_count * 512;
-        size_t resp_len = sizeof(struct wvm_header) +
-                          sizeof(struct wvm_block_payload) + need;
-        uint8_t *tx = malloc(resp_len);
+        size_t resp_len;
+        uint8_t *tx;
         size_t out_bytes = 0;
-        if (!tx || req->sector_count == 0) {
-            free(tx);
+        struct wvm_header *rh;
+        struct wvm_block_payload *rp;
+
+        /*
+         * The completion length is a u16 and the whole reply must stay inside
+         * one datagram.  Reject an oversized read before sizing the buffer
+         * instead of truncating payload_len or allocating unbounded memory.
+         */
+        if (req->sector_count == 0 ||
+            need > WVM_MAX_PACKET_SIZE - sizeof(struct wvm_header) -
+                       sizeof(struct wvm_block_payload)) {
             handle_block_io_send_ack(sockfd, client, hdr, 1);
             return;
         }
-        {
-            struct wvm_header *rh = (struct wvm_header *)tx;
-            struct wvm_block_payload *rp =
-                (struct wvm_block_payload *)(tx + sizeof(*hdr));
-            *rh = *hdr;
-            rh->msg_type = htons(MSG_BLOCK_ACK);
-            rh->payload_len =
-                htons(sizeof(struct wvm_block_payload) + need);
-            rh->magic = htonl(WVM_MAGIC);
-            rh->flags &= (uint8_t)~WVM_FLAG_ERROR;
-            rp->lba = WVM_HTONLL(req->lba_512);
-            rp->count = htonl(req->sector_count);
-            rp->padding = 0;
-            rc = wvm_block_chunk_read(req->lba_512, req->sector_count, rp->data,
-                                      need, &out_bytes, err, sizeof(err));
-            if (rc != 0) {
-                free(tx);
-                handle_block_io_send_ack(sockfd, client, hdr, 1);
-                status = 1;
-            } else {
-                rh->crc32 = 0;
-                rh->crc32 = htonl(calculate_crc32(tx, resp_len));
-                robust_sendto(sockfd, tx, resp_len, client);
-                free(tx);
-                status = 0;
-            }
+
+        resp_len = sizeof(struct wvm_header) +
+                   sizeof(struct wvm_block_payload) + need;
+        tx = malloc(resp_len);
+        if (!tx) {
+            handle_block_io_send_ack(sockfd, client, hdr, 1);
+            return;
+        }
+        rh = (struct wvm_header *)tx;
+        rp = (struct wvm_block_payload *)(tx + sizeof(*rh));
+        block_typed_init_ack_header(rh, hdr,
+                                    sizeof(struct wvm_block_payload) + need);
+        rp->lba = WVM_HTONLL(req->lba_512);
+        rp->count = htonl(req->sector_count);
+        rp->padding = 0;
+        rc = wvm_block_chunk_read(req->lba_512, req->sector_count, rp->data,
+                                  need, &out_bytes, err, sizeof(err));
+        if (rc != 0) {
+            free(tx);
+            handle_block_io_send_ack(sockfd, client, hdr, 1);
+            status = 1;
+        } else {
+            rh->crc32 = 0;
+            rh->crc32 = htonl(calculate_crc32(tx, resp_len));
+            robust_sendto(sockfd, tx, resp_len, client);
+            /*
+             * Retain this completion payload for duplicate replay; the cache
+             * makes its own copy and this reference is released after the
+             * store.  The header is rebuilt per request so a retry keeps its
+             * own transport correlation.
+             */
+            reply_allocation = tx;
+            reply_bytes = tx + sizeof(struct wvm_header);
+            reply_bytes_len = (uint32_t)(resp_len - sizeof(struct wvm_header));
+            status = 0;
         }
     } else if (req->operation == WVM_BLOCK_OP_FLUSH) {
         if (req->sector_count == 0)
@@ -3394,8 +3544,10 @@ static void handle_block_typed_phys(int sockfd, struct sockaddr_in *client,
 
     pthread_mutex_lock(&g_block_op_cache_lock);
     block_op_cache_store(req->operation_id, req->operation, status,
-                         req->semantic_payload_digest);
+                         req->semantic_payload_digest, reply_bytes,
+                         reply_bytes_len);
     pthread_mutex_unlock(&g_block_op_cache_lock);
+    free(reply_allocation);
 }
 
 static void handle_block_io_send_ack(int sockfd, struct sockaddr_in *client,
@@ -3681,8 +3833,14 @@ void* kvm_worker_thread(void *arg) {
                 handle_kvm_run_stateless(s, &c[i], h, run_req, (int)core);
             }
             else if (type == MSG_BLOCK_TYPED) {
+                /*
+                 * R02: ntoh_header() above already converted payload_len to
+                 * host order.  Converting again byte-swapped the length, so
+                 * the handler either rejected a valid request or believed in
+                 * a length larger than the received datagram.
+                 */
                 handle_block_typed_phys(s, &c[i], h, pkt + sizeof(*h),
-                                       ntohs(h->payload_len));
+                                       h->payload_len);
             }
             else if (type == MSG_BLOCK_WRITE || type == MSG_BLOCK_READ || type == MSG_BLOCK_FLUSH) {
                 // 存储入口

@@ -1330,7 +1330,15 @@ static void* rx_thread_loop(void *arg) {
                         (msg_type == MSG_VCPU_RUN ||
                          msg_type == MSG_BLOCK_WRITE ||
                          msg_type == MSG_BLOCK_READ ||
-                         msg_type == MSG_BLOCK_FLUSH);
+                         msg_type == MSG_BLOCK_FLUSH ||
+                         /*
+                          * R02: the typed block envelope must reach the local
+                          * executor exactly like the legacy block messages.
+                          * Without this the remote request never enters the
+                          * slave dispatch and the initiator only sees a
+                          * timeout.
+                          */
+                         msg_type == MSG_BLOCK_TYPED);
                     int from_local_slave = (ntohs(src_addrs[i].sin_port) == (uint16_t)g_slave_forward_port);
 
                     if (msg_type == MSG_VCPU_EXIT) {
