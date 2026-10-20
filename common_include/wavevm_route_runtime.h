@@ -71,6 +71,22 @@ int wvm_route_runtime_retire(struct wvm_route_runtime *runtime,
                              char *error, size_t error_len);
 
 /*
+ * A05: real in-flight operation refs for ROUTE_RETIRE proof. Pin while a
+ * semantic operation uses the scope; put when it completes. Retire fails
+ * closed while refs != 0. Query feeds owner ACK fields (no constant 0/1).
+ */
+int wvm_route_runtime_operation_ref_get(
+    struct wvm_route_runtime *runtime, const struct wvm_vm_route_scope_key *scope,
+    char *error, size_t error_len);
+int wvm_route_runtime_operation_ref_put(
+    struct wvm_route_runtime *runtime, const struct wvm_vm_route_scope_key *scope,
+    char *error, size_t error_len);
+int wvm_route_runtime_query_retire_proof(
+    const struct wvm_route_runtime *runtime,
+    const struct wvm_route_snapshot_key *key, uint64_t *active_operation_refs,
+    int *retention_horizon_complete, char *error, size_t error_len);
+
+/*
  * Look up one prevalidated V1 routed frame. The envelope's complete snapshot
  * key must equal the active key for its VM route scope. A predecessor is never
  * selected for new data traffic; callers receive a route-stale failure instead.

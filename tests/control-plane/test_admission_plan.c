@@ -283,7 +283,7 @@ int main(void)
                    strcmp(placement_plan.reservation_requirements.entries[0]
                               .exclusive_leases.entries[2].lease_name,
                           "kernel-context") == 0,
-               "kernel profile reserves fixed single-VM context lease (roadmap §12 gate)")) {
+               "kernel profile reserves fixed kernel-context lease (gate closed)")) {
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
     }
@@ -397,9 +397,193 @@ int main(void)
         return 1;
     }
 
+    /*
+     * RM-P7-origin-not-host: request origin (node 99) does not implicitly
+     * become QEMU host_node. Only node 17 can reserve host overhead.
+     */
+    {
+        struct wvm_admission_snapshot origin_snapshot;
+        struct wvm_admission_request origin_request;
+        struct wvm_admission_plan origin_plan;
+        uint8_t origin_tx[WVM_ADMISSION_ID_BYTES];
+        char origin_error[128];
+
+        if (wvm_admission_snapshot_init(&origin_snapshot, 2) != 0) {
+            puts("FAIL: origin snapshot init");
+            cleanup_plan(&plan);
+            cleanup_plan(&proposed_plan);
+            wvm_admission_snapshot_cleanup(&snapshot);
+            return 1;
+        }
+        origin_snapshot.inventory_revision = 29;
+        origin_snapshot.membership_revision = 7;
+        origin_snapshot.topology_revision = 11;
+        origin_snapshot.capability_profile_generation = 13;
+        origin_snapshot.node_count = 2;
+        /* Origin-like node first: eligible for guest work but cannot host. */
+        origin_snapshot.nodes[0] = make_node(99, 202, 23, 2, 8 * 1024 * 1024);
+        origin_snapshot.nodes[1] = make_node(17, 101, 19, 8, 32 * 1024 * 1024);
+        memset(&origin_request, 0, sizeof(origin_request));
+        origin_request.vm_id = 42;
+        origin_request.vm_incarnation = 1;
+        origin_request.manifest_generation = 1;
+        origin_request.backend = WVM_ADMISSION_BACKEND_TCG;
+        origin_request.placement_policy = WVM_ADMISSION_PLACEMENT_COMPACT;
+        origin_request.requested_vcpu_slots = 1;
+        origin_request.requested_memory_bytes = 4 * 1024 * 1024;
+        origin_request.memory_chunk_bytes = 4 * 1024 * 1024;
+        origin_request.host_overhead_vcpu_slots = 3; /* exceeds node 99 (2) */
+        origin_request.host_overhead_memory_bytes = 1 * 1024 * 1024;
+        memset(origin_tx, 0, sizeof(origin_tx));
+        origin_tx[WVM_ADMISSION_ID_BYTES - 1] = 9;
+        memset(&origin_plan, 0, sizeof(origin_plan));
+        if (expect(wvm_admission_plan_propose(&origin_snapshot, &origin_request,
+                                              origin_tx, &origin_plan,
+                                              origin_error,
+                                              sizeof(origin_error)) == 0,
+                   "propose despite origin node lacking host capacity") ||
+            expect(origin_plan.host_physical_node_id == 17,
+                   "host_node is capacity-selected 17, not origin 99") ||
+            expect(origin_plan.host_physical_node_id != 99,
+                   "request origin 99 is not implicit host_node")) {
+            fprintf(stderr, "origin-not-host: %s\n", origin_error);
+            cleanup_plan(&origin_plan);
+            wvm_admission_snapshot_cleanup(&origin_snapshot);
+            cleanup_plan(&plan);
+            cleanup_plan(&proposed_plan);
+            wvm_admission_snapshot_cleanup(&snapshot);
+            return 1;
+        }
+        cleanup_plan(&origin_plan);
+        wvm_admission_snapshot_cleanup(&origin_snapshot);
+    }
+
+    /*
+     * Codex A06: capacity must be sum(ceil(per_node/chunk)), not ceil(total/chunk).
+     * Nodes 5+5 MiB with 4 MiB chunks → 2+2=4 slots; ceil(10/4)=3.
+     * capacity=3 must fail closed; capacity=4 must emit exactly 4 memory slots.
+     */
+    {
+        struct wvm_admission_plan a06_plan;
+        struct wvm_admission_reservation a06_reservations[2];
+        struct wvm_admission_request a06_request;
+        struct wvm_admission_placement_options a06_options;
+        struct wvm_placement_plan a06_placement;
+        struct wvm_vcpu_assignment a06_vcpus[8];
+        struct wvm_memory_chunk_assignment a06_memory_short[3];
+        struct wvm_memory_chunk_assignment a06_memory_ok[4];
+        struct wvm_reservation_requirement a06_reqs[4];
+        struct wvm_admission_node_listener_plan a06_listeners[2];
+        struct wvm_exclusive_lease a06_leases[2][3];
+        uint8_t a06_fence[WVM_SHA256_DIGEST_BYTES];
+        char a06_error[256];
+
+        memset(&a06_plan, 0, sizeof(a06_plan));
+        memset(a06_reservations, 0, sizeof(a06_reservations));
+        memset(&a06_request, 0, sizeof(a06_request));
+        a06_request.vm_id = 65;
+        a06_request.vm_incarnation = 1;
+        a06_request.manifest_generation = 1;
+        a06_request.backend = WVM_ADMISSION_BACKEND_TCG;
+        a06_request.placement_policy = WVM_ADMISSION_PLACEMENT_SPREAD;
+        a06_request.requested_vcpu_slots = 2;
+        a06_request.requested_memory_bytes = 10ULL * 1024ULL * 1024ULL;
+        a06_request.memory_chunk_bytes = 4ULL * 1024ULL * 1024ULL;
+        a06_request.host_overhead_vcpu_slots = 1;
+        a06_request.host_overhead_memory_bytes = WVM_ADMISSION_PAGE_BYTES;
+        a06_plan.host_physical_node_id = 17;
+        a06_plan.membership_revision = snapshot.membership_revision;
+        a06_plan.topology_revision = snapshot.topology_revision;
+        a06_plan.capability_profile_generation =
+            snapshot.capability_profile_generation;
+        a06_plan.reservation_count = 2;
+        a06_plan.reservation_capacity = 2;
+        a06_plan.reservations = a06_reservations;
+        a06_reservations[0].physical_node_id = 17;
+        a06_reservations[0].expected_node_instance_id = 101;
+        a06_reservations[0].expected_inventory_revision = 19;
+        a06_reservations[0].guest_vcpu_slots = 1;
+        a06_reservations[0].guest_memory_bytes = 5ULL * 1024ULL * 1024ULL;
+        a06_reservations[0].host_overhead_vcpu_slots = 1;
+        a06_reservations[0].host_overhead_memory_bytes = WVM_ADMISSION_PAGE_BYTES;
+        a06_reservations[1].physical_node_id = 99;
+        a06_reservations[1].expected_node_instance_id = 202;
+        a06_reservations[1].expected_inventory_revision = 23;
+        a06_reservations[1].guest_vcpu_slots = 1;
+        a06_reservations[1].guest_memory_bytes = 5ULL * 1024ULL * 1024ULL;
+        memset(a06_plan.admission_tx_id, 0x0a, sizeof(a06_plan.admission_tx_id));
+
+        memset(&a06_options, 0, sizeof(a06_options));
+        a06_options.memory_consistency_policy = 1;
+        a06_options.guest_topology_policy = WVM_MANIFEST_GUEST_TOPOLOGY_FLAT;
+        a06_options.guest_numa_nodes = 1;
+        a06_options.executor_class = 1;
+        a06_options.route_scope_key.vm_id = a06_request.vm_id;
+        a06_options.route_scope_key.vm_incarnation = a06_request.vm_incarnation;
+        a06_options.route_scope_key.route_scope_id = 1;
+        memset(a06_listeners, 0, sizeof(a06_listeners));
+        memset(a06_leases, 0, sizeof(a06_leases));
+        a06_listeners[0].physical_node_id = 17;
+        a06_listeners[0].expected_node_instance_id = 101;
+        a06_listeners[0].node_runtime_data_port = 19100;
+        a06_listeners[0].local_executor_service_port = 19105;
+        a06_listeners[0].lease_generation = 101;
+        a06_listeners[0].lease_entries = a06_leases[0];
+        a06_listeners[0].lease_capacity = 3;
+        a06_listeners[1].physical_node_id = 99;
+        a06_listeners[1].expected_node_instance_id = 202;
+        a06_listeners[1].node_runtime_data_port = 19200;
+        a06_listeners[1].local_executor_service_port = 19205;
+        a06_listeners[1].lease_generation = 202;
+        a06_listeners[1].lease_entries = a06_leases[1];
+        a06_listeners[1].lease_capacity = 3;
+        a06_options.listener_plans = a06_listeners;
+        a06_options.listener_plan_count = 2;
+        memset(a06_fence, 0x5a, sizeof(a06_fence));
+        memset(&a06_placement, 0, sizeof(a06_placement));
+        a06_placement.vcpu_assignments.entries = a06_vcpus;
+        a06_placement.vcpu_assignments.capacity =
+            sizeof(a06_vcpus) / sizeof(a06_vcpus[0]);
+        a06_placement.memory_assignments.entries = a06_memory_short;
+        a06_placement.memory_assignments.capacity = 3; /* ceil(total/chunk)=3 */
+        a06_placement.reservation_requirements.entries = a06_reqs;
+        a06_placement.reservation_requirements.capacity =
+            sizeof(a06_reqs) / sizeof(a06_reqs[0]);
+        a06_error[0] = '\0';
+        if (expect(wvm_admission_placement_plan_build(
+                       &snapshot, &a06_request, &a06_plan, a06_fence,
+                       &a06_options, &a06_placement, a06_error,
+                       sizeof(a06_error)) != 0,
+                   "A06 fail-closed when capacity < sum(ceil(per_node/chunk))")) {
+            fprintf(stderr, "A06 short-capacity: %s\n", a06_error);
+            cleanup_plan(&plan);
+            cleanup_plan(&proposed_plan);
+            wvm_admission_snapshot_cleanup(&snapshot);
+            return 1;
+        }
+        a06_placement.memory_assignments.entries = a06_memory_ok;
+        a06_placement.memory_assignments.capacity = 4;
+        a06_error[0] = '\0';
+        if (expect(wvm_admission_placement_plan_build(
+                       &snapshot, &a06_request, &a06_plan, a06_fence,
+                       &a06_options, &a06_placement, a06_error,
+                       sizeof(a06_error)) == 0 &&
+                       a06_placement.memory_assignments.count == 4,
+                   "A06 succeeds with capacity==sum(ceil(per_node/chunk))")) {
+            fprintf(stderr, "A06 adequate-capacity: %s count=%zu\n", a06_error,
+                    a06_placement.memory_assignments.count);
+            cleanup_plan(&plan);
+            cleanup_plan(&proposed_plan);
+            wvm_admission_snapshot_cleanup(&snapshot);
+            return 1;
+        }
+    }
+
     cleanup_plan(&plan);
     cleanup_plan(&proposed_plan);
     wvm_admission_snapshot_cleanup(&snapshot);
     puts("admission-plan tests: PASS");
+    puts("NOTE: RM-P7-origin-not-host oracle included.");
+    puts("NOTE: Codex A06 sum(ceil(per_node/chunk)) capacity oracle included.");
     return 0;
 }

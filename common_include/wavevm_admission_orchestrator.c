@@ -862,18 +862,23 @@ int wvm_admission_orchestrator_stop(
     if (state == WVM_LIFECYCLE_STOPPED) {
         return 0;
     }
-    if (state != WVM_LIFECYCLE_RUNNING && state != WVM_LIFECYCLE_STOPPING &&
+    /*
+     * A12: DEGRADED/FAILED must still allow cleanup STOP. Lifecycle matrix
+     * already permits DEGRADED/FAILED → STOPPING; entry gate must match.
+     */
+    if (state != WVM_LIFECYCLE_RUNNING && state != WVM_LIFECYCLE_DEGRADED &&
+        state != WVM_LIFECYCLE_FAILED && state != WVM_LIFECYCLE_STOPPING &&
         state != WVM_LIFECYCLE_RETIRING) {
         set_error(error, error_len,
-                  "STOP requires RUNNING, STOPPING, or RETIRING lifecycle");
+                  "STOP requires RUNNING/DEGRADED/FAILED/STOPPING/RETIRING");
         return -1;
     }
 
-    if (state == WVM_LIFECYCLE_RUNNING) {
+    if (state == WVM_LIFECYCLE_RUNNING || state == WVM_LIFECYCLE_DEGRADED ||
+        state == WVM_LIFECYCLE_FAILED) {
         if (wvm_control_plane_transition(
-                input->control_plane, input->transaction,
-                WVM_LIFECYCLE_RUNNING, WVM_LIFECYCLE_STOPPING, error,
-                error_len) != 0) {
+                input->control_plane, input->transaction, state,
+                WVM_LIFECYCLE_STOPPING, error, error_len) != 0) {
             return -1;
         }
         state = WVM_LIFECYCLE_STOPPING;
@@ -900,6 +905,8 @@ int wvm_admission_orchestrator_stop(
                         &input->prepared_vm->candidate,
                         &input->prepared_vm->node_runtime_manifests[pi], error,
                         error_len) != 0) {
+                    fprintf(stderr, "orchestrator_stop: participant_abort[%zu] failed: %s\n",
+                            pi, (error && error[0]) ? error : "(none)");
                     return -1;
                 }
             }
@@ -911,27 +918,71 @@ int wvm_admission_orchestrator_stop(
                           "STOP route must be ACTIVATED before retirement");
                 return -1;
             }
-            if (input->membership_controller) {
-                if (wvm_membership_controller_route_state(
-                        input->membership_controller,
-                        input->route_transaction->operation_id,
-                        &membership_route_state, error, error_len) != 0) {
+            /*
+             * F5: When membership begin_retire will run and RequiredAckSet is
+             * non-empty, ROUTE_RETIRE owner ACKs are mandatory. Stream transport
+             * validates each ACK carries refs=0 + horizon-complete; those proven
+             * values feed begin_retire. Without membership (unit local STOP),
+             * control-plane route state alone advances. ABORT_* is not this path.
+             */
+            {
+                size_t ack_count =
+                    input->route_transaction->required_ack_set.entries.count;
+                uint64_t proven_refs = 0;
+                int proven_horizon_complete = 1;
+                int collected_owner_acks = 0;
+
+                if (input->membership_controller && ack_count > 0 &&
+                    (!input->callbacks || !input->callbacks->route_retire)) {
+                    set_error(error, error_len,
+                              "STOP requires ROUTE_RETIRE ACK from route "
+                              "owners before membership begin_retire");
                     return -1;
                 }
-                if (membership_route_state == WVM_ROUTE_TRANSACTION_ACTIVATED) {
-                    if (wvm_membership_controller_route_begin_retire(
-                            input->membership_controller,
-                            input->route_transaction->operation_id, 0, 1, error,
-                            error_len) != 0) {
+                if (input->callbacks && input->callbacks->route_retire) {
+                    if (input->callbacks->route_retire(
+                            input->callback_context, input->transaction,
+                            input->route_transaction, input->route_snapshot,
+                            error, error_len) != 0) {
+                        fprintf(stderr, "orchestrator_stop: route_retire failed: %s\n",
+                                (error && error[0]) ? error : "(none)");
                         return -1;
                     }
-                } else if (membership_route_state !=
-                           WVM_ROUTE_TRANSACTION_RETIRING &&
-                           membership_route_state !=
-                               WVM_ROUTE_TRANSACTION_RETIRED) {
-                    set_error(error, error_len,
-                              "STOP membership route is not retirement-ready");
-                    return -1;
+                    collected_owner_acks = 1;
+                    proven_refs = 0;
+                    proven_horizon_complete = 1;
+                }
+                if (input->membership_controller) {
+                    if (ack_count > 0 && !collected_owner_acks) {
+                        set_error(error, error_len,
+                                  "STOP membership begin_retire lacks owner "
+                                  "ROUTE_RETIRE ACK proof");
+                        return -1;
+                    }
+                    if (wvm_membership_controller_route_state(
+                            input->membership_controller,
+                            input->route_transaction->operation_id,
+                            &membership_route_state, error, error_len) != 0) {
+                        return -1;
+                    }
+                    if (membership_route_state ==
+                        WVM_ROUTE_TRANSACTION_ACTIVATED) {
+                        if (wvm_membership_controller_route_begin_retire(
+                                input->membership_controller,
+                                input->route_transaction->operation_id,
+                                proven_refs, proven_horizon_complete, error,
+                                error_len) != 0) {
+                            return -1;
+                        }
+                    } else if (membership_route_state !=
+                                   WVM_ROUTE_TRANSACTION_RETIRING &&
+                               membership_route_state !=
+                                   WVM_ROUTE_TRANSACTION_RETIRED) {
+                        set_error(
+                            error, error_len,
+                            "STOP membership route is not retirement-ready");
+                        return -1;
+                    }
                 }
             }
             if (stop_persist_route_state(
@@ -974,6 +1025,8 @@ int wvm_admission_orchestrator_stop(
                     input->callback_context, &input->prepared_vm->candidate,
                     &input->prepared_vm->reservations[ri], error,
                     error_len) != 0) {
+                fprintf(stderr, "orchestrator_stop: reservation_abort[%zu] failed: %s\n",
+                        ri, (error && error[0]) ? error : "(none)");
                 return -1;
             }
         }
@@ -1025,14 +1078,18 @@ int wvm_admission_orchestrator_stop(
             return -1;
         }
     }
-    if (wvm_control_plane_transition(
-            input->control_plane, input->transaction, WVM_LIFECYCLE_RETIRING,
-            WVM_LIFECYCLE_STOPPED, error, error_len) != 0) {
-        return -1;
-    }
+    /*
+     * Quarantine namespace before durable STOPPED so an interrupted STOP cannot
+     * idempotently succeed while leaving the namespace un-quarantined (F12).
+     */
     if (stop_quarantine_namespace(input->namespace_allocator,
                                   input->transaction, input->route_transaction,
                                   error, error_len) != 0) {
+        return -1;
+    }
+    if (wvm_control_plane_transition(
+            input->control_plane, input->transaction, WVM_LIFECYCLE_RETIRING,
+            WVM_LIFECYCLE_STOPPED, error, error_len) != 0) {
         return -1;
     }
     return 0;

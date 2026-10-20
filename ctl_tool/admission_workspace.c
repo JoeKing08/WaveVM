@@ -39,13 +39,13 @@ int wvm_ctl_admission_buffers_reset(
     struct buffer_layout layout[BUFFER_COUNT] = {
         {member_count, sizeof(struct wvm_required_member), 0},
         {requested_vcpus, sizeof(struct wvm_vcpu_assignment), 0},
-        {node_count, sizeof(struct wvm_memory_chunk_assignment), 0},
+        {node_count * 2U, sizeof(struct wvm_memory_chunk_assignment), 0},
         {node_count, sizeof(struct wvm_reservation_requirement), 0},
         {member_count, sizeof(struct wvm_capability_ref), 0},
         {node_count, sizeof(struct wvm_resource_reservation), 0},
         {node_count, sizeof(struct wvm_node_runtime_manifest), 0},
         {requested_vcpus, sizeof(struct wvm_vcpu_assignment), 0},
-        {node_count, sizeof(struct wvm_memory_chunk_assignment), 0},
+        {node_count * 2U, sizeof(struct wvm_memory_chunk_assignment), 0},
         {member_count, sizeof(struct wvm_startup_dependency), 0},
         {1, sizeof(struct wvm_route_snapshot_key), 0},
         {WVM_ENVELOPE_MAX_LOCAL_PAYLOAD, 1, 0},
@@ -63,6 +63,10 @@ int wvm_ctl_admission_buffers_reset(
             snprintf(error, error_len, "invalid admission workspace dimensions");
         }
         return -1;
+    }
+    /* A06: MEMORY capacity must cover sum(ceil(per_node/chunk)), not just N. */
+    if (node_count > SIZE_MAX / 2U) {
+        goto capacity;
     }
     /* Projection currently requires full candidate-list capacity per runtime.
      * Bound the complete allocation before allocating any of these lists. */
@@ -105,7 +109,7 @@ int wvm_ctl_admission_buffers_reset(
     prepared->placement_plan.vcpu_assignments.entries = parts[VCPUS];
     prepared->placement_plan.vcpu_assignments.capacity = requested_vcpus;
     prepared->placement_plan.memory_assignments.entries = parts[MEMORY];
-    prepared->placement_plan.memory_assignments.capacity = node_count;
+    prepared->placement_plan.memory_assignments.capacity = node_count * 2U;
     prepared->placement_plan.reservation_requirements.entries = parts[REQUIREMENTS];
     prepared->placement_plan.reservation_requirements.capacity = node_count;
     prepared->candidate.required_capabilities.entries = parts[CAPABILITIES];
@@ -124,8 +128,8 @@ int wvm_ctl_admission_buffers_reset(
         runtime->local_vcpu_assignments.capacity = requested_vcpus;
         runtime->local_memory_assignments.entries =
             (struct wvm_memory_chunk_assignment *)parts[LOCAL_MEMORY] +
-            i * node_count;
-        runtime->local_memory_assignments.capacity = node_count;
+            i * (node_count * 2U);
+        runtime->local_memory_assignments.capacity = node_count * 2U;
         runtime->startup_dependencies.entries =
             (struct wvm_startup_dependency *)parts[DEPENDENCIES] +
             i * member_count;

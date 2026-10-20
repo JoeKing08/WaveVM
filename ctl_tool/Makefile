@@ -23,6 +23,7 @@ SRCS = main.c admission_workspace.c admission_readiness.c admission_recovery.c \
 	$(COMMON_DIR)/wavevm_cluster.c \
 	$(COMMON_DIR)/wavevm_reservation_runtime.c \
 	$(COMMON_DIR)/wavevm_fault_engine.c \
+	$(COMMON_DIR)/wavevm_host_probe.c \
 	$(COMMON_DIR)/wavevm_coordinator.c \
 	$(COMMON_DIR)/wavevm_admission_evidence.c \
 	$(COMMON_DIR)/wavevm_admission_provider.c \

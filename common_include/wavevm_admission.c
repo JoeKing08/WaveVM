@@ -1045,14 +1045,13 @@ static int derive_listener_leases(
     }
     if (plan->kernel_accelerator_required) {
         /*
-         * Roadmap §12 / kernel-accelerator.md §7 short-term gate:
-         * until real /dev/wavevm per-VM isolation+teardown evidence exists,
-         * admission must reject a second Mode A VM on the same physical
-         * node. A fixed exclusive KERNEL_CONTEXT lease name is that
-         * fail-closed gate. Per-VM lease names alone are NOT enough to
-         * open dual Mode A (control-plane naming ≠ kernel isolation).
-         * Lift only after isolation acceptance tests pass; then distinct
-         * names (e.g. kernel-context:vm=:inc=) may return.
+         * Roadmap §12 short-term gate: one Mode A VM per physical node until
+         * real isolation evidence closes A01–A04 (explicit context on sleepable
+         * paths, committer send ownership, TX/VMA/destroy refs, full u32 VM
+         * identity). Fixed exclusive name rejects a second Mode A lease on the
+         * same node. Per-VM "kernel-context:vm=:inc=" names must not reopen the
+         * gate while those correctness gaps remain. Still require non-zero VM
+         * route scope so Mode A placement stays bound to a real identity.
          */
         plan->lease_entries[2].lease_kind =
             WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
@@ -1201,7 +1200,6 @@ int wvm_admission_placement_plan_build(
     struct wvm_memory_chunk_assignment_list memory;
     struct wvm_storage_assignment_list storage;
     struct wvm_reservation_requirement_list requirements;
-    uint64_t remaining_memory;
     uint64_t gpa_start = 0;
     size_t required_memory_assignments = 0;
     size_t i;
@@ -1209,22 +1207,46 @@ int wvm_admission_placement_plan_build(
     size_t memory_index = 0;
 
     if (wvm_admission_plan_validate(snapshot, request, admission_plan, error,
-                                    error_len) != 0 ||
-        !eligibility_fence_digest || digest_is_zero(eligibility_fence_digest) ||
-        placement_options_validate(options, error, error_len) != 0 ||
-        !placement_plan) {
-        set_error(error, error_len, "cannot build placement plan");
+                                    error_len) != 0) {
+        return -1;
+    }
+    if (!eligibility_fence_digest || digest_is_zero(eligibility_fence_digest)) {
+        set_error(error, error_len, "placement eligibility fence missing");
+        return -1;
+    }
+    if (placement_options_validate(options, error, error_len) != 0) {
+        return -1;
+    }
+    if (!placement_plan) {
+        set_error(error, error_len, "placement plan output is NULL");
         return -1;
     }
 
-    remaining_memory = request->requested_memory_bytes;
-    while (remaining_memory != 0) {
-        const uint64_t chunk = remaining_memory > request->memory_chunk_bytes
-                                   ? request->memory_chunk_bytes
-                                   : remaining_memory;
-
-        required_memory_assignments++;
-        remaining_memory -= chunk;
+    /*
+     * Chunk count is sum(ceil(per_reservation_memory / chunk)), not
+     * ceil(total / chunk). Uneven node tails each consume an extra slot
+     * (Codex A06). Fail closed before writing if capacity is short.
+     */
+    if (request->memory_chunk_bytes == 0) {
+        set_error(error, error_len, "placement memory chunk size is zero");
+        return -1;
+    }
+    for (i = 0; i < admission_plan->reservation_count; i++) {
+        uint64_t local_memory =
+            admission_plan->reservations[i].guest_memory_bytes;
+        while (local_memory != 0) {
+            const uint64_t chunk =
+                local_memory > request->memory_chunk_bytes
+                    ? request->memory_chunk_bytes
+                    : local_memory;
+            if (required_memory_assignments == SIZE_MAX) {
+                set_error(error, error_len,
+                          "placement memory assignment count overflow");
+                return -1;
+            }
+            required_memory_assignments++;
+            local_memory -= chunk;
+        }
     }
     vcpus = placement_plan->vcpu_assignments;
     memory = placement_plan->memory_assignments;
@@ -1350,7 +1372,14 @@ int wvm_admission_placement_plan_build(
                 local_memory > request->memory_chunk_bytes
                     ? request->memory_chunk_bytes
                     : local_memory;
-            struct wvm_memory_chunk_assignment *assignment =
+            struct wvm_memory_chunk_assignment *assignment;
+
+            if (memory_index >= placement_plan->memory_assignments.capacity) {
+                set_error(error, error_len,
+                          "placement memory assignment capacity exceeded");
+                return -1;
+            }
+            assignment =
                 &placement_plan->memory_assignments.entries[memory_index];
 
             memset(assignment, 0, sizeof(*assignment));

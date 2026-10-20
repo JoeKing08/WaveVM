@@ -352,4 +352,17 @@ int wvm_control_plane_start_if_participants_ready(
     wvm_control_plane_readiness_observer_fn observe_ready,
     void *observer_context, char *error, size_t error_len);
 
+/*
+ * goal §1 continuous production loop: scan durable RUNNING|DEGRADED VMs and
+ * fail-closed when required members are unhealthy OR required runtime/executor
+ * ready-owners are dead (A12 child-death → no false RUNNING).
+ *   RUNNING + unhealthy -> DEGRADED
+ *   DEGRADED + still unhealthy -> FAILED
+ * Does not invent RECOVERY_REBIND. ctl serve must call periodically.
+ */
+int wvm_control_plane_reconcile_required_member_health(
+    struct wvm_control_plane *plane,
+    struct wvm_membership_controller *membership_controller,
+    size_t *transitioned_out, char *error, size_t error_len);
+
 #endif /* WAVEVM_CONTROL_PLANE_H */

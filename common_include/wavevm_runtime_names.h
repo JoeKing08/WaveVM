@@ -63,6 +63,16 @@ int wvm_runtime_ready_remove(
     size_t error_len);
 
 /*
+ * A12: continuous RUNNING health probe. Returns 1 when the derived ready
+ * file exists and its recorded owner task is still alive; 0 when missing
+ * or the owner is dead/stale; -1 on input/derive errors. Does not invent
+ * RECOVERY_REBIND — callers fail-closed to DEGRADED/FAILED.
+ */
+int wvm_runtime_ready_owner_alive(
+    const struct wvm_local_name_namespace *namespace_value, char *error,
+    size_t error_len);
+
+/*
  * Retire one VM's derived local names after its owner has stopped.
  * Unlinks sockets, ready file, and SHM for THIS name set only. Missing
  * paths (ENOENT) are success; other unlink errors fail closed. Never

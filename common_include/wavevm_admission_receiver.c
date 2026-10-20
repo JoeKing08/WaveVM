@@ -1282,6 +1282,9 @@ static int apply_participant_stage(
             receiver->config.local_physical_node_id ||
         scratch.runtime_manifest->expected_node_instance_id !=
             receiver->config.local_node_instance_id) {
+        fprintf(stderr, "[admission-receiver] stage reject early msg=0x%x: %s\n",
+                (unsigned)request->message_type,
+                (error && error[0]) ? error : "runtime stage does not target this node");
         set_error(error, error_len, "runtime stage does not target this node");
         return -1;
     }
@@ -1311,6 +1314,14 @@ static int apply_participant_stage(
                       "participant has not reached identity-bound runtime readiness");
             return -1;
         }
+        /* A12: activated required-child death is fail-closed, not §6.2 relaunch. */
+        if (slot->has_required_child_failed) {
+            set_error(error, error_len,
+                      "required runtime/executor child failed; VM must DEGRADE");
+            result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+            result->recorded_state = WVM_LIFECYCLE_FAILED;
+            return 0;
+        }
         ready_status = wvm_runtime_ready_validate(
             scratch.runtime_manifest, receiver->config.local_node_instance_id,
             error, error_len);
@@ -1322,9 +1333,12 @@ static int apply_participant_stage(
              * polls reuse QUERY_RUNTIME_READY + existing start_runtime; no new
              * wire opcode and no RECOVERY_REBIND. Agent death / instance change
              * still fail closed (no false RUNNING).
+             * A12: never relaunch after has_required_child_failed (handled above)
+             * or once the slot was activated into admitted service.
              */
             if (receiver->config.start_runtime && slot->has_activation_decision &&
-                !slot->has_aborted) {
+                !slot->has_aborted && !slot->has_activated &&
+                !slot->has_required_child_failed) {
                 char relaunch_error[256];
 
                 relaunch_error[0] = '\0';
@@ -1445,24 +1459,52 @@ static int apply_participant_stage(
                      scratch.runtime_manifest, 1, error, error_len) != 1)) {
                 set_error(error, error_len,
                           "lifecycle STOP identity does not match participant");
+                fprintf(stderr, "[admission-receiver] ABORT LIFECYCLE_STOP: %s\n",
+                        error);
                 return -1;
             }
             if (receiver->config.stop_runtime &&
                 receiver->config.stop_runtime(
                     receiver->config.context, slot, scratch.runtime_manifest,
                     error, error_len) != 0) {
+                fprintf(stderr, "[admission-receiver] ABORT stop_runtime failed: %s\n",
+                        (error && error[0]) ? error : "(none)");
                 return -1;
+            }
+            /*
+             * F6: participant owner must retire sockets + ready + SHM on this
+             * host. stop_runtime (runtime agent) already does this; enforce
+             * the same contract at the receiver so mock/missing agent paths
+             * cannot leave remote residuals while the coordinator only
+             * unlinks its local filesystem view.
+             */
+            {
+                struct wvm_runtime_name_set owner_names;
+
+                memset(&owner_names, 0, sizeof(owner_names));
+                if (wvm_runtime_name_set_derive(
+                        &scratch.runtime_manifest->local_names, &owner_names,
+                        error, error_len) != 0 ||
+                    wvm_runtime_name_set_retire(&owner_names, error,
+                                                error_len) != 0) {
+                    fprintf(stderr, "[admission-receiver] ABORT name retire failed: %s\n",
+                            (error && error[0]) ? error : "(none)");
+                    return -1;
+                }
             }
             if (!slot->has_aborted &&
                 (restore_participant_stage(receiver, slot, request, error,
                                            error_len) != 0 ||
                  persist_participant_stage(slot, request, error, error_len) !=
                      0)) {
+                fprintf(stderr, "[admission-receiver] ABORT persist failed: %s\n",
+                        (error && error[0]) ? error : "(none)");
                 slot->state_failed = 1;
                 return -1;
             }
             slot->has_activated = 0;
             result->recorded_state = WVM_LIFECYCLE_STOPPING;
+            fprintf(stderr, "[admission-receiver] ABORT LIFECYCLE_STOP ok\n");
         } else if (slot->has_activation_decision ||
                    !local_reservation_allows_abort(
                        receiver, scratch.runtime_manifest->reservation_id) ||
@@ -1510,10 +1552,27 @@ static int apply_route_stage(struct wvm_admission_receiver *receiver,
         return -1;
     }
     result->recorded_state = route_result.recorded_state;
-    result->applied_revision =
-        route_result.route_snapshot_key.route_generation;
-    result->expiry_or_retention_deadline =
-        route_result.operation_retention_horizon_ms;
+    if (request->message_type == WVM_ENVELOPE_MSG_ROUTE_RETIRE) {
+        /*
+         * F5: ACK proof uses wire fields that encode allows (result_flags
+         * must stay 0). applied_revision = active refs; expiry = 0 means
+         * retention horizon complete when recorded_state == retired(4).
+         */
+        if (!route_result.retention_horizon_complete ||
+            route_result.active_operation_refs != 0) {
+            set_error(error, error_len,
+                      "ROUTE_RETIRE owner is not retirement-ready");
+            return -1;
+        }
+        result->applied_revision = route_result.active_operation_refs;
+        result->expiry_or_retention_deadline = 0;
+        result->result_flags = 0;
+    } else {
+        result->applied_revision =
+            route_result.route_snapshot_key.route_generation;
+        result->expiry_or_retention_deadline =
+            route_result.operation_retention_horizon_ms;
+    }
     result->status_code = WVM_CONTROL_RESULT_SUCCESS;
     return 0;
 }
@@ -1528,6 +1587,7 @@ void wvm_admission_receiver_slot_init(struct wvm_admission_receiver_slot *slot)
     slot->has_activated = 0;
     slot->has_activation_decision = 0;
     slot->has_aborted = 0;
+    slot->has_required_child_failed = 0;
     slot->vm_id = 0;
     slot->vm_incarnation = 0;
     slot->manifest_generation = 0;

@@ -50,6 +50,9 @@ struct wvm_admission_receiver_slot {
     int has_activated;
     int has_activation_decision;
     int has_aborted;
+    /* A12: unexpected death of an activated required runtime/executor child.
+     * Blocks false READY relaunch; reconcile must fail-closed the VM. */
+    int has_required_child_failed;
     uint32_t vm_id;
     uint64_t vm_incarnation;
     uint64_t manifest_generation;

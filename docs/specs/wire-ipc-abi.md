@@ -1,6 +1,10 @@
 # WaveVM Wire and Local IPC ABI Specification
 
-Status: proposed implementation specification.
+Status: normative implementation specification.
+
+RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
+semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
+failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
 
 Scope: network framing, header validation, byte order, payload bounds, request
 identity, QoS, duplicate/retry semantics, local QEMU-to-node-runtime IPC,

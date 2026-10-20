@@ -700,11 +700,49 @@ static int apply_unlogged(struct wvm_route_control *control,
         }
         return result;
     }
+    /*
+     * A05: query real outstanding refs before/after retire. Do not advertise
+     * constant refs=0 / horizon_complete=1. Retire itself fails closed while
+     * refs remain; ACK fields mirror the query proof.
+     */
+    if (result_out) {
+        uint64_t refs = 0;
+        int horizon = 0;
+        if (wvm_route_runtime_query_retire_proof(control->runtime, &key, &refs,
+                                                 &horizon, error,
+                                                 error_len) != 0) {
+            return -1;
+        }
+        if (refs != 0 || !horizon) {
+            set_error(error, error_len,
+                      "ROUTE_RETIRE owner not ready (outstanding refs)");
+            result_out->active_operation_refs = refs;
+            result_out->retention_horizon_complete = 0;
+            result_out->operation_retention_horizon_ms = 0;
+            result_out->route_snapshot_key = key;
+            return -1;
+        }
+    }
     result = wvm_route_runtime_retire(control->runtime, &key, error,
                                       error_len);
     if (result == 0 && result_out) {
+        uint64_t refs = 0;
+        int horizon = 0;
         result_out->recorded_state = 4;
         result_out->route_snapshot_key = key;
+        if (wvm_route_runtime_query_retire_proof(control->runtime, &key, &refs,
+                                                 &horizon, error,
+                                                 error_len) != 0) {
+            return -1;
+        }
+        result_out->active_operation_refs = refs;
+        result_out->operation_retention_horizon_ms = 0;
+        result_out->retention_horizon_complete = horizon && refs == 0;
+        if (!result_out->retention_horizon_complete) {
+            set_error(error, error_len,
+                      "ROUTE_RETIRE proof incomplete after local retire");
+            return -1;
+        }
     }
     return result;
 }

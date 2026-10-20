@@ -445,6 +445,33 @@ int wvm_runtime_ready_validate(
     return 0;
 }
 
+
+int wvm_runtime_ready_owner_alive(
+    const struct wvm_local_name_namespace *namespace_value, char *error,
+    size_t error_len)
+{
+    struct wvm_runtime_name_set names;
+    struct wvm_runtime_ready_record actual;
+
+    if (wvm_runtime_name_set_derive(namespace_value, &names, error,
+                                    error_len) != 0) {
+        return -1;
+    }
+    if (read_ready_record(names.ready_file, &actual) != 0) {
+        set_error(error, error_len, "runtime readiness is unavailable: %s",
+                  strerror(errno));
+        return 0;
+    }
+    if (!ready_owner_alive(&actual)) {
+        set_error(error, error_len, "runtime readiness owner is not alive");
+        return 0;
+    }
+    if (error && error_len) {
+        error[0] = '\0';
+    }
+    return 1;
+}
+
 int wvm_runtime_ready_remove(
     const struct wvm_node_runtime_manifest *manifest, char *error,
     size_t error_len)

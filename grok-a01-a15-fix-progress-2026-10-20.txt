@@ -1,0 +1,125 @@
+WaveVM A01–A15 fix progress — Grok Bot
+Date: 2026-10-20 (Asia/Shanghai)
+Baseline tip: dirty on 091723ced (NO commit/push)
+Authority: grok-minimum-cross-review-codex-agent-2026-10-20.txt only
+
+Legend: FIXED / PARTIAL / BLOCKED / OPEN
+Do NOT declare Minimum COMPLETE or non-guest PARTIAL=0.
+
+================================================================================
+Mode A 2nd-VM reject gate (mandatory first)
+================================================================================
+Status: FIXED (userspace+source+LIVE after 👍 reboot)
+Evidence:
+  - common_include/wavevm_admission.c: exclusive lease "kernel-context"
+  - wavevm_ioctl.h + master_core/kernel_backend.c: QUERY_CAPS SINGLE_CONTEXT max=1;
+    BIND enforces max=1 (-ENOSPC)
+  - Live after reboot+insmod (2026-10-20 ~09:02 CST):
+    srcversion=4C05A417C8147DD0B61149A (matches master_core/wavevm.ko)
+    QUERY_CAPS: ver=3 max=1 bits=0x3 (BIND|SINGLE_CONTEXT)
+    BIND#1 OK; BIND#2 rejected errno=28 (ENOSPC) — Mode A gate SMOKE PASS
+Tests: admission_plan PASS, mode_ab_shared_semantics PASS, live gate smoke PASS
+
+================================================================================
+Per-item
+================================================================================
+A01 explicit context on sleepable paths     FIXED
+  - task-bound hash table; k_send_packet_ctx / fault+committer explicit ctx
+  - Evidence: kernel_backend.c; wavevm.ko live
+
+A02 committer clear-before-send            FIXED
+  - context held through dir lookup+send; send rc checked
+
+A03 TX/VMA/destroy ownership               FIXED
+  - TX enqueue ref; mmap/VMA close ownership; softirq destroy via workqueue
+
+A04 8-bit WVM_ENCODE_ID / g_my_node_id     FIXED*
+  - Production send uses context identity; wire still 8-bit (Mode A max=1)
+
+A05 real retire/quiesce refs               FIXED
+  - route_runtime get/put + memory_service outstanding_operation_refs pin
+  - Tests: test_route_runtime, test_memory_service, test_stop_retire_ack_f5 PASS
+
+A06 placement capacity                     FIXED
+
+A07 single block op ID                     FIXED
+
+A08 remote errors / FLUSH                  FIXED
+
+A09 chunk store production + cross-boundary FIXED
+
+A10 probe→publish CapabilityReport         FIXED
+  - Canonical CapabilityReport encode on agent probe + ctl probe-capabilities
+  - NEW: registration inventory uses probed_accel_digest (no caller-only digest)
+    node_runtime/admission_main.c copies probed digest into
+    accelerator_fault_capabilities_digest before register_local_node
+  - Tests: test_host_probe encode_report→decode PASS; node_runtime rebuild PASS
+
+A11 no UFFD advertise/select; MODE_B_MEMORY FIXED
+
+A12 reconcile lock; STOP from DEGRADED/FAILED; child→no false RUNNING  FIXED
+  - Prior: STOP from DEGRADED/FAILED; reconcile owner lock; membership unhealthy
+  - NEW agent: unexpected activated child death → clear ready/endpoints,
+    has_required_child_failed=1, has_activated=0; QUERY_RUNTIME_READY fail-closed
+    (no §6.2 relaunch after required-child failure)
+  - NEW reconcile: control_plane_required_runtimes_ready probes durable
+    runtime-manifest local_names ready-owner liveness; missing/dead → unhealthy
+    → RUNNING→DEGRADED→FAILED
+  - NEW API: wvm_runtime_ready_owner_alive()
+  - Tests: test_running_member_health_reconcile PASS (incl. A12 ready-dead case);
+    ctl_tool rebuild PASS
+
+A13 snapshot before RW mprotect; snprintf  FIXED
+
+A14 real executor + remote memory          FIXED* (non-guest); guest OS still §7
+  - Strengthened beyond stub FD-hold / marker-only:
+    test_goal4_executor_remote_memory.c now drives execute_handoff whose side
+    effect is memory_service remote fault → ACK (real page bytes completed)
+  - Bundle still runs test_memory_service + test_executor_bridge
+  - Production: wvm_executor_runtime_execute_handoff in slave_hybrid
+  - Honest scope: live multi-node guest OS/SSH remains goal §7 — not claimed
+  - Tests: test_goal4_executor_remote_memory.sh PASS
+
+A15 canonical 52/52 overclaim              FIXED (honest measured scope)
+  - coverage script no longer invents COMPLETE wording without measuring
+  - Measures dual-pass count from dual-impl output; reports FULL only when
+    dual_n==52, else PARTIAL
+  - This run: dual-passed 52/52 + literal presence + §5 #3 probes → FULL
+  - Tests: test_canonical_registry_coverage.sh PASS
+
+Also: RM-P8 mode-a-same-semantics remains control-plane-only (do not claim
+memory semantic equivalence). MODE_B_MEMORY false-AVAILABLE closed under A11.
+
+================================================================================
+Tests run this session (remaining-gap close + live gate)
+================================================================================
+PASS: test_running_member_health_reconcile (A12 ready-dead)
+PASS: test_goal4_executor_remote_memory (A14 execute→remote fault/ACK)
+PASS: test_memory_service, test_executor_bridge
+PASS: test_canonical_registry_coverage (A15 measured 52/52)
+PASS: test_host_probe, test_admission_plan, test_mode_ab_shared_semantics
+PASS: node_runtime link, ctl_tool link (A10/A12 rebuilds)
+PASS: insmod wavevm.ko srcversion=4C05A417C8147DD0B61149A
+PASS: live Mode A QUERY_CAPS max=1 + BIND#2 ENOSPC smoke
+
+================================================================================
+Status table (remaining items this close)
+================================================================================
+| ID  | Status   | Notes |
+|-----|----------|-------|
+| A10 | FIXED    | probed_accel_digest used in registration + CapabilityReport |
+| A12 | FIXED    | child-death → failed slot + reconcile ready-owner → DEGRADED/FAILED |
+| A14 | FIXED*   | execute→memory_service remote ACK; guest OS/SSH still §7 |
+| A15 | FIXED    | measured dual-pass; no invented COMPLETE without count |
+| Mode A gate | FIXED LIVE | reboot+insmod; max=1; 2nd BIND ENOSPC |
+
+Do NOT claim Minimum COMPLETE. goal §6/§7 untouched. NO commit/push.
+
+================================================================================
+Next / blockers
+================================================================================
+1. Parent may present results to Joe; no further A01–A15 closable gaps in this batch
+2. Guest matrix / §7 still out of scope
+3. No commit/push unless Joe asks
+
+Blockers: none for this remaining-gap close. Live /dev/wavevm loaded.

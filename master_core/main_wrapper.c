@@ -394,6 +394,13 @@ static int bind_kernel_context_from_manifest(uint32_t physical_node_id)
     request.version = WVM_KERNEL_CONTEXT_ABI_VERSION;
     request.vm_id = g_runtime_storage.manifest.vm_id;
     request.physical_node_id = physical_node_id;
+    request.node_instance_id =
+        g_runtime_storage.manifest.expected_node_instance_id;
+    if (request.node_instance_id == 0) {
+        fprintf(stderr,
+                "[KernelContext] manifest expected_node_instance_id is zero\n");
+        return -1;
+    }
     request.vm_incarnation = g_runtime_storage.manifest.vm_incarnation;
     request.manifest_generation =
         g_runtime_storage.manifest.manifest_generation;
@@ -431,8 +438,9 @@ static int bind_kernel_context_from_manifest(uint32_t physical_node_id)
     }
     fprintf(stderr,
             "[KernelContext] bound VM=%u incarnation=%" PRIu64
-            " node=%u (single-context Mode A gate)\n",
-            request.vm_id, request.vm_incarnation, request.physical_node_id);
+            " node=%u instance=%" PRIu64 " (Mode A gate)\n",
+            request.vm_id, request.vm_incarnation, request.physical_node_id,
+            request.node_instance_id);
     return 0;
 }
 
@@ -527,11 +535,9 @@ static void inject_mem_global(uint32_t slot, uint32_t value) {
     free(payload);
 }
 
+/* IOCTL_SET_VM_ID retired; production uses IOCTL_WVM_BIND_CONTEXT only. */
 static void inject_vm_id(uint32_t vm_id) {
-    if (g_dev_fd < 0) return;
-    if (ioctl(g_dev_fd, IOCTL_SET_VM_ID, &vm_id) < 0) {
-        fprintf(stderr, "[VM-ID] inject failed (errno=%d)\n", errno);
-    }
+    (void)vm_id;
 }
 #define NUM_BCAST_WORKERS 8
 
@@ -1414,6 +1420,60 @@ void* client_handler(void *socket_desc) {
                         usleep(100);
                     }
 
+                    /*
+                     * storage-device-authority.md §4.3: FUA/SYNC writes require
+                     * durable flush for that write even without a later FLUSH.
+                     * Legacy MSG_BLOCK_WRITE drops typed flags, so follow with
+                     * MSG_BLOCK_FLUSH on the same storage target before ACK.
+                     */
+                    if (success && req->operation == WVM_BLOCK_OP_WRITE &&
+                        (req->flags & (WVM_BLOCK_FLAG_FUA | WVM_BLOCK_FLAG_SYNC))) {
+                        size_t flush_pkt_len = sizeof(struct wvm_header) +
+                                              sizeof(struct wvm_block_payload);
+                        uint8_t *flush_pkt = u_ops.alloc_packet(flush_pkt_len, 0);
+                        uint8_t *flush_rx = malloc(sizeof(struct wvm_header) +
+                                                  sizeof(struct wvm_block_payload));
+                        uint64_t flush_rid = (uint64_t)-1;
+                        if (flush_pkt && flush_rx)
+                            flush_rid = u_ops.alloc_req_id(
+                                flush_rx, (uint32_t)(sizeof(struct wvm_header) +
+                                                     sizeof(struct wvm_block_payload)));
+                        if (flush_pkt && flush_rid != (uint64_t)-1) {
+                            struct wvm_header *fh = (struct wvm_header *)flush_pkt;
+                            struct wvm_block_payload *fp =
+                                (void *)(flush_pkt + sizeof(*fh));
+                            memset(fh, 0, sizeof(*fh));
+                            fh->magic = htonl(WVM_MAGIC);
+                            fh->msg_type = htons(MSG_BLOCK_FLUSH);
+                            fh->payload_len = htons(sizeof(*fp));
+                            fh->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                            fh->req_id = WVM_HTONLL(flush_rid);
+                            fh->qos_level = 1;
+                            fp->lba = WVM_HTONLL(req->lba_512);
+                            fp->count = htonl(0);
+                            fh->crc32 = 0;
+                            fh->crc32 = htonl(calculate_crc32(flush_pkt, flush_pkt_len));
+                            u_ops.send_packet(flush_pkt, flush_pkt_len, target);
+                            t_start = u_ops.get_time_us();
+                            success = 0;
+                            while (u_ops.time_diff_us(t_start) < 5000000) {
+                                if (u_ops.check_req_status(flush_rid) == 1) {
+                                    struct wvm_header *rx_hdr =
+                                        (struct wvm_header *)flush_rx;
+                                    success = !(rx_hdr->flags & WVM_FLAG_ERROR);
+                                    break;
+                                }
+                                usleep(100);
+                            }
+                            u_ops.free_req_id(flush_rid);
+                        } else {
+                            success = 0;
+                        }
+                        if (flush_pkt)
+                            u_ops.free_packet(flush_pkt);
+                        free(flush_rx);
+                    }
+
                     /* Send typed completion to QEMU */
                     uint32_t response_data_size = (success && req->operation == WVM_BLOCK_OP_READ) ?
                                                   req->sector_count * 512 : 0;
@@ -1631,7 +1691,18 @@ int wavevm_master_runtime_main(
         fprintf(stderr, "[Route] admitted manifest route snapshot rejected\n");
         return 1;
     }
-    if (bind_kernel_context_from_manifest((uint32_t)my_phys_id) != 0) {
+    /*
+     * Negotiated profile decides device use (cross-review Mode B contract):
+     * bits==0 => Mode B entirely — never BIND /dev/wavevm; close if opened.
+     * bits!=0 => Mode A context/capability contract; BIND failure is fatal.
+     */
+    if (g_runtime_storage.manifest.negotiated_profile.kernel_accelerator_bits ==
+        0) {
+        if (g_dev_fd >= 0) {
+            close(g_dev_fd);
+            g_dev_fd = -1;
+        }
+    } else if (bind_kernel_context_from_manifest((uint32_t)my_phys_id) != 0) {
         return 1;
     }
 
@@ -1726,7 +1797,7 @@ int wavevm_master_runtime_main(
     printf("[Init] Identity Mapped: PhysID %d -> VirtualID %d (Primary)\n", my_phys_id, my_virtual_id);
     // Mode A owns a separate Logic Core instance inside wavevm.ko.
     if (flat_route_cache_enabled) {
-        inject_vm_id(g_my_vm_id);
+        /* VM identity comes from BIND_CONTEXT; do not call SET_VM_ID. */
         inject_mem_global(0, total_vnodes);
         inject_mem_global(1, (uint32_t)my_virtual_id);
         inject_cpu_route_table();

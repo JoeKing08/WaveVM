@@ -87,6 +87,7 @@ struct wvm_memory_pending_entry {
     uint32_t directory_physical_node_id;
     uint64_t directory_node_instance_id;
     uint8_t state;
+    uint8_t route_op_ref_held; /* A05: outstanding_operation_refs pin */
 };
 
 struct wvm_memory_commit_entry {
@@ -106,6 +107,7 @@ struct wvm_memory_outgoing_commit_entry {
     uint64_t directory_node_instance_id;
     struct wvm_mem_commit_ack result;
     uint8_t state;
+    uint8_t route_op_ref_held; /* A05: outstanding_operation_refs pin */
 };
 
 struct wvm_memory_service {

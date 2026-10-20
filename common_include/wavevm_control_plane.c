@@ -3685,3 +3685,192 @@ int wvm_control_plane_start_if_participants_ready(
         runtime_manifest_count, observe_ready, observer_context, error,
         error_len);
 }
+
+
+
+/*
+ * A12: when durable runtime manifests are recorded for a RUNNING VM, every
+ * required participant ready-owner must still be alive. Missing/dead ready
+ * after required-child death (agent cleared endpoints) is unhealthy.
+ * If no matching runtime manifests are recorded, leave the decision to
+ * membership health alone (fail-closed when deps missing).
+ */
+static int control_plane_required_runtimes_ready(
+    const struct wvm_control_plane *plane,
+    const struct wvm_admission_transaction_record *tx, int *ready_out,
+    char *error, size_t error_len)
+{
+    size_t i;
+    size_t matched = 0;
+
+    if (!plane || !tx || !ready_out) {
+        set_error(error, error_len, "required-runtime ready probe input invalid");
+        return -1;
+    }
+    *ready_out = 1;
+    if (!tx->has_candidate_manifest_digest || !plane->runtime_manifest_entries ||
+        plane->runtime_manifest_entry_count == 0) {
+        return 0;
+    }
+    for (i = 0; i < plane->runtime_manifest_entry_count; i++) {
+        const struct wvm_control_plane_runtime_manifest_entry *entry =
+            &plane->runtime_manifest_entries[i];
+        struct wvm_canonical_record record;
+        struct wvm_canonical_field field;
+        struct wvm_local_name_namespace local_names;
+        size_t offset = 0;
+        int next;
+        int present15 = 0;
+        int alive;
+        char ready_error[256];
+
+        if (memcmp(entry->candidate_manifest_digest,
+                   tx->candidate_manifest_digest,
+                   sizeof(tx->candidate_manifest_digest)) != 0) {
+            continue;
+        }
+        matched++;
+        if (!entry->record_bytes || entry->record_byte_count == 0 ||
+            wvm_canonical_record_parse(entry->record_bytes,
+                                       entry->record_byte_count,
+                                       &record) != 0 ||
+            record.record_type != WVM_RECORD_NODE_RUNTIME_MANIFEST) {
+            *ready_out = 0;
+            set_error(error, error_len,
+                      "required runtime manifest record is corrupt");
+            return 0;
+        }
+        memset(&local_names, 0, sizeof(local_names));
+        while ((next = wvm_canonical_record_next(&record, &offset, &field)) ==
+               1) {
+            if (field.tag == 15) {
+                present15 = 1;
+                if (wvm_local_name_namespace_decode(
+                        field.value, field.value_bytes, &local_names, error,
+                        error_len) != 0) {
+                    *ready_out = 0;
+                    return 0;
+                }
+            }
+        }
+        if (next < 0 || !present15) {
+            *ready_out = 0;
+            set_error(error, error_len,
+                      "required runtime manifest lacks local_names");
+            return 0;
+        }
+        ready_error[0] = '\0';
+        alive = wvm_runtime_ready_owner_alive(&local_names, ready_error,
+                                              sizeof(ready_error));
+        if (alive != 1) {
+            *ready_out = 0;
+            set_error(error, error_len, "%s",
+                      ready_error[0] ? ready_error
+                                     : "required runtime ready owner dead");
+            return 0;
+        }
+    }
+    (void)matched;
+    if (error && error_len) {
+        error[0] = '\0';
+    }
+    return 0;
+}
+
+int wvm_control_plane_reconcile_required_member_health(
+    struct wvm_control_plane *plane,
+    struct wvm_membership_controller *membership_controller,
+    size_t *transitioned_out, char *error, size_t error_len)
+{
+    size_t i;
+    size_t transitioned = 0;
+
+    if (transitioned_out) {
+        *transitioned_out = 0;
+    }
+    if (!plane || !membership_controller) {
+        set_error(error, error_len,
+                  "required-member health reconcile input is invalid");
+        return -1;
+    }
+    for (i = 0; i < plane->entry_count; i++) {
+        struct wvm_admission_transaction_record *tx =
+            &plane->entries[i].transaction;
+        struct wvm_coordinator_transaction coordinator;
+        int members_healthy = 0;
+        char health_error[256];
+        enum wvm_lifecycle_state expected;
+        enum wvm_lifecycle_state next;
+        char transition_error[256];
+
+        if (tx->vm_id == 0 || tx->vm_incarnation == 0) {
+            continue;
+        }
+        if (tx->state == WVM_LIFECYCLE_RUNNING) {
+            expected = WVM_LIFECYCLE_RUNNING;
+            next = WVM_LIFECYCLE_DEGRADED;
+        } else if (tx->state == WVM_LIFECYCLE_DEGRADED) {
+            expected = WVM_LIFECYCLE_DEGRADED;
+            next = WVM_LIFECYCLE_FAILED;
+        } else {
+            continue;
+        }
+
+        health_error[0] = '\0';
+        members_healthy = 0;
+        if (wvm_membership_controller_vm_required_members_healthy(
+                membership_controller, tx->vm_id, tx->vm_incarnation,
+                &members_healthy, health_error, sizeof(health_error)) != 0) {
+            members_healthy = 0;
+        }
+        {
+            /* A12: required executor/runtime child death (ready owner gone). */
+            int runtimes_ready = 1;
+            char runtime_error[256];
+
+            runtime_error[0] = '\0';
+            if (control_plane_required_runtimes_ready(
+                    plane, tx, &runtimes_ready, runtime_error,
+                    sizeof(runtime_error)) != 0) {
+                runtimes_ready = 0;
+            }
+            if (!runtimes_ready) {
+                members_healthy = 0;
+                if (!health_error[0] && runtime_error[0]) {
+                    snprintf(health_error, sizeof(health_error), "%s",
+                             runtime_error);
+                }
+            }
+        }
+        if (members_healthy) {
+            continue;
+        }
+
+        memset(&coordinator, 0, sizeof(coordinator));
+        memcpy(coordinator.request_id, tx->request_id,
+               sizeof(coordinator.request_id));
+        coordinator.vm_id = tx->vm_id;
+        coordinator.vm_incarnation = tx->vm_incarnation;
+        coordinator.manifest_generation = tx->manifest_generation;
+        memcpy(coordinator.admission_tx_id, tx->admission_tx_id,
+               sizeof(coordinator.admission_tx_id));
+        memcpy(coordinator.manifest_id, tx->manifest_id,
+               sizeof(coordinator.manifest_id));
+        coordinator.route_scope_key = tx->route_scope_key;
+
+        transition_error[0] = '\0';
+        if (wvm_control_plane_transition(plane, &coordinator, expected, next,
+                                         transition_error,
+                                         sizeof(transition_error)) != 0) {
+            continue;
+        }
+        transitioned++;
+    }
+    if (transitioned_out) {
+        *transitioned_out = transitioned;
+    }
+    if (error && error_len) {
+        error[0] = '\0';
+    }
+    return 0;
+}

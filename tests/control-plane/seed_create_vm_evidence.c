@@ -131,7 +131,7 @@ int main(int argc, char **argv)
                     instance_id, 302, observed_at + 1);
     fill_capability(&records[2], WVM_CAPABILITY_ID_VM_ID_U32, node_id,
                     instance_id, 303, observed_at + 2);
-    /* Mode A multi-context admission publishes kernel acceleration capability.
+    /* Mode A admission may publish kernel acceleration capability; second-VM gate stays closed until A01-A04.
      * CREATE_VM with ACCELERATOR_DISABLED still ignores it; REQUIRE_KERNEL uses it.
      * This does not claim /dev/wavevm guest E2E. */
     fill_capability(&records[3], WVM_CAPABILITY_ID_KERNEL_ACCELERATION, node_id,

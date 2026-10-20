@@ -2833,13 +2833,20 @@ int main(void)
         return 1;
     }
     initialize_prepared_vm(&rejected_prepared, &rejected_buffers);
-    if (expect(wvm_coordinator_prepare(&request, &transaction, &records,
+    memset(error, 0, sizeof(error));
+    if (expect(transaction.vm_id >= 256,
+               "live admission already holds V1 vm_id>255 before CAP reject") ||
+        expect(wvm_coordinator_prepare(&request, &transaction, &records,
                                        &prepared_route, &options,
                                        &rejected_prepared, error,
                                        sizeof(error)) != 0,
-               "reject participants without V1 namespace capability")) {
+               "reject participants without V1 namespace capability") ||
+        expect(strstr(error, "V1 namespace capability") != NULL,
+               "CAP reject names missing V1 namespace capability")) {
+        fprintf(stderr, "coordinator u32-cap oracle error=%s\n", error);
         return 1;
     }
+    puts("NOTE: live >255 admission oracle: allocate>=256 + reject missing WVM_CAP_VM_ID_U32");
 
     wvm_control_plane_close(&control_plane);
     wvm_vm_namespace_allocator_init(

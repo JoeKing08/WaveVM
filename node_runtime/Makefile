@@ -7,7 +7,7 @@ TARGET = ../wavevm_node_runtime
 
 MASTER_OBJS = master_logic.o master_user.o master_main.o
 SLAVE_OBJS = slave_hybrid.o slave_vfio.o
-COMMON_OBJS = resources.o sha256.o canonical.o identity.o runtime_names.o manifest.o lifecycle.o runtime_gate.o runtime_dispatch.o executor_abi.o executor_session.o envelope.o memory.o vcpu_handoff.o vcpu_handoff_cache.o x86_context.o local_memory.o route_runtime.o executor_bridge.o vcpu_coordinator.o vcpu_service.o memory_service.o ingress.o directory_store.o kvm_page_cache.o control.o route_delivery.o runtime_delivery.o membership_control.o membership_controller.o reservation_runtime.o admission_stage.o admission_receiver.o route_control.o control_transport.o control_owner.o tls_control_connector.o admission_node_service.o admission_slot_registry.o admission_runtime_agent.o
+COMMON_OBJS = resources.o sha256.o canonical.o identity.o runtime_names.o manifest.o lifecycle.o runtime_gate.o runtime_dispatch.o executor_abi.o executor_session.o envelope.o memory.o vcpu_handoff.o vcpu_handoff_cache.o x86_context.o local_memory.o route_runtime.o executor_bridge.o vcpu_coordinator.o vcpu_service.o memory_service.o ingress.o directory_store.o kvm_page_cache.o control.o route_delivery.o runtime_delivery.o membership_control.o membership_controller.o reservation_runtime.o admission_stage.o admission_receiver.o route_control.o control_transport.o control_owner.o tls_control_connector.o admission_node_service.o admission_slot_registry.o admission_runtime_agent.o host_probe.o capability.o block_chunk_store.o
 
 all: $(TARGET)
 
@@ -159,3 +159,12 @@ clean:
 	rm -f $(TARGET) main.o $(MASTER_OBJS) $(SLAVE_OBJS) $(COMMON_OBJS)
 
 .PHONY: all clean
+
+host_probe.o: ../common_include/wavevm_host_probe.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+capability.o: ../common_include/wavevm_capability.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+block_chunk_store.o: ../common_include/wavevm_block_chunk_store.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@

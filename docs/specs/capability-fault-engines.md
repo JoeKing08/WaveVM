@@ -1,6 +1,10 @@
 # WaveVM Capability and Fault Engine Specification
 
-Status: proposed implementation specification.
+Status: normative implementation specification.
+
+RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
+semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
+failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
 
 Scope: host capability discovery, versioned capability profiles, execution and
 fault-engine selection, userfaultfd and SIGSEGV/mprotect behavior, KVM dirty

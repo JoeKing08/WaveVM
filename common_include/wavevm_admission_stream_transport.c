@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "wavevm_lifecycle.h"
+#include "wavevm_envelope.h"
 
 static void set_error(char *error, size_t error_len, const char *message)
 {
@@ -80,6 +81,29 @@ int wvm_admission_stream_transport_submit(
         set_error(error, error_len,
                   "runtime readiness reply does not report COMMITTED state");
         return -EPROTO;
+    }
+    if (envelope->message_type == WVM_ENVELOPE_MSG_ROUTE_RETIRE) {
+        /*
+         * F5: begin_retire may only use ACK-proven values.
+         * recorded_state 4 = retired; applied_revision = active refs (0);
+         * expiry_or_retention_deadline 0 = horizon complete.
+         * result_flags must remain 0 (control_result encode contract).
+         */
+        if (result.recorded_state != 4 || result.applied_revision != 0 ||
+            result.expiry_or_retention_deadline != 0 ||
+            result.result_flags != 0) {
+            if (error && error_len != 0) {
+                (void)snprintf(
+                    error, error_len,
+                    "ROUTE_RETIRE ACK lacks refs=0/horizon-complete proof "
+                    "(state=%u refs=%llu horizon_ms=%llu flags=%u)",
+                    (unsigned)result.recorded_state,
+                    (unsigned long long)result.applied_revision,
+                    (unsigned long long)result.expiry_or_retention_deadline,
+                    (unsigned)result.result_flags);
+            }
+            return -EPROTO;
+        }
     }
     return 0;
 }

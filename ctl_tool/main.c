@@ -34,6 +34,7 @@
 #include "admission_readiness.h"
 #include "admission_recovery.h"
 #include "capability_publication.h"
+#include "wavevm_host_probe.h"
 #include "runtime_profile_publication.h"
 #include "membership_enrollment.h"
 #include "gateway_drain.h"
@@ -428,9 +429,27 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
                 transaction.vm_incarnation, &members_healthy, health_error,
                 sizeof(health_error)) != 0 ||
             !members_healthy) {
+            char degrade_error[256] = {0};
+
+            /*
+             * §1 Minimum: required-member failure while RUNNING must leave
+             * durable DEGRADED, not a false healthy SUCCESS (closed loop).
+             */
+            if (wvm_control_plane_transition(
+                    context->plane, &transaction, WVM_LIFECYCLE_RUNNING,
+                    WVM_LIFECYCLE_DEGRADED, degrade_error,
+                    sizeof(degrade_error)) != 0) {
+                fprintf(stderr,
+                        "wvm_ctl: cannot degrade unhealthy RUNNING: %s\n",
+                        degrade_error[0] ? degrade_error : "transition failed");
+            }
+            entry = wvm_control_plane_find_request(context->plane,
+                                                   transaction.request_id);
             pthread_mutex_unlock(&context->lock);
             result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
-            result->recorded_state = (uint16_t)entry->transaction.state;
+            result->recorded_state =
+                entry ? (uint16_t)entry->transaction.state
+                      : (uint16_t)WVM_LIFECYCLE_DEGRADED;
             fprintf(stderr,
                     "wvm_ctl: CREATE_VM refuse healthy RUNNING: %s\n",
                     health_error[0] ? health_error
@@ -512,6 +531,10 @@ static int apply_stop_vm(void *opaque, const struct wvm_envelope *request,
         context->request_list_capacity > 0 ? context->request_list_capacity
                                             : 8U,
         result, error, error_len);
+    fprintf(stderr,
+            "wvm_ctl: STOP_VM rc=%d status=%u recorded_state=%u err=%s\n",
+            rc, (unsigned)result->status_code, (unsigned)result->recorded_state,
+            (error && error[0]) ? error : "(none)");
     pthread_mutex_unlock(&context->lock);
     return rc;
 }
@@ -977,6 +1000,9 @@ static int capability_available_for_node(
 {
     size_t i;
 
+    if (!evidence || !node || !evidence->records) {
+        return 0;
+    }
     for (i = 0; i < evidence->record_count; i++) {
         const struct wvm_capability_record *record = &evidence->records[i];
 
@@ -989,6 +1015,32 @@ static int capability_available_for_node(
     }
     return 0;
 }
+
+static int capability_feature_bits_for_node(
+    const struct wvm_ctl_capability_evidence *evidence,
+    const struct wvm_node_record *node, uint16_t capability_id,
+    uint64_t *feature_bits_out)
+{
+    size_t i;
+
+    if (!evidence || !node || !evidence->records || !feature_bits_out) {
+        return -1;
+    }
+    *feature_bits_out = 0;
+    for (i = 0; i < evidence->record_count; i++) {
+        const struct wvm_capability_record *record = &evidence->records[i];
+
+        if (record->physical_node_id == node->physical_node_id &&
+            record->node_instance_id == node->node_instance_id &&
+            record->capability_id == capability_id &&
+            record->state == WVM_CAPABILITY_AVAILABLE) {
+            *feature_bits_out = record->feature_bits;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 
 static uint64_t current_unix_time_ms(void)
 {
@@ -1060,25 +1112,56 @@ static int admission_workspace_prepare_template(
              "pc-i440fx-5.2");
     options.guest_machine.qemu_compat_version = 502;
     options.guest_machine.firmware_policy = 1;
-    if (request->execution_backend_policy ==
-            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM ||
-        (request->execution_backend_policy == WVM_MANIFEST_BACKEND_POLICY_AUTO &&
-         all_kvm)) {
-        options.execution_profile.backend = WVM_MANIFEST_BACKEND_KVM;
+    /*
+     * Minimum fault-engine selection via shared probe→profile helper.
+     * KVM requires dirty-log evidence; otherwise AUTO falls back to restricted
+     * TCG (SIGSEGV). UFFD is never selected unless every node advertised it.
+     */
+    {
+        int all_kvm_dirty = all_kvm;
+        int all_tcg_uffd = all_tcg;
+        struct wvm_host_probe_execution_choice choice;
+        char select_error[256] = {0};
+
+        for (i = 0; i < workspace->membership_capture.node_count; i++) {
+            const struct wvm_node_record *node =
+                &workspace->membership_capture.nodes[i];
+            uint64_t bits = 0;
+
+            if (all_kvm_dirty) {
+                if (capability_feature_bits_for_node(
+                        evidence, node, WVM_CAPABILITY_ID_EXECUTION_KVM,
+                        &bits) != 0 ||
+                    (bits & WVM_HOST_PROBE_KVM_DIRTY_LOG) == 0) {
+                    all_kvm_dirty = 0;
+                }
+            }
+            if (all_tcg_uffd) {
+                if (capability_feature_bits_for_node(
+                        evidence, node, WVM_CAPABILITY_ID_EXECUTION_TCG,
+                        &bits) != 0 ||
+                    (bits & WVM_HOST_PROBE_TCG_USERFAULTFD) == 0) {
+                    all_tcg_uffd = 0;
+                }
+            }
+        }
+
+        if (wvm_host_probe_select_execution(
+                request->execution_backend_policy, all_tcg, all_kvm,
+                all_kvm_dirty, all_tcg_uffd, &choice, select_error,
+                sizeof(select_error)) != 0) {
+            snprintf(error, error_len, "%s",
+                     select_error[0] ? select_error
+                                     : "execution profile selection failed");
+            return -1;
+        }
+        options.execution_profile.backend = choice.backend;
         options.execution_profile.dirty_capture_engine =
-            WVM_FAULT_ENGINE_KVM_DIRTY_LOG;
-        options.execution_profile.read_fault_engine =
-            WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC;
+            choice.dirty_capture_engine;
+        options.execution_profile.read_fault_engine = choice.read_fault_engine;
         options.execution_profile.invalidation_engine =
-            WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC;
-    } else {
-        options.execution_profile.backend = WVM_MANIFEST_BACKEND_TCG;
-        options.execution_profile.dirty_capture_engine =
-            WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
-        options.execution_profile.read_fault_engine =
-            WVM_FAULT_ENGINE_USERFAULTFD;
-        options.execution_profile.invalidation_engine =
-            WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+            choice.invalidation_engine;
+        options.execution_profile.fallback_decision = choice.fallback_decision;
     }
     if (request->execution_backend_policy ==
             WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG && !all_tcg) {
@@ -1086,9 +1169,28 @@ static int admission_workspace_prepare_template(
         return -1;
     }
     if (request->execution_backend_policy ==
-            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM && !all_kvm) {
-        snprintf(error, error_len, "no complete KVM capability set is published");
-        return -1;
+            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM) {
+        int dirty_ok = all_kvm;
+        size_t di;
+
+        for (di = 0; dirty_ok && di < workspace->membership_capture.node_count;
+             di++) {
+            const struct wvm_node_record *node =
+                &workspace->membership_capture.nodes[di];
+            uint64_t bits = 0;
+
+            if (capability_feature_bits_for_node(
+                    evidence, node, WVM_CAPABILITY_ID_EXECUTION_KVM, &bits) !=
+                    0 ||
+                (bits & WVM_HOST_PROBE_KVM_DIRTY_LOG) == 0) {
+                dirty_ok = 0;
+            }
+        }
+        if (!all_kvm || !dirty_ok) {
+            snprintf(error, error_len,
+                     "no complete KVM dirty/resync capability set is published");
+            return -1;
+        }
     }
     if (request->accelerator_policy == WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL &&
         !all_kernel) {
@@ -1114,8 +1216,82 @@ static int admission_workspace_prepare_template(
     options.execution_profile.per_node_capabilities.capacity = workspace->capacity;
     wvm_sha256_digest("wavevm/memory-policy/1", sizeof("wavevm/memory-policy/1") - 1U,
                       options.execution_profile.supported_memory_policies_digest);
-    options.execution_profile.fallback_decision = 1;
-    options.memory_chunk_bytes = request->requested_memory_bytes;
+    /* fallback_decision already set by backend/engine selection above. */
+    /*
+     * Memory chunk sizing must stay within placement buffer capacity
+     * (admission_workspace MEMORY capacity == compute node_count).
+     * COMPACT / single-node: one chunk == full guest RAM.
+     * SPREAD across N>1 compute: split into min(N, vcpus) MiB-aligned
+     * chunks so pin-local-memory-on-vCPU-nodes can co-locate without
+     * overflowing buffers or inventing remote-memory executors.
+     */
+    {
+        uint64_t chunk_divisor = 1ULL;
+        uint64_t mib = 1024ULL * 1024ULL;
+        /* Must match admission_workspace MEMORY = 2 * node_count (A06). */
+        uint64_t mem_capacity =
+            workspace->membership_capture.node_count * 2ULL;
+
+        if (request->placement_policy == WVM_MANIFEST_PLACEMENT_SPREAD &&
+            workspace->membership_capture.node_count > 1U &&
+            request->requested_vcpus > 1U) {
+            chunk_divisor = workspace->membership_capture.node_count;
+            if (chunk_divisor > request->requested_vcpus) {
+                chunk_divisor = request->requested_vcpus;
+            }
+        }
+        options.memory_chunk_bytes =
+            request->requested_memory_bytes / chunk_divisor;
+        options.memory_chunk_bytes -= options.memory_chunk_bytes % mib;
+        if (options.memory_chunk_bytes < mib) {
+            options.memory_chunk_bytes = mib;
+        }
+        if (options.memory_chunk_bytes > request->requested_memory_bytes) {
+            options.memory_chunk_bytes = request->requested_memory_bytes;
+        }
+        /*
+         * A06: actual placement emits sum(ceil(per_node/chunk)) slots, which
+         * can exceed ceil(total/chunk) by up to (N-1) tail pieces. Size chunk
+         * so that bound fits MEMORY capacity; otherwise collapse to one chunk.
+         */
+        if (options.memory_chunk_bytes > 0 && mem_capacity > 0) {
+            uint64_t node_n = workspace->membership_capture.node_count;
+            uint64_t chunks =
+                (request->requested_memory_bytes + options.memory_chunk_bytes -
+                 1U) /
+                options.memory_chunk_bytes;
+            uint64_t bound = chunks + (node_n > 0 ? node_n - 1U : 0U);
+            while (bound > mem_capacity) {
+                uint64_t min_chunk;
+                if (mem_capacity <= (node_n > 0 ? node_n - 1U : 0U)) {
+                    options.memory_chunk_bytes = request->requested_memory_bytes;
+                    break;
+                }
+                /* Invert bound ≈ ceil(total/c) + N - 1 <= capacity. */
+                min_chunk =
+                    (request->requested_memory_bytes +
+                     (mem_capacity - (node_n > 0 ? node_n - 1U : 0U)) - 1U) /
+                    (mem_capacity - (node_n > 0 ? node_n - 1U : 0U));
+                min_chunk = (min_chunk + mib - 1U) / mib * mib;
+                if (min_chunk < mib) {
+                    min_chunk = mib;
+                }
+                if (min_chunk > request->requested_memory_bytes) {
+                    options.memory_chunk_bytes = request->requested_memory_bytes;
+                    break;
+                }
+                if (min_chunk <= options.memory_chunk_bytes) {
+                    options.memory_chunk_bytes = request->requested_memory_bytes;
+                    break;
+                }
+                options.memory_chunk_bytes = min_chunk;
+                chunks = (request->requested_memory_bytes +
+                          options.memory_chunk_bytes - 1U) /
+                         options.memory_chunk_bytes;
+                bound = chunks + (node_n > 0 ? node_n - 1U : 0U);
+            }
+        }
+    }
     options.host_overhead_vcpu_slots = 1;
     options.host_overhead_memory_bytes = WVM_MANIFEST_PAGE_BYTES;
     options.memory_consistency_policy = 1;
@@ -1423,6 +1599,83 @@ int main(int argc, char **argv)
 
     if (argc > 1 && strcmp(argv[1], "publish-capabilities") == 0) {
         return wvm_ctl_capability_publish_command(argc, argv);
+    }
+    if (argc > 1 && strcmp(argv[1], "probe-capabilities") == 0) {
+        /*
+         * Production probe → capability records file for publish-capabilities.
+         * Does not invent AVAILABLE for unimplemented engines.
+         */
+        struct wvm_host_probe_result probe;
+        struct wvm_capability_record records[8];
+        size_t record_count = 0;
+        char error[256] = {0};
+        uint32_t node_id = 1;
+        uint64_t instance_id = 1;
+        const char *out_path = NULL;
+        int i;
+
+        for (i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--node") == 0 && i + 1 < argc) {
+                node_id = (uint32_t)strtoul(argv[++i], NULL, 10);
+            } else if (strcmp(argv[i], "--instance") == 0 && i + 1 < argc) {
+                instance_id = strtoull(argv[++i], NULL, 10);
+            } else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc) {
+                out_path = argv[++i];
+            }
+        }
+        if (!out_path || node_id == 0 || instance_id == 0) {
+            fprintf(stderr,
+                    "Usage: %s probe-capabilities --node ID --instance ID "
+                    "--out FILE\n",
+                    argv[0]);
+            return 2;
+        }
+        if (wvm_host_probe_run(&probe, error, sizeof(error)) != 0) {
+            fprintf(stderr, "probe-capabilities failed: %s\n",
+                    error[0] ? error : "unknown");
+            return 1;
+        }
+        if (wvm_host_probe_fill_records(&probe, node_id, instance_id, instance_id,
+                                        records, 8, &record_count, error,
+                                        sizeof(error)) != 0 ||
+            record_count == 0) {
+            fprintf(stderr, "probe-capabilities fill failed: %s\n",
+                    error[0] ? error : "unknown");
+            return 1;
+        }
+        {
+            uint8_t *report_bytes = NULL;
+            size_t report_size = 0;
+            FILE *fp;
+            /* A10: emit canonical CapabilityReport for publish-capabilities. */
+            if (wvm_host_probe_encode_report(records, record_count, instance_id,
+                                             &report_bytes, &report_size, error,
+                                             sizeof(error)) != 0) {
+                fprintf(stderr, "probe-capabilities encode failed: %s\n",
+                        error[0] ? error : "unknown");
+                return 1;
+            }
+            fp = fopen(out_path, "wb");
+            if (!fp) {
+                free(report_bytes);
+                perror("probe-capabilities open out");
+                return 1;
+            }
+            if (fwrite(report_bytes, 1, report_size, fp) != report_size) {
+                fclose(fp);
+                free(report_bytes);
+                fprintf(stderr, "probe-capabilities write failed\n");
+                return 1;
+            }
+            fclose(fp);
+            free(report_bytes);
+        }
+        fprintf(stderr,
+                "probe-capabilities wrote CapabilityReport (%zu records, "
+                "tcg=%u kvm=%u kernel=%u)\n",
+                record_count, (unsigned)probe.tcg_state,
+                (unsigned)probe.kvm_state, (unsigned)probe.kernel_accel_state);
+        return 0;
     }
     if (argc > 1 && strcmp(argv[1], "publish-runtime-profile") == 0) {
         return wvm_ctl_runtime_profile_publish_command(argc, argv);
@@ -1742,9 +1995,10 @@ int main(int argc, char **argv)
         }
 
         if (wvm_ctl_recover_midflight_admissions(
-                &plane, &plane.membership_controller, authority,
-                options.state_directory, &admission_workspace.membership_capture,
-                options.capacity, recover_max_vcpus,
+                &plane, &namespace_allocator, &plane.membership_controller,
+                authority, options.state_directory,
+                &admission_workspace.membership_capture, options.capacity,
+                recover_max_vcpus,
                 admission_workspace.route_rule_capacity
                     ? admission_workspace.route_rule_capacity
                     : options.capacity * 64U,
@@ -1798,9 +2052,30 @@ int main(int argc, char **argv)
         wvm_control_service_destroy(&service);
         goto close_plane;
     }
+    /*
+     * goal §1 continuous production loop: periodically fail-closed RUNNING
+     * VMs whose required members became unhealthy (not only CREATE return).
+     */
     while (!shutdown_requested) {
-        if (pause() < 0 && errno != EINTR) {
-            fprintf(stderr, "wvm_ctl: wait for shutdown failed: %s\n",
+        size_t transitioned = 0;
+        char reconcile_error[256];
+        struct timespec interval = {.tv_sec = 1, .tv_nsec = 0};
+
+        reconcile_error[0] = '\0';
+        /*
+         * A12: serialize with CREATE/STOP owner callbacks that hold
+         * control_context.lock while mutating the same plane/journal.
+         */
+        pthread_mutex_lock(&control_context.lock);
+        if (wvm_ctl_reconcile_required_member_health(
+                &plane, &plane.membership_controller, &transitioned,
+                reconcile_error, sizeof(reconcile_error)) != 0) {
+            fprintf(stderr, "wvm_ctl: required-member reconcile failed: %s\n",
+                    reconcile_error[0] ? reconcile_error : "unknown");
+        }
+        pthread_mutex_unlock(&control_context.lock);
+        if (nanosleep(&interval, NULL) < 0 && errno != EINTR) {
+            fprintf(stderr, "wvm_ctl: serve interval failed: %s\n",
                     strerror(errno));
             break;
         }

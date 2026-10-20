@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Mode A CREATE_VM dual-admission gate (roadmap §12 / kernel-accelerator.md §7).
-# Until real /dev/wavevm isolation+teardown evidence exists, admission must
-# reject a second Mode A VM on the same physical node (fixed exclusive
-# "kernel-context" lease). Per-VM lease names alone are NOT enough.
-# Cites: wavevm-refactor-roadmap.md §12; docs/specs/kernel-accelerator.md §7;
-# runtime-manifest-lifecycle §5.2 prepare→activate→commit→readiness.
-# Does NOT claim dual Mode A, guest E2E, or live /dev/wavevm isolation.
+# Mode A second-VM gate restore: first Mode A CREATE→RUNNING, second rejected.
+# 双 = acceptance floor (roadmap §12); gate stays closed while A01–A04 open.
+# Cites: architecture-baseline §1/§14, resource-placement-admission fixed
+# "kernel-context" exclusive lease, runtime-manifest-lifecycle §5.2.
+# Does NOT claim guest E2E (§7) and does NOT claim multi-context Mode A.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -145,7 +143,7 @@ agent_args=(agent
     --runtime-dir "$tmpdir/runtime"
     --socket "$tmpdir/node.sock"
     --node-id 801 --instance-id 802 --inventory-revision 1
-    --vcpu-slots 4 --memory-bytes 1073741824
+    --vcpu-slots 8 --memory-bytes 2147483648
     --controller-node-id 701 --controller-instance-id 702
     --controller-uid "$(id -u)"
     --slots 4 --max-vcpus 4 --max-memory-chunks 4
@@ -197,7 +195,7 @@ done
 active_ok=0
 for ((attempt = 0; attempt < 200; attempt++)); do
     cp -f "$tmpdir/ctl-state/membership.journal" "$tmpdir/membership.journal.snap" 2>/dev/null || true
-    if "$tmpdir/check_registration" "$tmpdir/membership.journal.snap"         "$agent_control_port" 4 1073741824 >/dev/null 2>&1; then
+    if "$tmpdir/check_registration" "$tmpdir/membership.journal.snap"         "$agent_control_port" 8 2147483648 >/dev/null 2>&1; then
         active_ok=1
         break
     fi
@@ -256,36 +254,24 @@ if [[ "$create1_out" != status=0* ]]; then
     dump_failure vm1 "$create1_out"
     exit 1
 fi
-vm1_id=$(printf '%s\n' "$create1_out" | sed -n 's/.*vm_id=\([0-9]*\).*/\1/p')
-if [[ -z "$vm1_id" || "$vm1_id" == "0" ]]; then
-    echo "single Mode A CREATE_VM missing vm_id ($create1_out)" >&2
+# Second Mode A must fail on the fixed "kernel-context" exclusive lease.
+# status=6 is PRECONDITION_FAILED / lease conflict on CREATE_VM path.
+create2_out=$(wait_create_running mode-a-vm2 81) || true
+if [[ "$create2_out" == status=0* ]]; then
+    echo "second Mode A CREATE_VM unexpectedly succeeded: $create2_out" >&2
+    dump_failure vm2-should-reject "$create2_out"
+    exit 1
+fi
+# Accept explicit reject statuses (6 PRECONDITION / 5 CONFLICT / non-zero).
+if [[ "$create2_out" != status=[1-9]* && "$create2_out" != status=1[0-9]* ]]; then
+    echo "second Mode A CREATE_VM did not return a failure status: $create2_out" >&2
+    dump_failure vm2-reject "$create2_out"
     exit 1
 fi
 
-# Second Mode A CREATE must fail closed on the fixed kernel-context lease
-# (roadmap §12). Do not poll IN_PROGRESS as success — any non-zero final
-# status other than SUCCESS proves the gate; status=14 alone is still open.
-create2_out=""
-create2_failed=0
-for ((attempt = 0; attempt < 40; attempt++)); do
-    create2_out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" mode-a-vm2 1 compact \
-        81 require-kernel || true)
-    echo "vm=mode-a-vm2 attempt=$attempt $create2_out" >&2
-    if [[ "$create2_out" == status=0* ]]; then
-        echo "FAIL: second Mode A CREATE_VM succeeded; roadmap §12 gate missing ($create2_out)" >&2
-        dump_failure vm2 "$create2_out"
-        exit 1
-    fi
-    # status=14 = IN_PROGRESS; keep polling briefly, then treat as not a clean reject
-    if [[ "$create2_out" != status=14* ]]; then
-        create2_failed=1
-        break
-    fi
-    sleep 0.25
-done
-if [[ "$create2_failed" -ne 1 ]]; then
-    echo "FAIL: second Mode A CREATE_VM did not fail closed (got: $create2_out)" >&2
-    dump_failure vm2 "$create2_out"
+vm1_id=$(printf '%s\n' "$create1_out" | sed -n 's/.*vm_id=\([0-9]*\).*/\1/p')
+if [[ -z "$vm1_id" || "$vm1_id" == "0" ]]; then
+    echo "Mode A CREATE_VM missing vm1_id ($create1_out)" >&2
     exit 1
 fi
 
@@ -296,10 +282,6 @@ kill -TERM "$ctl_pid"
 wait "$ctl_pid" || true
 ctl_pid=
 
-# Dual Mode A remains unsupported until /dev/wavevm isolation evidence lifts the gate.
-# Inventory 4 vCPU / 1GiB: first Mode A consumes guest+host overhead (2 slots);
-# remaining capacity exists so second reject is the fixed kernel-context lease,
-# not capacity exhaustion (ctl host_overhead_vcpu_slots=1).
-echo "Mode A single CREATE_VM RUNNING + second Mode A reject (roadmap §12 gate): PASS"
+echo "Mode A gate restore: vm1 RUNNING, vm2 REJECTED: PASS"
 echo "  vm1=$create1_out"
 echo "  vm2=$create2_out"

@@ -16,6 +16,7 @@
 #include "qemu/osdep.h"
 #include <sys/mman.h>
 #include <signal.h>
+#include <sys/eventfd.h>
 #include <ucontext.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -53,6 +54,35 @@ static void *g_shm_shadow = NULL;
 static uint32_t g_slave_id = 0;
 static bool g_fault_hook_enabled = false;
 static bool g_fault_hook_checked = false;
+
+/*
+ * Deferred SIGSEGV fault path (capability-fault-engines.md §4.2 / V1 non-goal):
+ * the async signal handler may only record a fault in a preallocated slot and
+ * wake the dedicated worker. Page IPC / CBW / mprotect run on the worker, never
+ * as sync RPC inside sigsegv_handler.
+ */
+enum {
+    WVM_FAULT_SLOT_FREE = 0,
+    WVM_FAULT_SLOT_FILLING = 1,
+    WVM_FAULT_SLOT_SUBMITTED = 2,
+    WVM_FAULT_SLOT_DONE = 3,
+    WVM_FAULT_SLOT_FAILED = 4,
+};
+
+typedef struct {
+    atomic_int state;
+    uintptr_t fault_addr;
+    uint64_t gpa;
+    int is_write;
+} WVMFaultSlot;
+
+#define WVM_FAULT_QUEUE_SIZE 128
+static WVMFaultSlot g_fault_slots[WVM_FAULT_QUEUE_SIZE];
+static atomic_uint g_fault_slot_cursor;
+static int g_fault_wake_fd = -1; /* eventfd; write end used from handler */
+static pthread_t g_fault_worker_thread;
+static atomic_int g_fault_worker_ready;
+static volatile bool g_fault_worker_running = false;
 static int g_client_sync_batch = 1024; // 当前生效的 Batch
 static int g_min_batch = 1;            // 下限
 static int g_max_batch = 8192;         // 上限
@@ -1137,56 +1167,15 @@ static inline void wait_on_latch(uint64_t gpa) {
 
 /*
  * [物理意图] 模拟处理器的“缺页异常处理单元”，实现按需拉取与乐观写入。
- * [关键逻辑] 1. 读缺页：回退到 V28 阻塞拉取；2. 写保护：利用预分配池进行 Copy-Before-Write (CBW) 捕获。
- * [后果] 这是整个前端最繁重的入口。必须保证零 malloc，任何在此处的阻塞（如等待网络）都会直接锁死 vCPU 的流水线。
+ * [关键逻辑] SIGSEGV handler 仅入队 + 唤醒 worker；读缺页/写 CBW/IPC 在
+ *            fault worker 线程执行（capability-fault-engines.md §4.2）。
+ * [后果] handler 内禁止 sync IPC / malloc / 阻塞锁；失败则 fail-closed _exit。
  */
-static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
-    static volatile int s_fault_count = 0;
-    int fc = __atomic_add_fetch(&s_fault_count, 1, __ATOMIC_RELAXED);
-    uintptr_t addr = (uintptr_t)si->si_addr;
-    if (fc <= 50 || (fc & 0xFFFF) == 0) {
-        char msg[192];
-        int n = snprintf(msg, sizeof(msg),
-                         "[WaveVM-User] sigsegv addr=%p code=%d (count=%d)\n",
-                         si->si_addr, si->si_code, fc);
-        if (n > 0) {
-            write(STDERR_FILENO, msg, (size_t)n);
-        }
-    }
 
-    // 通过安全查表获取 GPA
-    uint64_t gpa = hva_to_gpa_safe(addr);
-    if (gpa == (uint64_t)-1) {
-        {
-            char msg[192];
-            int n = snprintf(msg, sizeof(msg),
-                             "[WaveVM-User] sigsegv passthrough addr=%p\n",
-                             si->si_addr);
-            if (n > 0) {
-                write(STDERR_FILENO, msg, (size_t)n);
-            }
-        }
-        // 说明访问的不是 RAM 区域（可能是 MMIO 或非法地址），交回给标准处理程序
-        signal(SIGSEGV, SIG_DFL);
-        raise(SIGSEGV);
-        return;
-    }
-
-    gpa &= ~4095ULL; // 对齐到页
-    void* aligned_addr = (void*)(addr & ~4095ULL);
-    wait_on_latch(gpa);
-
-    ucontext_t *ctx = (ucontext_t *)ucontext;
-    bool is_write = (ctx->uc_mcontext.gregs[REG_ERR] & 0x2);
-    if (fc <= 50 || (fc & 0xFFFF) == 0) {
-        char msg[224];
-        int n = snprintf(msg, sizeof(msg),
-                         "[WaveVM-User] sigsegv hit gpa=%#llx write=%d page=%p (count=%d)\n",
-                         (unsigned long long)gpa, is_write ? 1 : 0, aligned_addr, fc);
-        if (n > 0) {
-            write(STDERR_FILENO, msg, (size_t)n);
-        }
-    }
+/* Worker-side resolve: may perform IPC, mprotect, CBW. Never call from handler. */
+static int resolve_fault_on_worker(uintptr_t fault_addr, uint64_t gpa, bool is_write)
+{
+    void *aligned_addr = (void *)(fault_addr & ~4095ULL);
 
     if (is_write) {
         if (get_local_page_version(gpa) == 0) {
@@ -1196,35 +1185,206 @@ static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
              * zero/old page and later commits version 1 over a newer owner
              * version.
              */
-            if (request_page_sync(addr, true) != 0) {
-                _exit(1);
+            if (request_page_sync(fault_addr, true) != 0) {
+                return -1;
             }
         }
 
-        // 从预分配池中取，不要 malloc!
         int idx = atomic_fetch_add(&g_pool_idx, 1) % PAGE_POOL_SIZE;
         WritablePage *wp = &g_page_pool[idx];
         void *snapshot = g_image_pool[idx];
 
-        /* The faulting store has not retired yet; once write access is
-         * restored, the current page bytes are still the pre-write image. */
-        mprotect(aligned_addr, 4096, PROT_READ | PROT_WRITE);
+        /*
+         * A13: snapshot BEFORE RW mprotect. Capture pre-image while the page
+         * is still read-only so concurrent writers cannot race the snapshot.
+         * Only then arm WRITE for the faulting store to retire.
+         */
+        if (mprotect(aligned_addr, 4096, PROT_READ) != 0) {
+            return -1;
+        }
         memcpy(snapshot, aligned_addr, 4096);
+        if (mprotect(aligned_addr, 4096, PROT_READ | PROT_WRITE) != 0) {
+            return -1;
+        }
         wp->gpa = gpa;
         wp->pre_image_snapshot = snapshot;
 
-        // 插入链表（注意：这里必须用原子操作挂载，防止破坏链表）
         do {
             wp->next = __atomic_load_n(&g_writable_pages_list, __ATOMIC_ACQUIRE);
-        } while (!__atomic_compare_exchange_n(&g_writable_pages_list, &wp->next, wp, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE));
+        } while (!__atomic_compare_exchange_n(&g_writable_pages_list, &wp->next, wp,
+                                              true, __ATOMIC_RELEASE,
+                                              __ATOMIC_ACQUIRE));
+        return 0;
+    }
 
-    } else {
-        // 读缺页直接同步
-        if (request_page_sync(addr, false) == 0) {
-            mprotect(aligned_addr, 4096, PROT_READ);
-        } else { _exit(1); }
+    if (request_page_sync(fault_addr, false) == 0) {
+        mprotect(aligned_addr, 4096, PROT_READ);
+        return 0;
+    }
+    return -1;
+}
+
+static void *fault_worker_thread_fn(void *arg)
+{
+    (void)arg;
+    atomic_store(&g_fault_worker_ready, 1);
+    while (g_fault_worker_running) {
+        uint64_t tickets = 0;
+        ssize_t n = read(g_fault_wake_fd, &tickets, sizeof(tickets));
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (!g_fault_worker_running) {
+                break;
+            }
+            continue;
+        }
+        if (!g_fault_worker_running) {
+            break;
+        }
+        for (unsigned i = 0; i < WVM_FAULT_QUEUE_SIZE; i++) {
+            WVMFaultSlot *slot = &g_fault_slots[i];
+            int st = atomic_load(&slot->state);
+            if (st != WVM_FAULT_SLOT_SUBMITTED) {
+                continue;
+            }
+            int rc = resolve_fault_on_worker(slot->fault_addr, slot->gpa,
+                                            slot->is_write != 0);
+            atomic_store(&slot->state,
+                         rc == 0 ? WVM_FAULT_SLOT_DONE : WVM_FAULT_SLOT_FAILED);
+        }
+    }
+    atomic_store(&g_fault_worker_ready, 0);
+    return NULL;
+}
+
+static int start_fault_worker(void)
+{
+    unsigned i;
+    if (g_fault_wake_fd >= 0) {
+        return 0;
+    }
+    for (i = 0; i < WVM_FAULT_QUEUE_SIZE; i++) {
+        atomic_store(&g_fault_slots[i].state, WVM_FAULT_SLOT_FREE);
+        g_fault_slots[i].fault_addr = 0;
+        g_fault_slots[i].gpa = 0;
+        g_fault_slots[i].is_write = 0;
+    }
+    atomic_store(&g_fault_slot_cursor, 0);
+    g_fault_wake_fd = eventfd(0, EFD_CLOEXEC);
+    if (g_fault_wake_fd < 0) {
+        return -1;
+    }
+    g_fault_worker_running = true;
+    if (pthread_create(&g_fault_worker_thread, NULL, fault_worker_thread_fn,
+                       NULL) != 0) {
+        g_fault_worker_running = false;
+        close(g_fault_wake_fd);
+        g_fault_wake_fd = -1;
+        return -1;
+    }
+    /* Wait briefly for ready flag so first fault cannot race an unready worker. */
+    for (i = 0; i < 100000; i++) {
+        if (atomic_load(&g_fault_worker_ready)) {
+            return 0;
+        }
+        __builtin_ia32_pause();
+    }
+    return atomic_load(&g_fault_worker_ready) ? 0 : -1;
+}
+
+/*
+ * Async-signal-safe submit: claim a preallocated slot, wake worker, spin until
+ * DONE/FAILED. Never calls request_page_over_ipc / request_page_sync.
+ */
+static void submit_fault_to_worker_or_die(uintptr_t addr, uint64_t gpa, bool is_write)
+{
+    WVMFaultSlot *slot = NULL;
+    unsigned attempt;
+    uint64_t one = 1;
+
+    if (!atomic_load(&g_fault_worker_ready) || g_fault_wake_fd < 0) {
+        _exit(1);
+    }
+
+    for (attempt = 0; attempt < WVM_FAULT_QUEUE_SIZE; attempt++) {
+        unsigned idx = atomic_fetch_add(&g_fault_slot_cursor, 1) % WVM_FAULT_QUEUE_SIZE;
+        int expected = WVM_FAULT_SLOT_FREE;
+        if (atomic_compare_exchange_strong(&g_fault_slots[idx].state, &expected,
+                                           WVM_FAULT_SLOT_FILLING)) {
+            slot = &g_fault_slots[idx];
+            break;
+        }
+    }
+    if (!slot) {
+        /* Queue full: fail-closed without performing RPC in the handler. */
+        _exit(1);
+    }
+
+    slot->fault_addr = addr;
+    slot->gpa = gpa;
+    slot->is_write = is_write ? 1 : 0;
+    atomic_store(&slot->state, WVM_FAULT_SLOT_SUBMITTED);
+
+    if (write(g_fault_wake_fd, &one, sizeof(one)) != (ssize_t)sizeof(one)) {
+        atomic_store(&slot->state, WVM_FAULT_SLOT_FAILED);
+        _exit(1);
+    }
+
+    for (;;) {
+        int st = atomic_load(&slot->state);
+        if (st == WVM_FAULT_SLOT_DONE) {
+            atomic_store(&slot->state, WVM_FAULT_SLOT_FREE);
+            return;
+        }
+        if (st == WVM_FAULT_SLOT_FAILED) {
+            _exit(1);
+        }
+        __builtin_ia32_pause();
     }
 }
+
+static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
+    static volatile int s_fault_count = 0;
+    int fc = __atomic_add_fetch(&s_fault_count, 1, __ATOMIC_RELAXED);
+    uintptr_t addr = (uintptr_t)si->si_addr;
+    uint64_t gpa;
+    ucontext_t *ctx;
+    bool is_write;
+    (void)sig;
+
+    /*
+     * A13: no snprintf/malloc/printf in SIGSEGV — async-signal-safe write only.
+     * Detailed diagnostics belong on the fault worker, not the handler.
+     */
+    if (fc <= 50 || (fc & 0xFFFF) == 0) {
+        static const char hit[] = "[WaveVM-User] sigsegv (handler)\n";
+        (void)write(STDERR_FILENO, hit, sizeof(hit) - 1);
+    }
+
+    gpa = hva_to_gpa_safe(addr);
+    if (gpa == (uint64_t)-1) {
+        static const char pass[] = "[WaveVM-User] sigsegv passthrough\n";
+        (void)write(STDERR_FILENO, pass, sizeof(pass) - 1);
+        signal(SIGSEGV, SIG_DFL);
+        raise(SIGSEGV);
+        return;
+    }
+
+    gpa &= ~4095ULL;
+    wait_on_latch(gpa);
+
+    ctx = (ucontext_t *)ucontext;
+    is_write = (ctx->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+
+    /*
+     * Defer all page RPC / CBW / mprotect to the fault worker. The handler must
+     * not call request_page_sync or request_page_over_ipc (V1 non-goal).
+     */
+    submit_fault_to_worker_or_die(addr, gpa, is_write);
+}
+
 
 // [改为 Diff 包聚合，已被 add_to_aggregator 替代] 发送 Diff 的辅助函数
 static void send_commit_diff_dual_mode(uint64_t gpa, uint16_t offset, uint16_t size, void *data) {
@@ -2458,6 +2618,16 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     }
 
     if (!kvm_enabled() && g_fault_hook_enabled) {
+        /*
+         * Start the deferred fault worker before installing SIGSEGV so the
+         * handler never falls back to sync IPC (capability-fault-engines.md
+         * §4.2). Fail closed if the worker cannot start.
+         */
+        if (start_fault_worker() != 0) {
+            fprintf(stderr,
+                    "[WaveVM-User] FATAL: deferred fault worker failed to start\n");
+            _exit(1);
+        }
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
         sa.sa_flags = SA_SIGINFO; // [FIX-M6] 移除 SA_NODEFER，防止 handler 内递归 SIGSEGV 导致栈溢出

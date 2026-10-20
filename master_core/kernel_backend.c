@@ -19,6 +19,10 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/miscdevice.h>
+#include <linux/file.h>
+#include <linux/anon_inodes.h>
+#include <linux/pseudo_fs.h>
+#include <linux/mount.h>
 #include <linux/net.h>
 #include <linux/in.h>
 #include <linux/udp.h>
@@ -33,6 +37,7 @@
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/atomic.h>
+#include <linux/refcount.h>
 #include <asm/barrier.h>
 #include <linux/spinlock.h>
 #include <linux/percpu.h>
@@ -53,6 +58,8 @@
 #include <linux/workqueue.h>
 #include <linux/cpu.h>
 #include <linux/mutex.h>
+#include <linux/hashtable.h>
+#include <linux/hash.h>
 
 #include "../common_include/wavevm_ioctl.h"
 #include "../common_include/wavevm_protocol.h"
@@ -71,15 +78,24 @@ struct wvm_mem_slot {
     bool active;
 };
 
-// [Fix] Multi-VM: 引用全局 vm_id，用于 composite ID 编码
-// In kernel module context, define it here (main_wrapper.c is userspace-only)
-uint32_t g_my_vm_id = 0;
-EXPORT_SYMBOL(g_my_vm_id);
+/* Module-global VM identity removed (baseline §14 / kernel-accelerator.md).
+ * Final-path identity comes from the explicit per-context identity only.
+ */
 
-/* F10 fix: Per-CPU context tracking to avoid global single-slot race.
- * Each CPU maintains its own current context pointer.
- * IOCTL/fault handlers set this at entry and clear at exit. */
-static DEFINE_PER_CPU(struct wvm_kernel_context *, current_context) = NULL;
+/*
+ * A01: Task-bound active context (NOT per-CPU). Survives schedule()/CPU
+ * migration across sleepable fault/ioctl waits. Hash lock is held only for
+ * push/pop — never across sleepable ops or network I/O (no global-serial fix).
+ * Sleepable paths also pass ctx explicitly into k_*_ctx helpers.
+ */
+#define WVM_TASK_CTX_BITS 6
+#define WVM_TASK_CTX_SLOTS (1u << WVM_TASK_CTX_BITS)
+struct wvm_task_ctx_slot {
+	struct task_struct *task;
+	struct wvm_kernel_context *ctx;
+};
+static struct wvm_task_ctx_slot wvm_task_ctx_slots[WVM_TASK_CTX_SLOTS];
+static DEFINE_SPINLOCK(wvm_task_ctx_lock);
 
 static int module_service_port = 9000;
 module_param(module_service_port, int, 0644);
@@ -89,16 +105,18 @@ module_param(module_local_slave_port, int, 0644);
 static struct kmem_cache *wvm_pkt_cache = NULL;
 
 /*
- * Transitional context boundary.
+ * Per-VM kernel context boundary.
  *
- * The data-plane state below is still being migrated away from module
- * globals.  Until that migration is complete, the registry deliberately
- * admits only one manifest identity per module instance.  This prevents a
- * second VM from silently overwriting the first VM's kernel state.
+ * Registry scaffolding allows WVM_KERNEL_MAX_CONCURRENT_CONTEXTS identities,
+ * but the Mode A second-VM gate (admission + QUERY_CAPS + BIND) currently
+ * advertises and enforces max=1 until A01–A04 isolation evidence lands.
+ * Data-plane lookups resolve through the bound context; there is no module-
+ * global VM identity mirror on the final path.
  */
 struct wvm_kernel_context_identity {
     uint32_t vm_id;
     uint32_t physical_node_id;
+    uint64_t node_instance_id;
     uint64_t vm_incarnation;
     uint64_t manifest_generation;
     uint8_t candidate_manifest_digest[WVM_KERNEL_DIGEST_BYTES];
@@ -113,12 +131,19 @@ struct wvm_kernel_transport;
 
 struct wvm_kernel_context {
     struct wvm_kernel_context_identity identity;
+    /* A04: node-runtime primary vnode for this context (not g_my_node_id). */
+    uint32_t local_vnode_id;
     int active;
     atomic_t refs;
     struct hlist_node hash_node;  /* For registry hash table */
+    struct work_struct destroy_work; /* A03: last put from atomic → deferred */
     uint32_t kernel_epoch;
     struct rw_semaphore mapping_sem;
     struct address_space *mapping;
+    struct file *priv_file; /* F3: per-context private address_space file */
+    int priv_fs_pinned;
+    atomic_t mapping_file_refs; /* F3: mmap owners sharing context->mapping */
+    atomic_t file_attaches; /* F3: BIND owners; last detach clears route */
     struct wvm_mem_slot mem_slots[MAX_WVM_SLOTS];
     wait_queue_head_t irq_wait_queue;
     atomic_t irq_pending;
@@ -132,7 +157,12 @@ struct wvm_kernel_context {
 
     /* F12 fix: Per-VM directory table and route context */
     void *dir_table;  /* Per-VM directory authority (replaces g_dir_table) */
+    void *dir_locks;  /* Per-VM GPA shard locks (concurrency; not authority) */
     void *route_context;  /* Per-VM routing context (replaces g_logic_route_context) */
+
+    /* Per-context dirty-commit queue (was shared on g_module_transport). */
+    struct list_head diff_queue;
+    spinlock_t diff_lock;
 };
 
 struct wvm_kernel_file_context {
@@ -154,10 +184,105 @@ static DEFINE_HASHTABLE(g_context_registry, WVM_CONTEXT_HASH_BITS);
 static int g_active_context_count = 0;
 
 /*
- * Shared transport for all VM contexts.
- * TX ring, diff queue, and gateway table are shared infrastructure.
+ * Module-wide UDP socket + TX rings (context-tagged slots). Diff queues are
+ * per-context. Workers may remain module-wide only with explicit context refs.
  */
-static struct wvm_kernel_transport *g_shared_transport;
+static struct wvm_kernel_transport *g_module_transport;
+static wait_queue_head_t g_diff_wq;
+static atomic_t g_diff_pending;
+
+/* F3: per-context private address_space (miscdevice inode is shared). */
+#define WVM_FS_MAGIC 0x57564D41u /* WVMA */
+static struct vfsmount *wvm_mnt;
+static int wvm_mnt_count;
+static DEFINE_MUTEX(wvm_mnt_lock);
+
+static int wvm_init_fs_context(struct fs_context *fc)
+{
+    struct pseudo_fs_context *ctx = init_pseudo(fc, WVM_FS_MAGIC);
+    if (!ctx)
+        return -ENOMEM;
+    return 0;
+}
+
+static const struct file_operations wvm_mem_fops;
+
+static struct file_system_type wvm_fs_type = {
+    .name = "wavevm",
+    .init_fs_context = wvm_init_fs_context,
+    .kill_sb = kill_anon_super,
+};
+
+
+static int wvm_context_ensure_private_mapping(struct wvm_kernel_context *ctx)
+{
+    struct inode *inode;
+    struct file *file;
+    int err;
+
+    if (!ctx)
+        return -EINVAL;
+    if (ctx->priv_file && ctx->mapping)
+        return 0;
+
+    mutex_lock(&wvm_mnt_lock);
+    if (ctx->priv_file && ctx->mapping) {
+        mutex_unlock(&wvm_mnt_lock);
+        return 0;
+    }
+
+    err = simple_pin_fs(&wvm_fs_type, &wvm_mnt, &wvm_mnt_count);
+    if (err) {
+        mutex_unlock(&wvm_mnt_lock);
+        return err;
+    }
+
+    inode = alloc_anon_inode(wvm_mnt->mnt_sb);
+    if (IS_ERR(inode)) {
+        err = PTR_ERR(inode);
+        simple_release_fs(&wvm_mnt, &wvm_mnt_count);
+        mutex_unlock(&wvm_mnt_lock);
+        return err;
+    }
+    inode->i_mode = S_IFREG | S_IRUSR | S_IWUSR;
+    mapping_set_gfp_mask(inode->i_mapping, GFP_HIGHUSER_MOVABLE);
+
+    file = alloc_file_pseudo(inode, wvm_mnt, "[wavevm_mem]",
+                             O_RDWR, &wvm_mem_fops);
+    if (IS_ERR(file)) {
+        err = PTR_ERR(file);
+        iput(inode);
+        simple_release_fs(&wvm_mnt, &wvm_mnt_count);
+        mutex_unlock(&wvm_mnt_lock);
+        return err;
+    }
+    file->f_mode |= FMODE_CAN_READ | FMODE_CAN_WRITE;
+    file->private_data = ctx;
+    ctx->priv_file = file;
+    ctx->mapping = file->f_mapping;
+    ctx->priv_fs_pinned = 1;
+    mutex_unlock(&wvm_mnt_lock);
+    return 0;
+}
+
+static void wvm_context_release_private_mapping(struct wvm_kernel_context *ctx)
+{
+    if (!ctx)
+        return;
+    if (ctx->priv_file) {
+        /* Drop dangling ctx pointer before async __fput; VMA may still hold
+         * a file ref until munmap. Fault path must not UAF after destroy. */
+        ctx->priv_file->private_data = NULL;
+        fput(ctx->priv_file);
+        ctx->priv_file = NULL;
+    }
+    ctx->mapping = NULL;
+    if (ctx->priv_fs_pinned) {
+        simple_release_fs(&wvm_mnt, &wvm_mnt_count);
+        ctx->priv_fs_pinned = 0;
+    }
+}
+
 
 // --- [V29 Wavelet] 内核态脏区捕获与Diff提交结构 ---
 
@@ -229,10 +354,8 @@ struct wvm_kernel_transport {
     struct wvm_tx_ring_t slow_ring;
     struct task_struct *tx_thread;
     wait_queue_head_t tx_wq;
-    struct list_head diff_queue;
-    spinlock_t diff_lock;
     struct task_struct *committer_thread;
-    wait_queue_head_t diff_wq;
+    refcount_t refs; /* contexts + module hold refs */
 };
 
 // 定义工作项结构，用于把参数带到 Workqueue 里
@@ -244,17 +367,28 @@ struct wvm_inval_work {
 
 /* Forward declaration */
 static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx);
+static void wvm_kernel_put_context(struct wvm_kernel_context *ctx);
+static void wvm_context_destroy_work_fn(struct work_struct *work);
+
+static u32 wvm_context_hash_key(uint32_t vm_id, uint64_t node_instance_id)
+{
+    return vm_id ^ (u32)node_instance_id ^ (u32)(node_instance_id >> 32);
+}
+
 
 /*
  * Find and reference an active context by vm_id. Caller must hold g_context_mutex.
  * Returns context with refs incremented, or NULL if not found.
  */
-static struct wvm_kernel_context *wvm_kernel_find_context_locked(uint32_t vm_id)
+static struct wvm_kernel_context *wvm_kernel_find_context_keyed_locked(
+    uint32_t vm_id, uint64_t node_instance_id)
 {
     struct wvm_kernel_context *ctx;
 
-    hash_for_each_possible(g_context_registry, ctx, hash_node, vm_id) {
-        if (ctx->active && ctx->identity.vm_id == vm_id) {
+    hash_for_each_possible(g_context_registry, ctx, hash_node,
+                           wvm_context_hash_key(vm_id, node_instance_id)) {
+        if (ctx->active && ctx->identity.vm_id == vm_id &&
+            ctx->identity.node_instance_id == node_instance_id) {
             atomic_inc(&ctx->refs);
             return ctx;
         }
@@ -263,23 +397,63 @@ static struct wvm_kernel_context *wvm_kernel_find_context_locked(uint32_t vm_id)
 }
 
 /*
- * Convenience wrapper: find and reference a context with internal locking.
+ * Find any active context for vm_id. Full-table walk because F11 publishes
+ * under composite (vm_id, node_instance_id). Ambiguous multi-match → NULL.
  */
-/* F11 fix: RCU-protected context lookup for softirq/atomic contexts.
- * This variant can be called from sk_data_ready (RX softirq) without sleeping.
- * The context itself remains valid because registry removal waits for RCU grace period. */
-static struct wvm_kernel_context *wvm_kernel_find_context_rcu(uint32_t vm_id)
+static struct wvm_kernel_context *wvm_kernel_find_context_locked(uint32_t vm_id)
 {
     struct wvm_kernel_context *ctx;
+    struct wvm_kernel_context *first = NULL;
+    int bkt;
+
+    hash_for_each(g_context_registry, bkt, ctx, hash_node) {
+        if (!ctx->active || ctx->identity.vm_id != vm_id)
+            continue;
+        if (first)
+            return NULL;
+        first = ctx;
+    }
+    if (first) {
+        atomic_inc(&first->refs);
+        return first;
+    }
+    return NULL;
+}
+
+/*
+ * F11: RCU RX lookup. Prefer (vm_id, physical_node_id) when node_id present;
+ * otherwise single active match for vm_id. Softirq-safe.
+ */
+static struct wvm_kernel_context *wvm_kernel_find_context_rcu(
+    uint32_t vm_id, uint32_t physical_node_id)
+{
+    struct wvm_kernel_context *ctx;
+    struct wvm_kernel_context *matched = NULL;
+    int bkt;
 
     rcu_read_lock();
-    hash_for_each_possible_rcu(g_context_registry, ctx, hash_node, vm_id) {
-        if (ctx->identity.vm_id == vm_id && ctx->active) {
+    hash_for_each_rcu(g_context_registry, bkt, ctx, hash_node) {
+        if (!ctx->active || ctx->identity.vm_id != vm_id)
+            continue;
+        if (physical_node_id != 0 &&
+            ctx->identity.physical_node_id == physical_node_id) {
             if (atomic_inc_not_zero(&ctx->refs)) {
                 rcu_read_unlock();
                 return ctx;
             }
+            continue;
         }
+        if (physical_node_id == 0) {
+            if (matched) {
+                matched = NULL;
+                break;
+            }
+            matched = ctx;
+        }
+    }
+    if (matched && atomic_inc_not_zero(&matched->refs)) {
+        rcu_read_unlock();
+        return matched;
     }
     rcu_read_unlock();
     return NULL;
@@ -295,12 +469,31 @@ static struct wvm_kernel_context *wvm_kernel_find_context(uint32_t vm_id)
     return ctx;
 }
 
+static void wvm_context_destroy_work_fn(struct work_struct *work)
+{
+    struct wvm_kernel_context *ctx =
+        container_of(work, struct wvm_kernel_context, destroy_work);
+
+    /* Process context: mutex / synchronize_rcu / mapping teardown OK. */
+    wvm_kernel_destroy_context(ctx);
+}
+
+/*
+ * A03: last put must not run sleepable destroy from softirq/atomic (RX path).
+ * Defer to workqueue when refs hit 0 outside process context.
+ */
 static void wvm_kernel_put_context(struct wvm_kernel_context *ctx)
 {
-    if (ctx && atomic_dec_and_test(&ctx->refs)) {
-        /* Context refs reached 0, destroy it */
-        wvm_kernel_destroy_context(ctx);
+    if (!ctx)
+        return;
+    if (!atomic_dec_and_test(&ctx->refs))
+        return;
+    if (in_atomic() || irqs_disabled()) {
+        INIT_WORK(&ctx->destroy_work, wvm_context_destroy_work_fn);
+        schedule_work(&ctx->destroy_work);
+        return;
     }
+    wvm_kernel_destroy_context(ctx);
 }
 
 /*
@@ -321,9 +514,19 @@ static struct wvm_kernel_context *wvm_kernel_allocate_context(uint32_t vm_id)
         return NULL;
 
     ctx->identity.vm_id = vm_id;
+    ctx->local_vnode_id = 0;
     atomic_set(&ctx->refs, 1);
+    atomic_set(&ctx->mapping_file_refs, 0);
+    atomic_set(&ctx->file_attaches, 0);
     ctx->active = 0;  /* Caller sets to 1 after publish */
-    ctx->transport = g_shared_transport;
+    if (!g_module_transport ||
+        !refcount_inc_not_zero(&g_module_transport->refs)) {
+        kfree(ctx);
+        return NULL;
+    }
+    ctx->transport = g_module_transport;
+    INIT_LIST_HEAD(&ctx->diff_queue);
+    spin_lock_init(&ctx->diff_lock);
     INIT_RADIX_TREE(&ctx->page_tree, GFP_ATOMIC);
     spin_lock_init(&ctx->page_tree_lock);
     init_rwsem(&ctx->mapping_sem);
@@ -360,6 +563,24 @@ static struct wvm_kernel_context *wvm_kernel_allocate_context(uint32_t vm_id)
         pool->tail = MAX_IDS_PER_CPU;  /* All IDs available */
     }
 
+    ctx->dir_table = wvm_logic_alloc_dir_table();
+    if (!ctx->dir_table)
+        goto fail_id_pool;
+    ctx->dir_locks = wvm_logic_alloc_dir_locks();
+    if (!ctx->dir_locks) {
+        wvm_logic_free_dir_table(ctx->dir_table);
+        ctx->dir_table = NULL;
+        goto fail_id_pool;
+    }
+    ctx->route_context = wvm_logic_alloc_route_context();
+    if (!ctx->route_context) {
+        wvm_logic_free_dir_locks(ctx->dir_locks);
+        ctx->dir_locks = NULL;
+        wvm_logic_free_dir_table(ctx->dir_table);
+        ctx->dir_table = NULL;
+        goto fail_id_pool;
+    }
+
     /* No registry publish here; caller does hash_add + g_active_context_count++ */
     return ctx;
 
@@ -373,8 +594,37 @@ fail_id_pool:
 fail_req_ctx:
     vfree(ctx->req_ctx);
 fail_ctx:
+    if (ctx->transport)
+        refcount_dec(&ctx->transport->refs);
     kfree(ctx);
     return NULL;
+}
+
+
+static void wvm_drain_context_diff_tasks(struct wvm_kernel_context *ctx)
+{
+    LIST_HEAD(local);
+    struct diff_task_t *task, *tmp;
+    int n = 0;
+
+    if (!ctx)
+        return;
+    spin_lock_bh(&ctx->diff_lock);
+    list_splice_init(&ctx->diff_queue, &local);
+    spin_unlock_bh(&ctx->diff_lock);
+
+    list_for_each_entry_safe(task, tmp, &local, list) {
+        list_del(&task->list);
+        n++;
+        if (task->pre_image)
+            vfree(task->pre_image);
+        if (task->page)
+            put_page(task->page);
+        wvm_kernel_put_context(task->context);
+        kfree(task);
+    }
+    if (n)
+        atomic_sub(n, &g_diff_pending);
 }
 
 static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
@@ -383,6 +633,9 @@ static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
 
     if (!ctx)
         return;
+
+    /* Drop pending wavelet tasks before touching pages / mapping. */
+    wvm_drain_context_diff_tasks(ctx);
 
     mutex_lock(&g_context_mutex);
     if (ctx->active) {
@@ -396,6 +649,18 @@ static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
      * This ensures any concurrent RCU readers in sk_data_ready finish. */
     synchronize_rcu();
 
+    /*
+     * Page ownership: fault keeps alloc ref on meta; vm_insert_page adds VMA
+     * ref. Write-protect unmap drops VMA refs; meta ref keeps the page alive
+     * for re-fault. Unmap first, then put_page(meta->page) + free meta.
+     */
+    down_write(&ctx->mapping_sem);
+    if (ctx->mapping) {
+        unmap_mapping_range(ctx->mapping, 0, (~(loff_t)0), 1);
+    }
+    atomic_set(&ctx->mapping_file_refs, 0);
+    up_write(&ctx->mapping_sem);
+
     /* Clean up id_pool */
     if (ctx->id_pool) {
         for_each_possible_cpu(cpu) {
@@ -404,75 +669,100 @@ static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
                 vfree(pool->ids);
         }
         free_percpu(ctx->id_pool);
+        ctx->id_pool = NULL;
     }
 
     /* Clean up req_ctx */
-    if (ctx->req_ctx)
+    if (ctx->req_ctx) {
         vfree(ctx->req_ctx);
+        ctx->req_ctx = NULL;
+    }
 
-    /* Clean up radix tree */
+    /* Clean up radix tree: delete slots, put_page meta owns, free meta.
+     * Small batches keep stack under frame-size warning. */
     {
         struct radix_tree_iter iter;
         void **slot;
-        unsigned long indices_to_delete[256];
+        unsigned long indices_to_delete[16];
+        kvm_page_meta_t *metas_to_free[16];
         int count = 0;
+        int i;
+        int more = 1;
 
-        spin_lock(&ctx->page_tree_lock);
-
-        /* First pass: collect all indices */
-        radix_tree_for_each_slot(slot, &ctx->page_tree, &iter, 0) {
-            page_meta_t *meta = radix_tree_deref_slot(slot);
-            if (meta && meta->page) {
-                put_page(meta->page);
-                kfree(meta);
+        while (more) {
+            count = 0;
+            spin_lock(&ctx->page_tree_lock);
+            radix_tree_for_each_slot(slot, &ctx->page_tree, &iter, 0) {
+                indices_to_delete[count] = iter.index;
+                metas_to_free[count] = radix_tree_deref_slot(slot);
+                count++;
+                if (count >= 16)
+                    break;
             }
-            indices_to_delete[count++] = iter.index;
-            if (count >= 256) {
-                /* Delete batch and reset */
-                int i;
-                for (i = 0; i < count; i++) {
-                    radix_tree_delete(&ctx->page_tree, indices_to_delete[i]);
-                }
-                count = 0;
-            }
-        }
-
-        /* Delete remaining items */
-        if (count > 0) {
-            int i;
-            for (i = 0; i < count; i++) {
+            for (i = 0; i < count; i++)
                 radix_tree_delete(&ctx->page_tree, indices_to_delete[i]);
+            more = (count >= 16);
+            spin_unlock(&ctx->page_tree_lock);
+            for (i = 0; i < count; i++) {
+                if (!metas_to_free[i])
+                    continue;
+                skb_queue_purge(&metas_to_free[i]->reorder_q);
+                /* meta owns one page ref (survives write-protect unmap). */
+                if (metas_to_free[i]->page)
+                    put_page(metas_to_free[i]->page);
+                kfree(metas_to_free[i]);
             }
+            if (count == 0)
+                break;
         }
-
-        spin_unlock(&ctx->page_tree_lock);
     }
 
+    if (ctx->dir_table) {
+        wvm_logic_free_dir_table(ctx->dir_table);
+        ctx->dir_table = NULL;
+    }
+    if (ctx->dir_locks) {
+        wvm_logic_free_dir_locks(ctx->dir_locks);
+        ctx->dir_locks = NULL;
+    }
+    if (ctx->route_context) {
+        wvm_logic_free_route_context(ctx->route_context);
+        ctx->route_context = NULL;
+    }
+
+    if (ctx->transport) {
+        refcount_dec(&ctx->transport->refs);
+        ctx->transport = NULL;
+    }
+
+    wvm_context_release_private_mapping(ctx);
     kfree(ctx);
 }
 
 /*
- * F10 fix: Get the currently active context from per-CPU variable.
- *
- * This function is used by ops callbacks (k_send_packet, k_alloc_req_id, etc.)
- * which are invoked by logic_core.c or directly by kernel paths.
- *
- * The per-CPU context is set by:
- * - IOCTL handlers at entry (from file->private_data)
- * - Page fault handlers (from vma->vm_file->private_data)
- * - Async workers (already have context pointer, should set before calling ops)
- *
- * Returns the context WITHOUT incrementing refcount (caller owns the reference
- * for the duration of the operation).
+ * A01: Task-bound active context for logic_core / g_ops shims.
+ * Sleepable fault paths pass ctx explicitly via k_*_ctx; this table only
+ * bridges code that still resolves through wvm_kernel_active_*().
+ * Returns WITHOUT taking a ref (caller lifetime covers the op).
  */
 static struct wvm_kernel_context *wvm_active_context(void)
 {
-    struct wvm_kernel_context *ctx;
+    struct wvm_kernel_context *ctx = NULL;
+    unsigned long flags;
+    unsigned slot = hash_ptr(current, WVM_TASK_CTX_BITS);
+    unsigned i;
 
-    /* Get current CPU's context (preemption disabled during get_cpu_var) */
-    ctx = get_cpu_var(current_context);
-    put_cpu_var(current_context);
-
+    spin_lock_irqsave(&wvm_task_ctx_lock, flags);
+    for (i = 0; i < WVM_TASK_CTX_SLOTS; i++) {
+        unsigned idx = (slot + i) & (WVM_TASK_CTX_SLOTS - 1);
+        if (wvm_task_ctx_slots[idx].task == current) {
+            ctx = wvm_task_ctx_slots[idx].ctx;
+            break;
+        }
+        if (!wvm_task_ctx_slots[idx].task)
+            break;
+    }
+    spin_unlock_irqrestore(&wvm_task_ctx_lock, flags);
     return ctx;
 }
 
@@ -483,20 +773,60 @@ static struct wvm_kernel_transport *wvm_active_transport(void)
     return context ? context->transport : NULL;
 }
 
-/*
- * F10 fix: Set/clear per-CPU context for the duration of an operation.
- * Must be called at IOCTL/fault handler entry and exit.
- */
 static void wvm_set_active_context(struct wvm_kernel_context *ctx)
 {
-    struct wvm_kernel_context **slot = get_cpu_ptr(&current_context);
-    *slot = ctx;
-    put_cpu_ptr(&current_context);
+    unsigned long flags;
+    unsigned slot = hash_ptr(current, WVM_TASK_CTX_BITS);
+    unsigned i;
+    int placed = 0;
+
+    spin_lock_irqsave(&wvm_task_ctx_lock, flags);
+    for (i = 0; i < WVM_TASK_CTX_SLOTS; i++) {
+        unsigned idx = (slot + i) & (WVM_TASK_CTX_SLOTS - 1);
+        if (wvm_task_ctx_slots[idx].task == current ||
+            !wvm_task_ctx_slots[idx].task) {
+            wvm_task_ctx_slots[idx].task = ctx ? current : NULL;
+            wvm_task_ctx_slots[idx].ctx = ctx;
+            placed = 1;
+            break;
+        }
+    }
+    spin_unlock_irqrestore(&wvm_task_ctx_lock, flags);
+    if (!placed && ctx)
+        pr_warn_ratelimited("wavevm: task-ctx table full; explicit ctx paths required\n");
 }
 
 static void wvm_clear_active_context(void)
 {
     wvm_set_active_context(NULL);
+}
+
+/* A04: prefer context-local vnode over module-global g_my_node_id. */
+static uint32_t wvm_ctx_local_vnode(const struct wvm_kernel_context *ctx)
+{
+    extern int g_my_node_id;
+
+    if (ctx && ctx->local_vnode_id)
+        return ctx->local_vnode_id;
+    return (uint32_t)g_my_node_id;
+}
+
+/*
+ * A04: legacy wire still packs vm into 8 bits. Semantic authority is full u32
+ * on the context; refuse to emit a lying composite when vm_id does not fit.
+ */
+static int wvm_wire_encode_id(uint32_t vm_id, uint32_t node_id, uint32_t *out)
+{
+    if (!out)
+        return -EINVAL;
+    if (vm_id > 0xffu) {
+        pr_warn_ratelimited(
+            "wavevm: vm_id=%u exceeds legacy 8-bit wire; need V1 envelope\n",
+            vm_id);
+        return -EOPNOTSUPP;
+    }
+    *out = WVM_ENCODE_ID(vm_id, node_id);
+    return 0;
 }
 
 static struct wvm_kernel_context *wvm_context_for_file(
@@ -510,17 +840,22 @@ static struct wvm_kernel_context *wvm_context_for_file(
 static struct wvm_kernel_context *wvm_context_from_vma(
     const struct vm_area_struct *vma)
 {
+    struct file *filp;
     struct wvm_kernel_file_context *file_context;
 
     if (!vma || !vma->vm_file)
         return NULL;
-    file_context = vma->vm_file->private_data;
+    filp = vma->vm_file;
+    /* Per-context mem file: private_data is the kernel context itself. */
+    if (filp->f_op == &wvm_mem_fops)
+        return filp->private_data;
+    file_context = filp->private_data;
     return wvm_context_for_file(file_context);
 }
 
 /*
- * DEPRECATED: This function uses global g_my_vm_id as fallback and should not
- * be relied upon in multi-VM scenarios. Callers should pass context explicitly.
+ * Active-context VM id only. No module-global mirror. Prefer passing
+ * context->identity.vm_id explicitly on final TX/RX paths.
  */
 uint32_t wvm_kernel_current_vm_id(void)
 {
@@ -528,11 +863,33 @@ uint32_t wvm_kernel_current_vm_id(void)
 
     if (context)
         return READ_ONCE(context->identity.vm_id);
-
-    /* Fallback to legacy global (deprecated) */
-    return READ_ONCE(g_my_vm_id);
+    return 0;
 }
 EXPORT_SYMBOL_GPL(wvm_kernel_current_vm_id);
+
+void *wvm_kernel_active_dir_table(void)
+{
+    struct wvm_kernel_context *context = wvm_active_context();
+
+    return context ? context->dir_table : NULL;
+}
+EXPORT_SYMBOL_GPL(wvm_kernel_active_dir_table);
+
+void *wvm_kernel_active_dir_locks(void)
+{
+    struct wvm_kernel_context *context = wvm_active_context();
+
+    return context ? context->dir_locks : NULL;
+}
+EXPORT_SYMBOL_GPL(wvm_kernel_active_dir_locks);
+
+void *wvm_kernel_active_route_context(void)
+{
+    struct wvm_kernel_context *context = wvm_active_context();
+
+    return context ? context->route_context : NULL;
+}
+EXPORT_SYMBOL_GPL(wvm_kernel_active_route_context);
 
 static int init_ring(struct wvm_tx_ring_t *ring) {
     ring->slots = vmalloc(sizeof(struct tx_slot_t) * TX_RING_SIZE);
@@ -546,25 +903,29 @@ static int init_ring(struct wvm_tx_ring_t *ring) {
 
 static void wvm_transport_stop(struct wvm_kernel_transport *transport)
 {
-    struct diff_task_t *task, *next;
+    struct task_struct *tx, *committer;
 
     if (!transport)
         return;
-    if (transport->tx_thread && !IS_ERR(transport->tx_thread)) {
-        kthread_stop(transport->tx_thread);
-        transport->tx_thread = NULL;
+    /* Drop socket callbacks first so softirq cannot re-enter send paths. */
+    if (transport->socket && transport->socket->sk) {
+        transport->socket->sk->sk_data_ready = NULL;
+        transport->socket->sk->sk_user_data = NULL;
+        /* Ensure in-flight softirq RX sees NULL before we tear threads. */
+        synchronize_rcu();
     }
-    if (transport->committer_thread &&
-        !IS_ERR(transport->committer_thread)) {
-        kthread_stop(transport->committer_thread);
-        transport->committer_thread = NULL;
-    }
-    list_for_each_entry_safe(task, next, &transport->diff_queue, list) {
-        list_del(&task->list);
-        vfree(task->pre_image);
-        put_page(task->page);
-        kfree(task);
-    }
+    wake_up_interruptible(&transport->tx_wq);
+    wake_up_interruptible(&g_diff_wq);
+    tx = transport->tx_thread;
+    transport->tx_thread = NULL;
+    /* kthread_stop on a task that already exited races to NULL deref. */
+    if (tx && !IS_ERR_OR_NULL(tx))
+        kthread_stop(tx);
+    committer = transport->committer_thread;
+    transport->committer_thread = NULL;
+    if (committer && !IS_ERR_OR_NULL(committer))
+        kthread_stop(committer);
+    /* Diff tasks live on per-context queues; drained in context destroy. */
     if (transport->fast_ring.slots) {
         vfree(transport->fast_ring.slots);
         transport->fast_ring.slots = NULL;
@@ -584,32 +945,41 @@ static void wvm_transport_stop(struct wvm_kernel_transport *transport)
 // --- 工作线程回调（运行在进程上下文，安全！）---
 static void wvm_inval_work_fn(struct work_struct *work) {
     struct wvm_inval_work *iw = container_of(work, struct wvm_inval_work, work);
-    
-    down_read(&iw->context->mapping_sem);
-    if (iw->context->mapping) {
+    struct wvm_kernel_context *context = iw->context;
+
+    /* Prefer per-file mapping when set; fall back to context mapping. */
+    down_read(&context->mapping_sem);
+    if (context->mapping) {
         loff_t offset = (loff_t)iw->gpa;
-        unmap_mapping_range(iw->context->mapping, offset, PAGE_SIZE, 1);
+        unmap_mapping_range(context->mapping, offset, PAGE_SIZE, 1);
     }
-    up_read(&iw->context->mapping_sem);
-    
-    kfree(iw); // 任务完成，释放工作项本身
+    up_read(&context->mapping_sem);
+
+    /* F3: drop the ref taken in schedule_async_unmap. */
+    wvm_kernel_put_context(context);
+    kfree(iw);
 }
 
-// --- 调度函数（可以在原子上下文中调用）---
+/* Schedulable from atomic context. Holds a context ref across the work. */
 static void schedule_async_unmap(struct wvm_kernel_context *context,
                                  uint64_t gpa) {
-    // 必须使用 GFP_ATOMIC，因为我们在软中断里
-    struct wvm_inval_work *iw = kmalloc(sizeof(*iw), GFP_ATOMIC);
-    if (iw) {
-        INIT_WORK(&iw->work, wvm_inval_work_fn);
-        iw->context = context;
-        iw->gpa = gpa;
-        schedule_work(&iw->work); // 扔给系统默认队列，内核会择机执行
-    } else {
-        // 极罕见的 OOM，打印错误但只能放弃 Unmap
-        // 后果仅仅是 Guest 短时间内读到旧数据，不会崩系统
+    struct wvm_inval_work *iw;
+
+    if (!context)
+        return;
+    iw = kmalloc(sizeof(*iw), GFP_ATOMIC);
+    if (!iw) {
         printk(KERN_ERR "[WVM] OOM scheduling unmap for GPA %llx\n", gpa);
+        return;
     }
+    if (!atomic_inc_not_zero(&context->refs)) {
+        kfree(iw);
+        return;
+    }
+    INIT_WORK(&iw->work, wvm_inval_work_fn);
+    iw->context = context;
+    iw->gpa = gpa;
+    schedule_work(&iw->work);
 }
 
 // --- 辅助函数 ---
@@ -681,17 +1051,16 @@ static void k_invalidate_meta_atomic(struct wvm_kernel_context *context,
  * [关键逻辑] 采用 Per-CPU 变量技术，每个逻辑核拥有独立的 ID 池。利用 Generation 机制检测网络乱序导致的 ABA 冲突。
  * [后果] 这一步是 Mode A 支持百万 TPS 的基石。它消除了传统分布式系统中全局 ID 产生器的串行化瓶颈。
  */
-static uint64_t k_alloc_req_id(void *rx_buffer, uint32_t buffer_size) {
+static uint64_t k_alloc_req_id_ctx(struct wvm_kernel_context *context,
+                                     void *rx_buffer, uint32_t buffer_size) {
     uint64_t id = (uint64_t)-1;
     unsigned long flags;
-    struct wvm_kernel_context *context = wvm_active_context();
-    int cpu = get_cpu();
+    int cpu;
     struct id_pool_t *pool;
 
-    if (!context->id_pool || !context->req_ctx) {
-        put_cpu();
+    if (!context || !context->id_pool || !context->req_ctx)
         return id;
-    }
+    cpu = get_cpu();
     pool = this_cpu_ptr(context->id_pool);
 
     spin_lock_irqsave(&pool->lock, flags);
@@ -718,41 +1087,62 @@ out:
     return id;
 }
 
-static void k_free_req_id(uint64_t full_id) {
+static uint64_t k_alloc_req_id(void *rx_buffer, uint32_t buffer_size)
+{
+    return k_alloc_req_id_ctx(wvm_active_context(), rx_buffer, buffer_size);
+}
+
+static void k_free_req_id_ctx(struct wvm_kernel_context *context, uint64_t full_id)
+{
     unsigned long flags;
-    struct wvm_kernel_context *context = wvm_active_context();
     uint32_t generation = (uint32_t)(full_id >> 32);
     uint32_t combined_idx = (uint32_t)(full_id & 0xFFFFFFFF);
     int owner_cpu = (combined_idx >> CPU_ID_SHIFT);
     uint32_t raw_idx = combined_idx & (MAX_IDS_PER_CPU - 1);
     struct id_pool_t *pool;
 
-    if (unlikely(!context->id_pool || !context->req_ctx ||
+    if (unlikely(!context || !context->id_pool || !context->req_ctx ||
                  (size_t)combined_idx >= context->req_ctx_count ||
-                 owner_cpu >= nr_cpu_ids)) return;
-    if (context->req_ctx[combined_idx].generation != generation) return;
+                 owner_cpu >= nr_cpu_ids))
+        return;
+    if (context->req_ctx[combined_idx].generation != generation)
+        return;
 
     xchg(&context->req_ctx[combined_idx].rx_buffer, NULL);
     WRITE_ONCE(context->req_ctx[combined_idx].done, 0);
 
     pool = per_cpu_ptr(context->id_pool, owner_cpu);
-    if (unlikely(!pool->ids)) return;
+    if (unlikely(!pool->ids))
+        return;
     spin_lock_irqsave(&pool->lock, flags);
     pool->ids[pool->tail & (MAX_IDS_PER_CPU - 1)] = raw_idx;
     pool->tail++;
     spin_unlock_irqrestore(&pool->lock, flags);
 }
 
-static int k_check_req_status(uint64_t full_id) {
-    struct wvm_kernel_context *context = wvm_active_context();
+static void k_free_req_id(uint64_t full_id)
+{
+    k_free_req_id_ctx(wvm_active_context(), full_id);
+}
+
+static int k_check_req_status_ctx(struct wvm_kernel_context *context,
+                                  uint64_t full_id)
+{
     uint32_t combined_idx = (uint32_t)(full_id & 0xFFFFFFFF);
-    if (!context->req_ctx ||
-        (size_t)combined_idx >= context->req_ctx_count) return -1;
+
+    if (!context || !context->req_ctx ||
+        (size_t)combined_idx >= context->req_ctx_count)
+        return -1;
     if (READ_ONCE(context->req_ctx[combined_idx].done)) {
         smp_rmb();
         return 1;
     }
     return 0;
+}
+
+static int k_check_req_status(uint64_t full_id)
+{
+    return k_check_req_status_ctx(wvm_active_context(), full_id);
 }
 
 // --- 发送逻辑 ---
@@ -839,6 +1229,10 @@ static int tx_worker_thread_fn(void *data) {
 
                 raw_kernel_send(slot->context, slot->data, slot->len,
                                 slot->target_id);
+                /* A03: drop TX-slot get taken at enqueue. */
+                if (slot->context)
+                    wvm_kernel_put_context(slot->context);
+                slot->context = NULL;
                 cond_resched();
             }
         }
@@ -868,6 +1262,9 @@ static int tx_worker_thread_fn(void *data) {
 
                 raw_kernel_send(slot->context, slot->data, slot->len,
                                 slot->target_id);
+                if (slot->context)
+                    wvm_kernel_put_context(slot->context);
+                slot->context = NULL;
             }
             // Preempt if fast packet arrives
             if (atomic_read(&transport->fast_ring.pending_count) > 0) break;
@@ -878,32 +1275,36 @@ static int tx_worker_thread_fn(void *data) {
     return 0;
 }
 
-// [修改] k_send_packet 函数
-static int k_send_packet(void *data, int len, uint32_t target_id) {
+/* A01: explicit context; A03: TX slot holds a get until worker put. */
+static int k_send_packet_ctx(struct wvm_kernel_context *context,
+                             void *data, int len, uint32_t target_id)
+{
     struct wvm_header *hdr = (struct wvm_header *)data;
-    struct wvm_kernel_context *context = wvm_active_context();
-    
-    // [PATCH] 注入当前 Epoch
+    struct wvm_tx_ring_t *ring;
+    unsigned long flags;
+    uint32_t next;
+
+    if (!context || !context->transport || !data)
+        return -ENODEV;
+
     hdr->epoch = htonl(READ_ONCE(context->kernel_epoch));
-    // Node State 在内核态通常默认为 ACTIVE (2)，因为能跑内核模块说明节点活着
-    hdr->node_state = 2; 
+    hdr->node_state = 2;
     hdr->target_id = htonl(target_id);
 
     hdr->crc32 = 0;
     hdr->crc32 = htonl(calculate_crc32(data, len));
-    
-    if (!context || !context->transport)
-        return -ENODEV;
     if (!k_is_atomic_context())
         return raw_kernel_send(context, data, len, target_id);
 
-    struct wvm_tx_ring_t *ring =
-        (hdr->qos_level == 1) ? &context->transport->fast_ring
-                               : &context->transport->slow_ring;
-    unsigned long flags;
+    ring = (hdr->qos_level == 1) ? &context->transport->fast_ring
+                                : &context->transport->slow_ring;
     spin_lock_irqsave(&ring->lock, flags);
-    uint32_t next = (ring->tail + 1) % TX_RING_SIZE;
+    next = (ring->tail + 1) % TX_RING_SIZE;
     if (next != ring->head) {
+        if (!atomic_inc_not_zero(&context->refs)) {
+            spin_unlock_irqrestore(&ring->lock, flags);
+            return -ENODEV;
+        }
         ring->slots[ring->tail].context = context;
         ring->slots[ring->tail].len = len;
         ring->slots[ring->tail].target_id = target_id;
@@ -911,28 +1312,47 @@ static int k_send_packet(void *data, int len, uint32_t target_id) {
         ring->tail = next;
         atomic_inc(&ring->pending_count);
         wake_up_interruptible(&context->transport->tx_wq);
+        spin_unlock_irqrestore(&ring->lock, flags);
+        return 0;
     }
     spin_unlock_irqrestore(&ring->lock, flags);
-    return 0;
+    return -EAGAIN;
 }
 
-static void k_send_packet_async(uint16_t msg_type, void* payload, int len, uint32_t target_id, uint8_t qos) {
+static int k_send_packet(void *data, int len, uint32_t target_id)
+{
+    return k_send_packet_ctx(wvm_active_context(), data, len, target_id);
+}
+
+static void k_send_packet_async(uint16_t msg_type, void *payload, int len,
+                                uint32_t target_id, uint8_t qos)
+{
     size_t pkt_len = sizeof(struct wvm_header) + len;
     uint8_t *buffer = k_alloc_packet(pkt_len, 1);
-    if (!buffer) return;
+    struct wvm_kernel_context *context = wvm_active_context();
+    struct wvm_header *hdr;
+    uint32_t wire_id;
 
-    struct wvm_header *hdr = (struct wvm_header *)buffer;
-    extern int g_my_node_id;
+    if (!buffer)
+        return;
+    if (!context ||
+        wvm_wire_encode_id(context->identity.vm_id,
+                           wvm_ctx_local_vnode(context), &wire_id) != 0) {
+        k_free_packet(buffer);
+        return;
+    }
+
+    hdr = (struct wvm_header *)buffer;
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(WVM_ENCODE_ID(wvm_kernel_current_vm_id(),
-                                         g_my_node_id));
+    hdr->slave_id = htonl(wire_id);
     hdr->req_id = 0;
     hdr->qos_level = qos;
-    if (payload && len > 0) memcpy(buffer + sizeof(*hdr), payload, len);
+    if (payload && len > 0)
+        memcpy(buffer + sizeof(*hdr), payload, len);
 
-    k_send_packet(buffer, pkt_len, target_id);
+    k_send_packet_ctx(context, buffer, pkt_len, target_id);
     k_free_packet(buffer);
 }
 
@@ -978,7 +1398,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     if (!context)
         return VM_FAULT_SIGBUS;
 
-    /* F10 fix: Set per-CPU context for the duration of this fault handler */
+    /* A01: task-bound active ctx for logic_core; ops use explicit ctx. */
     wvm_set_active_context(context);
 
     // 严谨的地址合法性检查
@@ -997,11 +1417,50 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         goto out;
     }
 
+    /*
+     * Re-fault after write-protect unmap: restore the page owned by page_tree.
+     * meta holds one ref so the page survives unmap_mapping_range.
+     */
+    {
+        kvm_page_meta_t *existing;
+
+        spin_lock(&context->page_tree_lock);
+        existing = radix_tree_lookup(&context->page_tree, gpa >> PAGE_SHIFT);
+        if (existing && existing->page) {
+            struct page *ep = existing->page;
+
+            get_page(ep);
+            spin_unlock(&context->page_tree_lock);
+            if (vm_insert_page(vmf->vma, vmf->address, ep) == 0) {
+                put_page(ep);
+                result = VM_FAULT_NOPAGE;
+                goto out;
+            }
+            put_page(ep);
+            result = VM_FAULT_SIGBUS;
+            goto out;
+        }
+        spin_unlock(&context->page_tree_lock);
+    }
+
     uint32_t dir_node = wvm_get_directory_node_id(gpa);
     struct page *page;
     void *page_addr;
     kvm_page_meta_t *meta;
     int ret;
+    int treat_local;
+
+    /*
+     * F4: AUTO_ROUTE / unbound route is NOT a local-alloc license.
+     * Only an explicit local directory owner may take the local first-touch
+     * path; directory/data miss there may zero-fill. Range/table miss and
+     * unbound snapshot must SIGBUS rather than succeed-with-zeros.
+     */
+    if (!WVM_IS_VALID_TARGET(dir_node)) {
+        result = VM_FAULT_SIGBUS;
+        goto out;
+    }
+    treat_local = (WVM_GET_NODEID(dir_node) == wvm_ctx_local_vnode(context));
 
     // 1. 分配目标物理页 (HighMem 兼容)
     page = alloc_page(GFP_HIGHUSER_MOVABLE);
@@ -1025,14 +1484,27 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     // ========================================================================
     // 分支 A: 本地缺页 (Local Fault) - 极速路径
     // ========================================================================
-    if (WVM_GET_NODEID(dir_node) == (uint32_t)g_my_node_id) {
+    if (treat_local) {
         uint64_t local_version = 0;
         
         // 建立临时内核映射进行拷贝 (原子上下文)
         page_addr = kmap_atomic(page);
         
-        // 调用 Logic Core 直接获取数据
+        /* Local directory owner: miss may first-touch zero; hard errors fail. */
         ret = wvm_handle_local_fault_fastpath(gpa, page_addr, &local_version);
+        if (ret < 0) {
+            kunmap_atomic(page_addr);
+            kfree(meta);
+            __free_page(page);
+            result = VM_FAULT_SIGBUS;
+            goto out;
+        }
+        if (ret > 0) {
+            /* Positive miss/empty → first-touch zero page. */
+            memset(page_addr, 0, PAGE_SIZE);
+            local_version = 0;
+            ret = 0;
+        }
         
         kunmap_atomic(page_addr);
 
@@ -1048,13 +1520,11 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
                 goto out;
             }
 
-            // 注册到全局索引树 (用于后续接收 PUSH)
+            // 注册到 per-VM 索引树；meta 保留 alloc 引用（写保护 unmap 后仍可复用）
             spin_lock(&context->page_tree_lock);
             radix_tree_insert(&context->page_tree, gpa >> PAGE_SHIFT, meta);
             spin_unlock(&context->page_tree_lock);
-
-            // 释放 alloc_page 的引用，现在由 VMA 管理
-            put_page(page);
+            /* Do NOT put_page: meta owns the alloc ref; VMA holds insert ref. */
 
             // [V29] 宣告兴趣
             wvm_declare_interest_in_neighborhood(gpa);
@@ -1087,8 +1557,8 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             goto out;
         }
 
-        // 2. 分配请求 ID
-        rid = k_alloc_req_id(bounce_buf, (uint32_t)ack_payload_size);
+        // 2. 分配请求 ID (A01: explicit context)
+        rid = k_alloc_req_id_ctx(context, bounce_buf, (uint32_t)ack_payload_size);
         if (rid == (uint64_t)-1) {
             kfree(bounce_buf);
             kfree(meta);
@@ -1112,23 +1582,34 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             hdr->magic = htonl(WVM_MAGIC);
             hdr->msg_type = htons(MSG_MEM_READ);
             hdr->payload_len = htons(sizeof(net_gpa));
-            hdr->slave_id = htonl(WVM_ENCODE_ID(
-                wvm_kernel_current_vm_id(), dir_node));
+            {
+                uint32_t wire_id;
+
+                if (wvm_wire_encode_id(context->identity.vm_id,
+                                       wvm_ctx_local_vnode(context),
+                                       &wire_id) == 0)
+                    hdr->slave_id = htonl(wire_id);
+                else
+                    hdr->slave_id = 0;
+            }
             hdr->req_id = WVM_HTONLL(rid);
             hdr->qos_level = 1;
             hdr->crc32 = 0;
             memcpy(buffer + sizeof(*hdr), &net_gpa, sizeof(net_gpa));
-            k_send_packet(buffer, pkt_len, dir_node);
+            k_send_packet_ctx(context, buffer, pkt_len, dir_node);
             k_free_packet(buffer);
         }
 
         while (1) {
-        // 4. 睡眠等待
+        // 4. 睡眠等待 — may migrate CPU; do not rely on per-CPU active ctx
         timeout_ret = wait_event_interruptible_timeout(
                 context->req_ctx[(uint32_t)rid].wq,
                 READ_ONCE(context->req_ctx[(uint32_t)rid].done) == 1,
                 timeout_jiffies
             );
+
+            /* A01: re-arm task-bound active ctx after sleep for logic_core. */
+            wvm_set_active_context(context);
 
         // 5. 成功检查
             if (READ_ONCE(context->req_ctx[(uint32_t)rid].done) == 1) {
@@ -1138,7 +1619,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             // 6. 信号中断检查 (防止死锁)
             if (signal_pending(current)) {
                 k_log("Page fault interrupted by signal. GPA: %llx", gpa);
-                k_free_req_id(rid);
+                k_free_req_id_ctx(context, rid);
                 kfree(bounce_buf);
                 kfree(meta);
                 __free_page(page);
@@ -1154,23 +1635,29 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
                 buffer = k_alloc_packet(pkt_len, 1);
                 if (buffer) {
                     struct wvm_header *hdr = (struct wvm_header *)buffer;
+                    uint32_t wire_id;
+
                     hdr->magic = htonl(WVM_MAGIC);
                     hdr->msg_type = htons(MSG_MEM_READ);
                     hdr->payload_len = htons(sizeof(net_gpa));
-                    hdr->slave_id = htonl(WVM_ENCODE_ID(
-                        wvm_kernel_current_vm_id(), dir_node));
+                    if (wvm_wire_encode_id(context->identity.vm_id,
+                                           wvm_ctx_local_vnode(context),
+                                           &wire_id) == 0)
+                        hdr->slave_id = htonl(wire_id);
+                    else
+                        hdr->slave_id = 0;
                     hdr->req_id = WVM_HTONLL(rid);
                     hdr->qos_level = 1;
                     hdr->crc32 = 0;
                     memcpy(buffer + sizeof(*hdr), &net_gpa, sizeof(net_gpa));
-                    k_send_packet(buffer, pkt_len, dir_node);
+                    k_send_packet_ctx(context, buffer, pkt_len, dir_node);
                     k_free_packet(buffer);
                 }
             }
         }
 
         // --- 数据处理 ---
-        k_free_req_id(rid); 
+        k_free_req_id_ctx(context, rid); 
 
         // 从 Bounce Buffer 拷贝数据
         struct wvm_mem_ack_payload *ack = (struct wvm_mem_ack_payload *)bounce_buf;
@@ -1192,8 +1679,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         spin_lock(&context->page_tree_lock);
         radix_tree_insert(&context->page_tree, gpa >> PAGE_SHIFT, meta);
         spin_unlock(&context->page_tree_lock);
-
-        put_page(page);
+        /* meta owns alloc ref across write-protect unmap cycles. */
 
         // V29: 宣告兴趣
         wvm_declare_interest_in_neighborhood(gpa);
@@ -1203,7 +1689,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     }
 
 out:
-    /* F10 fix: Clear per-CPU context on exit */
+    /* A01: clear task-bound active ctx on exit */
     wvm_clear_active_context();
     return result;
 }
@@ -1219,24 +1705,38 @@ static int committer_thread_fn(void *data) {
     if (!transport)
         return -EINVAL;
     while (!kthread_should_stop()) {
-        struct diff_task_t *task;
-        
-        // 1. 等待任务
-        wait_event_interruptible(transport->diff_wq,
-            !list_empty(&transport->diff_queue) || kthread_should_stop());
-            
-        if (kthread_should_stop()) break;
+        struct diff_task_t *task = NULL;
+        struct wvm_kernel_context *ctx;
+        struct hlist_node *tmp;
+        int bkt;
 
-        // 2. 取出一个任务
-        spin_lock_bh(&transport->diff_lock);
-        if (list_empty(&transport->diff_queue)) {
-            spin_unlock_bh(&transport->diff_lock);
-            continue;
+        wait_event_interruptible(g_diff_wq,
+            atomic_read(&g_diff_pending) > 0 || kthread_should_stop());
+
+        if (kthread_should_stop())
+            break;
+
+        /* Round-robin: take one task from any live context queue. */
+        mutex_lock(&g_context_mutex);
+        hash_for_each_safe(g_context_registry, bkt, tmp, ctx, hash_node) {
+            if (!ctx->active)
+                continue;
+            spin_lock_bh(&ctx->diff_lock);
+            if (!list_empty(&ctx->diff_queue)) {
+                task = list_first_entry(&ctx->diff_queue, struct diff_task_t,
+                                        list);
+                list_del(&task->list);
+                spin_unlock_bh(&ctx->diff_lock);
+                atomic_dec(&g_diff_pending);
+                /* Hold context across commit work (task already refs it). */
+                break;
+            }
+            spin_unlock_bh(&ctx->diff_lock);
         }
-        task = list_first_entry(&transport->diff_queue, struct diff_task_t,
-                                list);
-        list_del(&task->list);
-        spin_unlock_bh(&transport->diff_lock);
+        mutex_unlock(&g_context_mutex);
+
+        if (!task)
+            continue;
 
         // 3. 计算 Diff (Compare current page with pre-image)
         void *current_data = kmap_atomic(task->page);
@@ -1276,12 +1776,22 @@ static int committer_thread_fn(void *data) {
             uint8_t *buffer = k_alloc_packet(pkt_len, 0); // Can sleep here
             if (buffer) {
                 struct wvm_header *hdr = (struct wvm_header *)buffer;
+                uint32_t wire_id;
+
                 hdr->magic = htonl(WVM_MAGIC);
                 hdr->msg_type = htons(MSG_COMMIT_DIFF);
                 hdr->payload_len = htons(payload_size);
-                extern int g_my_node_id;
-                hdr->slave_id = htonl(WVM_ENCODE_ID(
-                    wvm_kernel_current_vm_id(), g_my_node_id));
+                if (wvm_wire_encode_id(task->context->identity.vm_id,
+                                       wvm_ctx_local_vnode(task->context),
+                                       &wire_id) != 0) {
+                    k_free_packet(buffer);
+                    vfree(task->pre_image);
+                    put_page(task->page);
+                    wvm_kernel_put_context(task->context);
+                    kfree(task);
+                    continue;
+                }
+                hdr->slave_id = htonl(wire_id);
                 hdr->req_id = 0;
                 hdr->qos_level = 1;
 
@@ -1296,15 +1806,42 @@ static int committer_thread_fn(void *data) {
                 log->offset = htons(offset);
                 log->size = htons(size);
                 
-                // Copy diff data
+                // Copy diff data (pointer past header avoids FORTIFY field-span WARN)
                 current_data = kmap_atomic(task->page);
-                memcpy(log->data, (uint8_t*)current_data + offset, size);
+                {
+                    uint8_t *dst = (uint8_t *)(log + 1);
+                    memcpy(dst, (uint8_t *)current_data + offset, size);
+                }
                 kunmap_atomic(current_data);
                 
-                // Send
-                uint32_t dir_node = wvm_get_directory_node_id(task->gpa);
-                k_send_packet(buffer, pkt_len, dir_node);
-                k_free_packet(buffer);
+                /*
+                 * A02: keep explicit context bound through directory lookup AND
+                 * k_send_packet. Clearing before send made active context NULL
+                 * so send returned -ENODEV and diffs were silently dropped.
+                 * Check send result; failed commits skip the "success" reprotect
+                 * cycle so the page remains dirty for a later retry path.
+                 */
+                {
+                    uint32_t dir_node;
+                    int send_rc;
+
+                    wvm_set_active_context(task->context);
+                    dir_node = wvm_get_directory_node_id(task->gpa);
+                    send_rc = k_send_packet_ctx(task->context, buffer, pkt_len,
+                                                dir_node);
+                    wvm_clear_active_context();
+                    k_free_packet(buffer);
+                    if (send_rc != 0) {
+                        pr_warn_ratelimited(
+                            "wavevm: diff commit send failed gpa=0x%llx rc=%d\n",
+                            (unsigned long long)task->gpa, send_rc);
+                        vfree(task->pre_image);
+                        put_page(task->page);
+                        wvm_kernel_put_context(task->context);
+                        kfree(task);
+                        continue;
+                    }
+                }
             }
         }
 
@@ -1320,64 +1857,62 @@ static int committer_thread_fn(void *data) {
 
         // 6. 清理资源
         vfree(task->pre_image);
-        put_page(task->page); // 释放我们在 mkwrite 中获取的引用
+        put_page(task->page); /* mkwrite get_page */
+        wvm_kernel_put_context(task->context); /* mkwrite context ref */
         kfree(task);
     }
     return 0;
 }
 
-/* 
- * [物理意图] 捕获 Guest 对“只读缓存页”的第一次写动作，启动 Wavelet 提交周期。
- * [关键逻辑] 当 Guest 试图修改内存时拦截请求，执行 Copy-Before-Write 快照，并将原始数据放入 Committer 队列。
- * [后果] 它是分布式写操作的触发器。通过此钩子，WaveVM 能在不修改 Guest 内核的情况下，精准感知每一个字节的变动。
- */
 static vm_fault_t wvm_page_mkwrite(struct vm_fault *vmf) {
     struct wvm_kernel_context *context = wvm_context_from_vma(vmf->vma);
     struct page *page = vmf->page;
     uint64_t gpa = (uint64_t)vmf->pgoff << PAGE_SHIFT;
+    struct diff_task_t *task;
+    void *vaddr;
 
-    if (!context)
+    if (!context || !page)
         return VM_FAULT_SIGBUS;
-    
-    // 1. 分配任务结构和快照内存
-    struct diff_task_t *task = kmalloc(sizeof(*task), GFP_KERNEL);
-    if (!task) return VM_FAULT_OOM;
-    
-    task->pre_image = vmalloc(4096);
-    if (!task->pre_image) {
-        kfree(task);
+
+    /* Must lock when returning VM_FAULT_LOCKED (mm unlocks afterward). */
+    lock_page(page);
+
+    task = kmalloc(sizeof(*task), GFP_KERNEL);
+    if (!task) {
+        unlock_page(page);
         return VM_FAULT_OOM;
     }
 
-    // 2. 捕获快照 (Copy-Before-Write)
-    // 此时页面还是旧数据
-    void *vaddr = kmap_atomic(page);
+    task->pre_image = vmalloc(4096);
+    if (!task->pre_image) {
+        kfree(task);
+        unlock_page(page);
+        return VM_FAULT_OOM;
+    }
+
+    vaddr = kmap_atomic(page);
     memcpy(task->pre_image, vaddr, 4096);
     kunmap_atomic(vaddr);
 
+    if (!context->transport || !atomic_inc_not_zero(&context->refs)) {
+        vfree(task->pre_image);
+        kfree(task);
+        unlock_page(page);
+        return VM_FAULT_SIGBUS;
+    }
+
     task->context = context;
     task->page = page;
-    get_page(page); // 增加引用计数，防止在线程处理前被释放
+    get_page(page);
     task->gpa = gpa;
     task->timestamp = k_get_time_us();
 
-    // 3. 加入队列
-    // [FIX-M3] 统一使用 spin_lock_bh，与取出端保持一致，防止 softirq 死锁
-    if (!context->transport) {
-        vfree(task->pre_image);
-        put_page(task->page);
-        kfree(task);
-        return VM_FAULT_SIGBUS;
-    }
-    spin_lock_bh(&context->transport->diff_lock);
-    list_add_tail(&task->list, &context->transport->diff_queue);
-    spin_unlock_bh(&context->transport->diff_lock);
+    spin_lock_bh(&context->diff_lock);
+    list_add_tail(&task->list, &context->diff_queue);
+    spin_unlock_bh(&context->diff_lock);
+    atomic_inc(&g_diff_pending);
+    wake_up_interruptible(&g_diff_wq);
 
-    // 4. 唤醒提交线程
-    wake_up_interruptible(&context->transport->diff_wq);
-
-    // 5. 允许写入
-    // 返回 VM_FAULT_LOCKED 后，内核会将 PTE 设为可写
     return VM_FAULT_LOCKED;
 }
 
@@ -1765,13 +2300,11 @@ static void wavevm_udp_data_ready(struct sock *sk) {
             uint32_t vm_id = WVM_GET_VMID(target_id);
             struct wvm_kernel_context *context = NULL;
 
-            if (vm_id != 0) {
-                context = wvm_kernel_find_context_rcu(vm_id);
-            } else {
-                // 向后兼容：vm_id=0 时使用全局 g_my_vm_id 查找
-                uint32_t legacy_vm_id = READ_ONCE(g_my_vm_id);
-                if (legacy_vm_id != 0)
-                    context = wvm_kernel_find_context_rcu(legacy_vm_id);
+            {
+                uint32_t pkt_node = WVM_GET_NODEID(target_id);
+                /* Explicit vm_id required; no module-global legacy fallback. */
+                if (vm_id != 0)
+                    context = wvm_kernel_find_context_rcu(vm_id, pkt_node);
             }
 
             if (context) {
@@ -1794,17 +2327,14 @@ static void wavevm_udp_data_ready(struct sock *sk) {
  * [关键逻辑] 通过 Workqueue 异步触发 unmap_mapping_range，强制冲刷所有物理核心的 TLB 缓存。
  * [后果] 实现了真正的“硬件级失效”。当 Guest 下一次访问该地址时，硬件会产生 EPT 违例并陷入内核，保证不会读到旧数据。
  */
-static void k_invalidate_local(uint64_t gpa) {
+static void k_invalidate_local(uint64_t gpa)
+{
     struct wvm_kernel_context *context = wvm_active_context();
 
-    // 1. 先从内核元数据索引中删除（防止新的 Push 进来）
+    if (!context)
+        return;
     k_invalidate_meta_atomic(context, gpa);
-    
-    // 2. [关键] 必须调用这个！触发 unmap_mapping_range
-    // 这会强制撤销 Guest 的物理页映射，并冲刷 TLB
-    // 由于此函数可能在软中断上下文，必须走 Workqueue 异步执行
     schedule_async_unmap(context, gpa);
-    
     k_log("[Consistency] Invalidate hardware mapping for GPA: %llx", gpa);
 }
 
@@ -1849,6 +2379,7 @@ static void wvm_context_identity_from_ioctl(
     memset(identity, 0, sizeof(*identity));
     identity->vm_id = request->vm_id;
     identity->physical_node_id = request->physical_node_id;
+    identity->node_instance_id = request->node_instance_id;
     identity->vm_incarnation = request->vm_incarnation;
     identity->manifest_generation = request->manifest_generation;
     memcpy(identity->candidate_manifest_digest,
@@ -1868,6 +2399,7 @@ static int wvm_context_identity_equal(
 {
     return left->vm_id == right->vm_id &&
            left->physical_node_id == right->physical_node_id &&
+           left->node_instance_id == right->node_instance_id &&
            left->vm_incarnation == right->vm_incarnation &&
            left->manifest_generation == right->manifest_generation &&
            memcmp(left->candidate_manifest_digest,
@@ -1900,6 +2432,7 @@ static int wvm_context_request_valid(
         request->magic != WVM_KERNEL_CONTEXT_MAGIC ||
         request->version != WVM_KERNEL_CONTEXT_ABI_VERSION ||
         request->vm_id == 0 ||
+        request->node_instance_id == 0 ||
         request->vm_incarnation == 0 ||
         request->manifest_generation == 0 ||
         !wvm_bytes_nonzero(request->candidate_manifest_digest,
@@ -1927,7 +2460,10 @@ static int wvm_context_bind_file(
 {
     struct wvm_kernel_context_identity identity;
     struct wvm_route_snapshot_key route_key;
+    struct wvm_kernel_context *ctx = NULL;
+    struct wvm_kernel_context *iter;
     int result = 0;
+    int created = 0;
 
     if (!file_context || wvm_context_request_valid(request) != 0) {
         return -EINVAL;
@@ -1957,44 +2493,88 @@ static int wvm_context_bind_file(
         return result;
     }
 
-    /* Find existing context or allocate new one */
-    struct wvm_kernel_context *ctx = NULL;
-    hash_for_each_possible(g_context_registry, ctx, hash_node, identity.vm_id) {
-        if (ctx->identity.vm_id == identity.vm_id) {
-            /* Found existing context for this vm_id */
-            if (!wvm_context_identity_equal(&ctx->identity, &identity)) {
-                /* Identity mismatch - different VM with same vm_id */
+    /* F11: exact (vm_id, node_instance_id) first; then scan for same-vm
+     * collisions that would share identity incorrectly. */
+    ctx = wvm_kernel_find_context_keyed_locked(identity.vm_id,
+                                               identity.node_instance_id);
+    if (ctx) {
+        if (!wvm_context_identity_equal(&ctx->identity, &identity)) {
+            wvm_kernel_put_context(ctx);
+            mutex_unlock(&g_context_mutex);
+            return -EBUSY;
+        }
+        /* keyed lookup already took a ref; bind path expects to inc once more
+         * for attach below only when reusing — drop the lookup ref and let
+         * the reuse branch atomic_inc. */
+        atomic_dec(&ctx->refs);
+    } else {
+        int bkt;
+        hash_for_each(g_context_registry, bkt, iter, hash_node) {
+            if (!iter->active)
+                continue;
+            if (iter->identity.vm_id == identity.vm_id &&
+                iter->identity.node_instance_id != identity.node_instance_id) {
+                /* Different compute instance of same VM — allowed. */
+                continue;
+            }
+            if (iter->identity.vm_id == identity.vm_id &&
+                iter->identity.node_instance_id == identity.node_instance_id) {
                 mutex_unlock(&g_context_mutex);
                 return -EBUSY;
             }
-            break;
         }
     }
 
     if (!ctx) {
-        /* No existing context, allocate new one */
-        if (wvm_logic_bind_route_snapshot(&route_key) != 0) {
+        /* Match QUERY_CAPS: gate closed → max 1 concurrent Mode A context. */
+        if (g_active_context_count >= 1) {
             mutex_unlock(&g_context_mutex);
-            return -EINVAL;
+            return -ENOSPC;
         }
-        /* Allocator now requires caller to hold mutex and publish */
         ctx = wvm_kernel_allocate_context(identity.vm_id);
         if (!ctx) {
             mutex_unlock(&g_context_mutex);
             return -ENOMEM;
         }
         ctx->identity = identity;
-        hash_add(g_context_registry, &ctx->hash_node, identity.vm_id);
-        g_active_context_count++;
-        ctx->active = 1;  /* Mark active after registry publish */
+        created = 1;
+        /* allocate() starts refs at 1; that hold is the first file attach.
+         * Do NOT publish to the registry until route bind succeeds (CC §3-C).
+         */
+    } else {
+        atomic_inc(&ctx->refs);
     }
 
     file_context->context = ctx;
     file_context->identity = identity;
     file_context->bound = 1;
-    WRITE_ONCE(g_my_vm_id, identity.vm_id);
-    atomic_inc(&ctx->refs);
     mutex_unlock(&g_context_mutex);
+
+    /* Bind route against THIS context before data-plane publish. */
+    wvm_set_active_context(ctx);
+    if (wvm_logic_bind_route_snapshot(&route_key) != 0) {
+        mutex_lock(&g_context_mutex);
+        file_context->bound = 0;
+        file_context->context = NULL;
+        memset(&file_context->identity, 0, sizeof(file_context->identity));
+        mutex_unlock(&g_context_mutex);
+        wvm_clear_active_context();
+        wvm_kernel_put_context(ctx); /* must not skip put / leak */
+        return -EINVAL;
+    }
+    wvm_clear_active_context();
+
+    if (created) {
+        mutex_lock(&g_context_mutex);
+        /* Publish only after route is ready. */
+        hash_add_rcu(g_context_registry, &ctx->hash_node,
+                     wvm_context_hash_key(identity.vm_id,
+                                          identity.node_instance_id));
+        ctx->active = 1;
+        g_active_context_count++;
+        mutex_unlock(&g_context_mutex);
+    }
+    atomic_inc(&ctx->file_attaches);
     return 0;
 }
 
@@ -2003,32 +2583,42 @@ static int wvm_context_unbind_file(
     const struct wvm_ioctl_context_bind *request)
 {
     struct wvm_kernel_context_identity identity;
-    int result = 0;
+    struct wvm_kernel_context *ctx;
 
-    if (!file_context || !file_context->bound) return 0;
+    if (!file_context || !file_context->bound)
+        return 0;
     if (request) {
-        if (wvm_context_request_valid(request) != 0) return -EINVAL;
+        if (wvm_context_request_valid(request) != 0)
+            return -EINVAL;
         wvm_context_identity_from_ioctl(&identity, request);
         if (!wvm_context_identity_equal(&file_context->identity, &identity))
             return -EPERM;
     }
 
     mutex_lock(&g_context_mutex);
+    ctx = file_context->context;
     file_context->bound = 0;
+    file_context->context = NULL;
     memset(&file_context->identity, 0, sizeof(file_context->identity));
-    {
-        struct wvm_kernel_context *ctx = file_context->context;
-        file_context->context = NULL;
-        if (ctx && atomic_dec_and_test(&ctx->refs)) {
-            ctx->active = 0;
-            memset(&ctx->identity, 0, sizeof(ctx->identity));
-            wvm_logic_unbind_route_snapshot();
-            WRITE_ONCE(g_my_vm_id, 0);
-            g_active_context_count--;
-        }
-    }
     mutex_unlock(&g_context_mutex);
-    return result;
+
+    if (!ctx)
+        return 0;
+
+    /*
+     * F3: multiple FDs may share one context. Clearing the route on every
+     * detach made surviving FDs SIGBUS (AUTO_ROUTE). Only the last BIND
+     * owner may unbind the route snapshot; destroy still frees route_context.
+     */
+    if (atomic_dec_and_test(&ctx->file_attaches)) {
+        wvm_set_active_context(ctx);
+        wvm_logic_unbind_route_snapshot();
+        wvm_clear_active_context();
+    }
+
+    /* Drop the file's context reference; last put destroys + hash_del. */
+    wvm_kernel_put_context(ctx);
+    return 0;
 }
 
 static int wvm_context_accepts_vm_id(uint32_t vm_id)
@@ -2061,17 +2651,13 @@ static int wvm_open(struct inode *inode, struct file *filp) {
 
 static int wvm_release(struct inode *inode, struct file *filp) {
     struct wvm_kernel_file_context *file_context = filp->private_data;
-    struct wvm_kernel_context *context =
-        wvm_context_for_file(file_context);
-    struct address_space *mapping = file_context ? file_context->mapping : NULL;
 
     (void)inode;
-    if (mapping) {
-        down_write(&context->mapping_sem);
-        if (context->mapping == mapping)
-            context->mapping = NULL;
-        up_write(&context->mapping_sem);
-    }
+    /*
+     * A03: mapping_file_refs + mmap context get are owned by wvm_vma_close.
+     * Misc close must not touch them — VMA can outlive this FD.
+     * Never NULL context->mapping here: priv_file owns address_space until destroy.
+     */
     wvm_context_unbind_file(file_context, NULL);
     kfree(file_context);
     filp->private_data = NULL;
@@ -2085,7 +2671,7 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     struct wvm_kernel_context *ctx = NULL;
     long ret;
 
-    /* F10 fix: Bind current task to file's VM context using per-CPU variable */
+    /* A01: Bind current task to file's VM context (task-local, not per-CPU). */
     if (file_context && file_context->context) {
         ctx = file_context->context;
         wvm_set_active_context(ctx);
@@ -2118,11 +2704,17 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         memset(&caps, 0, sizeof(caps));
         caps.magic = WVM_KERNEL_CONTEXT_MAGIC;
         caps.version = WVM_KERNEL_CONTEXT_ABI_VERSION;
-        caps.max_concurrent_contexts = 65535;  /* Large finite value for dynamic registry */
+        /*
+         * Gate restored: advertise single-context until A01–A04 isolation
+         * evidence exists. Registry may still hold migration scaffolding;
+         * BIND enforces this advertised max=1.
+         */
+        caps.max_concurrent_contexts = 1U;
         mutex_lock(&g_context_mutex);
-        caps.active_contexts = g_active_context_count;
+        caps.active_contexts = (uint32_t)g_active_context_count;
         mutex_unlock(&g_context_mutex);
-        caps.feature_bits = WVM_KERNEL_CAP_CONTEXT_BIND;
+        caps.feature_bits =
+            WVM_KERNEL_CAP_CONTEXT_BIND | WVM_KERNEL_CAP_SINGLE_CONTEXT;
         if (copy_to_user(argp, &caps, sizeof(caps))) {
             ret = -EFAULT;
             goto out;
@@ -2205,11 +2797,18 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 
     case IOCTL_SET_MEM_LAYOUT: {
         struct wvm_ioctl_mem_layout layout;
+        struct wvm_kernel_context *layout_ctx;
+
         if (copy_from_user(&layout, argp, sizeof(layout))) {
             ret = -EFAULT;
             goto out;
         }
-        ret = wvm_set_mem_layout(wvm_context_for_file(file_context), &layout);
+        layout_ctx = wvm_context_for_file(file_context);
+        if (!layout_ctx) {
+            ret = -ENODEV;
+            goto out;
+        }
+        ret = wvm_set_mem_layout(layout_ctx, &layout);
         goto out;
     }
 
@@ -2243,12 +2842,14 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
             goto out;
         }
 
-        // 4. 传导给 Logic Core
+        // 4. 传导给 Logic Core; A04: also pin vnode on bound context
         for (int i = 0; i < head.count; i++) {
-            // start_index 即 Slot ID
-            // Logic Core 会根据 slot 0/1 更新 g_total_nodes / g_my_node_id
-            // [FIX-M5] 移除 uint16_t 截断，保留完整 uint32_t
-            wvm_set_mem_mapping(head.start_index + i, buf[i]);
+            uint32_t slot = head.start_index + i;
+
+            // start_index 即 Slot ID; [FIX-M5] keep full uint32_t
+            wvm_set_mem_mapping(slot, buf[i]);
+            if (ctx && slot == 1)
+                WRITE_ONCE(ctx->local_vnode_id, buf[i]);
         }
 
         vfree(buf);
@@ -2296,39 +2897,13 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     }
 
     case IOCTL_SET_VM_ID: {
-        uint32_t vm_id;
-        struct wvm_kernel_context *context;
-
-        if (copy_from_user(&vm_id, argp, sizeof(vm_id))) {
-            ret = -EFAULT;
-            goto out;
-        }
-
-        /* Find existing context or allocate new one */
-        mutex_lock(&g_context_mutex);
-        context = wvm_kernel_find_context_locked(vm_id);
-        if (!context) {
-            context = wvm_kernel_allocate_context(vm_id);
-            if (!context) {
-                mutex_unlock(&g_context_mutex);
-                ret = -ENOMEM;
-                goto out;
-            }
-            hash_add_rcu(g_context_registry, &context->hash_node, vm_id);  /* F11: RCU-safe publish */
-            g_active_context_count++;
-            context->active = 1;
-        } else {
-            /* find_context_locked already incremented refs */
-        }
-        mutex_unlock(&g_context_mutex);
-
-        /* Release the reference we acquired from find_context_locked */
-        if (context)
-            wvm_kernel_put_context(context);
-
-        /* Update legacy global for compatibility - will be removed */
-        WRITE_ONCE(g_my_vm_id, vm_id);
-        break;
+        /*
+         * Retired from the production path. Manifest-bound
+         * IOCTL_WVM_BIND_CONTEXT is the only supported context create/attach.
+         * Must goto out: the success epilogue after switch sets ret=0.
+         */
+        ret = -EOPNOTSUPP;
+        goto out;
     }
 
     // [PATCH] 处理 Epoch 更新
@@ -2403,29 +2978,77 @@ out:
     return ret;
 }
 
+static void wvm_vma_close(struct vm_area_struct *vma);
+
 static const struct vm_operations_struct wvm_vm_ops = {
     .fault = wvm_fault_handler,
-    .page_mkwrite = wvm_page_mkwrite, // [V29] 注册 mkwrite 钩子
+    .page_mkwrite = wvm_page_mkwrite,
+    .close = wvm_vma_close, /* A03: put mmap context ref */
 };
 
 static int wvm_mmap(struct file *filp, struct vm_area_struct *vma) {
     struct wvm_kernel_file_context *file_context = filp->private_data;
     struct wvm_kernel_context *context =
         wvm_context_for_file(file_context);
+    struct file *old_file;
+    int err;
+
+    if (!context || !file_context || !file_context->bound)
+        return -ENODEV;
+
+    /* F3: private address_space per context — same GPA must not share misc inode. */
+    err = wvm_context_ensure_private_mapping(context);
+    if (err)
+        return err;
+
+    /* A03: VMA holds a context ref until vm_ops.close. */
+    if (!atomic_inc_not_zero(&context->refs))
+        return -ENODEV;
 
     vma->vm_ops = &wvm_vm_ops;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
-    vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+    /* MIXEDMAP required for vm_insert_page in the fault path. */
+    vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP);
 #else
-    vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+    vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP | VM_MIXEDMAP;
 #endif
+
+    old_file = vma->vm_file;
+    vma->vm_file = get_file(context->priv_file);
+    fput(old_file);
+
     down_write(&context->mapping_sem);
-    context->mapping = vma->vm_file->f_mapping;
+    context->mapping = context->priv_file->f_mapping;
+    atomic_inc(&context->mapping_file_refs);
     up_write(&context->mapping_sem);
-    if (file_context)
-        file_context->mapping = vma->vm_file->f_mapping;
+    file_context->mapping = context->mapping;
     return 0;
 }
+
+/* A03: last mapping owner drops the mmap context get on sleepable path. */
+static void wvm_vma_close(struct vm_area_struct *vma)
+{
+    struct wvm_kernel_context *context = wvm_context_from_vma(vma);
+
+    if (!context)
+        return;
+    down_write(&context->mapping_sem);
+    if (context->mapping && vma->vm_file &&
+        context->mapping == vma->vm_file->f_mapping)
+        atomic_dec(&context->mapping_file_refs);
+    up_write(&context->mapping_sem);
+    wvm_kernel_put_context(context);
+}
+
+static const struct file_operations wvm_mem_fops = {
+    /*
+     * Intentionally no .owner: alloc_file_pseudo does not fops_get/module_get,
+     * but __fput still fops_put/module_put when .owner is set — that underflowed
+     * wavevm refcnt to Unloading after context destroy (same-GPA teardown).
+     * Module lifetime stays pinned by miscdevice opens + loaded module state.
+     */
+    /* mmap/ioctl stay on misc fd; this file only supplies a private mapping. */
+};
 
 static const struct file_operations wvm_fops = {
     .owner = THIS_MODULE,
@@ -2455,16 +3078,16 @@ static int __init wavevm_init(void) {
         return -ENOMEM;
     transport->service_port = module_service_port;
     transport->local_slave_port = module_local_slave_port;
-    INIT_LIST_HEAD(&transport->diff_queue);
-    spin_lock_init(&transport->diff_lock);
     init_waitqueue_head(&transport->tx_wq);
-    init_waitqueue_head(&transport->diff_wq);
+    refcount_set(&transport->refs, 1); /* module holds one ref */
+    init_waitqueue_head(&g_diff_wq);
+    atomic_set(&g_diff_pending, 0);
 
     /*
-     * Contexts are now allocated on-demand via wvm_kernel_allocate_context()
-     * when IOCTL_SET_VM_ID is called. The transport is shared across all contexts.
+     * Module-wide UDP + TX rings (slots carry context*). Diff queues are
+     * per-context. Contexts attach via BIND and take a transport ref.
      */
-    g_shared_transport = transport;
+    g_module_transport = transport;
 
     size_t slab_size = sizeof(struct wvm_header) + 4096 + sizeof(struct wvm_mem_ack_payload);
     wvm_pkt_cache = kmem_cache_create("wvm_data", slab_size, 0, SLAB_HWCACHE_ALIGN, NULL);
@@ -2520,45 +3143,49 @@ fail_contexts:
 }
 
 static void __exit wavevm_exit(void) {
-    struct wvm_kernel_transport *transport = g_shared_transport;
+    struct wvm_kernel_transport *transport = g_module_transport;
     struct wvm_kernel_context *ctx;
     struct hlist_node *tmp;
     int bkt;
 
-    // 1. 先停掉所有自产的内核线程
-    wvm_transport_stop(transport);
-
-    // 2. 刷新系统工作队列 (Workqueue Flush)
-    // 确保所有 schedule_async_unmap 扔出去的任务都已执行完毕。
-    // 如果不加这行，卸载模块后，系统队列里可能还有任务在跑，会执行已被卸载的代码 -> 崩溃。
-    flush_scheduled_work();
-
-    // 3. 等待 RCU 回调 (RCU Barrier)
-    // 确保所有 kfree_rcu 的内存都已真正释放。
-    rcu_barrier();
-
-    // 4. 释放其余资源
+    /* 1. Unpublish device so no new opens race with teardown. */
     misc_deregister(&wvm_misc);
 
-    /* Clean up all active contexts in hash table */
+    /* 2. Quiesce RX callbacks before draining async work. */
+    if (transport && transport->socket && transport->socket->sk) {
+        transport->socket->sk->sk_data_ready = NULL;
+        transport->socket->sk->sk_user_data = NULL;
+    }
+
+    /* 3. Drain async unmap work while contexts still exist (F3 refs). */
+    flush_scheduled_work();
+    rcu_barrier();
+
+    /* 4. Destroy remaining contexts. */
     mutex_lock(&g_context_mutex);
     hash_for_each_safe(g_context_registry, bkt, tmp, ctx, hash_node) {
-        hash_del(&ctx->hash_node);
+        hash_del_rcu(&ctx->hash_node);
         g_active_context_count--;
+        ctx->active = 0;
         mutex_unlock(&g_context_mutex);
-
-        /* Context cleanup without mutex held */
+        synchronize_rcu();
         wvm_kernel_put_context(ctx);
-
         mutex_lock(&g_context_mutex);
     }
     mutex_unlock(&g_context_mutex);
 
-    // [FIX-M4] 销毁 slab 缓存，防止模块卸载后内存泄漏
+    /* 5. Stop kthreads / release socket / rings. */
+    g_module_transport = NULL;
+    wvm_transport_stop(transport);
+
     if (wvm_pkt_cache)
         kmem_cache_destroy(wvm_pkt_cache);
 
     kfree(transport);
+
+    /* Drop pinned pseudo-fs if a destroy raced oddly. */
+    while (wvm_mnt_count > 0)
+        simple_release_fs(&wvm_mnt, &wvm_mnt_count);
 }
 
 module_init(wavevm_init);

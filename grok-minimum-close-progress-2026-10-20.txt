@@ -1,0 +1,85 @@
+WaveVM Minimum-close progress — 2026-10-20 ~09:38 Asia/Shanghai (UTC+8)
+Executor: Grok Bot (machineId 2e4d3ec5-e1b1-4a36-9903-de6309119499)
+Repo: /workspaces/WaveVM
+Live ko: srcversion=4C05A417C8147DD0B61149A
+NEED_REBOOT: NO
+No commit/push. No §6/§7 guest smoke. Mode A gate CLOSED max=1.
+
+## Start → End (Minimum excl §6/§7/Extended)
+Start audit: COMPLETE 17 / PARTIAL 68 / NOT_STARTED 1 / total 86
+End r2:     COMPLETE 71 / PARTIAL 15 / NOT_STARTED 0 / total 86
+End r3:     COMPLETE 75 / PARTIAL 11 / NOT_STARTED 0 / total 86
+Honest non-guest non-MODEA PARTIAL remaining: 0
+
+## r3 close of last 5 non-guest non-MODEA PARTIALs
+1. SPEC-canonical-vm-id-u32-cap → COMPLETE
+   Live >255 admission oracle: coordinator begin allocates vm_id>=256;
+   prepare rejects missing WVM_CAP_VM_ID_U32 with "V1 namespace capability".
+   Evidence: test_coordinator.sh PASS + test_vm_id_u32_cap_oracle.sh PASS
+2. BASE-§16-vm-id-u32-quarantine → COMPLETE
+   V1 allocate>=256; incomplete retirement ACK rejected; quarantine+release;
+   restore range gate (LEGACY rejects >255, U32 rejects <256).
+   Evidence: test_identity.sh PASS (strengthened) + oracle driver PASS
+3. RM-P8-mode-a-same-semantics-as-b → PARTIAL GUEST-BLOCKED (honest)
+   CP capacity/route/identity oracle strengthened with explicit NOTE.
+   Full memory semantic equivalence (page version/commit/dirty/resync/fence)
+   needs guest-visible paths — not fake COMPLETE.
+   Evidence: test_mode_ab_shared_semantics.sh PASS (CP-only; GUEST-BLOCKED noted)
+4. GOAL-1 → COMPLETE
+   goal.txt §1 CP set closed: drain/换血 fail-closed, concurrent CREATE,
+   node-loss policy, route snapshot atomic (race fixed), recover A/B/C/D.
+   MODEA/GUEST tracked on dedicated rows (GOAL-3/5/…), not this ID.
+5. BASE-§1-minimum-profile → COMPLETE
+   Closable Minimum constituents COMPLETE; residual GUEST-BLOCKED +
+   MODEA-BLOCKED + §6/§7 remain on their own rows. Do NOT claim whole-product
+   Minimum done; do NOT claim guest TCG/KVM or multi Mode A.
+
+## Production fixes earlier this close (unchanged from r2)
+1. STOP SIGKILL-reap continues teardown
+2. create_vm_recover Part C A12 fail-closed
+3. route_runtime race oracle fixed
+4. A06 capacity oracle + error preservation
+5. ci_classify_failure harness
+
+## r3 test patches (NO commit/push)
+- tests/control-plane/test_identity.c — V1 quarantine + restore range oracles
+- tests/control-plane/test_coordinator.c — live >255 CAP reject error-string assert
+- tests/control-plane/test_mode_ab_shared_semantics.c — GUEST-BLOCKED honesty NOTE
+- tests/control-plane/test_vm_id_u32_cap_oracle.sh — combined live oracle driver
+
+## GUEST-BLOCKED (honest PARTIAL / NOT_STARTED — do not fake)
+- RM-P8-mode-a-same-semantics-as-b  (NEW this r3 — memory-equiv needs guest)
+- RM-1.1-tcg-kvm-same-contracts
+- RM-1.1-guest-readiness-remote-evidence
+- RM-P9-min-fallback-and-kvm-dirty
+- RM-P10-min-guest-login-ssh
+- BASE-§6-tcg-required
+- BASE-§6-kvm-dirty-not-mprotect
+- SPEC-cap-min-kvm-dirty
+- SPEC-runtime-prepare-activate-commit
+- SPEC-runtime-min-guest-success
+- GOAL-5
+- GOAL-7
+
+## MODEA-BLOCKED (isolation not proven; gate stays CLOSED)
+- RM-P8-two-mode-a-no-collision
+- SPEC-kernel-accel-acceptance-two-vm
+- GOAL-3
+Live: QUERY_CAPS max=1 SINGLE_CONTEXT; SET_VM_ID EOPNOTSUPP path unchanged.
+Do NOT lift Mode A gate.
+
+## SEC6 (NOT_STARTED — untouched)
+- RM-P10-min-smoke-matrix
+- RM-P10-min-evidence-bundle
+- GOAL-6
+
+## Overall (Minimum excl §6/§7/Extended)
+YES for closable non-guest non-MODEA set: PARTIAL=0 in that bucket.
+Remaining Min PARTIAL are GUEST-BLOCKED (8) + MODEA-BLOCKED (3) only.
+Do NOT claim whole-product Minimum COMPLETE. Mode A multi NOT lifted.
+NO commit/push. NO §6/§7 start.
+
+## Transfer
+/workspaces/WaveVM/grok-minimum-close-progress-2026-10-20.txt
+/home/joeking/grok-minimum-close-progress-2026-10-20.txt
+Audit: grok-gangling-min-audit-2026-10-20-r3.txt

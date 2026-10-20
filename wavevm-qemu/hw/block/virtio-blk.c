@@ -674,10 +674,23 @@ static int virtio_blk_handle_request(VirtIOBlockReq *req, MultiReqBuffer *mrb)
                                          req->qiov.size / BDRV_SECTOR_SIZE);
         }
 
-        if (wavevm_blk_interceptor(req->sector_num, &req->qiov, is_write) == 0) {
-            virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
-            virtio_blk_free_request(req);
-            return 0;
+        {
+            int wvm_rc = wavevm_blk_interceptor(req->sector_num, &req->qiov,
+                                                is_write);
+            if (wvm_rc == 0) {
+                virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
+                virtio_blk_free_request(req);
+                return 0;
+            }
+            if (wvm_rc > 0) {
+                /* A08: remote WaveVM failure — never silent local fallback. */
+                virtio_blk_req_complete(req, VIRTIO_BLK_S_IOERR);
+                block_acct_invalid(blk_get_stats(s->blk),
+                                   is_write ? BLOCK_ACCT_WRITE
+                                            : BLOCK_ACCT_READ);
+                virtio_blk_free_request(req);
+                return 0;
+            }
         }
 
         if (!virtio_blk_sect_range_ok(s, req->sector_num, req->qiov.size)) {

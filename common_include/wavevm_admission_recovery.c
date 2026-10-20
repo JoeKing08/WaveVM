@@ -1,5 +1,6 @@
 #include "wavevm_admission_orchestrator.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -383,6 +384,18 @@ int wvm_admission_orchestrator_recover(
     }
     if (entry->transaction.state == WVM_LIFECYCLE_ABORTING) {
         return recover_abort(input, &activation, error, error_len);
+    }
+    if (entry->transaction.state == WVM_LIFECYCLE_STOPPING ||
+        entry->transaction.state == WVM_LIFECYCLE_RETIRING) {
+        /*
+         * Interrupted STOP must be replayed through orchestrator_stop, not
+         * skipped as idempotent SUCCESS (F12). Signal caller with -EINPROGRESS
+         * so ctl cold-recover invokes STOP_VM.
+         */
+        set_error(error, error_len,
+                  "admission recovery must resume STOP for lifecycle state %d",
+                  entry->transaction.state);
+        return -EINPROGRESS;
     }
     set_error(error, error_len,
               "admission recovery cannot resume lifecycle state %d",

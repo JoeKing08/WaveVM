@@ -540,8 +540,10 @@ rm -rf -- "$tmpdir_b"
 
 echo "PASS part B: COMMITTED mid-flight ctl restart recover (scan+dependency_acquire republish, stay IN_PROGRESS)"
 
-# --- Part C: same agent node_instance_id, kill admitted child → relaunch → RUNNING ---
-# §6.2 noncritical local child restart; no RECOVERY_REBIND / agent replacement.
+# --- Part C: same agent, kill admitted child → fail-closed (A12; no false RUNNING) ---
+# Codex A12 / goal §1: unexpected required-child death must DEGRADE/FAILED path;
+# QUERY_RUNTIME_READY must not relaunch into fake RUNNING. §6.2 relaunch is only
+# for noncritical pre-activation cases without has_required_child_failed.
 tmpdir_c=$(mktemp -d "${TMPDIR:-/tmp}/wavevm-create-vm-recover-c.XXXXXX")
 mkdir "$tmpdir_c/ctl-state" "$tmpdir_c/node-state" "$tmpdir_c/runtime" "$tmpdir_c/evidence"
 digest_c=$("$tmpdir/seed_evidence" "$tmpdir_c/evidence" 801 802 1 1 \
@@ -620,13 +622,22 @@ for ((attempt = 0; attempt < 200; attempt++)); do
 done
 [[ "$active_ok" -eq 1 ]]
 
-# Drive to durable COMMITTED (status=14) first — killing after RUNNING would
-# only hit CREATE replay short-circuit and not prove relaunch.
+# Drive to durable COMMITTED (status=14), kill admitted child, assert no RUNNING.
 create_c=""
 killed_child=""
+saw_fail_closed=0
 for ((attempt = 0; attempt < 80; attempt++)); do
     create_c=$("$tmpdir/submit_create_vm" "$tmpdir_c/ctl.sock" || true)
     echo "part_c_attempt=$attempt $create_c"
+    if [[ "$create_c" == status=0* ]]; then
+        if [[ -n "$killed_child" ]]; then
+            echo "fail-closed violated: child kill still reached RUNNING ($create_c)" >&2
+            cat "$tmpdir_c/agent.log" >&2 || true
+            exit 1
+        fi
+        # Reached RUNNING before we could kill — continue loop after kill setup below.
+        :
+    fi
     if [[ "$create_c" == status=14* && -z "$killed_child" ]]; then
         child_pid=""
         while read -r pid; do
@@ -653,11 +664,18 @@ for ((attempt = 0; attempt < 80; attempt++)); do
             killed_child=$child_pid
         fi
     fi
-    if [[ "$create_c" == status=0* ]]; then
-        break
-    fi
-    if [[ "$create_c" != status=14* && "$create_c" != status=0* ]]; then
-        break
+    if [[ -n "$killed_child" ]]; then
+        # After kill: must not be RUNNING. PRECONDITION_FAILED(6) or sticky
+        # IN_PROGRESS(14)/NOT_READY paths are acceptable; SUCCESS(0) is not.
+        if [[ "$create_c" == status=0* ]]; then
+            echo "fail-closed violated: RUNNING after child kill ($create_c)" >&2
+            exit 1
+        fi
+        if [[ "$create_c" == status=6* || "$create_c" == status=12* || "$create_c" == status=13* ]]; then
+            saw_fail_closed=1
+            break
+        fi
+        # status=14 may still appear briefly; keep polling.
     fi
     sleep 0.25
 done
@@ -668,37 +686,30 @@ if [[ -z "$killed_child" ]]; then
     exit 1
 fi
 if ! kill -0 "$agent_pid" 2>/dev/null; then
-    echo "agent died with child; cannot exercise same-instance relaunch" >&2
+    echo "agent died with child; cannot observe fail-closed on live agent" >&2
     exit 1
 fi
-if [[ "$create_c" != status=0* ]]; then
-    echo "part C child-kill relaunch did not reach RUNNING (got: $create_c)" >&2
-    cat "$tmpdir_c/ctl.log" >&2 || true
-    cat "$tmpdir_c/agent.log" >&2 || true
-    exit 1
-fi
-# Prove a replacement child is live (different pid), same agent.
-new_child=""
-for ((attempt = 0; attempt < 50; attempt++)); do
-    while read -r pid; do
-        [[ -z "$pid" ]] && continue
-        cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
-        if [[ "$cmd" == *" child "* ]] || [[ "$cmd" == *" child" ]]; then
-            new_child=$pid
-            break
-        fi
-    done < <(pgrep -P "$agent_pid" || true)
-    if [[ -n "$new_child" && "$new_child" != "$killed_child" ]]; then
-        break
+if [[ "$saw_fail_closed" -ne 1 ]]; then
+    # Final probe: one more CREATE must not claim RUNNING.
+    create_c=$("$tmpdir/submit_create_vm" "$tmpdir_c/ctl.sock" || true)
+    echo "part_c_final $create_c"
+    if [[ "$create_c" == status=0* ]]; then
+        echo "part C fail-closed violated: final RUNNING ($create_c)" >&2
+        cat "$tmpdir_c/ctl.log" >&2 || true
+        cat "$tmpdir_c/agent.log" >&2 || true
+        exit 1
     fi
-    sleep 0.05
-done
-if [[ -z "$new_child" || "$new_child" == "$killed_child" ]]; then
-    echo "part C expected a new admitted child after relaunch (old=$killed_child new=$new_child)" >&2
+    if [[ "$create_c" != status=6* && "$create_c" != status=12* && "$create_c" != status=13* && "$create_c" != status=14* ]]; then
+        echo "part C unexpected post-kill status ($create_c)" >&2
+        exit 1
+    fi
+fi
+if ! grep -q 'has_required_child_failed' "$tmpdir_c/agent.log"; then
+    echo "part C expected agent to mark has_required_child_failed" >&2
     cat "$tmpdir_c/agent.log" >&2 || true
     exit 1
 fi
-echo "PASS part C: admitted child KILL@$killed_child → relaunch@$new_child → RUNNING ($create_c)"
+echo "PASS part C: admitted child KILL@$killed_child → fail-closed (no RUNNING; $create_c)"
 
 kill -TERM "$agent_pid"
 wait "$agent_pid" || true
@@ -835,4 +846,4 @@ ctl_pid=
 rm -rf -- "$tmpdir_d"
 tmpdir_d=
 
-echo "CREATE_VM coordinator restart recovery + local child relaunch: PASS"
+echo "CREATE_VM coordinator restart recovery + child-kill fail-closed + agent-kill: PASS"

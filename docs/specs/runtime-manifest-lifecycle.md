@@ -1,6 +1,10 @@
 # WaveVM Runtime Manifest and Lifecycle Specification
 
-Status: proposed implementation specification.
+Status: normative implementation specification.
+
+RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
+semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
+failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
 
 Scope: the user-facing VM request, the immutable admitted launch manifest,
 per-node runtime manifests, manifest publication, VM lifecycle state, startup,

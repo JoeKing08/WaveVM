@@ -1,14 +1,19 @@
 # WaveVM Mode A/Mode B Boundary Audit
 
-Status: Phase 1 architecture inventory. This is a description of the current
-tree and a migration guide; it does not make the current implementation a
-normative design.
+Status: Phase 1 architecture inventory **plus 2026-10-20 gate restore**.
+Explicit per-VM kernel contexts (ABI v3 BIND), private `address_space`, and
+per-context dir/route scaffolding exist, but the Mode A second-VM gate is
+**restored** (fixed `"kernel-context"` lease + QUERY_CAPS SINGLE_CONTEXT max=1)
+until A01–A04 isolation correctness closes. Module-wide UDP/TX rings remain
+shared plumbing with context-tagged slots (see `kernel-accelerator.md`
+§1.2/§8) and are not a second control plane. Guest login/SSH E2E remains goal
+§7.
 
-Scope: the current `master_core` and `slave_daemon` roles, kernel accelerator,
-QEMU WaveVM glue, and the `/dev/wavevm` IOCTL boundary. This audit identifies
-duplicated semantic state that must be removed or converted to derived
-accelerator state before Mode A can safely support multiple VM instances on one
-physical node.
+Legacy text below retains the historical inventory of duplicated semantic
+state. Where older paragraphs claim the gate is lifted, prefer this header and
+`kernel-accelerator.md` §1.2.
+
+---
 
 ## 1. Current Execution Shape
 
@@ -93,7 +98,7 @@ treated as member admission.
 | `IOCTL_SET_MEM_LAYOUT` | QEMU sends RAM ranges; kernel stores them in the bound context's RAM-slot cache for fault validation. | QEMU RAMBlock/memslot registration is authoritative; kernel caches registered ranges for one VM. | Keep as a context-bound compatibility adapter until the versioned RAM ABI replaces it. |
 | `IOCTL_UPDATE_MEM_ROUTE` | User space injects legacy memory route slots into the kernel-linked logic core. | Memory consistency/routing semantic authority in user space. | Deprecate after the manifest and memory contract define the canonical placement snapshot. |
 | `IOCTL_UPDATE_MEMORY_PLACEMENT` | `main_wrapper.c` injects the 1 GiB placement table into the kernel-linked logic core. | User-space manifest and memory authority. | Replace with a versioned per-VM derived cache, or remove if the kernel fast path can query a narrow local cache. |
-| `IOCTL_SET_VM_ID` | The bound context stores the VM ID; `g_my_vm_id` is retained only as a compatibility mirror for legacy callers. | VM identity and incarnation belong to the admitted runtime manifest. | Retire the mirror and setter after all callers use context binding. |
+| `IOCTL_SET_VM_ID` | Retired in kernel (`-EOPNOTSUPP`); production callers use `IOCTL_WVM_BIND_CONTEXT` only. | VM identity and incarnation belong to the admitted runtime manifest. | Done: setter retired from production path; BIND is sole attach. |
 | `IOCTL_UPDATE_EPOCH` | `user_backend.c` copies the current epoch into the bound context's accelerator cache. | User-space consistency authority. | Keep only as an optional per-VM cache update if a kernel fast path needs it. |
 | `IOCTL_UPDATE_CPU_ROUTE` | `main_wrapper.c` injects the CPU route table into the kernel-linked logic core. | User-space manifest and vCPU handoff authority. | Replace with a versioned per-VM derived cache or a narrow handoff lookup interface. |
 

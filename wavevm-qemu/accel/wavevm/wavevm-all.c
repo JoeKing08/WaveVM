@@ -2462,12 +2462,7 @@ int wvm_send_typed_block_request(uint64_t lba_512, void *buf, uint32_t sector_co
         return -1;
     }
 
-    /* Allocate unique operation ID */
-    qemu_mutex_lock(&s->block_operation_id_lock);
-    operation_id = s->next_block_operation_id++;
-    qemu_mutex_unlock(&s->block_operation_id_lock);
-
-    /* Serialize block requests */
+    /* Serialize block requests (A07: one op id allocated under same lock path) */
     qemu_mutex_lock(&s->block_io_lock);
 
     /* Lazy initialization + reconnection */
@@ -2501,9 +2496,12 @@ int wvm_send_typed_block_request(uint64_t lba_512, void *buf, uint32_t sector_co
     req->origin_physical_node_id = g_vm_runtime_identity.physical_node_id;
     req->origin_runtime_instance_id = g_vm_runtime_identity.runtime_instance_id;
 
-    /* Generate unique operation_id using counter */
+    /* A07: single block op ID — one allocator, echoed in completion match. */
+    qemu_mutex_lock(&s->block_operation_id_lock);
+    operation_id = s->next_block_operation_id++;
+    qemu_mutex_unlock(&s->block_operation_id_lock);
     qemu_mutex_lock(&g_block_request_lock);
-    req->operation_id = ++g_block_operation_id_counter;
+    req->operation_id = operation_id;
     req->queue_sequence = ++g_block_queue_sequence;
     qemu_mutex_unlock(&g_block_request_lock);
 

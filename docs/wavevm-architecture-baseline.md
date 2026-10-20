@@ -968,14 +968,13 @@ Target invariants:
 - No module-global route table as semantic truth.
 - No module-global memory mapping pointer that can be overwritten by another VM.
 
-Until explicit contexts exist, Mode A must be treated as
-single-VM-per-physical-node. Admission must reject a second concurrent Mode A
-VM rather than allowing global state to be overwritten.
-
-This is a migration gate, not the desired product limit. Per-VM contexts,
-context-bound IOCTL/mmap operations, and independent teardown are required
-before the minimum usable system may advertise multiple Mode A VMs on one
-physical node.
+The migration gate stays closed while A01–A04 remain open: QUERY_CAPS
+advertises `SINGLE_CONTEXT` with max=1, and admission rejects a second Mode A
+VM via the fixed `"kernel-context"` exclusive lease. Explicit per-VM contexts
+and targeted isolation tests are scaffolding toward reopening, not evidence
+that multi-VM Mode A is safe today. Module-global VM identity and
+directory/route fallbacks must still leave the final path. Guest login/SSH E2E
+remains goal §7 and is not implied by dual Mode A stub READY.
 
 ## 15. Invariants
 

@@ -98,4 +98,15 @@ int wvm_vcpu_handoff_coordinator_dispatch(
     void *opaque, const struct wvm_envelope *envelope, char *error,
     size_t error_len);
 
+/*
+ * Return a terminal cached result for one operation_id without minting a new
+ * handoff sequence (lost VCPU_EXIT across route-generation change).
+ * 0 = filled; -ENOENT unknown; -EINPROGRESS still in flight.
+ */
+int wvm_vcpu_handoff_coordinator_lookup_completed(
+    struct wvm_vcpu_handoff_coordinator *coordinator, uint32_t vcpu_index,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    struct wvm_vcpu_handoff_request *request_out,
+    struct wvm_vcpu_handoff_result *result_out, char *error, size_t error_len);
+
 #endif /* WAVEVM_NODE_RUNTIME_VCPU_COORDINATOR_H */

@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,6 +20,7 @@ struct route_scope_slot {
     int has_active;
     int has_prepared;
     int has_predecessor;
+    uint64_t outstanding_operation_refs;
 };
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
@@ -487,6 +489,12 @@ int wvm_route_runtime_retire(struct wvm_route_runtime *runtime,
         set_error(error, error_len, "route retirement key is not retained");
         return -1;
     }
+    if (scope->outstanding_operation_refs != 0) {
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len,
+                  "route retirement blocked: outstanding operation refs remain");
+        return -1;
+    }
     if (scope->has_predecessor &&
         snapshot_key_equal(&scope->predecessor.key, key)) {
         snapshot_clear(&scope->predecessor);
@@ -656,4 +664,87 @@ int wvm_route_runtime_has_snapshot(
               snapshot_key_equal(&scope->predecessor.key, key)));
     pthread_rwlock_unlock((pthread_rwlock_t *)&runtime->lock);
     return found;
+}
+
+
+int wvm_route_runtime_operation_ref_get(
+    struct wvm_route_runtime *runtime, const struct wvm_vm_route_scope_key *scope,
+    char *error, size_t error_len)
+{
+    struct route_scope_slot *slot;
+
+    if (!runtime || !scope) {
+        set_error(error, error_len, "route operation ref get input is invalid");
+        return -1;
+    }
+    pthread_rwlock_wrlock(&runtime->lock);
+    slot = find_scope(runtime, scope);
+    if (!slot || !slot->has_active) {
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len,
+                  "route operation ref requires an active scope");
+        return -1;
+    }
+    if (slot->outstanding_operation_refs == UINT64_MAX) {
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len, "route operation ref count overflow");
+        return -1;
+    }
+    slot->outstanding_operation_refs++;
+    pthread_rwlock_unlock(&runtime->lock);
+    return 0;
+}
+
+int wvm_route_runtime_operation_ref_put(
+    struct wvm_route_runtime *runtime, const struct wvm_vm_route_scope_key *scope,
+    char *error, size_t error_len)
+{
+    struct route_scope_slot *slot;
+
+    if (!runtime || !scope) {
+        set_error(error, error_len, "route operation ref put input is invalid");
+        return -1;
+    }
+    pthread_rwlock_wrlock(&runtime->lock);
+    slot = find_scope(runtime, scope);
+    if (!slot || slot->outstanding_operation_refs == 0) {
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len, "route operation ref put underflow");
+        return -1;
+    }
+    slot->outstanding_operation_refs--;
+    pthread_rwlock_unlock(&runtime->lock);
+    return 0;
+}
+
+int wvm_route_runtime_query_retire_proof(
+    const struct wvm_route_runtime *runtime,
+    const struct wvm_route_snapshot_key *key, uint64_t *active_operation_refs,
+    int *retention_horizon_complete, char *error, size_t error_len)
+{
+    const struct route_scope_slot *slot;
+
+    if (!runtime || !key || !active_operation_refs ||
+        !retention_horizon_complete) {
+        set_error(error, error_len, "route retire proof query input is invalid");
+        return -1;
+    }
+    pthread_rwlock_rdlock((pthread_rwlock_t *)&runtime->lock);
+    slot = find_scope_const(runtime, &key->scope_key);
+    if (!slot) {
+        /* Already gone: no retained work for this scope. */
+        pthread_rwlock_unlock((pthread_rwlock_t *)&runtime->lock);
+        *active_operation_refs = 0;
+        *retention_horizon_complete = 1;
+        return 0;
+    }
+    *active_operation_refs = slot->outstanding_operation_refs;
+    /*
+     * Horizon complete only when no outstanding ops and the named key is the
+     * only retained copy being retired (no extra prepared successor holding
+     * drain state for a different generation without proof).
+     */
+    *retention_horizon_complete = (slot->outstanding_operation_refs == 0) ? 1 : 0;
+    pthread_rwlock_unlock((pthread_rwlock_t *)&runtime->lock);
+    return 0;
 }

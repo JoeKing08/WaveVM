@@ -8,6 +8,7 @@
 
 #include "../common_include/wavevm_admission.h"
 #include "../common_include/wavevm_lifecycle.h"
+#include "../common_include/wavevm_coordinator.h"
 #include "../common_include/wavevm_manifest.h"
 #include "../common_include/wavevm_membership_controller.h"
 #include "../common_include/wavevm_runtime_gate.h"
@@ -167,7 +168,8 @@ allocation_failed:
 static int lifecycle_needs_recover(enum wvm_lifecycle_state state)
 {
     return state == WVM_LIFECYCLE_ACTIVATION_DECIDED ||
-           state == WVM_LIFECYCLE_COMMITTED || state == WVM_LIFECYCLE_ABORTING;
+           state == WVM_LIFECYCLE_COMMITTED || state == WVM_LIFECYCLE_ABORTING ||
+           state == WVM_LIFECYCLE_STOPPING || state == WVM_LIFECYCLE_RETIRING;
 }
 
 static int backend_to_admission(enum wvm_manifest_backend backend,
@@ -911,6 +913,7 @@ out:
 
 int wvm_ctl_recover_midflight_admissions(
     struct wvm_control_plane *plane,
+    struct wvm_vm_namespace_allocator *namespace_allocator,
     struct wvm_membership_controller *membership_controller,
     const struct wvm_admission_authority *authority, const char *state_directory,
     const struct wvm_membership_controller_capture *membership_capture,
@@ -920,9 +923,9 @@ int wvm_ctl_recover_midflight_admissions(
     size_t i;
 
     if (!plane || plane->journal_fd < 0 || plane->journal_failed ||
-        !membership_controller || !authority || !state_directory ||
-        !membership_capture || member_capacity == 0 || max_vcpus == 0 ||
-        route_rule_capacity == 0 || route_ack_capacity == 0) {
+        !namespace_allocator || !membership_controller || !authority ||
+        !state_directory || !membership_capture || member_capacity == 0 ||
+        max_vcpus == 0 || route_rule_capacity == 0 || route_ack_capacity == 0) {
         if (error && error_len) {
             snprintf(error, error_len, "admission recovery scan input is invalid");
         }
@@ -942,6 +945,34 @@ int wvm_ctl_recover_midflight_admissions(
                 entry->transaction.vm_id,
                 (unsigned long long)entry->transaction.vm_incarnation,
                 (unsigned)entry->transaction.state);
+        if (entry->transaction.state == WVM_LIFECYCLE_STOPPING ||
+            entry->transaction.state == WVM_LIFECYCLE_RETIRING) {
+            struct wvm_control_result stop_result;
+
+            memset(&stop_result, 0, sizeof(stop_result));
+            if (wvm_ctl_stop_vm(
+                    plane, namespace_allocator, membership_controller, authority,
+                    state_directory, membership_capture, entry->transaction.vm_id,
+                    entry->transaction.vm_incarnation,
+                    entry->transaction.manifest_generation, member_capacity,
+                    max_vcpus, route_rule_capacity, route_ack_capacity,
+                    &stop_result, entry_error, sizeof(entry_error)) != 0 ||
+                stop_result.status_code != WVM_CONTROL_RESULT_SUCCESS) {
+                fprintf(stderr,
+                        "wvm_ctl: interrupted STOP recovery fail-closed for "
+                        "vm_id=%u: %s (status=%u)\n",
+                        entry->transaction.vm_id,
+                        entry_error[0] ? entry_error : "unknown error",
+                        (unsigned)stop_result.status_code);
+                if (error && error_len) {
+                    snprintf(error, error_len, "%s",
+                             entry_error[0] ? entry_error
+                                            : "interrupted STOP recovery failed");
+                }
+                return -1;
+            }
+            continue;
+        }
         if (recover_one_entry(plane, membership_controller, authority,
                               state_directory, membership_capture, entry,
                               member_capacity, max_vcpus, route_rule_capacity,
@@ -1129,12 +1160,15 @@ int wvm_ctl_stop_vm(
         return 0;
     }
     if (entry->transaction.state != WVM_LIFECYCLE_RUNNING &&
+        entry->transaction.state != WVM_LIFECYCLE_DEGRADED &&
+        entry->transaction.state != WVM_LIFECYCLE_FAILED &&
         entry->transaction.state != WVM_LIFECYCLE_STOPPING &&
         entry->transaction.state != WVM_LIFECYCLE_RETIRING) {
         result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
         if (error && error_len) {
             snprintf(error, error_len,
-                     "STOP_VM requires RUNNING/STOPPING/RETIRING (state=%u)",
+                     "STOP_VM requires RUNNING/DEGRADED/FAILED/STOPPING/"
+                     "RETIRING (state=%u)",
                      (unsigned)entry->transaction.state);
         }
         return 0;
@@ -1275,11 +1309,20 @@ int wvm_ctl_stop_vm(
         goto out;
     }
 
+    /*
+     * ROUTE_RETIRE payload is the snapshot key. Full next-hop tables are not
+     * required for the retire ACK; bind the durable prepared key.
+     */
+    memset(&projection.route_snapshot, 0, sizeof(projection.route_snapshot));
+    projection.route_snapshot.route_snapshot_key =
+        entry->transaction.prepared_route_snapshot_key;
+
     memset(&stop_input, 0, sizeof(stop_input));
     stop_input.control_plane = plane;
     stop_input.transaction = &transaction;
     stop_input.prepared_vm = &projection.prepared_vm;
     stop_input.route_transaction = &projection.route_transaction;
+    stop_input.route_snapshot = &projection.route_snapshot;
     stop_input.membership_controller = membership_controller;
     stop_input.namespace_allocator = namespace_allocator;
     if (authority) {
@@ -1287,6 +1330,8 @@ int wvm_ctl_stop_vm(
         stop_input.callback_context = authority->context;
     }
     if (wvm_admission_orchestrator_stop(&stop_input, error, error_len) != 0) {
+        fprintf(stderr, "wvm_ctl: orchestrator_stop failed: %s\n",
+                (error && error[0]) ? error : "(no error text)");
         result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
         goto out;
     }
@@ -1310,4 +1355,14 @@ out:
     free(candidate_record);
     projection_destroy(&projection);
     return status == 0 ? 0 : (result->status_code == WVM_CONTROL_RESULT_INTERNAL_FAILURE ? -EIO : 0);
+}
+
+
+int wvm_ctl_reconcile_required_member_health(
+    struct wvm_control_plane *plane,
+    struct wvm_membership_controller *membership_controller,
+    size_t *transitioned_out, char *error, size_t error_len)
+{
+    return wvm_control_plane_reconcile_required_member_health(
+        plane, membership_controller, transitioned_out, error, error_len);
 }

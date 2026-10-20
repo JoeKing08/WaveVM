@@ -1,6 +1,10 @@
 # WaveVM Kernel Accelerator Specification
 
-Status: proposed implementation specification.
+Status: normative implementation specification.
+
+RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
+semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
+failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
 
 Scope: the optional `wavevm.ko` / `/dev/wavevm` accelerator, per-VM kernel
 contexts, IOCTL and mmap boundary, context lifetime, cache publication,
@@ -46,39 +50,46 @@ second-class path.
 
 ### 1.2 Implemented Migration Boundary
 
-The current tree implements the admission boundary and the first
-context-scoped data-plane state migration, but not the complete per-VM
-kernel-context migration:
+The current tree implements explicit per-VM kernel contexts, but the Mode A
+second-VM admission gate is **restored** until A01–A04 isolation correctness
+closes (explicit context on sleepable paths, committer send ownership,
+TX/VMA/destroy refs, full u32 VM identity). Targeted same-GPA / multi-FD /
+async teardown tests are necessary but not sufficient while those gaps remain:
 
-- `IOCTL_WVM_QUERY_CAPS` reports the context-binding ABI and the current limit
-  of one concurrent Mode A context per physical module instance.
-- `IOCTL_WVM_BIND_CONTEXT` and `IOCTL_WVM_UNBIND_CONTEXT` bind an open
-  `/dev/wavevm` descriptor to the manifest identity, VM incarnation,
-  manifest generation, capability profile, and activation fence.
+- `IOCTL_WVM_QUERY_CAPS` reports ABI v3, `WVM_KERNEL_CAP_CONTEXT_BIND` |
+  `WVM_KERNEL_CAP_SINGLE_CONTEXT`, and `max_concurrent_contexts = 1`. BIND
+  enforces that advertised max with `-ENOSPC`.
+- `IOCTL_WVM_BIND_CONTEXT` / `IOCTL_WVM_UNBIND_CONTEXT` bind an open
+  `/dev/wavevm` descriptor to the manifest identity (including
+  `node_instance_id`), VM incarnation, manifest generation, capability profile,
+  and activation fence. Admission uses a fixed exclusive lease name
+  `"kernel-context"` so a second Mode A VM on the same node is rejected.
 - Manifest-gated master, QEMU frontend, and KVM executor descriptors bind the
   same context before using the accelerator.
-- The explicit kernel context now owns the accepted identity, epoch cache,
-  registered RAM slots, mapping lock/pointer, and IRQ wait state. VMA fault and
-  write-protect callbacks resolve that context from the mapped file, and
-  asynchronous invalidation and dirty-commit work carries its context pointer.
-- The request ID pool and request completion table are allocated and released
-  through the context. Their wire ID format and per-CPU allocation behavior are
-  unchanged; this is an ownership migration, not a serialization change.
-- The page metadata radix tree and its lock are context-owned. Fault insertion,
-  invalidation, dirty commit, direct push, and kernel RPC batch lookup use the
-  same context tree; RCU lookup and reorder-queue behavior remain unchanged.
-- Kernel `logic_core` VM namespace construction uses a context accessor.
-  `g_my_vm_id` is not a production identity authority and must be removed
-  from the final context-bound path.
-- A different VM identity is rejected while the current module-global state is
-  still active. Field-by-field legacy IOCTL setters are not a supported
-  configuration path and must be removed as the typed context ABI is enabled.
+- Each kernel context owns identity, epoch cache, RAM slots, private
+  `address_space`/mapping, IRQ wait state, request ID pool/completion table,
+  page metadata radix tree, **per-context `dir_table`**, and **per-context
+  `route_context`**. There is no module-global `g_my_vm_id` and no RX
+  `legacy_vm_id` fallback; directory/route accessors fail closed without an
+  active context.
+- VMA fault and write-protect callbacks resolve context from the mapped file;
+  async invalidation/dirty-commit work carries a context pointer. TX slave_id
+  on final fault/diff paths uses `context->identity.vm_id` explicitly.
+- Module-wide UDP socket + TX rings remain as shared plumbing; every TX slot
+  and async work item carries an explicit context reference. Dirty-commit
+  queues and GPA shard locks are per-context. `IOCTL_SET_VM_ID` is retired
+  (`-EOPNOTSUPP`); BIND is the only production context attach.
 
-This boundary is still an admission guard, not proof that the old kernel
-`logic_core` semantic state, route tables, page metadata, request state,
-socket/transport, or shared queues have already become context-owned.
-Multi-VM Mode A remains unsupported until those states are migrated and the
-isolation acceptance tests pass.
+Honest remaining deviations (not claimed complete):
+
+- Second Mode A VM remains rejected at admission/caps until A01–A04 close.
+  Do not treat per-VM context scaffolding or prior targeted isolation PASS as
+  a reason to reopen the gate.
+- Dual Mode A CREATE→RUNNING with stub helpers is **not** guest login/SSH E2E
+  (§7 / goal §7). Do not treat stub READY as guest evidence.
+- Some field-by-field legacy IOCTL setters remain as compatibility adapters
+  (route/placement/epoch) but are not the supported configuration path;
+  `IOCTL_SET_VM_ID` is removed from the production path.
 
 Non-goals for V1:
 
@@ -353,10 +364,11 @@ vCPU contracts. A future hot fallback to Mode B requires a quiesced,
 manifest-validated transition that proves no dirty, handoff, or interrupt state
 is lost.
 
-Until explicit contexts, context-scoped mappings/requests, and teardown tests
-are implemented, capability discovery must advertise a single concurrent Mode
-A VM per physical node. Admission must reject a second Mode A VM even if two
-processes can currently open `/dev/wavevm`.
+Explicit contexts, context-scoped mappings/requests, and targeted teardown
+isolation tests exist as scaffolding, but capability discovery advertises
+single-context Mode A and admission rejects a second Mode A VM (fixed
+`"kernel-context"` lease) until A01–A04 isolation evidence closes. Guest
+login/SSH E2E remains out of scope for this boundary (goal §7).
 
 ## 8. Current Code Mapping and Known Deviations
 
@@ -365,7 +377,7 @@ processes can currently open `/dev/wavevm`.
 | `master_core/kernel_backend.c` | Holds the explicit single-context registry, context-scoped identity/epoch/RAM/mapping/IRQ state, and legacy accelerator paths. | Move remaining page metadata, route, request, socket, and shared-queue state into context-owned or explicitly context-tagged structures. |
 | `master_core/module-common.[ch]` | Shares module utility/state definitions. | Keep only module-wide registries/workers that carry an explicit context reference. |
 | `common_include/wavevm_ioctl.h` | Defines legacy IOCTL numbers and payloads. | Introduce versioned context lifecycle/configuration/operation envelopes while retaining adapters during migration. |
-| Remaining globals such as `g_socket`, `gateway_table`, route tables, and shared queues; `g_my_vm_id` is now only a compatibility mirror | Can still act as singleton state for one module instance. | Move into context-owned state or replace with derived immutable cache; remove the mirror after legacy setters are retired. |
+| Module `g_module_transport` (UDP socket + TX rings); per-context `diff_queue`/`dir_locks` | Socket/TX rings are module-wide plumbing with context-tagged slots; dirty queues and GPA shard locks are per-context; transport is refcounted across contexts. | Keep only module-wide workers that carry an explicit context reference (satisfied for TX/diff). |
 | `wavevm-qemu/accel/wavevm/` | Opens `/dev/wavevm` and uses accelerator hooks. | Create/attach only through the local prepared manifest and validate context identity for each operation. |
 | `master_core/logic_core.c` / node runtime | Owns current user-space packet and request handling. | Remain semantic authority; kernel completion returns to this contract rather than inventing a parallel RPC path. |
 

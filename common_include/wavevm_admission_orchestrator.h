@@ -89,6 +89,8 @@ struct wvm_admission_orchestrator_callbacks {
     wvm_admission_route_stage_fn route_prepare;
     wvm_admission_route_stage_fn route_commit;
     wvm_admission_route_stage_fn route_abort;
+    /* STOP route-retirement request/ACK (not ABORT_*). Optional NULL skips. */
+    wvm_admission_route_stage_fn route_retire;
     wvm_admission_reservation_stage_fn reservation_prepare;
     wvm_admission_reservation_commit_fn reservation_commit;
     wvm_admission_reservation_stage_fn reservation_abort;
@@ -237,6 +239,8 @@ struct wvm_admission_stop_input {
     const struct wvm_coordinator_transaction *transaction;
     struct wvm_coordinator_prepared_vm *prepared_vm;
     struct wvm_route_transaction_record *route_transaction;
+    /* Required for ROUTE_RETIRE ACK when callbacks->route_retire is set. */
+    const struct wvm_route_snapshot_record *route_snapshot;
     /*
      * Optional: when set, membership route must be ACTIVATED for this
      * operation_id so begin_retire/retire can run, and compute/gateway deps

@@ -48,25 +48,28 @@ struct wvm_ioctl_mem_layout {
 /* 1 GiB guest-memory chunk -> raw directory vnode placement table. */
 #define IOCTL_UPDATE_MEMORY_PLACEMENT _IOW('G', 21, struct wvm_ioctl_route_update)
 /* Keep the kernel Logic Core's composite-ID namespace aligned with the master. */
+/* Retired: returns -EOPNOTSUPP. Use IOCTL_WVM_BIND_CONTEXT. */
 #define IOCTL_SET_VM_ID _IOW('G', 22, uint32_t)
 
 /*
  * Context-bound Mode A admission.
  *
- * These operations are the first migration boundary for the kernel
- * accelerator.  Legacy setters remain available for compatibility, but a
- * manifest-gated launch must bind its VM identity before using /dev/wavevm.
- * The current implementation advertises one concurrent context per physical
- * module instance until the remaining module-global state is moved into the
- * context.
+ * Manifest-gated launch must BIND its VM identity before using /dev/wavevm.
+ * Mode A second-VM gate is restored (A01–A04 open): QUERY_CAPS advertises
+ * SINGLE_CONTEXT with max_concurrent_contexts=1. Per-VM context registry code
+ * remains, but admission+caps must not claim multi-context until isolation
+ * evidence closes those gaps. BIND still enforces the advertised max (-ENOSPC).
+ * SET_VM_ID is retired (-EOPNOTSUPP).
  */
 #define WVM_KERNEL_CONTEXT_MAGIC       0x574b4358U /* "WKCX" */
-#define WVM_KERNEL_CONTEXT_ABI_VERSION 2U
+#define WVM_KERNEL_CONTEXT_ABI_VERSION 3U /* F11: +node_instance_id; needs new ko */
 #define WVM_KERNEL_DIGEST_BYTES        32U
 #define WVM_KERNEL_FENCE_BYTES         16U
+/* Registry hard cap (code); QUERY_CAPS advertises 1 while the gate is closed. */
+#define WVM_KERNEL_MAX_CONCURRENT_CONTEXTS 64U
 
 #define WVM_KERNEL_CAP_CONTEXT_BIND    (1ULL << 0)
-#define WVM_KERNEL_CAP_SINGLE_CONTEXT  (1ULL << 1)
+#define WVM_KERNEL_CAP_SINGLE_CONTEXT  (1ULL << 1) /* set while second-VM gate closed */
 
 struct wvm_ioctl_route_snapshot_key {
     struct {
@@ -85,6 +88,8 @@ struct wvm_ioctl_context_bind {
     uint16_t flags;
     uint32_t vm_id;
     uint32_t physical_node_id;
+    /* F11: same-host multi compute instance identity (ABI v3). */
+    uint64_t node_instance_id;
     uint64_t vm_incarnation;
     uint64_t manifest_generation;
     uint8_t candidate_manifest_digest[WVM_KERNEL_DIGEST_BYTES];

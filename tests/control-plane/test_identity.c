@@ -67,13 +67,59 @@ int main(void)
                                          &vm_id, &incarnation, error,
                                          sizeof(error)) == 0,
                "allocate V1 namespace") ||
-        expect(vm_id == 256 && incarnation == 1, "first V1 identity")) {
+        expect(vm_id == 256 && incarnation == 1, "first V1 identity >255")) {
+        return 1;
+    }
+
+    /* V1 u32 quarantine: reuse only after retirement ACK (BASE-§16). */
+    if (expect(wvm_vm_namespace_activate(&allocator, vm_id, incarnation, error,
+                                         sizeof(error)) == 0,
+               "activate V1 namespace") ||
+        expect(wvm_vm_namespace_begin_retire(&allocator, vm_id, incarnation,
+                                             error, sizeof(error)) == 0,
+               "begin V1 retirement") ||
+        expect(wvm_vm_namespace_quarantine(&allocator, vm_id, incarnation,
+                                            retirement_digest, 0, error,
+                                            sizeof(error)) != 0,
+               "reject incomplete V1 retirement ACK") ||
+        expect(wvm_vm_namespace_quarantine(&allocator, vm_id, incarnation,
+                                            retirement_digest, 1, error,
+                                            sizeof(error)) == 0,
+               "quarantine V1 namespace after retirement ready") ||
+        expect(wvm_vm_namespace_release(&allocator, vm_id, incarnation, error,
+                                         sizeof(error)) == 0,
+               "release quarantined V1 namespace")) {
+        return 1;
+    }
+
+    /* Restore range gate: LEGACY cannot hold >255; U32 cannot hold <256. */
+    if (expect(wvm_vm_namespace_restore(&allocator, WVM_NAMESPACE_ABI_LEGACY,
+                                         300, 1, WVM_VM_NAMESPACE_ALLOCATED,
+                                         error, sizeof(error)) != 0,
+               "reject legacy restore of vm_id>255") ||
+        expect(wvm_vm_namespace_restore(&allocator, WVM_NAMESPACE_ABI_U32, 42,
+                                         1, WVM_VM_NAMESPACE_ALLOCATED, error,
+                                         sizeof(error)) != 0,
+               "reject U32 restore of vm_id<256") ||
+        expect(wvm_vm_namespace_restore(&allocator, WVM_NAMESPACE_ABI_U32, 300,
+                                         1, WVM_VM_NAMESPACE_ALLOCATED, error,
+                                         sizeof(error)) == 0,
+               "accept U32 restore of vm_id>255")) {
+        return 1;
+    }
+
+    /* Fresh V1 allocation after quarantine still yields >255. */
+    if (expect(wvm_vm_namespace_allocate(&allocator, WVM_NAMESPACE_ABI_U32,
+                                         &vm_id, &incarnation, error,
+                                         sizeof(error)) == 0,
+               "allocate post-quarantine V1 namespace") ||
+        expect(vm_id >= 256, "post-quarantine V1 id remains >255")) {
         return 1;
     }
 
     memset(&identity, 0, sizeof(identity));
-    identity.vm_id = 256;
-    identity.vm_incarnation = 1;
+    identity.vm_id = vm_id;
+    identity.vm_incarnation = incarnation;
     identity.manifest_generation = 1;
     identity.physical_node_id = 17;
     memset(identity.manifest_id, 0xcd, sizeof(identity.manifest_id));

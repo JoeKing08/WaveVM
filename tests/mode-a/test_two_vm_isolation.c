@@ -73,6 +73,7 @@ static int bind_vm_context(int fd, uint32_t vm_id, const char *vm_name)
     bind.flags = 0;
     bind.vm_id = vm_id;
     bind.physical_node_id = TEST_NODE_ID;
+    bind.node_instance_id = 1; /* F11 ABI v3 */
     bind.vm_incarnation = 1;
     bind.manifest_generation = 1;
 
@@ -83,7 +84,7 @@ static int bind_vm_context(int fd, uint32_t vm_id, const char *vm_name)
 
     bind.route_snapshot_key.scope_key.vm_id = vm_id;
     bind.route_snapshot_key.scope_key.vm_incarnation = 1;
-    bind.route_snapshot_key.scope_key.route_scope_id = 0;
+    bind.route_snapshot_key.scope_key.route_scope_id = 1;
     bind.route_snapshot_key.topology_revision = 1;
     bind.route_snapshot_key.route_generation = 1;
     memset(bind.route_snapshot_key.snapshot_digest, vm_id & 0xFF, WVM_KERNEL_DIGEST_BYTES);
@@ -153,13 +154,20 @@ static int test_context_isolation(void)
         return -1;
     }
 
-    if (caps.active_contexts < 2) {
-        fprintf(stderr, "[WARN] Expected at least 2 active contexts, got %u\n",
-                caps.active_contexts);
-        /* Not a hard failure - contexts may share global state */
-    } else {
-        printf("[OK] Two contexts are active: %u total\n", caps.active_contexts);
+    /*
+     * Gate restored: QUERY_CAPS must advertise SINGLE_CONTEXT with max=1
+     * until A01-A04 isolation evidence reopens multi-context Mode A.
+     */
+    if (!(caps.feature_bits & WVM_KERNEL_CAP_SINGLE_CONTEXT) ||
+        caps.max_concurrent_contexts != 1U) {
+        fprintf(stderr,
+                "[FAIL] single-context gate not advertised (feature_bits=%llx max=%u)\n",
+                (unsigned long long)caps.feature_bits,
+                caps.max_concurrent_contexts);
+        return 1;
     }
+    printf("[OK] single-context gate advertised (active=%u max=%u)\n",
+           caps.active_contexts, caps.max_concurrent_contexts);
 
     return 0;
 }
@@ -246,6 +254,68 @@ static int test_fault_isolation(void)
     return 0;
 }
 
+
+static int test_teardown_isolation(void)
+{
+    struct wvm_ioctl_context_caps caps = {0};
+    struct wvm_ioctl_context_bind unbind = {0};
+
+    printf("\n=== Test 4: Teardown Isolation ===\n");
+
+    unbind.magic = WVM_KERNEL_CONTEXT_MAGIC;
+    unbind.version = WVM_KERNEL_CONTEXT_ABI_VERSION;
+    unbind.vm_id = TEST_VM1_IDENTITY;
+    unbind.physical_node_id = TEST_NODE_ID;
+    unbind.node_instance_id = 1; /* F11 ABI v3 */
+    unbind.vm_incarnation = 1;
+    unbind.manifest_generation = 1;
+    memset(unbind.candidate_manifest_digest, TEST_VM1_IDENTITY & 0xFF,
+           WVM_KERNEL_DIGEST_BYTES);
+    memset(unbind.capability_profile_digest, (TEST_VM1_IDENTITY >> 8) & 0xFF,
+           WVM_KERNEL_DIGEST_BYTES);
+    memset(unbind.activation_fence, TEST_VM1_IDENTITY & 0xFF,
+           WVM_KERNEL_FENCE_BYTES);
+    unbind.route_snapshot_key.scope_key.vm_id = TEST_VM1_IDENTITY;
+    unbind.route_snapshot_key.scope_key.vm_incarnation = 1;
+    unbind.route_snapshot_key.scope_key.route_scope_id = 1;
+    unbind.route_snapshot_key.topology_revision = 1;
+    unbind.route_snapshot_key.route_generation = 1;
+    memset(unbind.route_snapshot_key.snapshot_digest, TEST_VM1_IDENTITY & 0xFF,
+           WVM_KERNEL_DIGEST_BYTES);
+
+    if (ioctl(g_dev_fd1, IOCTL_WVM_UNBIND_CONTEXT, &unbind) < 0) {
+        fprintf(stderr, "[FAIL] Unbind VM1: %s\n", strerror(errno));
+        return -1;
+    }
+    close(g_dev_fd1);
+    g_dev_fd1 = -1;
+    printf("[OK] Unbound and closed VM1 fd\n");
+
+    if (ioctl(g_dev_fd2, IOCTL_WVM_QUERY_CAPS, &caps) < 0) {
+        fprintf(stderr, "[FAIL] QUERY_CAPS after VM1 teardown: %s\n",
+                strerror(errno));
+        return -1;
+    }
+    if (caps.active_contexts < 1) {
+        fprintf(stderr,
+                "[FAIL] VM2 context destroyed by VM1 teardown (active=%u)\n",
+                caps.active_contexts);
+        return -1;
+    }
+    printf("[OK] VM2 context still active after VM1 teardown (active=%u)\n",
+           caps.active_contexts);
+
+    {
+        volatile uint32_t *vm2_mem = (volatile uint32_t *)g_vm2_mapping;
+        if (vm2_mem[0] != (0xBEEF0000u | 0u)) {
+            fprintf(stderr, "[FAIL] VM2 page corrupted after VM1 teardown\n");
+            return -1;
+        }
+    }
+    printf("[OK] VM2 memory intact after sibling teardown\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int ret = 0;
@@ -255,62 +325,43 @@ int main(int argc, char **argv)
     printf("Using existing BIND_CONTEXT interface\n\n");
 
     /* Open two file descriptors to /dev/wavevm */
-    g_dev_fd1 = open("/dev/wavevm0", O_RDWR);
+    g_dev_fd1 = open("/dev/wavevm", O_RDWR);
     if (g_dev_fd1 < 0) {
-        fprintf(stderr, "Failed to open /dev/wavevm0 for VM1: %s\n", strerror(errno));
+        fprintf(stderr, "Failed to open /dev/wavevm for VM1: %s\n", strerror(errno));
         fprintf(stderr, "Ensure kernel module is loaded: sudo insmod master_core/wavevm.ko\n");
         return 1;
     }
-    printf("[OK] Opened /dev/wavevm0 for VM1 (fd=%d)\n", g_dev_fd1);
+    printf("[OK] Opened /dev/wavevm for VM1 (fd=%d)\n", g_dev_fd1);
 
-    g_dev_fd2 = open("/dev/wavevm0", O_RDWR);
+    g_dev_fd2 = open("/dev/wavevm", O_RDWR);
     if (g_dev_fd2 < 0) {
-        fprintf(stderr, "Failed to open /dev/wavevm0 for VM2: %s\n", strerror(errno));
+        fprintf(stderr, "Failed to open /dev/wavevm for VM2: %s\n", strerror(errno));
         ret = 1;
         goto cleanup;
     }
-    printf("[OK] Opened /dev/wavevm0 for VM2 (fd=%d)\n", g_dev_fd2);
+    printf("[OK] Opened /dev/wavevm for VM2 (fd=%d)\n", g_dev_fd2);
 
-    /* Bind each fd to a distinct VM context */
+    /* Gate closed: first bind OK; second Mode A bind must be rejected. */
     if (bind_vm_context(g_dev_fd1, TEST_VM1_IDENTITY, "VM1") < 0) {
         ret = 1;
         goto cleanup;
     }
-
-    if (bind_vm_context(g_dev_fd2, TEST_VM2_IDENTITY, "VM2") < 0) {
+    if (bind_vm_context(g_dev_fd2, TEST_VM2_IDENTITY, "VM2") == 0) {
+        fprintf(stderr,
+                "[FAIL] second Mode A bind succeeded while gate is closed\n");
         ret = 1;
         goto cleanup;
     }
+    printf("[OK] second Mode A bind rejected (gate closed)\n");
 
-    /* Set up memory layouts with distinct GPA ranges */
-    if (set_memory_layout(g_dev_fd1, TEST_GPA_BASE_1, TEST_MEMORY_SIZE, "VM1") < 0) {
-        ret = 1;
-        goto cleanup;
-    }
-
-    if (set_memory_layout(g_dev_fd2, TEST_GPA_BASE_2, TEST_MEMORY_SIZE, "VM2") < 0) {
-        ret = 1;
-        goto cleanup;
-    }
-
-    /* Run isolation tests */
     if (test_context_isolation() < 0) {
         ret = 1;
         goto cleanup;
     }
 
-    if (test_memory_isolation() < 0) {
-        ret = 1;
-        goto cleanup;
-    }
-
-    if (test_fault_isolation() < 0) {
-        ret = 1;
-        goto cleanup;
-    }
-
     printf("\n====================================\n");
-    printf("All Mode A isolation tests PASSED\n");
+    printf("Mode A second-VM gate CLOSED (caps+BIND): PASS\n");
+    printf("Dual isolation body deferred until A01-A04 close.\n");
     printf("====================================\n");
 
 cleanup:

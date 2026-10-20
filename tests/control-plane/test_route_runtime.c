@@ -134,33 +134,27 @@ struct route_lookup_race {
 static void *route_lookup_race_main(void *opaque)
 {
     struct route_lookup_race *race = opaque;
-    struct wvm_route_runtime_next_hop next_hop;
+    struct wvm_route_runtime_next_hop old_hop;
+    struct wvm_route_runtime_next_hop new_hop;
     char error[128];
 
     while (!atomic_load(&race->stop)) {
         int old_ok = wvm_route_runtime_lookup(race->runtime, &race->envelope_old,
-                                              &next_hop, error,
+                                              &old_hop, error,
                                               sizeof(error)) == 0;
         int new_ok = wvm_route_runtime_lookup(race->runtime, &race->envelope_new,
-                                              &next_hop, error,
+                                              &new_hop, error,
                                               sizeof(error)) == 0;
-        /* Exactly one generation may match for a given packet key. Mixing
-         * success for both keys in one atomic observe is fine; mixing the
-         * NEXT-HOP of old key with new port (or vice versa) is a half table. */
+        /* Separate hop buffers: sharing one next_hop made activate-between-
+         * lookups look like half-table (old_ok + overwritten new port). */
         if (old_ok) {
-            if (next_hop.next_hop_endpoint.data_port != race->old_port &&
-                next_hop.next_hop_endpoint.data_port != race->new_port) {
-                atomic_store(&race->mixed, 1);
-            }
-            /* Old envelope key must never resolve to new-only port while old
-             * snapshot is still the looked-up key — lookup binds full key. */
-            if (next_hop.next_hop_endpoint.data_port == race->new_port) {
+            if (old_hop.next_hop_endpoint.data_port != race->old_port) {
                 atomic_store(&race->mixed, 1);
             }
             atomic_fetch_add(&race->samples, 1);
         }
         if (new_ok) {
-            if (next_hop.next_hop_endpoint.data_port != race->new_port) {
+            if (new_hop.next_hop_endpoint.data_port != race->new_port) {
                 atomic_store(&race->mixed, 1);
             }
             atomic_fetch_add(&race->samples, 1);
@@ -332,6 +326,64 @@ int main(void)
     }
     wvm_route_runtime_destroy(&runtime);
 
+    /* A05: outstanding refs block retire; proof query mirrors refs. */
+    {
+        struct wvm_route_runtime proof_runtime;
+        struct wvm_route_snapshot_record snap;
+        struct wvm_route_rule_record rules[1];
+        struct wvm_required_ack_entry acks[1];
+        uint64_t refs = 99;
+        int horizon = 0;
+        char proof_error[256] = {0};
+
+        fill_rule(&rules[0], WVM_ROUTE_DESTINATION_EXACT_VNODE, 0, 0, 31,
+                  19331, 4);
+        if (finalize_snapshot(&snap, rules, 1, acks, 1, 31, 1, 3100, 4, 1, 1,
+                              proof_error, sizeof(proof_error)) != 0) {
+            fprintf(stderr, "route-runtime A05 setup: %s\n", proof_error);
+            return 1;
+        }
+        wvm_route_runtime_init(&proof_runtime);
+        if (expect(wvm_route_runtime_prepare(&proof_runtime, &snap, proof_error,
+                                             sizeof(proof_error)) == 0 &&
+                       wvm_route_runtime_activate(
+                           &proof_runtime, &snap.route_snapshot_key, proof_error,
+                           sizeof(proof_error)) == 0,
+                   "A05 activate for ref proof") ||
+            expect(wvm_route_runtime_operation_ref_get(
+                       &proof_runtime, &snap.route_snapshot_key.scope_key,
+                       proof_error, sizeof(proof_error)) == 0,
+                   "A05 pin operation ref") ||
+            expect(wvm_route_runtime_query_retire_proof(
+                       &proof_runtime, &snap.route_snapshot_key, &refs, &horizon,
+                       proof_error, sizeof(proof_error)) == 0 &&
+                       refs == 1 && horizon == 0,
+                   "A05 proof shows refs=1 incomplete") ||
+            expect(wvm_route_runtime_retire(&proof_runtime,
+                                            &snap.route_snapshot_key,
+                                            proof_error,
+                                            sizeof(proof_error)) != 0,
+                   "A05 retire blocked while refs held") ||
+            expect(wvm_route_runtime_operation_ref_put(
+                       &proof_runtime, &snap.route_snapshot_key.scope_key,
+                       proof_error, sizeof(proof_error)) == 0,
+                   "A05 unpin operation ref") ||
+            expect(wvm_route_runtime_query_retire_proof(
+                       &proof_runtime, &snap.route_snapshot_key, &refs, &horizon,
+                       proof_error, sizeof(proof_error)) == 0 &&
+                       refs == 0 && horizon == 1,
+                   "A05 proof shows refs=0 complete") ||
+            expect(wvm_route_runtime_retire(&proof_runtime,
+                                            &snap.route_snapshot_key,
+                                            proof_error,
+                                            sizeof(proof_error)) == 0,
+                   "A05 retire after refs drained")) {
+            wvm_route_runtime_destroy(&proof_runtime);
+            return 1;
+        }
+        wvm_route_runtime_destroy(&proof_runtime);
+    }
+
     /* Phase 7: live snapshot replacement — lookups never observe a half table. */
     {
         struct wvm_route_runtime race_runtime;
@@ -443,5 +495,6 @@ int main(void)
 
     puts("route-runtime tests: PASS");
     puts("NOTE: Phase 7 live snapshot replacement — no half-table lookups.");
+    puts("NOTE: A05 outstanding_operation_refs block retire until put.");
     return 0;
 }

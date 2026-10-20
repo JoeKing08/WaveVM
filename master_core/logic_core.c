@@ -22,6 +22,8 @@
     #include <linux/delay.h>
     #include <linux/string.h>
     #include <linux/printk.h>
+    #include <linux/vmalloc.h>
+    #include <linux/slab.h>
 
     #ifndef UINT32_MAX
     #define UINT32_MAX ((uint32_t)~0U)
@@ -254,13 +256,17 @@ typedef struct {
 } page_meta_t;
 
 /*
- * F12 fix: Global directory table deprecated in favor of per-VM context.
- * These globals remain for backward compatibility during transition but
- * should be accessed through wvm_active_context()->dir_table in new code.
- * TODO Phase 5-7: Remove globals entirely and make all accesses context-aware.
+ * Directory authority is per-context (kernel: context->dir_table).
+ * Userspace Mode B keeps a process-local table; kernel has no module-global
+ * directory table and must not fall back to one.
+ * GPA-keyed shard locks are concurrency only — not directory authority.
+ * Kernel: per-context lock array (context->dir_locks). Userspace Mode B:
+ * process-local g_dir_table_locks (one process == one Mode B VM).
  */
+#ifndef __KERNEL__
 static page_meta_t *g_dir_table = NULL;
 static pthread_mutex_t g_dir_table_locks[LOCK_SHARDS];
+#endif
 
 #ifndef __KERNEL__
 static uint8_t *resolve_page_data(page_meta_t *page, uint64_t gpa) {
@@ -308,6 +314,16 @@ static inline uint32_t get_lock_idx(uint64_t gpa) {
     return murmur3_32(gpa >> WVM_PAGE_SHIFT) % LOCK_SHARDS;
 }
 
+/* Per-context (kernel) or process-local (userspace) GPA shard lock array. */
+static inline pthread_mutex_t *active_dir_locks(void)
+{
+#ifdef __KERNEL__
+    return (pthread_mutex_t *)wvm_kernel_active_dir_locks();
+#else
+    return g_dir_table_locks;
+#endif
+}
+
 /* 
  * [物理意图] 在页面的订阅者名单（Copy-set）中标记一个远程节点的"利害关系"。
  * [关键逻辑] 操作 64 位对齐的位图，记录哪些节点持有该页面的只读缓存，以便在发生写入时发起精准推送。
@@ -346,10 +362,9 @@ static void register_page_subscriber(page_meta_t *page, uint32_t node_id) {
 
 /*
  * Placement and route identity are one VM-scoped derived cache.  The
- * accelerator may still expose only one active context per module instance,
- * but the semantic state is no longer a collection of unqualified globals.
- * A later multi-context kernel implementation can register additional
- * instances without changing the lookup contract below.
+ * accelerator admits multiple contexts (QUERY_CAPS max); semantic directory
+ * and route state must resolve through the active/bound context, not a
+ * module-global table. Lookup contract below is per-context.
  */
 struct wvm_logic_route_context {
     uint32_t vm_id;
@@ -369,20 +384,85 @@ struct wvm_logic_route_context {
 };
 
 /*
- * F12 fix: Global route context deprecated in favor of per-VM context.
- * This global remains for backward compatibility during transition but
- * should be accessed through wvm_active_context()->route_context in new code.
- * TODO Phase 5-7: Remove global entirely and make all accesses context-aware.
+ * Kernel: route context is per-VM (context->route_context); no global fallback.
+ * Userspace Mode B: process-local g_logic_route_context.
  */
+#ifndef __KERNEL__
 static struct wvm_logic_route_context g_logic_route_context;
+#endif
 
 static struct wvm_logic_route_context *logic_route_context(void)
 {
-    /* F12 fix: In single-context bootstrap mode, use global.
-     * Full per-VM routing requires Phase 5-7 refactor where each
-     * context maintains its own route snapshot and directory authority. */
+#ifdef __KERNEL__
+    /* Fail closed: no module-global route fallback. */
+    return (struct wvm_logic_route_context *)wvm_kernel_active_route_context();
+#else
     return &g_logic_route_context;
+#endif
 }
+
+#ifdef __KERNEL__
+void *wvm_logic_alloc_route_context(void)
+{
+    struct wvm_logic_route_context *ctx;
+    int i;
+
+    ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+    if (!ctx)
+        return NULL;
+    for (i = 0; i < WVM_CPU_ROUTE_TABLE_SIZE; i++)
+        ctx->cpu_route_table[i] = WVM_NODE_AUTO_ROUTE;
+    for (i = 0; i < WVM_MEMORY_ROUTE_TABLE_SIZE; i++) {
+        ctx->memory_route_table[i] = WVM_NODE_AUTO_ROUTE;
+        ctx->memory_route_valid[i] = 0;
+    }
+    return ctx;
+}
+
+void wvm_logic_free_route_context(void *route)
+{
+    kfree(route);
+}
+
+void *wvm_logic_alloc_dir_table(void)
+{
+    return vzalloc(sizeof(page_meta_t) * DIR_TABLE_SIZE);
+}
+
+void wvm_logic_free_dir_table(void *table)
+{
+    vfree(table);
+}
+
+void *wvm_logic_alloc_dir_locks(void)
+{
+    pthread_mutex_t *locks;
+    int i;
+
+    locks = vzalloc(sizeof(*locks) * LOCK_SHARDS);
+    if (!locks)
+        return NULL;
+    for (i = 0; i < LOCK_SHARDS; i++)
+        pthread_mutex_init(&locks[i], NULL);
+    return locks;
+}
+
+void wvm_logic_free_dir_locks(void *locks)
+{
+    vfree(locks);
+}
+
+static page_meta_t *active_dir_table(void)
+{
+    /* Fail closed: no module-global directory fallback (baseline §14). */
+    return (page_meta_t *)wvm_kernel_active_dir_table();
+}
+#else
+static page_meta_t *active_dir_table(void)
+{
+    return g_dir_table;
+}
+#endif
 
 int wvm_logic_bind_route_snapshot(
     const struct wvm_route_snapshot_key *snapshot_key)
@@ -390,6 +470,9 @@ int wvm_logic_bind_route_snapshot(
     struct wvm_logic_route_context *context = logic_route_context();
     char error[128] = {0};
     int key_valid;
+
+    if (!context)
+        return -1;
 
     /*
      * The kernel module deliberately does not link the user-space canonical
@@ -423,7 +506,9 @@ int wvm_logic_bind_route_snapshot(
 
 int wvm_logic_route_snapshot_valid(void)
 {
-    return logic_route_context()->route_snapshot_bound;
+    struct wvm_logic_route_context *context = logic_route_context();
+
+    return context ? context->route_snapshot_bound : 0;
 }
 
 int wvm_logic_get_route_snapshot_key(
@@ -431,7 +516,7 @@ int wvm_logic_get_route_snapshot_key(
 {
     struct wvm_logic_route_context *context = logic_route_context();
 
-    if (!snapshot_key || !context->route_snapshot_bound) {
+    if (!snapshot_key || !context || !context->route_snapshot_bound) {
         return -1;
     }
     *snapshot_key = context->route_snapshot_key;
@@ -442,6 +527,8 @@ void wvm_logic_unbind_route_snapshot(void)
 {
     struct wvm_logic_route_context *context = logic_route_context();
 
+    if (!context)
+        return;
     memset(&context->route_snapshot_key, 0,
            sizeof(context->route_snapshot_key));
     context->vm_id = 0;
@@ -457,6 +544,8 @@ void wvm_logic_unbind_route_snapshot(void)
 void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id) {
     struct wvm_logic_route_context *context = logic_route_context();
 
+    if (!context)
+        return;
     // 这里的边界检查现在是安全的，与全局配置一致
     if (vcpu_index >= 0 && vcpu_index < WVM_CPU_ROUTE_TABLE_SIZE) {
         context->cpu_route_table[vcpu_index] = slave_id;
@@ -466,6 +555,8 @@ void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id) {
 void wvm_clear_cpu_mappings(void) {
     struct wvm_logic_route_context *context = logic_route_context();
 
+    if (!context)
+        return;
     for (int i = 0; i < WVM_CPU_ROUTE_TABLE_SIZE; i++) {
         context->cpu_route_table[i] = WVM_NODE_AUTO_ROUTE;
     }
@@ -497,12 +588,22 @@ uint32_t wvm_get_compute_slave_id(int vcpu_index) {
 }
 
 const uint32_t* wvm_get_cpu_route_table(void) {
+#ifdef __KERNEL__
+    {
+        struct wvm_logic_route_context *context = logic_route_context();
+        static const uint32_t empty_cpu[WVM_CPU_ROUTE_TABLE_SIZE];
+        return context ? context->cpu_route_table : empty_cpu;
+    }
+#else
     return logic_route_context()->cpu_route_table;
+#endif
 }
 
 void wvm_set_memory_mapping(int chunk_index, uint32_t node_id) {
     struct wvm_logic_route_context *context = logic_route_context();
 
+    if (!context)
+        return;
     if (chunk_index >= 0 && chunk_index < WVM_MEMORY_ROUTE_TABLE_SIZE) {
         context->memory_route_table[chunk_index] = node_id;
         context->memory_route_valid[chunk_index] = 1;
@@ -513,7 +614,11 @@ int wvm_set_memory_range_mapping(uint64_t gpa_start, uint64_t bytes,
                                  uint32_t node_id)
 {
     struct wvm_logic_route_context *context = logic_route_context();
-    size_t count = context->memory_range_route_count;
+    size_t count;
+
+    if (!context)
+        return -1;
+    count = context->memory_range_route_count;
 
     if (bytes == 0 || gpa_start > UINT64_MAX - bytes ||
         node_id == WVM_NODE_AUTO_ROUTE ||
@@ -540,6 +645,8 @@ int wvm_set_memory_range_mapping(uint64_t gpa_start, uint64_t bytes,
 void wvm_clear_memory_mappings(void) {
     struct wvm_logic_route_context *context = logic_route_context();
 
+    if (!context)
+        return;
     memset(context->memory_route_valid, 0,
            sizeof(context->memory_route_valid));
     for (int i = 0; i < WVM_MEMORY_ROUTE_TABLE_SIZE; i++) {
@@ -552,7 +659,15 @@ void wvm_clear_memory_mappings(void) {
 }
 
 const uint32_t* wvm_get_memory_route_table(void) {
+#ifdef __KERNEL__
+    {
+        struct wvm_logic_route_context *context = logic_route_context();
+        static const uint32_t empty_mem[WVM_MEMORY_ROUTE_TABLE_SIZE];
+        return context ? context->memory_route_table : empty_mem;
+    }
+#else
     return logic_route_context()->memory_route_table;
+#endif
 }
 
 /* 
@@ -563,7 +678,7 @@ const uint32_t* wvm_get_memory_route_table(void) {
 uint64_t wvm_logic_get_page_version(uint64_t gpa) {
     uint32_t lock_idx = get_lock_idx(gpa);
     uint64_t ver = 0;
-    pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_lock(&active_dir_locks()[lock_idx]);
     
     // 我们只需要读取版本，不需要创建 meta，如果不存在说明是初始版本 0
     uint64_t page_idx = gpa >> WVM_PAGE_SHIFT;
@@ -573,15 +688,22 @@ uint64_t wvm_logic_get_page_version(uint64_t gpa) {
 #else
     uint32_t _vcap = g_dir_capacity;
 #endif
-    for (int i = 0; i < DIR_MAX_PROBE; i++) {
-        uint32_t cur = (hash + i) % _vcap;
-        if (g_dir_table[cur].is_valid && g_dir_table[cur].gpa == gpa) {
-            ver = g_dir_table[cur].version;
-            break;
+    {
+        page_meta_t *dir = active_dir_table();
+        if (!dir) {
+            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
+            return 0;
         }
-        if (!g_dir_table[cur].is_valid) break;
+        for (int i = 0; i < DIR_MAX_PROBE; i++) {
+            uint32_t cur = (hash + i) % _vcap;
+            if (dir[cur].is_valid && dir[cur].gpa == gpa) {
+                ver = dir[cur].version;
+                break;
+            }
+            if (!dir[cur].is_valid) break;
+        }
     }
-    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
     return ver;
 }
 
@@ -593,44 +715,48 @@ uint64_t wvm_logic_get_page_version(uint64_t gpa) {
 static page_meta_t* find_or_create_page_meta(uint64_t gpa) {
     uint64_t page_idx = gpa >> WVM_PAGE_SHIFT;
     uint32_t hash = murmur3_32(page_idx);
+    page_meta_t *dir = active_dir_table();
 #ifdef __KERNEL__
     uint32_t cap = DIR_TABLE_SIZE;
 #else
     uint32_t cap = g_dir_capacity;
 #endif
 
+    if (!dir)
+        return NULL;
+
     for (int i = 0; i < DIR_MAX_PROBE; i++) {
         uint32_t cur = (hash + i) % cap;
 
         // 找到存在的
-        if (g_dir_table[cur].is_valid && g_dir_table[cur].gpa == gpa) {
+        if (dir[cur].is_valid && dir[cur].gpa == gpa) {
 #ifndef __KERNEL__
-            if (!resolve_page_data(&g_dir_table[cur], gpa)) {
+            if (!resolve_page_data(&dir[cur], gpa)) {
                 return NULL;
             }
 #endif
-            return &g_dir_table[cur];
+            return &dir[cur];
         }
 
         // 找到空位，新建
-        if (!g_dir_table[cur].is_valid) {
+        if (!dir[cur].is_valid) {
             // 清零整个结构体，包括数据页
-            memset(&g_dir_table[cur], 0, sizeof(page_meta_t));
+            memset(&dir[cur], 0, sizeof(page_meta_t));
 
-            g_dir_table[cur].is_valid = 1;
-            g_dir_table[cur].gpa = gpa;
-            g_dir_table[cur].version = MAKE_VERSION(g_curr_epoch, 1);
+            dir[cur].is_valid = 1;
+            dir[cur].gpa = gpa;
+            dir[cur].version = MAKE_VERSION(g_curr_epoch, 1);
 #ifndef __KERNEL__
-            if (!resolve_page_data(&g_dir_table[cur], gpa)) {
-                memset(&g_dir_table[cur], 0, sizeof(page_meta_t));
+            if (!resolve_page_data(&dir[cur], gpa)) {
+                memset(&dir[cur], 0, sizeof(page_meta_t));
                 return NULL;
             }
 #endif
 
             // 锁必须初始化，即使是在持锁状态下分配
-            pthread_mutex_init(&g_dir_table[cur].lock, NULL);
+            pthread_mutex_init(&dir[cur].lock, NULL);
 
-            return &g_dir_table[cur];
+            return &dir[cur];
         }
     }
 
@@ -651,20 +777,24 @@ static page_meta_t *find_page_meta_locked(uint64_t gpa)
 {
     uint64_t page_idx = gpa >> WVM_PAGE_SHIFT;
     uint32_t hash = murmur3_32(page_idx);
+    page_meta_t *dir = active_dir_table();
 #ifdef __KERNEL__
     uint32_t cap = DIR_TABLE_SIZE;
 #else
     uint32_t cap = g_dir_capacity;
 #endif
 
+    if (!dir)
+        return NULL;
+
     for (int i = 0; i < DIR_MAX_PROBE; i++) {
         uint32_t cur = (hash + i) % cap;
 
-        if (!g_dir_table[cur].is_valid) {
+        if (!dir[cur].is_valid) {
             return NULL;
         }
-        if (g_dir_table[cur].gpa == gpa) {
-            return &g_dir_table[cur];
+        if (dir[cur].gpa == gpa) {
+            return &dir[cur];
         }
     }
     return NULL;
@@ -681,7 +811,13 @@ static void broadcast_to_subscriber_ids(const uint32_t *subscriber_ids,
  * 动态扩容目录哈希表。获取所有分片锁后 rehash 到 2 倍容量。
  * 调用前：调用者已释放自己持有的分片锁。
  */
+/*
+ * Userspace Mode B only. Kernel per-context tables are fixed-size
+ * (DIR_TABLE_SIZE) and never grown via a module-global table.
+ * Grow mutates the process-local Mode B table, not a shared kernel authority.
+ */
 static void dir_table_grow(void) {
+    page_meta_t *src_table;
     pthread_mutex_lock(&g_grow_lock);
 
     uint32_t old_cap = g_dir_capacity;
@@ -693,9 +829,15 @@ static void dir_table_grow(void) {
         return;
     }
 
+    src_table = active_dir_table();
+    if (!src_table) {
+        pthread_mutex_unlock(&g_grow_lock);
+        return;
+    }
+
     /* 获取全部分片锁，阻止任何并发查找 */
     for (int i = 0; i < LOCK_SHARDS; i++)
-        pthread_mutex_lock(&g_dir_table_locks[i]);
+        pthread_mutex_lock(&active_dir_locks()[i]);
 
     /* 分配新表 */
     page_meta_t *new_table = (page_meta_t *)g_ops->alloc_large_table(
@@ -704,25 +846,25 @@ static void dir_table_grow(void) {
         if (g_ops && g_ops->log)
             g_ops->log("[CRITICAL] dir_table_grow: alloc failed for %u entries!", new_cap);
         for (int i = LOCK_SHARDS - 1; i >= 0; i--)
-            pthread_mutex_unlock(&g_dir_table_locks[i]);
+            pthread_mutex_unlock(&active_dir_locks()[i]);
         pthread_mutex_unlock(&g_grow_lock);
         return;
     }
     memset(new_table, 0, sizeof(page_meta_t) * new_cap);
 
-    /* Rehash 所有有效条目 */
+    /* Rehash 所有有效条目 from the active (process-local) table */
     uint32_t migrated = 0;
     for (uint32_t j = 0; j < old_cap; j++) {
-        if (!g_dir_table[j].is_valid) continue;
+        if (!src_table[j].is_valid) continue;
 
-        uint64_t page_idx = g_dir_table[j].gpa >> WVM_PAGE_SHIFT;
+        uint64_t page_idx = src_table[j].gpa >> WVM_PAGE_SHIFT;
         uint32_t hash = murmur3_32(page_idx);
         int placed = 0;
 
         for (int i = 0; i < DIR_MAX_PROBE * 4; i++) {
             uint32_t cur = (hash + i) % new_cap;
             if (!new_table[cur].is_valid) {
-                memcpy(&new_table[cur], &g_dir_table[j], sizeof(page_meta_t));
+                memcpy(&new_table[cur], &src_table[j], sizeof(page_meta_t));
                 /* pthread_mutex_t 不可 memcpy，必须重新初始化 */
                 pthread_mutex_init(&new_table[cur].lock, NULL);
                 placed = 1;
@@ -733,11 +875,11 @@ static void dir_table_grow(void) {
 
         if (!placed && g_ops && g_ops->log) {
             g_ops->log("[CRITICAL] dir_table_grow: rehash failed for GPA %llx!",
-                       (unsigned long long)g_dir_table[j].gpa);
+                       (unsigned long long)src_table[j].gpa);
         }
     }
 
-    /* 原子切换 */
+    /* 原子切换 process-local Mode B table */
     page_meta_t *old_table = g_dir_table;
     size_t old_alloc = g_dir_alloc_size;
     g_dir_table = new_table;
@@ -746,7 +888,7 @@ static void dir_table_grow(void) {
 
     /* 释放所有分片锁（逆序） */
     for (int i = LOCK_SHARDS - 1; i >= 0; i--)
-        pthread_mutex_unlock(&g_dir_table_locks[i]);
+        pthread_mutex_unlock(&active_dir_locks()[i]);
 
     /* 释放旧表（alloc_large_table 使用 mmap，必须用 munmap） */
     if (old_alloc > 0)
@@ -769,9 +911,9 @@ static page_meta_t* find_or_create_page_meta_safe(uint64_t gpa, uint32_t lock_id
     if (meta) return meta;
 
     /* 探测失败，需要扩容 */
-    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
     dir_table_grow();
-    pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_lock(&active_dir_locks()[lock_idx]);
 
     meta = find_or_create_page_meta(gpa);
     if (!meta && g_ops && g_ops->log) {
@@ -1176,19 +1318,18 @@ static void handle_view_ack(void *payload, uint16_t payload_len) {
 int wvm_core_init(struct dsm_driver_ops *ops, int total_nodes_hint) {
     if (!ops) return -1;
     g_ops = ops;
-    
-    g_dir_table = (page_meta_t *)g_ops->alloc_large_table(
+
 #ifdef __KERNEL__
-        sizeof(page_meta_t) * DIR_TABLE_SIZE);
+    /* Kernel directory authority + GPA shard locks are per-context (alloc on BIND). */
 #else
+    g_dir_table = (page_meta_t *)g_ops->alloc_large_table(
         sizeof(page_meta_t) * g_dir_capacity);
     g_dir_alloc_size = sizeof(page_meta_t) * g_dir_capacity;
-#endif
     if (!g_dir_table) return -ENOMEM;
-    
     for (int i = 0; i < LOCK_SHARDS; i++) {
-        pthread_mutex_init(&g_dir_table_locks[i], NULL); 
+        pthread_mutex_init(&g_dir_table_locks[i], NULL);
     }
+#endif
 
     pthread_mutex_init(&g_gossip_agg.lock, NULL);
     pthread_rwlock_init(&g_view_lock, NULL);
@@ -1221,6 +1362,10 @@ uint32_t wvm_get_directory_node_id(uint64_t gpa) {
     struct wvm_logic_route_context *context = logic_route_context();
     uint64_t chunk = gpa >> WVM_ROUTING_SHIFT;
     uint32_t target;
+
+    /* Fail-closed: kernel committer/TX may run without per-CPU active context. */
+    if (!context)
+        return WVM_NODE_AUTO_ROUTE;
 
     if (WVM_CURRENT_VM_ID() != 0 && !context->route_snapshot_bound) {
         return WVM_NODE_AUTO_ROUTE;
@@ -1269,7 +1414,7 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
     uint32_t lock_idx = get_lock_idx(gpa);
     
     // 必须加锁，因为可能有远程写操作正在更新这个页面
-    pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_lock(&active_dir_locks()[lock_idx]);
     
     page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
     if (page) {
@@ -1278,11 +1423,11 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
         if (version_out) {
             *version_out = page->version;
         }
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         return 0; // 成功
     }
     
-    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
     return -1; // 失败
 }
 
@@ -1315,27 +1460,27 @@ int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
 #endif
 
     lock_idx = get_lock_idx(gpa);
-    pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_lock(&active_dir_locks()[lock_idx]);
     page = find_page_meta_locked(gpa);
     if (!page) {
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         return -ENOENT;
     }
     if (page->version != base_version) {
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         return -ESTALE;
     }
 
     epoch = GET_EPOCH(page->version);
     counter = GET_COUNTER(page->version);
     if (epoch != g_curr_epoch || counter == UINT32_MAX) {
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         return epoch != g_curr_epoch ? -ESTALE : -EOVERFLOW;
     }
     memcpy(page->base_page_data + offset, data, data_bytes);
     page->version = MAKE_VERSION(epoch, counter + 1U);
     *result_version = page->version;
-    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
     return 0;
 }
 
@@ -1373,16 +1518,16 @@ int wvm_publish_local_commit(uint64_t gpa, uint64_t result_version,
     }
 
     lock_idx = get_lock_idx(gpa);
-    pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_lock(&active_dir_locks()[lock_idx]);
     page = find_page_meta_locked(gpa);
     if (!page) {
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         wvm_free_local(full_page);
         wvm_free_local(subscriber_ids);
         return -ENOENT;
     }
     if (page->version != result_version) {
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         wvm_free_local(full_page);
         wvm_free_local(subscriber_ids);
         return -ESTALE;
@@ -1414,7 +1559,7 @@ int wvm_publish_local_commit(uint64_t gpa, uint64_t result_version,
      * subscriber snapshot so the current commit is not echoed to its source.
      */
     register_page_subscriber(page, writer_node_id);
-    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
 
     if (use_full_page) {
         struct wvm_full_page_push *push;
@@ -1670,17 +1815,17 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
     if (!page) {
         // 尝试从目录表中查找
         uint32_t lock_idx = get_lock_idx(gpa);
-        pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_lock(&active_dir_locks()[lock_idx]);
         page = DIR_FIND_OR_CREATE(gpa, lock_idx);
         if (!page) {
-            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
             return; // 页面不存在，无法同步
         }
         // 复制版本和数据后立即释放锁
         uint64_t safe_version = page->version;
         uint8_t safe_data[4096];
         memcpy(safe_data, page->base_page_data, 4096);
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
 
         // 使用安全副本发送（跳过下方的直接解引用）
         // [FIX] 基于令牌桶思想的秒级节流
@@ -1761,7 +1906,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // [Multi-VM] dir_node 是 composite ID，用 WVM_GET_NODEID 比较
     if (WVM_GET_NODEID(dir_node) == (uint32_t)g_my_node_id) {
         uint32_t lock_idx = get_lock_idx(gpa);
-        pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_lock(&active_dir_locks()[lock_idx]);
         
         page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
         int ret = -1;
@@ -1779,7 +1924,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
             ret = 0;
         }
         
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         return ret;
     }
 
@@ -1880,7 +2025,7 @@ static void handle_prophet_metadata_update(uint64_t gpa_start, uint64_t len) {
         uint64_t cur_gpa = gpa_start + off;
         uint32_t lock_idx = get_lock_idx(cur_gpa);
         
-        pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_lock(&active_dir_locks()[lock_idx]);
         page_meta_t *page = DIR_FIND_OR_CREATE(cur_gpa, lock_idx);
         if (page) {
             // [严格遵守宏操作]：版本号必须单调连续递增
@@ -1895,7 +2040,7 @@ static void handle_prophet_metadata_update(uint64_t gpa_start, uint64_t len) {
             }
 #endif
         }
-        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
     }
 }
 
@@ -2331,7 +2476,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             struct wvm_mem_ack_payload *ack_pl = (struct wvm_mem_ack_payload*)(buffer + sizeof(*ack));
             
             uint32_t lock_idx = get_lock_idx(gpa);
-            pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+            pthread_mutex_lock(&active_dir_locks()[lock_idx]);
             
             page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
             if (page) {
@@ -2345,7 +2490,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 memset(ack_pl, 0, sizeof(*ack_pl));
             }
             
-            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
             
             g_ops->send_packet(buffer, pkt_len, source_node_id);
             g_ops->free_packet(buffer);
@@ -2360,7 +2505,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) return;
 
             uint32_t lock_idx = get_lock_idx(gpa);
-            pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+            pthread_mutex_lock(&active_dir_locks()[lock_idx]);
             
             page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
             if (page) {
@@ -2368,7 +2513,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 register_page_subscriber(page, src_id);
             }
             
-            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
             break;
         }
 
@@ -2419,7 +2564,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             int needs_push_fence = (hdr->flags & WVM_FLAG_NEED_ACK) != 0;
 
             if (sz == 0) {
-                pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+                pthread_mutex_lock(&active_dir_locks()[lock_idx]);
                 // [V29.5] Zero Page Commit
                 page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
                 if (page) {
@@ -2464,15 +2609,15 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     register_page_subscriber(page, src_id);
                     commit_ok = 1;
                 }
-                pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+                pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
             } else {
-                pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+                pthread_mutex_lock(&active_dir_locks()[lock_idx]);
 
                 page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
 
                 if (!page) {
                     if (g_ops->log) g_ops->log("[Logic] Fatal: Hash Table Full for GPA %llx", gpa);
-                    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+                    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
                     log_commit_sync_decision("reject-no-page", hdr, source_node_id,
                                              gpa, commit_version, 0, off, sz, pl_len);
                     send_commit_ack_if_needed(hdr, source_node_id, 0);
@@ -2502,7 +2647,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                         // [FIX-H8] 传 NULL 让 force_sync_client 走安全的重新查找+拷贝路径，
                         // 避免释放锁后解引用 page 指针导致的数据竞争
                         uint64_t local_version = page->version;
-                        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+                        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
                         force_sync_client(gpa, NULL, src_id);
                         log_commit_sync_decision("reject-version", hdr, source_node_id,
                                                  gpa, commit_version, local_version,
@@ -2586,7 +2731,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     }
                     commit_ok = 1;
                 }
-                pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+                pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
             }
             if (local_qemu_push_barrier_failed) {
                 if (g_ops->log) {
@@ -2619,7 +2764,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             }
             
             uint32_t lock_idx = get_lock_idx(gpa);
-            pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+            pthread_mutex_lock(&active_dir_locks()[lock_idx]);
             
             page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
             int write_success = 0;
@@ -2655,7 +2800,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 }
             }
             
-            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
 
             // 5. [ACK] 只有在"解锁"且"提交成功"后，才发送 ACK
             // 这保证了当客户端收到 ACK 时，数据一定已经在 Directory 的内存里了
@@ -2758,7 +2903,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
 // [V29 Interface] 本地原子更新版本号
 void wvm_logic_update_local_version(uint64_t gpa) {
     uint32_t lock_idx = get_lock_idx(gpa);
-    pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_lock(&active_dir_locks()[lock_idx]);
     
     // 仅更新已存在的元数据。若页面未被追踪，说明无 Diff 历史，无需版本号。
 
@@ -2769,7 +2914,7 @@ void wvm_logic_update_local_version(uint64_t gpa) {
         page->version = MAKE_VERSION(g_curr_epoch, local_counter + 1); 
     }
     
-    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
 }
 
 // [V29 Interface] 全网广播 RPC 包

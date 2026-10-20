@@ -17,6 +17,8 @@
 #include "../common_include/wavevm_admission_runtime_agent.h"
 #include "../common_include/wavevm_membership_control.h"
 #include "../common_include/wavevm_sha256.h"
+#include "../common_include/wavevm_host_probe.h"
+#include "../common_include/wavevm_capability.h"
 #include "../common_include/wavevm_tls_control_connector.h"
 
 enum agent_option {
@@ -697,6 +699,101 @@ static int register_local_node(const struct agent_options *options,
     return 0;
 }
 
+
+/*
+ * goal §5: probe host capabilities into state-dir before register/profile/exec.
+ * Writes durable records; derives accelerator-fault digest from honest probe
+ * states (no AVAILABLE advertisement for unsupported engines).
+ */
+static int agent_probe_and_publish_capabilities(
+    const char *state_dir, uint32_t node_id, uint64_t instance_id,
+    uint8_t accelerator_fault_digest[WVM_SHA256_DIGEST_BYTES], char *error,
+    size_t error_len)
+{
+    struct wvm_host_probe_result probe;
+    struct wvm_capability_record records[8];
+    size_t record_count = 0;
+    char path[PATH_MAX];
+    FILE *fp;
+
+    if (!state_dir || !accelerator_fault_digest) {
+        if (error && error_len) {
+            snprintf(error, error_len, "agent probe input is invalid");
+        }
+        return -1;
+    }
+    memset(&probe, 0, sizeof(probe));
+    memset(records, 0, sizeof(records));
+    if (wvm_host_probe_run(&probe, error, error_len) != 0) {
+        return -1;
+    }
+    if (wvm_host_probe_fill_records(&probe, node_id, instance_id, instance_id,
+                                    records, 8, &record_count, error,
+                                    error_len) != 0) {
+        return -1;
+    }
+    /*
+     * A10: write a canonical CapabilityReport so publish-capabilities --report
+     * can consume the same file. Concatenated CapabilityRecords are not a report.
+     */
+    if (snprintf(path, sizeof(path), "%s/host_capabilities.report",
+                 state_dir) >= (int)sizeof(path)) {
+        if (error && error_len) {
+            snprintf(error, error_len, "probe evidence path is too long");
+        }
+        return -1;
+    }
+    {
+        uint8_t *report_bytes = NULL;
+        size_t report_size = 0;
+        /* Use instance_id as profile_generation when publishing probe evidence. */
+        if (wvm_host_probe_encode_report(records, record_count, instance_id,
+                                         &report_bytes, &report_size, error,
+                                         error_len) != 0) {
+            return -1;
+        }
+        fp = fopen(path, "wb");
+        if (!fp) {
+            free(report_bytes);
+            if (error && error_len) {
+                snprintf(error, error_len, "cannot write probe evidence: %s",
+                         strerror(errno));
+            }
+            return -1;
+        }
+        if (fwrite(report_bytes, 1, report_size, fp) != report_size) {
+            fclose(fp);
+            free(report_bytes);
+            if (error && error_len) {
+                snprintf(error, error_len, "probe evidence write failed");
+            }
+            return -1;
+        }
+        fclose(fp);
+        free(report_bytes);
+    }
+    /* Honest accel-fault digest: hash of probe feature bits + states. */
+    {
+        uint8_t material[64];
+        memset(material, 0, sizeof(material));
+        material[0] = (uint8_t)probe.tcg_state;
+        material[1] = (uint8_t)probe.kvm_state;
+        material[2] = (uint8_t)probe.kernel_accel_state;
+        material[3] = (uint8_t)(probe.kvm_feature_bits & 0xff);
+        material[4] = (uint8_t)((probe.kvm_feature_bits >> 8) & 0xff);
+        material[5] = (uint8_t)(probe.tcg_feature_bits & 0xff);
+        material[6] = (uint8_t)(probe.kernel_accel_feature_bits & 0xff);
+        wvm_sha256_digest(material, sizeof(material), accelerator_fault_digest);
+    }
+    fprintf(stderr,
+            "[node-runtime] host probe published %zu records to %s "
+            "(tcg=%u kvm=%u kern=%u tcg_bits=%llx)\n",
+            record_count, path, (unsigned)probe.tcg_state,
+            (unsigned)probe.kvm_state, (unsigned)probe.kernel_accel_state,
+            (unsigned long long)probe.tcg_feature_bits);
+    return 0;
+}
+
 int wavevm_admission_agent_main(int argc, char **argv)
 {
     struct agent_options options;
@@ -835,6 +932,35 @@ int wavevm_admission_agent_main(int argc, char **argv)
         wvm_admission_runtime_agent_destroy(&agent);
         (void)sigprocmask(SIG_SETMASK, &previous_signals, NULL);
         return result;
+    }
+    if (options.registration_controller_address) {
+        uint8_t probed_accel_digest[WVM_SHA256_DIGEST_BYTES];
+
+        /*
+         * Always publish probe evidence under state-dir for ctl
+         * publish-capabilities / profile. Do not silently replace
+         * caller-supplied registration digests (tests/admission contract).
+         */
+        if (agent_probe_and_publish_capabilities(
+                options.state_dir, (uint32_t)options.node_id,
+                options.instance_id, probed_accel_digest, error,
+                sizeof(error)) != 0) {
+            fprintf(stderr,
+                    "[node-runtime] host capability probe failed: %s\n",
+                    error[0] ? error : "unknown");
+            return 1;
+        }
+        /*
+         * A10: CapabilityReport publish path already used probe material.
+         * Registration inventory must not keep a caller-only accel digest —
+         * use the probed digest as the authority for membership publish.
+         */
+        memcpy(options.accelerator_fault_capabilities_digest,
+               probed_accel_digest,
+               sizeof(options.accelerator_fault_capabilities_digest));
+        fprintf(stderr,
+                "[node-runtime] A10: registration accel digest replaced with "
+                "probed_accel_digest\n");
     }
     if (options.registration_controller_address &&
         register_local_node(&options, &network_endpoint, error,

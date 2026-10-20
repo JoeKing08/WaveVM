@@ -1,6 +1,10 @@
 # WaveVM Storage and Device Authority Specification
 
-Status: proposed implementation specification.
+Status: normative implementation specification.
+
+RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
+semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
+failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
 
 Scope: guest-visible device authority, remote block I/O dispatch, read/write
 ordering, flush/FUA semantics, idempotency, error mapping, and interaction with

@@ -206,6 +206,38 @@ static struct wvm_memory_pending_entry *find_pending_locked(
     return NULL;
 }
 
+/* A05: pin/put route scope refs for in-flight memory ops (retire proof). */
+static int memory_route_op_ref_get(struct wvm_memory_service *service,
+                                   char *error, size_t error_len)
+{
+    struct wvm_route_runtime *runtime;
+
+    if (!service || !service->config.route_runtime || !service->config.dispatch) {
+        set_error(error, error_len, "V1 memory route ref get has no runtime");
+        return -EINVAL;
+    }
+    runtime = (struct wvm_route_runtime *)service->config.route_runtime;
+    return wvm_route_runtime_operation_ref_get(
+        runtime,
+        &service->config.dispatch->required_route_snapshot_key.scope_key,
+        error, error_len);
+}
+
+static void memory_route_op_ref_put(struct wvm_memory_service *service)
+{
+    char discard[128];
+    struct wvm_route_runtime *runtime;
+
+    if (!service || !service->config.route_runtime || !service->config.dispatch) {
+        return;
+    }
+    runtime = (struct wvm_route_runtime *)service->config.route_runtime;
+    (void)wvm_route_runtime_operation_ref_put(
+        runtime,
+        &service->config.dispatch->required_route_snapshot_key.scope_key,
+        discard, sizeof(discard));
+}
+
 static int pending_register(struct wvm_memory_service *service,
                             const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
                             const struct wvm_runtime_memory_dispatch *memory,
@@ -242,9 +274,32 @@ static int pending_register(struct wvm_memory_service *service,
             entry->directory_node_instance_id =
                 memory->directory_node_instance_id;
             entry->state = WVM_MEMORY_PENDING_WAITING;
+            entry->route_op_ref_held = 0;
             *already_waiting = 0;
             pthread_mutex_unlock(&service->pending_lock);
-            return 0;
+            {
+                char pin_err[128];
+
+                if (memory_route_op_ref_get(service, pin_err,
+                                            sizeof(pin_err)) != 0) {
+                    pthread_mutex_lock(&service->pending_lock);
+                    entry = find_pending_locked(service, operation_id);
+                    if (entry && entry->state == WVM_MEMORY_PENDING_WAITING)
+                        memset(entry, 0, sizeof(*entry));
+                    pthread_mutex_unlock(&service->pending_lock);
+                    return -EAGAIN;
+                }
+                pthread_mutex_lock(&service->pending_lock);
+                entry = find_pending_locked(service, operation_id);
+                if (entry && entry->state == WVM_MEMORY_PENDING_WAITING) {
+                    entry->route_op_ref_held = 1;
+                    pthread_mutex_unlock(&service->pending_lock);
+                    return 0;
+                }
+                pthread_mutex_unlock(&service->pending_lock);
+                memory_route_op_ref_put(service);
+                return -EAGAIN;
+            }
         }
     }
     pthread_mutex_unlock(&service->pending_lock);
@@ -255,13 +310,17 @@ static void pending_remove(struct wvm_memory_service *service,
                            const uint8_t operation_id[WVM_IDENTITY_ID_BYTES])
 {
     struct wvm_memory_pending_entry *entry;
+    int put_ref = 0;
 
     pthread_mutex_lock(&service->pending_lock);
     entry = find_pending_locked(service, operation_id);
     if (entry && entry->state == WVM_MEMORY_PENDING_WAITING) {
+        put_ref = entry->route_op_ref_held;
         memset(entry, 0, sizeof(*entry));
     }
     pthread_mutex_unlock(&service->pending_lock);
+    if (put_ref)
+        memory_route_op_ref_put(service);
 }
 
 static struct wvm_memory_outgoing_commit_entry *
@@ -344,9 +403,36 @@ static int outgoing_commit_register(
     empty->directory_physical_node_id = memory->directory_physical_node_id;
     empty->directory_node_instance_id = memory->directory_node_instance_id;
     empty->state = WVM_MEMORY_COMMIT_IN_FLIGHT;
+    empty->route_op_ref_held = 0;
     *already_waiting = 0;
     pthread_mutex_unlock(&service->outgoing_commit_lock);
-    return 0;
+    {
+        char pin_err[128];
+        uint8_t op_copy[WVM_IDENTITY_ID_BYTES];
+
+        memcpy(op_copy, operation_id, sizeof(op_copy));
+        if (memory_route_op_ref_get(service, pin_err, sizeof(pin_err)) != 0) {
+            pthread_mutex_lock(&service->outgoing_commit_lock);
+            empty = find_outgoing_commit_locked(service, op_copy);
+            if (empty && empty->state == WVM_MEMORY_COMMIT_IN_FLIGHT)
+                memset(empty, 0, sizeof(*empty));
+            pthread_mutex_unlock(&service->outgoing_commit_lock);
+            set_error(error, error_len, pin_err[0] ? pin_err
+                      : "V1 outgoing commit route ref pin failed");
+            return -EAGAIN;
+        }
+        pthread_mutex_lock(&service->outgoing_commit_lock);
+        empty = find_outgoing_commit_locked(service, op_copy);
+        if (empty && empty->state == WVM_MEMORY_COMMIT_IN_FLIGHT) {
+            empty->route_op_ref_held = 1;
+            pthread_mutex_unlock(&service->outgoing_commit_lock);
+            return 0;
+        }
+        pthread_mutex_unlock(&service->outgoing_commit_lock);
+        memory_route_op_ref_put(service);
+        set_error(error, error_len, "V1 outgoing commit disappeared during pin");
+        return -EAGAIN;
+    }
 }
 
 static void outgoing_commit_remove(
@@ -354,13 +440,17 @@ static void outgoing_commit_remove(
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES])
 {
     struct wvm_memory_outgoing_commit_entry *entry;
+    int put_ref = 0;
 
     pthread_mutex_lock(&service->outgoing_commit_lock);
     entry = find_outgoing_commit_locked(service, operation_id);
     if (entry && entry->state == WVM_MEMORY_COMMIT_IN_FLIGHT) {
+        put_ref = entry->route_op_ref_held;
         memset(entry, 0, sizeof(*entry));
     }
     pthread_mutex_unlock(&service->outgoing_commit_lock);
+    if (put_ref)
+        memory_route_op_ref_put(service);
 }
 
 static int resolve_route(
@@ -563,14 +653,22 @@ static int service_remote_ack(struct wvm_memory_service *service,
         return completion_result;
     }
 
-    pthread_mutex_lock(&service->pending_lock);
-    pending = find_pending_locked(service, envelope->operation_id);
-    if (pending && pending->state == WVM_MEMORY_PENDING_WAITING) {
-        pending->state = WVM_MEMORY_PENDING_COMPLETED;
-        memcpy(pending->completion_payload_digest, payload_digest,
-               sizeof(payload_digest));
+    {
+        int put_ref = 0;
+
+        pthread_mutex_lock(&service->pending_lock);
+        pending = find_pending_locked(service, envelope->operation_id);
+        if (pending && pending->state == WVM_MEMORY_PENDING_WAITING) {
+            put_ref = pending->route_op_ref_held;
+            pending->route_op_ref_held = 0;
+            pending->state = WVM_MEMORY_PENDING_COMPLETED;
+            memcpy(pending->completion_payload_digest, payload_digest,
+                   sizeof(payload_digest));
+        }
+        pthread_mutex_unlock(&service->pending_lock);
+        if (put_ref)
+            memory_route_op_ref_put(service);
     }
-    pthread_mutex_unlock(&service->pending_lock);
     return 0;
 }
 
@@ -814,8 +912,15 @@ static int service_remote_commit_ack(
      * Claim completion before calling the local consumer. A retransmitted ACK
      * must never make a QEMU dirty journal apply its completion twice.
      */
-    pending->state = WVM_MEMORY_COMMIT_COMPLETED;
-    pthread_mutex_unlock(&service->outgoing_commit_lock);
+    {
+        int put_ref = pending->route_op_ref_held;
+
+        pending->route_op_ref_held = 0;
+        pending->state = WVM_MEMORY_COMMIT_COMPLETED;
+        pthread_mutex_unlock(&service->outgoing_commit_lock);
+        if (put_ref)
+            memory_route_op_ref_put(service);
+    }
 
     completion_result = service->config.complete_commit(
         service->config.opaque, envelope->operation_id, ack.gpa, ack.status,

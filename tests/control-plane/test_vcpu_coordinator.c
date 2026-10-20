@@ -48,7 +48,8 @@ static void fill_rule(struct wvm_route_rule_record *rule, uint32_t vnode,
 static int finalize_snapshot(struct wvm_route_snapshot_record *snapshot,
                              struct wvm_route_rule_record rules[2],
                              struct wvm_required_ack_entry acks[1],
-                             char *error, size_t error_len)
+                             uint64_t route_generation, char *error,
+                             size_t error_len)
 {
     uint8_t encoded[16384];
     uint8_t digest[WVM_SHA256_DIGEST_BYTES];
@@ -59,7 +60,7 @@ static int finalize_snapshot(struct wvm_route_snapshot_record *snapshot,
     snapshot->route_snapshot_key.scope_key.vm_incarnation = 4;
     snapshot->route_snapshot_key.scope_key.route_scope_id = 9;
     snapshot->route_snapshot_key.topology_revision = 2;
-    snapshot->route_snapshot_key.route_generation = 3;
+    snapshot->route_snapshot_key.route_generation = route_generation;
     snapshot->membership_revision = 2;
     snapshot->topology_kind = WVM_ROUTE_TOPOLOGY_FLAT;
     snapshot->next_hop_rules.entries = rules;
@@ -352,7 +353,7 @@ int main(void)
     completed_context.eip = UINT64_C(0x8877665544332211);
     fill_rule(&rules[0], 7, 17, 19017);
     fill_rule(&rules[1], 11, 18, 19018);
-    if (expect(finalize_snapshot(&snapshot, rules, acks, error,
+    if (expect(finalize_snapshot(&snapshot, rules, acks, 3, error,
                                  sizeof(error)) == 0,
                "build route snapshot") ||
         expect(setup_manifest(&manifest, &capability,
@@ -539,9 +540,134 @@ int main(void)
         wvm_route_runtime_destroy(&routes);
         return 1;
     }
+    /* Drain sequence-2 so the reroute oracle starts from a clean lane. */
+    if (expect(build_success_exit(&sent, 13, result_context,
+                                  result_context_bytes, exit_payload,
+                                  sizeof(exit_payload), &exit_envelope, error,
+                                  sizeof(error)) == 0 &&
+                   wvm_vcpu_handoff_coordinator_dispatch(
+                       &coordinator, &exit_envelope, error, sizeof(error)) ==
+                       0,
+               "complete sequence-2 before reroute oracle")) {
+        wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+        wvm_route_runtime_destroy(&routes);
+        return 1;
+    }
+
+    /*
+     * RM-P7-op-identity-across-reroute: drop VCPU_EXIT across G→G+1, refresh
+     * forwarding key on retry, then complete exactly once; lookup returns cache.
+     */
+    {
+        struct wvm_route_snapshot_record gen4;
+        struct wvm_route_rule_record gen4_rules[2];
+        struct wvm_required_ack_entry gen4_acks[1];
+        struct wvm_vcpu_handoff_request looked_request;
+        struct wvm_vcpu_handoff_result looked_result;
+        uint8_t op_tail = 7;
+        uint64_t sequence_before;
+        size_t completed_before = completed.count;
+
+        fill_rule(&gen4_rules[0], 7, 17, 19117);
+        fill_rule(&gen4_rules[1], 11, 21, 19121);
+        if (finalize_snapshot(&gen4, gen4_rules, gen4_acks, 4, error,
+                              sizeof(error)) != 0) {
+            fprintf(stderr, "vCPU coordinator gen4 setup: %s\n", error);
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+        gen4.has_predecessor_snapshot_key = 1;
+        gen4.predecessor_snapshot_key = manifest.required_route_snapshot_key;
+
+        fill_submit(&submit, 3, op_tail, submit_context, submit_context_bytes);
+        {
+            int submit_rc = wvm_vcpu_handoff_coordinator_submit(
+                &coordinator, &submit, error, sizeof(error));
+            if (expect(submit_rc == 0 && sent.count == 4,
+                       "submit semantic op under generation 3")) {
+                fprintf(stderr, "submit gen3 rc=%d count=%zu err=%s\n",
+                        submit_rc, sent.count, error);
+                wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+                wvm_route_runtime_destroy(&routes);
+                return 1;
+            }
+        }
+        sequence_before = sent.request.handoff_sequence;
+        if (expect(sent.envelope.route_generation == 3,
+                   "initial emit uses generation 3")) {
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+
+        /* Install G+1 and update admitted projection (control-plane reroute). */
+        if (expect(wvm_route_runtime_prepare(&routes, &gen4, error,
+                                             sizeof(error)) == 0 &&
+                       wvm_route_runtime_activate(
+                           &routes, &gen4.route_snapshot_key, error,
+                           sizeof(error)) == 0,
+                   "activate route generation 4")) {
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+        projection.required_route_snapshot_key = gen4.route_snapshot_key;
+        manifest.required_route_snapshot_key = gen4.route_snapshot_key;
+
+        /* Lost VCPU_EXIT: retry same operation_id; forwarding key refreshes. */
+        if (expect(wvm_vcpu_handoff_coordinator_submit(
+                       &coordinator, &submit, error, sizeof(error)) == 0 &&
+                       sent.count == 5 &&
+                       sent.envelope.route_generation == 4 &&
+                       sent.envelope.delivery_attempt_id == 2 &&
+                       sent.request.handoff_sequence == sequence_before &&
+                       memcmp(sent.envelope.operation_id, submit.operation_id,
+                              sizeof(submit.operation_id)) == 0,
+                   "reroute retry refreshes generation; keeps op identity")) {
+            fprintf(stderr,
+                    "reroute retry: gen=%llu attempt=%llu seq=%llu err=%s\n",
+                    (unsigned long long)sent.envelope.route_generation,
+                    (unsigned long long)sent.envelope.delivery_attempt_id,
+                    (unsigned long long)sent.request.handoff_sequence, error);
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+
+        if (expect(build_success_exit(&sent, 13, result_context,
+                                      result_context_bytes, exit_payload,
+                                      sizeof(exit_payload), &exit_envelope,
+                                      error, sizeof(error)) == 0 &&
+                       wvm_vcpu_handoff_coordinator_dispatch(
+                           &coordinator, &exit_envelope, error,
+                           sizeof(error)) == 0 &&
+                       completed.count == completed_before + 1,
+                   "one completion after dropped-exit reroute")) {
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+        if (expect(wvm_vcpu_handoff_coordinator_lookup_completed(
+                       &coordinator, 3, submit.operation_id, &looked_request,
+                       &looked_result, error, sizeof(error)) == 0 &&
+                       looked_result.status ==
+                           WVM_VCPU_HANDOFF_RESULT_SUCCESS &&
+                       looked_request.handoff_sequence == sequence_before,
+                   "lookup returns cached result under same operation_id") ||
+            expect(wvm_vcpu_handoff_coordinator_submit(
+                       &coordinator, &submit, error, sizeof(error)) ==
+                       -EALREADY,
+                   "resubmit of completed op does not mint a new sequence")) {
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+    }
 
     wvm_vcpu_handoff_coordinator_destroy(&coordinator);
     wvm_route_runtime_destroy(&routes);
     puts("vCPU coordinator tests: PASS");
+    puts("NOTE: RM-P7 op-identity across reroute (G→G+1 + cache lookup).");
     return 0;
 }

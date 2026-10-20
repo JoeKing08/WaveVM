@@ -1,6 +1,10 @@
 # WaveVM Identity and Routing Specification
 
-Status: proposed implementation specification.
+Status: normative implementation specification.
+
+RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
+semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
+failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
 
 Scope: identity allocation, identity lifetime, flat and fractal route scope,
 route lookup, route-snapshot ownership, compatibility with the current 32-bit
@@ -386,7 +390,7 @@ cannot independently create, remove, or reactivate a member.
 - A nonzero VM route miss never strips the VM ID and retries a raw lookup.
 - Flat and fractal deployments deliver identical semantic operations to the
   same target node runtime for equivalent admitted manifests.
-- A domain fixture budgeted for 4096 vnodes accepts 4096 admitted entries and
+- **Minimum:** A domain fixture budgeted for 4096 vnodes accepts 4096 admitted entries and
   rejects an additional entry without partial publication. A separate flat
   fixture with sufficient budgets admits more than 4096 entries, compiles the
   snapshot, and resolves/forwards destinations on both sides of the old boundary

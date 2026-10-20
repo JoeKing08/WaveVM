@@ -1,0 +1,12 @@
+SPEC-storage-remote-block-v1 / BASE-§11-storage-authority — COMPLETE (Batch G 2026-10-19)
+
+Evidence:
+1. FUA/SYNC on WRITE: master_core/main_wrapper.c follows successful typed WRITE
+   with MSG_BLOCK_FLUSH before completion ACK (storage-device-authority.md §4.3).
+2. Slave FLUSH allows count==0 (FUA follow-up); WVM_STORAGE_CHUNK_DIR scopes chunk root.
+3. Shared chunk store: common_include/wavevm_block_chunk_store.[ch] (R/W/FLUSH/FUA fdatasync).
+4. Oracle: tests/control-plane/test_typed_block_authority.sh — PASS
+   (chunk-store R/W/FLUSH/FUA + typed-IPC→slave-equivalent UDP authority path +
+   main_wrapper FUA wire source check).
+
+Guest-visible virtio/device E2E remains goal §7 (GUEST-BLOCKED list unchanged).

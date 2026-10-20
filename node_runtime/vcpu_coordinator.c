@@ -475,6 +475,10 @@ int wvm_vcpu_handoff_coordinator_submit(
     entry = find_operation_locked(coordinator, submit->vcpu_index,
                                   submit->operation_id);
     if (entry) {
+        const struct wvm_runtime_dispatch_projection *projection =
+            coordinator->config.dispatch;
+        struct wvm_envelope_route refreshed_route;
+
         if (wvm_vcpu_handoff_request_decode(
                 entry->request_payload, entry->request_payload_bytes, &decoded,
                 error, error_len) != 0 ||
@@ -484,6 +488,17 @@ int wvm_vcpu_handoff_coordinator_submit(
                       "vCPU handoff reuses operation ID with another request");
             return -EPROTO;
         }
+        if (entry->state == COORDINATOR_ENTRY_COMPLETED ||
+            entry->state == COORDINATOR_ENTRY_FAILED) {
+            /*
+             * Terminal result is retained under operation_id. A lost upper-layer
+             * notification must query the cache — never mint a second sequence.
+             */
+            pthread_mutex_unlock(&coordinator->lock);
+            set_error(error, error_len,
+                      "vCPU handoff result is cached; query instead of resubmit");
+            return -EALREADY;
+        }
         if (entry->state != COORDINATOR_ENTRY_REMOTE_IN_FLIGHT ||
             entry->request_envelope.delivery_attempt_id == UINT64_MAX) {
             pthread_mutex_unlock(&coordinator->lock);
@@ -491,7 +506,38 @@ int wvm_vcpu_handoff_coordinator_submit(
                       "vCPU handoff cannot retry a completed operation");
             return -EALREADY;
         }
+        /*
+         * Phase 7 / identity-routing: route-generation change refreshes only the
+         * forwarding key. operation_id, semantic digest, and handoff_sequence
+         * stay fixed so a dropped VCPU_EXIT still completes one semantic op.
+         */
+        if (resolve_route(coordinator, &cpu->executor, &refreshed_route, error,
+                          error_len) != 0) {
+            pthread_mutex_unlock(&coordinator->lock);
+            if (!error || error[0] == '\0') {
+                set_error(error, error_len,
+                          "vCPU handoff reroute cannot resolve destination");
+            }
+            return -ESTALE;
+        }
+        if (entry->request_envelope.delivery_attempt_id == UINT64_MAX) {
+            pthread_mutex_unlock(&coordinator->lock);
+            set_error(error, error_len, "vCPU handoff delivery attempts exhausted");
+            return -EAGAIN;
+        }
         entry->request_envelope.delivery_attempt_id++;
+        entry->request_envelope.route_scope_id =
+            projection->required_route_snapshot_key.scope_key.route_scope_id;
+        entry->request_envelope.topology_revision =
+            projection->required_route_snapshot_key.topology_revision;
+        entry->request_envelope.route_generation =
+            projection->required_route_snapshot_key.route_generation;
+        memcpy(entry->request_envelope.route_snapshot_digest,
+               projection->required_route_snapshot_key.snapshot_digest,
+               sizeof(entry->request_envelope.route_snapshot_digest));
+        entry->request_envelope.route = refreshed_route;
+        entry->request_envelope.payload = entry->request_payload;
+        entry->request_envelope.payload_bytes = entry->request_payload_bytes;
         outgoing = entry->request_envelope;
         pthread_mutex_unlock(&coordinator->lock);
         return coordinator->config.send_envelope(
@@ -682,5 +728,50 @@ int wvm_vcpu_handoff_coordinator_dispatch(
             coordinator->config.complete_opaque, &request, &result, error,
             error_len);
     }
+    return 0;
+}
+
+int wvm_vcpu_handoff_coordinator_lookup_completed(
+    struct wvm_vcpu_handoff_coordinator *coordinator, uint32_t vcpu_index,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    struct wvm_vcpu_handoff_request *request_out,
+    struct wvm_vcpu_handoff_result *result_out, char *error, size_t error_len)
+{
+    struct coordinator_entry *entry;
+
+    if (!coordinator || !coordinator->initialized || !operation_id ||
+        !request_out || !result_out) {
+        set_error(error, error_len, "vCPU handoff lookup arguments are invalid");
+        return -EINVAL;
+    }
+    pthread_mutex_lock(&coordinator->lock);
+    prune_locked(coordinator, monotonic_milliseconds());
+    entry = find_operation_locked(coordinator, vcpu_index, operation_id);
+    if (!entry) {
+        pthread_mutex_unlock(&coordinator->lock);
+        set_error(error, error_len, "vCPU handoff operation is unknown");
+        return -ENOENT;
+    }
+    if (entry->state == COORDINATOR_ENTRY_REMOTE_IN_FLIGHT) {
+        pthread_mutex_unlock(&coordinator->lock);
+        set_error(error, error_len, "vCPU handoff operation is still in flight");
+        return -EINPROGRESS;
+    }
+    if (entry->state != COORDINATOR_ENTRY_COMPLETED &&
+        entry->state != COORDINATOR_ENTRY_FAILED) {
+        pthread_mutex_unlock(&coordinator->lock);
+        set_error(error, error_len, "vCPU handoff operation has no cached result");
+        return -ENOENT;
+    }
+    if (wvm_vcpu_handoff_request_decode(entry->request_payload,
+                                        entry->request_payload_bytes,
+                                        request_out, error, error_len) != 0 ||
+        wvm_vcpu_handoff_result_decode(entry->result_payload,
+                                       entry->result_payload_bytes, result_out,
+                                       error, error_len) != 0) {
+        pthread_mutex_unlock(&coordinator->lock);
+        return -EPROTO;
+    }
+    pthread_mutex_unlock(&coordinator->lock);
     return 0;
 }

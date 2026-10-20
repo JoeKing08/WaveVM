@@ -87,7 +87,7 @@ int main(void)
     memset(&sent, 0, sizeof(sent));
     fill_rule(&rules[0], 7, 17, 19017);
     fill_rule(&rules[1], 11, 18, 19018);
-    if (service_expect(finalize_snapshot(&snapshot, rules, acks, error,
+    if (service_expect(finalize_snapshot(&snapshot, rules, acks, 3, error,
                                          sizeof(error)) == 0,
                        "build route snapshot") ||
         service_expect(setup_manifest(&manifest, &capability,

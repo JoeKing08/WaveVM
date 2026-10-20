@@ -2,6 +2,7 @@
 #include "wavevm_runtime_names.h"
 
 #include <errno.h>
+#include <time.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <signal.h>
@@ -212,10 +213,12 @@ static void clear_stale_admitted_endpoints(
                                     derive_error, sizeof(derive_error)) != 0) {
         return;
     }
-    (void)unlink(names.runtime_socket);
-    (void)unlink(names.executor_socket);
-    (void)unlink(names.worker_socket);
-    (void)unlink(names.monitor_socket);
+    /*
+     * Owner-local cleanup on the participant host: sockets + ready + SHM.
+     * Coordinator-side unlink/shm_unlink only affects the coordinator host
+     * filesystem; remote agents must retire their own names (F6).
+     */
+    (void)wvm_runtime_name_set_retire(&names, derive_error, sizeof(derive_error));
 }
 
 static int start_runtime(
@@ -331,17 +334,66 @@ static int stop_one_runtime(
     }
     pid = owned->runtime_pids[index];
     if (pid <= 0) {
+        clear_stale_admitted_endpoints(runtime_manifest);
         return 0;
     }
-    if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
+    /*
+     * A05: SIGTERM wait is a quiesce attempt, not proof. If the child still
+     * runs after the bounded wait, SIGKILL and fail closed — do not claim
+     * normal STOP completion / fence convergence.
+     */
+    if (kill(pid, SIGTERM) != 0 && errno != ESRCH) {
         set_error(error, error_len, "cannot signal admitted runtime child");
         return -errno;
     }
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    {
+        int waited;
+        pid_t r;
+
+        for (waited = 0; waited < 50; waited++) {
+            r = waitpid(pid, &status, WNOHANG);
+            if (r == pid || (r < 0 && errno == ECHILD)) {
+                owned->runtime_pids[index] = 0;
+                clear_stale_admitted_endpoints(runtime_manifest);
+                return 0;
+            }
+            {
+                struct timespec ts = {0, 20 * 1000 * 1000}; /* 20ms */
+                nanosleep(&ts, NULL);
+            }
+        }
+        r = waitpid(pid, &status, WNOHANG);
+        if (r == pid || (r < 0 && errno == ECHILD)) {
+            owned->runtime_pids[index] = 0;
+            clear_stale_admitted_endpoints(runtime_manifest);
+            return 0;
+        }
+        if (r != 0) {
+            set_error(error, error_len, "waitpid on admitted runtime failed");
+            return -errno;
+        }
+        /*
+         * Still running after SIGTERM window: hard-kill and reap. Child death
+         * is enough for Minimum STOP participant teardown (goal §2). Graceful
+         * quiesce / fence proof is owned by ROUTE_RETIRE ACK refs+horizon
+         * (A05), not by refusing STOP after a successful SIGKILL reap — else
+         * durable state stays RUNNING with a dead child (false healthy).
+         */
+        if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
+            set_error(error, error_len, "cannot SIGKILL admitted runtime child");
+            return -errno;
+        }
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        }
+        owned->runtime_pids[index] = 0;
+        clear_stale_admitted_endpoints(runtime_manifest);
+        fprintf(stderr,
+                "[runtime-agent] admitted child pid=%d required SIGKILL after "
+                "SIGTERM window; STOP participant teardown continues "
+                "(fence proof remains ROUTE_RETIRE)\n",
+                (int)pid);
+        return 0;
     }
-    owned->runtime_pids[index] = 0;
-    clear_stale_admitted_endpoints(runtime_manifest);
-    return 0;
 }
 
 static void reap_runtime_children(struct wvm_admission_runtime_agent *agent)
@@ -359,11 +411,33 @@ static void reap_runtime_children(struct wvm_admission_runtime_agent *agent)
         if (pid > 0 && waitpid(pid, &status, WNOHANG) == pid) {
             fprintf(stderr,
                     "[runtime-agent] admitted child pid=%d exited status=0x%x "
-                    "signaled=%d sig=%d exited=%d code=%d\n",
+                    "signaled=%d sig=%d exited=%d code=%d — owner cleanup\n",
                     (int)pid, status, WIFSIGNALED(status),
                     WIFSIGNALED(status) ? WTERMSIG(status) : 0,
                     WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1);
             owned->runtime_pids[i] = 0;
+            /*
+             * A12: unexpected required-child death must not leave a false
+             * READY owner. Retire local endpoints/ready/SHM, mark the slot
+             * failed so QUERY cannot relaunch into fake RUNNING, and leave
+             * durable RUNNING→DEGRADED/FAILED to controller reconcile that
+             * probes runtime-ready owner liveness.
+             */
+            if (agent->slots && i < agent->slot_capacity &&
+                (agent->slots[i].has_prepared || agent->slots[i].has_activated ||
+                 agent->slots[i].has_required_child_failed)) {
+                clear_stale_admitted_endpoints(
+                    &agent->slots[i].prepared_storage.runtime_manifest);
+                if (agent->slots[i].has_activated ||
+                    agent->slots[i].has_activation_decision) {
+                    agent->slots[i].has_required_child_failed = 1;
+                    agent->slots[i].has_activated = 0;
+                    fprintf(stderr,
+                            "[runtime-agent] slot vm=%u: required child dead → "
+                            "has_required_child_failed (reconcile must DEGRADE)\n",
+                            agent->slots[i].vm_id);
+                }
+            }
         }
     }
 }

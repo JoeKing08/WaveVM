@@ -434,6 +434,64 @@ static int transport_route_abort(
                        &aborted, error, error_len);
 }
 
+static int transport_route_retire(
+    void *context, const struct wvm_coordinator_transaction *coordinator,
+    const struct wvm_route_transaction_record *transaction,
+    const struct wvm_route_snapshot_record *snapshot, char *error,
+    size_t error_len)
+{
+    struct wvm_admission_transport *transport = context;
+    size_t i;
+
+    /*
+     * STOP must collect ROUTE_RETIRE ACK from route owners before local
+     * begin_retire(refs=0, horizon=1). ABORT_MANIFEST/ABORT_RESERVATION are
+     * not a substitute (cross-review F5).
+     *
+     * Retire payload is the snapshot key carried on the durable route
+     * transaction; do not require a fully re-validated snapshot record here
+     * (STOP rebuild may only have the prepared key).
+     */
+    (void)snapshot;
+    if (!transport || !coordinator || !transaction ||
+        wvm_route_transaction_record_validate(transaction, error, error_len) !=
+            0) {
+        set_error(error, error_len, "route retire input is invalid");
+        return -1;
+    }
+    if (coordinator->vm_id !=
+            transaction->route_snapshot_key.scope_key.vm_id ||
+        coordinator->vm_incarnation !=
+            transaction->route_snapshot_key.scope_key.vm_incarnation) {
+        set_error(error, error_len,
+                  "route retire does not bind coordinator identity");
+        return -1;
+    }
+    for (i = 0; i < transaction->required_ack_set.entries.count; i++) {
+        const struct wvm_required_ack_entry *ack =
+            &transaction->required_ack_set.entries.entries[i];
+        struct wvm_admission_transport_target target;
+
+        memset(&target, 0, sizeof(target));
+        if (resolve_member_target(transport, &ack->member_key, &ack->endpoint,
+                                  &target, error, error_len) != 0) {
+            return -1;
+        }
+        if (submit_record(transport, &target, WVM_ENVELOPE_MSG_ROUTE_RETIRE,
+                          transaction->operation_id, coordinator->vm_id,
+                          coordinator->vm_incarnation,
+                          coordinator->manifest_generation,
+                          &transaction->route_snapshot_key,
+                          encode_route_snapshot_key,
+                          &transaction->route_snapshot_key, error,
+                          error_len) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+
 static int transport_reservation_stage(
     void *context, const struct wvm_candidate_vm_manifest *candidate,
     const struct wvm_resource_reservation *reservation, uint16_t message_type,
@@ -796,6 +854,7 @@ int wvm_admission_transport_callbacks(
     callbacks->route_prepare = transport_route_prepare;
     callbacks->route_commit = transport_route_commit;
     callbacks->route_abort = transport_route_abort;
+    callbacks->route_retire = transport_route_retire;
     callbacks->reservation_prepare = transport_reservation_prepare;
     callbacks->reservation_commit = transport_reservation_commit;
     callbacks->reservation_abort = transport_reservation_abort;

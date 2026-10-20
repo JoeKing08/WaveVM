@@ -38,6 +38,15 @@ extern uint32_t g_curr_epoch;
 extern uint8_t g_my_node_state;
 #ifdef __KERNEL__
 uint32_t wvm_kernel_current_vm_id(void);
+void *wvm_kernel_active_dir_table(void);
+void *wvm_kernel_active_dir_locks(void);
+void *wvm_kernel_active_route_context(void);
+void *wvm_logic_alloc_dir_table(void);
+void wvm_logic_free_dir_table(void *table);
+void *wvm_logic_alloc_dir_locks(void);
+void wvm_logic_free_dir_locks(void *locks);
+void *wvm_logic_alloc_route_context(void);
+void wvm_logic_free_route_context(void *route);
 #define WVM_CURRENT_VM_ID() wvm_kernel_current_vm_id()
 #else
 extern uint32_t g_my_vm_id;

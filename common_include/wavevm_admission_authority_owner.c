@@ -186,6 +186,15 @@ DEFINE_STAGE_FORWARDER(
      error, error_len))
 
 DEFINE_STAGE_FORWARDER(
+    route_retire,
+    (void *context, const struct wvm_coordinator_transaction *transaction,
+     const struct wvm_route_transaction_record *route_transaction,
+     const struct wvm_route_snapshot_record *route_snapshot, char *error,
+     size_t error_len),
+    (owner->config.transport, transaction, route_transaction, route_snapshot,
+     error, error_len))
+
+DEFINE_STAGE_FORWARDER(
     reservation_prepare,
     (void *context, const struct wvm_candidate_vm_manifest *candidate,
      const struct wvm_resource_reservation *reservation, char *error,
@@ -265,6 +274,7 @@ int wvm_admission_authority_owner_init(
     owner->authority.callbacks.route_prepare = owner_route_prepare;
     owner->authority.callbacks.route_commit = owner_route_commit;
     owner->authority.callbacks.route_abort = owner_route_abort;
+    owner->authority.callbacks.route_retire = owner_route_retire;
     owner->authority.callbacks.reservation_prepare = owner_reservation_prepare;
     owner->authority.callbacks.reservation_commit = owner_reservation_commit;
     owner->authority.callbacks.reservation_abort = owner_reservation_abort;

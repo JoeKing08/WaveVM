@@ -4,8 +4,11 @@
 #include "../../../common_include/wavevm_protocol.h"
 
 /*
- * virtio-blk hook entry point. Returns 0 when the request is handled by the
- * WaveVM IPC path. Returns -1 to let virtio-blk use its normal local path.
+ * virtio-blk hook entry point (A07/A08):
+ *   0  = WaveVM handled successfully (guest sees OK)
+ *   1  = WaveVM handled remote/transport failure (guest MUST see IOERR;
+ *        never fall through to local disk — no silent local fallback)
+ *  -1  = not claimed (WVM_BLOCK_IO off or interceptor unavailable)
  *
  * Enabled only when WVM_BLOCK_IO=1 is set in the environment.
  */
@@ -81,5 +84,9 @@ int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write)
     }
 
     g_free(linear_buf);
-    return ret;
+    /* A08: remote error is guest-visible IOERR, not local-disk fallback. */
+    if (ret != 0) {
+        return 1;
+    }
+    return 0;
 }

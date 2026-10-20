@@ -26,6 +26,7 @@
  */
 int wvm_ctl_recover_midflight_admissions(
     struct wvm_control_plane *plane,
+    struct wvm_vm_namespace_allocator *namespace_allocator,
     struct wvm_membership_controller *membership_controller,
     const struct wvm_admission_authority *authority,
     const char *state_directory,
@@ -52,5 +53,21 @@ int wvm_ctl_stop_vm(
     size_t member_capacity, uint32_t max_vcpus, size_t route_rule_capacity,
     size_t route_ack_capacity, struct wvm_control_result *result, char *error,
     size_t error_len);
+
+/*
+ * Continuous production health loop (goal §1 / membership §5.6 /
+ * runtime-manifest-lifecycle §6.2): scan durable RUNNING|DEGRADED VMs and
+ * fail-closed when required members are unhealthy.
+ *   RUNNING + unhealthy -> DEGRADED
+ *   DEGRADED + still unhealthy -> FAILED
+ * Does not invent RECOVERY_REBIND / silent rebind. CREATE-time degrade alone
+ * is not sufficient; ctl serve must call this periodically.
+ * transitioned_out may be NULL. Returns 0 even when some VMs transition;
+ * returns -1 only on invalid input / hard plane errors.
+ */
+int wvm_ctl_reconcile_required_member_health(
+    struct wvm_control_plane *plane,
+    struct wvm_membership_controller *membership_controller,
+    size_t *transitioned_out, char *error, size_t error_len);
 
 #endif

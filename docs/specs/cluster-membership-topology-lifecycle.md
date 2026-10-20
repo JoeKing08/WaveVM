@@ -1,6 +1,10 @@
 # WaveVM Cluster Membership and Topology Lifecycle Specification
 
-Status: proposed implementation specification.
+Status: normative implementation specification.
+
+RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
+semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
+failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
 
 Scope: cluster membership, physical-node and gateway registration, health,
 flat/fractal topology, Pod membership, route-snapshot publication, scheduling
@@ -638,7 +642,7 @@ entry as a substitute for an admitted snapshot.
 ## 10. Acceptance Tests
 
 The join, cordon, safe drain, route-snapshot publication, and verified gateway
-replacement tests form the minimum usable topology gate. Failure races and
+replacement tests form the minimum usable topology gate. Acceptance bullets in this section that are not marked Extended are also Minimum, including the flat >4096 and multi-Pod budget fixtures. Failure races and
 multi-scope host recovery are extended hardening and do not block the first
 correct member lifecycle.
 
@@ -676,7 +680,7 @@ correct member lifecycle.
   or become active without revalidation.
 - Flat and fractal fixtures retain the same VM namespace and route-generation
   semantics, while each leaf route domain remains within its declared fan-out.
-- A flat membership/admission fixture exceeds 4096 with sufficient independent
+- **Minimum:** A flat membership/admission fixture exceeds 4096 with sufficient independent
   workspace and route budgets and compiles/uses routes without a hierarchy
   change. A multi-Pod fixture exceeds that cluster total while every Pod stays
   within its own declared budget and overlapping local vnode IDs remain distinct.

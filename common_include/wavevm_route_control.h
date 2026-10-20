@@ -30,6 +30,10 @@ struct wvm_route_control_result {
     struct wvm_route_snapshot_key route_snapshot_key;
     uint8_t required_ack_set_digest[WVM_SHA256_DIGEST_BYTES];
     uint64_t operation_retention_horizon_ms;
+    /* Owner-reported in-flight ops for this snapshot; 0 means clear to retire. */
+    uint64_t active_operation_refs;
+    /* Non-zero when the owner confirms retention/query horizon finished. */
+    int retention_horizon_complete;
 };
 
 struct wvm_route_control {
