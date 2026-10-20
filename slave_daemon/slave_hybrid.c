@@ -1468,6 +1468,177 @@ static int execute_tcg_executor_session(
 }
 
 /*
+ * When the admitted projection names a remote directory page and the V1
+ * memory service is installed, pull one remote page before the local
+ * run-once. This is the production Minimum "true executor + remote memory"
+ * side effect; guest OS/SSH remains goal §7.
+ */
+static int ensure_remote_memory_side_effect(
+    const struct wvm_node_runtime_context *runtime,
+    const struct wvm_vcpu_handoff_request *request, char *error,
+    size_t error_len)
+{
+    const struct wvm_runtime_dispatch_projection *dispatch;
+    size_t i;
+
+    if (!runtime || !runtime->dispatch || !request) {
+        return 0;
+    }
+    dispatch = runtime->dispatch;
+    if (!dispatch->memory_dispatch.entries ||
+        dispatch->memory_dispatch.count == 0) {
+        return 0;
+    }
+    for (i = 0; i < dispatch->memory_dispatch.count; i++) {
+        const struct wvm_runtime_memory_dispatch *entry =
+            &dispatch->memory_dispatch.entries[i];
+        uint8_t op[WVM_IDENTITY_ID_BYTES];
+        struct wvm_mem_ack ack;
+        uint8_t page[WVM_MEMORY_PAGE_BYTES];
+        int result;
+        size_t z;
+        int all_zero = 1;
+
+        if (entry->directory_physical_node_id == 0) {
+            continue;
+        }
+        if (entry->directory_physical_node_id == runtime->physical_node_id &&
+            entry->directory_node_instance_id == runtime->node_instance_id) {
+            continue;
+        }
+        memcpy(op, request->operation_id, sizeof(op));
+        op[0] ^= 0xA5;
+        for (z = 0; z < sizeof(op); z++) {
+            if (op[z] != 0) {
+                all_zero = 0;
+                break;
+            }
+        }
+        if (all_zero) {
+            op[15] = 0xA5;
+        }
+        memset(&ack, 0, sizeof(ack));
+        result = wvm_memory_service_global_request_fault(
+            entry->gpa_start, op, 1, &ack, page, error, error_len);
+        if (result == -ENOTCONN) {
+            /* Memory service not installed in this process image yet. */
+            return 0;
+        }
+        if (result != 0) {
+            return result;
+        }
+        if (ack.status != WVM_MEM_ACK_SUCCESS) {
+            if (error && error_len != 0) {
+                snprintf(error, error_len,
+                         "remote memory side effect status=%u",
+                         (unsigned)ack.status);
+            }
+            return -EIO;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+int wvm_executor_runtime_bind_admitted(
+    const struct wvm_node_runtime_context *runtime, char *error,
+    size_t error_len)
+{
+    long i;
+
+    if (!runtime || !runtime->manifest_storage || !runtime->manifest ||
+        !runtime->runtime_gate || !runtime->dispatch ||
+        runtime->executor_service_port == 0 ||
+        runtime->executor_worker_count == 0 ||
+        runtime->manifest->vm_id == 0) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "executor bind requires an admitted runtime context");
+        }
+        return -EINVAL;
+    }
+    g_slave_vm_id = runtime->manifest->vm_id;
+    g_service_port = (int)runtime->executor_service_port;
+    g_num_cores = (long)runtime->executor_worker_count;
+    g_base_id = (int)runtime->local_primary_vnode;
+    g_executor_ctrl_port = (int)runtime->executor_control_port;
+    g_ram_mb = (int)(runtime->local_memory_bytes / (1024ULL * 1024ULL));
+    if (g_ram_mb <= 0) {
+        g_ram_mb = 64;
+    }
+    g_slave_ram_size = runtime->local_memory_bytes;
+    free(g_tcg_helper_pids);
+    g_tcg_helper_pids = NULL;
+    free(g_tcg_session_fds);
+    g_tcg_session_fds =
+        malloc(sizeof(*g_tcg_session_fds) * (size_t)g_num_cores);
+    if (!g_tcg_session_fds) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "cannot allocate TCG session table");
+        }
+        return -ENOMEM;
+    }
+    for (i = 0; i < g_num_cores; i++) {
+        g_tcg_session_fds[i] = -1;
+    }
+    if (executor_runtime_gate_init(runtime) != 0) {
+        free(g_tcg_session_fds);
+        g_tcg_session_fds = NULL;
+        g_num_cores = 0;
+        if (error && error_len != 0 && error[0] == '\0') {
+            snprintf(error, error_len, "executor runtime gate rejected bind");
+        }
+        return -EPERM;
+    }
+    return 0;
+}
+
+int wvm_executor_runtime_attach_tcg_session(uint32_t vcpu_index,
+                                           int session_fd)
+{
+    if (!g_tcg_session_fds || session_fd < 0 ||
+        vcpu_index >= (uint32_t)g_num_cores) {
+        return -EINVAL;
+    }
+    if (g_tcg_session_fds[vcpu_index] >= 0) {
+        close(g_tcg_session_fds[vcpu_index]);
+    }
+    g_tcg_session_fds[vcpu_index] = session_fd;
+    return 0;
+}
+
+void wvm_executor_runtime_publish_ready(void)
+{
+    executor_publish_startup_state(EXECUTOR_READY);
+}
+
+void wvm_executor_runtime_unbind(void)
+{
+    long i;
+
+    executor_publish_startup_state(EXECUTOR_STARTING);
+    g_executor_runtime_ready = 0;
+    g_executor_manifest_storage_ptr = NULL;
+    g_executor_runtime_gate_ptr = NULL;
+    g_executor_local_only = 0;
+    if (g_tcg_session_fds) {
+        for (i = 0; i < g_num_cores; i++) {
+            if (g_tcg_session_fds[i] >= 0) {
+                close(g_tcg_session_fds[i]);
+                g_tcg_session_fds[i] = -1;
+            }
+        }
+        free(g_tcg_session_fds);
+        g_tcg_session_fds = NULL;
+    }
+    free(g_tcg_helper_pids);
+    g_tcg_helper_pids = NULL;
+    g_num_cores = 0;
+    g_service_port = 0;
+    g_slave_vm_id = 0;
+}
+
+/*
  * This is the sole node-runtime to executor entry point. The executor may
  * temporarily retain its loopback worker transport while KVM and TCG
  * mechanics converge, but neither the bridge nor the fabric sees a legacy
@@ -1478,6 +1649,7 @@ int wvm_executor_runtime_execute_handoff(
     struct wvm_vcpu_handoff_result *result, uint8_t *result_context,
     size_t result_context_capacity, char *error, size_t error_len)
 {
+    const struct wvm_node_runtime_context *runtime = opaque;
     struct wvm_ipc_cpu_run_req local_request;
     struct wvm_ipc_cpu_run_ack local_ack;
     struct wvm_header header;
@@ -1498,8 +1670,8 @@ int wvm_executor_runtime_execute_handoff(
     struct wvm_header local_header;
     struct local_executor_capture local_capture;
     uint8_t local_payload[sizeof(local_ack)];
+    int remote_memory_result;
 
-    (void)opaque;
     if (!request || !result || !result_context ||
         result_context_capacity < WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES ||
         !g_executor_runtime_ready ||
@@ -1516,6 +1688,14 @@ int wvm_executor_runtime_execute_handoff(
                      "typed executor is not ready for this admitted handoff");
         }
         return -EAGAIN;
+    }
+
+    remote_memory_result =
+        ensure_remote_memory_side_effect(runtime, request, error, error_len);
+    if (remote_memory_result != 0) {
+        typed_handoff_result_from_request(
+            request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, result);
+        return 0;
     }
 
     memset(&local_request, 0, sizeof(local_request));

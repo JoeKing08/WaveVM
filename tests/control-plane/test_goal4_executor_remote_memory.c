@@ -1,22 +1,36 @@
 /*
- * goal §4 / A14: typed execute_handoff whose side effect is a real
- * memory_service remote fault → ACK (not tcg_helper_stub pause-as-READY,
- * not a local marker-only stub). Companion shell also runs
- * test_memory_service + test_executor_bridge. Guest OS/SSH remains §7.
+ * goal §4 / A14: drive production wvm_executor_runtime_execute_handoff through
+ * executor_bridge with a real memory_service remote fault side effect.
+ * Forbidden: test-local execute_with_remote_memory, tcg_helper_stub READY alone.
+ * Guest OS/SSH remains goal §7. Multi-node CREATE may still use stub for CP.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
 
+#include "executor_bridge.h"
+#include "executor_runtime.h"
 #include "memory_service.h"
+#include "runtime_context.h"
+#include "wavevm_executor_session.h"
 #include "wavevm_membership.h"
 #include "wavevm_protocol.h"
+#include "wavevm_runtime_gate.h"
 #include "wavevm_vcpu_handoff.h"
+#include "wavevm_x86_context.h"
+
+#define TEST_VM_ID 256U
+#define TEST_VCPU 0U
 
 struct remote_state {
     pthread_mutex_t lock;
+    pthread_cond_t available;
     int send_count;
     int completion_count;
     uint64_t completed_gpa;
@@ -26,12 +40,24 @@ struct remote_state {
     struct wvm_envelope sent;
     uint8_t sent_payload[WVM_MEM_ACK_HEADER_BYTES + WVM_MEMORY_PAGE_BYTES];
     size_t sent_payload_bytes;
-    int execute_called;
+    struct wvm_memory_service *service;
+    int stop;
 };
 
-struct exec_ctx {
-    struct remote_state *state;
-    struct wvm_memory_service *service;
+struct session_peer {
+    int fd;
+    volatile int stop;
+    volatile int run_count;
+};
+
+struct exit_capture {
+    pthread_mutex_t lock;
+    pthread_cond_t available;
+    size_t count;
+    struct wvm_envelope response;
+    struct wvm_vcpu_handoff_result result;
+    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + sizeof(wvm_tcg_context_t)];
+    size_t context_bytes;
 };
 
 static int expect(int cond, const char *msg)
@@ -85,7 +111,7 @@ static int finalize_snapshot(struct wvm_route_snapshot_record *snapshot,
     size_t encoded_bytes;
 
     memset(snapshot, 0, sizeof(*snapshot));
-    snapshot->route_snapshot_key.scope_key.vm_id = 256;
+    snapshot->route_snapshot_key.scope_key.vm_id = TEST_VM_ID;
     snapshot->route_snapshot_key.scope_key.vm_incarnation = 7;
     snapshot->route_snapshot_key.scope_key.route_scope_id = 33;
     snapshot->route_snapshot_key.topology_revision = 11;
@@ -117,27 +143,104 @@ static int finalize_snapshot(struct wvm_route_snapshot_record *snapshot,
     return wvm_route_snapshot_record_validate(snapshot, error, error_len);
 }
 
+static int setup_manifest(struct wvm_node_runtime_manifest *manifest,
+                          struct wvm_capability_ref *capability,
+                          const struct wvm_route_snapshot_key *route_key,
+                          char *error, size_t error_len)
+{
+    struct wvm_local_name_identity name_identity;
+
+    memset(manifest, 0, sizeof(*manifest));
+    memset(manifest->candidate_manifest_digest, 0x11,
+           sizeof(manifest->candidate_manifest_digest));
+    manifest->vm_id = route_key->scope_key.vm_id;
+    manifest->vm_incarnation = route_key->scope_key.vm_incarnation;
+    manifest->manifest_generation = 3;
+    memset(manifest->admission_tx_id, 0x22, sizeof(manifest->admission_tx_id));
+    memset(manifest->eligibility_fence_digest, 0x33,
+           sizeof(manifest->eligibility_fence_digest));
+    manifest->has_activation_fence = 1;
+    memset(manifest->activation_fence, 0x52,
+           sizeof(manifest->activation_fence));
+    manifest->physical_node_id = 17;
+    manifest->expected_node_instance_id = 101;
+    manifest->local_role_bits =
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_NODE_RUNTIME) |
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR);
+    manifest->required_route_snapshot_key = *route_key;
+    memset(&name_identity, 0, sizeof(name_identity));
+    name_identity.vm_id = manifest->vm_id;
+    name_identity.vm_incarnation = manifest->vm_incarnation;
+    name_identity.manifest_generation = manifest->manifest_generation;
+    name_identity.physical_node_id = manifest->physical_node_id;
+    memset(name_identity.manifest_id, 0x66, sizeof(name_identity.manifest_id));
+    memcpy(name_identity.admission_tx_id, manifest->admission_tx_id,
+           sizeof(name_identity.admission_tx_id));
+    if (wvm_local_name_namespace_derive(&name_identity, &manifest->local_names,
+                                        error, error_len) != 0) {
+        return -1;
+    }
+    manifest->negotiated_profile.backend = WVM_MANIFEST_BACKEND_TCG;
+    manifest->negotiated_profile.context_schema_version = 1;
+    manifest->negotiated_profile.dirty_capture_engine = 1;
+    manifest->negotiated_profile.read_fault_engine = 1;
+    manifest->negotiated_profile.invalidation_engine = 1;
+    manifest->negotiated_profile.fallback_decision = 1;
+    memset(manifest->negotiated_profile.supported_memory_policies_digest, 0x77,
+           sizeof(manifest->negotiated_profile.supported_memory_policies_digest));
+    memset(capability, 0, sizeof(*capability));
+    capability->physical_node_id = manifest->physical_node_id;
+    capability->node_instance_id = manifest->expected_node_instance_id;
+    capability->profile_generation = 8;
+    memset(capability->profile_digest, 0x88,
+           sizeof(capability->profile_digest));
+    manifest->negotiated_profile.per_node_capabilities.entries = capability;
+    manifest->negotiated_profile.per_node_capabilities.count = 1;
+    manifest->negotiated_profile.per_node_capabilities.capacity = 1;
+    memset(manifest->reservation_id, 0x99, sizeof(manifest->reservation_id));
+    manifest->launch_plan.plan_version = WVM_NODE_RUNTIME_LAUNCH_PLAN_VERSION;
+    manifest->launch_plan.node_runtime_data_port = 19100;
+    manifest->launch_plan.node_runtime_control_port = 19121;
+    manifest->launch_plan.local_executor_service_port = 19105;
+    manifest->launch_plan.local_executor_control_port = 19121;
+    manifest->launch_plan.executor_worker_count = 1;
+    manifest->launch_plan.vcpu_handoff_record_capacity = 4;
+    manifest->launch_plan.sync_batch_size = 1;
+    manifest->launch_plan.guest_total_memory_bytes = 4 * 1024 * 1024;
+    strcpy(manifest->launch_plan.guest_machine.architecture, "x86_64");
+    strcpy(manifest->launch_plan.guest_machine.machine_type, "pc-i440fx-5.2");
+    manifest->launch_plan.guest_machine.qemu_compat_version = 502;
+    manifest->launch_plan.guest_machine.firmware_policy = 1;
+    manifest->launch_plan.consistency_policy.dirty_batch_size = 1;
+    manifest->launch_plan.consistency_policy.handoff_commit_policy = 1;
+    manifest->launch_plan.consistency_policy.subscriber_delivery_policy = 1;
+    manifest->launch_plan.consistency_policy.max_commit_latency_ms = 1000;
+    return wvm_node_runtime_manifest_validate(manifest, error, error_len);
+}
+
 static void fill_projection(
     struct wvm_runtime_dispatch_projection *projection,
     struct wvm_runtime_memory_dispatch memory[2],
-    const struct wvm_route_snapshot_key *route_key)
+    const struct wvm_node_runtime_manifest *manifest)
 {
     memset(projection, 0, sizeof(*projection));
-    memset(projection->candidate_manifest_digest, 0x51,
+    memcpy(projection->candidate_manifest_digest,
+           manifest->candidate_manifest_digest,
            sizeof(projection->candidate_manifest_digest));
-    projection->vm_id = 256;
-    projection->vm_incarnation = 7;
-    projection->manifest_generation = 3;
-    projection->physical_node_id = 17;
-    projection->expected_node_instance_id = 101;
-    memset(projection->activation_fence, 0x52,
+    projection->vm_id = manifest->vm_id;
+    projection->vm_incarnation = manifest->vm_incarnation;
+    projection->manifest_generation = manifest->manifest_generation;
+    projection->physical_node_id = manifest->physical_node_id;
+    projection->expected_node_instance_id = manifest->expected_node_instance_id;
+    memcpy(projection->activation_fence, manifest->activation_fence,
            sizeof(projection->activation_fence));
-    projection->required_route_snapshot_key = *route_key;
+    projection->required_route_snapshot_key =
+        manifest->required_route_snapshot_key;
     projection->route_topology_kind = WVM_ROUTE_TOPOLOGY_FRACTAL;
     projection->local_primary.destination_kind =
         WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
     projection->local_primary.destination_scope = 41;
-    projection->local_primary.destination_vnode = 0;
+    projection->local_primary.destination_vnode = 7;
     fill_endpoint(&projection->local_sidecar_endpoint, 17, 19017);
     projection->memory_dispatch.entries = memory;
     projection->memory_dispatch.count = 2;
@@ -147,6 +250,7 @@ static void fill_projection(
     memory[0].bytes = WVM_MEMORY_PAGE_BYTES;
     memory[0].directory = projection->local_primary;
     memory[0].executor = projection->local_primary;
+    /* local vnode 7 */
     memory[0].directory_physical_node_id = 17;
     memory[0].directory_node_instance_id = 101;
     memory[0].consistency_policy = 1;
@@ -181,24 +285,26 @@ static int complete_fault(void *opaque,
                           size_t error_len)
 {
     struct remote_state *state = opaque;
+    int result;
 
-    (void)operation_id;
-    (void)directory_physical_node_id;
-    (void)directory_node_instance_id;
-    (void)error;
-    (void)error_len;
-    if (!state || (status == WVM_MEM_ACK_SUCCESS &&
-                   (!data || data_bytes != WVM_MEMORY_PAGE_BYTES))) {
-        return -EINVAL;
+    result = wvm_memory_service_global_complete(
+        operation_id, gpa, version, status, directory_physical_node_id,
+        directory_node_instance_id, data, data_bytes, error, error_len);
+    if (result != 0) {
+        return result;
+    }
+    if (!state) {
+        return 0;
     }
     pthread_mutex_lock(&state->lock);
     state->completion_count++;
     state->completed_gpa = gpa;
     state->completed_version = version;
     state->completed_status = status;
-    if (data_bytes != 0) {
+    if (data_bytes != 0 && data_bytes <= sizeof(state->completed_page)) {
         memcpy(state->completed_page, data, data_bytes);
     }
+    pthread_cond_broadcast(&state->available);
     pthread_mutex_unlock(&state->lock);
     return 0;
 }
@@ -238,8 +344,8 @@ static int complete_commit(void *opaque,
     return 0;
 }
 
-static int send_envelope(void *opaque, const struct wvm_envelope *envelope,
-                         char *error, size_t error_len)
+static int send_memory_envelope(void *opaque, const struct wvm_envelope *envelope,
+                                char *error, size_t error_len)
 {
     struct remote_state *state = opaque;
 
@@ -255,42 +361,294 @@ static int send_envelope(void *opaque, const struct wvm_envelope *envelope,
     state->sent_payload_bytes = envelope->payload_bytes;
     memcpy(state->sent_payload, envelope->payload, envelope->payload_bytes);
     state->sent.payload = state->sent_payload;
+    pthread_cond_broadcast(&state->available);
     pthread_mutex_unlock(&state->lock);
     return 0;
 }
 
-/* Production-shaped execute_handoff: remote memory fault as the side effect. */
-static int execute_with_remote_memory(
-    void *opaque, const struct wvm_vcpu_handoff_request *request,
-    struct wvm_vcpu_handoff_result *result, uint8_t *result_context,
-    size_t result_context_capacity, char *error, size_t error_len)
+static void *ack_worker(void *opaque)
 {
-    struct exec_ctx *ctx = opaque;
-    uint8_t op[WVM_IDENTITY_ID_BYTES];
+    struct remote_state *state = opaque;
+    uint8_t remote_page[WVM_MEMORY_PAGE_BYTES];
+    char error[256];
 
-    if (!ctx || !ctx->state || !ctx->service || !request || !result ||
-        !result_context || result_context_capacity < 64) {
-        if (error && error_len) {
-            snprintf(error, error_len, "execute_with_remote_memory bad input");
+    memset(remote_page, 0x3c, sizeof(remote_page));
+    for (;;) {
+        struct wvm_envelope sent;
+        struct wvm_mem_ack ack;
+        struct wvm_envelope_route reply_route;
+        struct wvm_envelope response;
+        uint8_t ack_payload[WVM_MEM_ACK_HEADER_BYTES + WVM_MEMORY_PAGE_BYTES];
+        size_t ack_payload_bytes = 0;
+        int stop = 0;
+        int have_send = 0;
+
+        pthread_mutex_lock(&state->lock);
+        while (!state->stop && state->send_count == 0) {
+            pthread_cond_wait(&state->available, &state->lock);
         }
+        stop = state->stop;
+        if (!stop && state->send_count > 0) {
+            sent = state->sent;
+            have_send = 1;
+            state->send_count = 0;
+        }
+        pthread_mutex_unlock(&state->lock);
+        if (stop) {
+            break;
+        }
+        if (!have_send || sent.message_type != WVM_ENVELOPE_MSG_MEM_READ ||
+            !state->service) {
+            continue;
+        }
+        memset(&ack, 0, sizeof(ack));
+        ack.gpa = WVM_MEMORY_PAGE_BYTES;
+        ack.version = 9;
+        ack.status = WVM_MEM_ACK_SUCCESS;
+        ack.directory_physical_node_id = 99;
+        ack.directory_node_instance_id = 202;
+        ack.data = remote_page;
+        ack.data_bytes = sizeof(remote_page);
+        memset(&reply_route, 0, sizeof(reply_route));
+        reply_route.destination_kind =
+            WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
+        reply_route.destination_scope = 41;
+        reply_route.destination_vnode_or_endpoint = 7;
+        reply_route.hop_limit = 4;
+        memset(error, 0, sizeof(error));
+        if (wvm_mem_ack_envelope_build(
+                &sent, &reply_route, 2, &ack, ack_payload, sizeof(ack_payload),
+                &ack_payload_bytes, &response, error, sizeof(error)) != 0 ||
+            wvm_memory_service_dispatch(state->service, &response, error,
+                                        sizeof(error)) != 0) {
+            fprintf(stderr, "goal4 ack_worker: %s\n", error);
+        }
+    }
+    return NULL;
+}
+
+static void *session_worker(void *opaque)
+{
+    struct session_peer *peer = opaque;
+    uint8_t frame[WVM_EXECUTOR_SESSION_MAX_FRAME_BYTES];
+    uint8_t response[WVM_EXECUTOR_SESSION_MAX_FRAME_BYTES];
+    char error[256];
+
+    while (!peer->stop) {
+        const uint8_t *payload = NULL;
+        size_t payload_bytes = 0;
+        size_t response_bytes = 0;
+        uint16_t message_type = 0;
+        struct wvm_vcpu_handoff_request request;
+        struct wvm_vcpu_handoff_result result;
+        uint8_t result_context[WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES];
+        size_t result_payload_bytes = 0;
+        ssize_t received;
+        struct pollfd pfd = {.fd = peer->fd, .events = POLLIN};
+
+        if (poll(&pfd, 1, 50) <= 0) {
+            continue;
+        }
+        received = recv(peer->fd, frame, sizeof(frame), 0);
+        if (received <= 0) {
+            if (received == 0 || (errno != EINTR && errno != EAGAIN)) {
+                break;
+            }
+            continue;
+        }
+        memset(error, 0, sizeof(error));
+        if (wvm_executor_session_decode(frame, (size_t)received, &message_type,
+                                        &payload, &payload_bytes, error,
+                                        sizeof(error)) != 0 ||
+            message_type != WVM_EXECUTOR_SESSION_VCPU_RUN ||
+            wvm_vcpu_handoff_request_decode(payload, payload_bytes, &request,
+                                            error, sizeof(error)) != 0) {
+            fprintf(stderr, "goal4 session decode: %s\n", error);
+            continue;
+        }
+        memset(&result, 0, sizeof(result));
+        result.protocol_version = WVM_VCPU_HANDOFF_RESULT_VERSION;
+        result.status = WVM_VCPU_HANDOFF_RESULT_SUCCESS;
+        result.exit_class = WVM_VCPU_EXIT_BUDGET;
+        result.backend = request.backend;
+        result.vm_id = request.vm_id;
+        result.vm_incarnation = request.vm_incarnation;
+        result.manifest_generation = request.manifest_generation;
+        result.origin_physical_node_id = request.origin_physical_node_id;
+        result.origin_runtime_instance_id = request.origin_runtime_instance_id;
+        result.vcpu_index = request.vcpu_index;
+        result.handoff_sequence = request.handoff_sequence;
+        result.produced_memory_fence_id = request.memory_fence_id;
+        memcpy(result.operation_id, request.operation_id,
+               sizeof(result.operation_id));
+        result.context_schema_version = request.context_schema_version;
+        result.context_valid_fields = request.context_valid_fields;
+        if (request.context_bytes >
+            sizeof(result_context)) {
+            continue;
+        }
+        memcpy(result_context, request.context, request.context_bytes);
+        result.context = result_context;
+        result.context_bytes = request.context_bytes;
+        {
+            uint8_t result_payload[WVM_EXECUTOR_SESSION_MAX_FRAME_BYTES];
+
+            if (wvm_vcpu_handoff_result_encode(
+                    &result, result_payload, sizeof(result_payload),
+                    &result_payload_bytes, error, sizeof(error)) != 0 ||
+                wvm_executor_session_encode(
+                    WVM_EXECUTOR_SESSION_VCPU_EXIT, result_payload,
+                    result_payload_bytes, response, sizeof(response),
+                    &response_bytes, error, sizeof(error)) != 0) {
+            fprintf(stderr, "goal4 session encode: %s\n", error);
+            continue;
+            }
+        }
+        if (send(peer->fd, response, response_bytes, MSG_NOSIGNAL) ==
+            (ssize_t)response_bytes) {
+            peer->run_count++;
+        }
+    }
+    return NULL;
+}
+
+static int capture_exit(void *opaque, const struct wvm_envelope *envelope,
+                        char *error, size_t error_len)
+{
+    struct exit_capture *state = opaque;
+    struct wvm_vcpu_handoff_result result;
+
+    if (!state || !envelope ||
+        wvm_vcpu_handoff_result_decode(envelope->payload,
+                                       envelope->payload_bytes, &result, error,
+                                       error_len) != 0) {
+        return -EINVAL;
+    }
+    if (result.context_bytes > sizeof(state->context)) {
+        return -EOVERFLOW;
+    }
+    pthread_mutex_lock(&state->lock);
+    if (result.context_bytes != 0) {
+        memcpy(state->context, result.context, result.context_bytes);
+        result.context = state->context;
+    }
+    state->context_bytes = result.context_bytes;
+    state->response = *envelope;
+    state->response.payload = NULL;
+    state->response.payload_bytes = 0;
+    state->result = result;
+    state->count++;
+    pthread_cond_broadcast(&state->available);
+    pthread_mutex_unlock(&state->lock);
+    return 0;
+}
+
+static int wait_exit(struct exit_capture *state, size_t expected)
+{
+    struct timespec deadline;
+    int result = 0;
+
+    if (!state || clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
         return -1;
     }
-    ctx->state->execute_called = 1;
-    memset(op, 0, sizeof(op));
-    op[15] = 0xA1;
-    if (wvm_memory_service_request_fault(ctx->service, WVM_MEMORY_PAGE_BYTES,
-                                         op, 1, error, error_len) != 0) {
+    deadline.tv_sec += 5;
+    pthread_mutex_lock(&state->lock);
+    while (state->count < expected) {
+        result = pthread_cond_timedwait(&state->available, &state->lock,
+                                        &deadline);
+        if (result != 0) {
+            break;
+        }
+    }
+    result = state->count >= expected ? 0 : -1;
+    pthread_mutex_unlock(&state->lock);
+    return result;
+}
+
+static int make_request(const struct wvm_node_runtime_manifest *manifest,
+                        const struct wvm_runtime_dispatch_projection *projection,
+                        struct wvm_vcpu_handoff_request *request,
+                        struct wvm_envelope *envelope, uint8_t *payload,
+                        size_t payload_capacity, size_t *payload_bytes,
+                        char *error, size_t error_len)
+{
+    static wvm_tcg_context_t legacy_context;
+    static uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES +
+                           sizeof(legacy_context)];
+    static size_t context_bytes;
+
+    memset(request, 0, sizeof(*request));
+    memset(&legacy_context, 0, sizeof(legacy_context));
+    legacy_context.eip = UINT64_C(0x1122334455667788);
+    if (wvm_x86_context_encode(
+            WVM_VCPU_BACKEND_TCG,
+            WVM_VCPU_CONTEXT_FIELD_ARCHITECTURAL_STATE |
+                WVM_VCPU_CONTEXT_FIELD_INTERRUPT_STATE,
+            &legacy_context, sizeof(legacy_context), context, sizeof(context),
+            &context_bytes, error, error_len) != 0) {
         return -1;
     }
-    memset(result, 0, sizeof(*result));
-    result->status = WVM_VCPU_HANDOFF_RESULT_SUCCESS;
-    result->handoff_sequence = request->handoff_sequence;
-    result->produced_memory_fence_id = request->memory_fence_id;
-    result->context_valid_fields = request->context_valid_fields;
-    memset(result_context, 0, result_context_capacity);
-    result_context[0] = 0xA5;
-    result->context = result_context;
-    result->context_bytes = 64;
+    request->protocol_version = WVM_VCPU_HANDOFF_REQUEST_VERSION;
+    request->backend = WVM_VCPU_BACKEND_TCG;
+    request->context_schema_version = WVM_VCPU_CONTEXT_SCHEMA_X86;
+    request->memory_fence_result = WVM_VCPU_MEMORY_FENCE_SUCCEEDED;
+    request->vm_id = manifest->vm_id;
+    request->vm_incarnation = manifest->vm_incarnation;
+    request->manifest_generation = manifest->manifest_generation;
+    request->origin_physical_node_id = 18;
+    request->origin_runtime_instance_id = 202;
+    request->vcpu_index = TEST_VCPU;
+    request->destination_executor_id =
+        projection->local_primary.destination_vnode;
+    request->reply_destination_kind =
+        WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
+    request->reply_destination_scope = 41;
+    request->reply_destination_vnode = 7;
+    request->handoff_sequence = 7;
+    request->memory_fence_id = 11;
+    request->local_interrupt_watermark = 1;
+    request->device_event_watermark = 1;
+    request->operation_id[15] = 0xA1;
+    request->context_valid_fields =
+        WVM_VCPU_CONTEXT_FIELD_ARCHITECTURAL_STATE |
+        WVM_VCPU_CONTEXT_FIELD_INTERRUPT_STATE;
+    request->context = context;
+    request->context_bytes = context_bytes;
+    if (wvm_vcpu_handoff_request_encode(request, payload, payload_capacity,
+                                        payload_bytes, error, error_len) !=
+        0) {
+        return -1;
+    }
+    memset(envelope, 0, sizeof(*envelope));
+    envelope->message_type = WVM_ENVELOPE_MSG_VCPU_RUN;
+    envelope->vm_id = manifest->vm_id;
+    envelope->vm_incarnation = manifest->vm_incarnation;
+    envelope->manifest_generation = manifest->manifest_generation;
+    envelope->origin_physical_node_id = request->origin_physical_node_id;
+    envelope->origin_runtime_instance_id = request->origin_runtime_instance_id;
+    memcpy(envelope->operation_id, request->operation_id,
+           sizeof(envelope->operation_id));
+    envelope->delivery_attempt_id = 1;
+    envelope->route_scope_id =
+        manifest->required_route_snapshot_key.scope_key.route_scope_id;
+    envelope->topology_revision =
+        manifest->required_route_snapshot_key.topology_revision;
+    envelope->route_generation =
+        manifest->required_route_snapshot_key.route_generation;
+    memcpy(envelope->route_snapshot_digest,
+           manifest->required_route_snapshot_key.snapshot_digest,
+           sizeof(envelope->route_snapshot_digest));
+    envelope->route.destination_kind =
+        projection->local_primary.destination_kind;
+    envelope->route.destination_scope =
+        projection->local_primary.destination_scope;
+    envelope->route.destination_vnode_or_endpoint =
+        projection->local_primary.destination_vnode;
+    envelope->route.hop_limit = 4;
+    envelope->payload = payload;
+    envelope->payload_bytes = *payload_bytes;
+    wvm_envelope_semantic_digest(payload, *payload_bytes,
+                                 envelope->semantic_payload_digest);
     return 0;
 }
 
@@ -302,29 +660,48 @@ int main(void)
     struct wvm_route_runtime routes;
     struct wvm_runtime_memory_dispatch memory[2];
     struct wvm_runtime_dispatch_projection projection;
-    struct wvm_memory_service_config config;
+    struct wvm_runtime_manifest_storage storage;
+    struct wvm_capability_ref capability;
+    struct wvm_runtime_gate gate;
+    struct wvm_runtime_registration registration;
+    uint8_t profile_digest[WVM_SHA256_DIGEST_BYTES];
+    uint64_t connection_id = 0;
+    struct wvm_memory_service_config mem_config;
     struct wvm_memory_service service;
-    struct remote_state state;
-    struct exec_ctx exec;
+    struct remote_state remote;
+    struct session_peer peer;
+    struct exit_capture exits;
+    struct wvm_node_runtime_context runtime_context;
+    struct wvm_executor_bridge_config bridge_config;
+    void *bridge = NULL;
     struct wvm_vcpu_handoff_request request;
-    struct wvm_vcpu_handoff_result result;
-    uint8_t result_context[256];
-    uint8_t remote_page[WVM_MEMORY_PAGE_BYTES];
-    struct wvm_mem_ack ack;
-    struct wvm_envelope_route reply_route;
-    struct wvm_envelope response;
-    uint8_t ack_payload[WVM_MEM_ACK_HEADER_BYTES + WVM_MEMORY_PAGE_BYTES];
-    size_t ack_payload_bytes = 0;
+    struct wvm_envelope envelope;
+    uint8_t payload[WVM_ENVELOPE_MAX_NETWORK_LOGICAL_PAYLOAD];
+    size_t payload_bytes = 0;
+    int session_pair[2] = {-1, -1};
+    pthread_t ack_thread;
+    pthread_t session_thread;
+    int ack_started = 0;
+    int session_started = 0;
+    int bound = 0;
+    int installed = 0;
     char error[256] = {0};
+    int exit_code = 1;
 
-    memset(remote_page, 0x3c, sizeof(remote_page));
-    fill_rule(&rules[0], 41, 0, 17, 101, 17);
+    fill_rule(&rules[0], 41, 7, 17, 101, 17);
     fill_rule(&rules[1], 99, 1, 99, 202, 99);
     if (finalize_snapshot(&snapshot, rules, acks, error, sizeof(error)) != 0) {
-        fprintf(stderr, "goal4 setup: %s\n", error);
+        fprintf(stderr, "goal4 setup snapshot: %s\n", error);
         return 1;
     }
-    fill_projection(&projection, memory, &snapshot.route_snapshot_key);
+    memset(&storage, 0, sizeof(storage));
+    if (setup_manifest(&storage.manifest, &capability,
+                       &snapshot.route_snapshot_key, error,
+                       sizeof(error)) != 0) {
+        fprintf(stderr, "goal4 setup manifest: %s\n", error);
+        return 1;
+    }
+    fill_projection(&projection, memory, &storage.manifest);
     if (expect(wvm_runtime_dispatch_projection_validate(
                    &projection, error, sizeof(error)) == 0,
                "dispatch projection") != 0) {
@@ -340,96 +717,234 @@ int main(void)
         wvm_route_runtime_destroy(&routes);
         return 1;
     }
-    memset(&state, 0, sizeof(state));
-    if (pthread_mutex_init(&state.lock, NULL) != 0) {
-        return 1;
-    }
-    memset(&config, 0, sizeof(config));
-    config.dispatch = &projection;
-    config.route_runtime = &routes;
-    config.local_physical_node_id = 17;
-    config.local_node_instance_id = 101;
-    config.local_runtime_instance_id = 1001;
-    config.completion_timeout_ms = 5000;
-    config.read_page = read_page;
-    config.commit_page = commit_page;
-    config.complete_commit = complete_commit;
-    config.complete_fault = complete_fault;
-    config.send_envelope = send_envelope;
-    config.opaque = &state;
-    if (expect(wvm_memory_service_init(&service, &config, error,
-                                       sizeof(error)) == 0,
-               "init memory_service") != 0) {
-        wvm_route_runtime_destroy(&routes);
-        return 1;
-    }
 
-    exec.state = &state;
-    exec.service = &service;
-    memset(&request, 0, sizeof(request));
-    request.backend = WVM_VCPU_BACKEND_TCG;
-    request.handoff_sequence = 7;
-    request.memory_fence_id = 11;
-    request.memory_fence_result = WVM_VCPU_MEMORY_FENCE_SUCCEEDED;
-    request.context_valid_fields = 1;
-    request.destination_executor_id = 1;
-    request.vm_id = 256;
-    request.vm_incarnation = 7;
-    request.manifest_generation = 3;
-
-    if (expect(execute_with_remote_memory(&exec, &request, &result,
-                                          result_context, sizeof(result_context),
-                                          error, sizeof(error)) == 0,
-               "execute_handoff returns 0") != 0 ||
-        expect(state.execute_called == 1, "execute invoked") != 0 ||
-        expect(result.status == WVM_VCPU_HANDOFF_RESULT_SUCCESS, "SUCCESS") !=
-            0 ||
-        expect(result_context[0] == 0xA5, "result context") != 0 ||
-        expect(state.send_count == 1, "remote MEM_READ sent") != 0 ||
-        expect(state.sent.message_type == WVM_ENVELOPE_MSG_MEM_READ,
-               "MEM_READ") != 0) {
-        fprintf(stderr, "err=%s\n", error);
-        wvm_memory_service_destroy(&service);
-        wvm_route_runtime_destroy(&routes);
-        return 1;
-    }
-
-    memset(&ack, 0, sizeof(ack));
-    ack.gpa = WVM_MEMORY_PAGE_BYTES;
-    ack.version = 9;
-    ack.status = WVM_MEM_ACK_SUCCESS;
-    ack.directory_physical_node_id = 99;
-    ack.directory_node_instance_id = 202;
-    ack.data = remote_page;
-    ack.data_bytes = sizeof(remote_page);
-    memset(&reply_route, 0, sizeof(reply_route));
-    reply_route.destination_kind = WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
-    reply_route.destination_scope = 41;
-    reply_route.destination_vnode_or_endpoint = 0;
-    reply_route.hop_limit = 4;
-    if (expect(wvm_mem_ack_envelope_build(
-                   &state.sent, &reply_route, 2, &ack, ack_payload,
-                   sizeof(ack_payload), &ack_payload_bytes, &response, error,
+    wvm_runtime_gate_init(&gate);
+    if (expect(wvm_runtime_gate_prepare(
+                   &gate, &storage.manifest, storage.manifest.physical_node_id,
+                   storage.manifest.expected_node_instance_id, error,
                    sizeof(error)) == 0 &&
-                   wvm_memory_service_dispatch(&service, &response, error,
-                                               sizeof(error)) == 0 &&
-                   state.completion_count == 1 &&
-                   state.completed_gpa == WVM_MEMORY_PAGE_BYTES &&
-                   state.completed_version == 9 &&
-                   memcmp(state.completed_page, remote_page,
-                          sizeof(remote_page)) == 0,
-               "remote ACK completes memory side effect") != 0) {
-        fprintf(stderr, "ack err=%s completion=%d\n", error,
-                state.completion_count);
-        wvm_memory_service_destroy(&service);
-        wvm_route_runtime_destroy(&routes);
-        return 1;
+                   wvm_runtime_manifest_profile_digest(
+                       &storage.manifest, profile_digest, error,
+                       sizeof(error)) == 0,
+               "prepare gate") != 0) {
+        fprintf(stderr, "goal4 prepare: %s\n", error);
+        goto out;
+    }
+    memset(&registration, 0, sizeof(registration));
+    registration.connection_role = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    registration.vm_id = storage.manifest.vm_id;
+    registration.vm_incarnation = storage.manifest.vm_incarnation;
+    registration.manifest_generation = storage.manifest.manifest_generation;
+    memcpy(registration.candidate_manifest_digest,
+           storage.manifest.candidate_manifest_digest,
+           sizeof(registration.candidate_manifest_digest));
+    registration.local_runtime_instance_id =
+        storage.manifest.expected_node_instance_id;
+    registration.caller_process_instance_id = 42;
+    memcpy(registration.capability_profile_digest, profile_digest,
+           sizeof(registration.capability_profile_digest));
+    snprintf(registration.requested_endpoint_name,
+             sizeof(registration.requested_endpoint_name), "%s",
+             storage.manifest.local_names.namespace_name);
+    if (expect(wvm_runtime_gate_register(&gate, &registration, &connection_id,
+                                         error, sizeof(error)) == 0 &&
+                   wvm_runtime_gate_activate(&gate,
+                                             storage.manifest.activation_fence,
+                                             error, sizeof(error)) == 0,
+               "activate executor gate") != 0) {
+        goto out;
     }
 
-    wvm_memory_service_destroy(&service);
+    memset(&remote, 0, sizeof(remote));
+    if (pthread_mutex_init(&remote.lock, NULL) != 0 ||
+        pthread_cond_init(&remote.available, NULL) != 0) {
+        goto out;
+    }
+    memset(&mem_config, 0, sizeof(mem_config));
+    mem_config.dispatch = &projection;
+    mem_config.route_runtime = &routes;
+    mem_config.local_physical_node_id = 17;
+    mem_config.local_node_instance_id = 101;
+    mem_config.local_runtime_instance_id = 1001;
+    mem_config.completion_timeout_ms = 5000;
+    mem_config.read_page = read_page;
+    mem_config.commit_page = commit_page;
+    mem_config.complete_commit = complete_commit;
+    mem_config.complete_fault = complete_fault;
+    mem_config.send_envelope = send_memory_envelope;
+    mem_config.opaque = &remote;
+    if (expect(wvm_memory_service_init(&service, &mem_config, error,
+                                       sizeof(error)) == 0,
+               "init memory_service") != 0 ||
+        expect(wvm_memory_service_global_install(&service, error,
+                                                 sizeof(error)) == 0,
+               "install global memory_service") != 0) {
+        goto out;
+    }
+    installed = 1;
+    remote.service = &service;
+    if (pthread_create(&ack_thread, NULL, ack_worker, &remote) != 0) {
+        goto out;
+    }
+    ack_started = 1;
+
+    memset(&runtime_context, 0, sizeof(runtime_context));
+    runtime_context.manifest_storage = &storage;
+    runtime_context.manifest = &storage.manifest;
+    runtime_context.runtime_gate = &gate;
+    runtime_context.dispatch = &projection;
+    runtime_context.route_runtime = &routes;
+    runtime_context.node_instance_id = storage.manifest.expected_node_instance_id;
+    runtime_context.physical_node_id = storage.manifest.physical_node_id;
+    runtime_context.local_primary_vnode =
+        projection.local_primary.destination_vnode;
+    runtime_context.local_vcpu_count = 1;
+    runtime_context.local_memory_bytes = 64ULL * 1024ULL * 1024ULL;
+    runtime_context.guest_memory_bytes =
+        storage.manifest.launch_plan.guest_total_memory_bytes;
+    runtime_context.executor_service_port =
+        storage.manifest.launch_plan.local_executor_service_port;
+    runtime_context.executor_control_port =
+        storage.manifest.launch_plan.local_executor_control_port;
+    runtime_context.executor_worker_count =
+        storage.manifest.launch_plan.executor_worker_count;
+
+    if (expect(wvm_executor_runtime_bind_admitted(&runtime_context, error,
+                                                  sizeof(error)) == 0,
+               "bind production executor runtime") != 0) {
+        fprintf(stderr, "bind err=%s\n", error);
+        goto out;
+    }
+    bound = 1;
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, session_pair) !=
+        0) {
+        perror("socketpair");
+        goto out;
+    }
+    if (expect(wvm_executor_runtime_attach_tcg_session(TEST_VCPU,
+                                                      session_pair[0]) == 0,
+               "attach TCG session") != 0) {
+        close(session_pair[0]);
+        close(session_pair[1]);
+        session_pair[0] = session_pair[1] = -1;
+        goto out;
+    }
+    session_pair[0] = -1; /* owned by executor runtime */
+    memset(&peer, 0, sizeof(peer));
+    peer.fd = session_pair[1];
+    if (pthread_create(&session_thread, NULL, session_worker, &peer) != 0) {
+        goto out;
+    }
+    session_started = 1;
+    wvm_executor_runtime_publish_ready();
+
+    memset(&exits, 0, sizeof(exits));
+    if (pthread_mutex_init(&exits.lock, NULL) != 0 ||
+        pthread_cond_init(&exits.available, NULL) != 0) {
+        goto out;
+    }
+    memset(&bridge_config, 0, sizeof(bridge_config));
+    bridge_config.manifest = &storage.manifest;
+    bridge_config.runtime_gate = &gate;
+    bridge_config.dispatch = &projection;
+    bridge_config.route_runtime = &routes;
+    bridge_config.local_runtime_instance_id =
+        storage.manifest.expected_node_instance_id;
+    bridge_config.runtime_connection_id = connection_id;
+    bridge_config.operation_retention_horizon_ms =
+        snapshot.operation_retention_horizon_ms;
+    bridge_config.execute_handoff = wvm_executor_runtime_execute_handoff;
+    bridge_config.execute_handoff_opaque = &runtime_context;
+    bridge_config.send_envelope = capture_exit;
+    bridge_config.send_envelope_opaque = &exits;
+    if (expect(wvm_executor_bridge_dispatch_init(&bridge_config, &bridge, error,
+                                                 sizeof(error)) == 0,
+               "init executor_bridge with production execute_handoff") != 0) {
+        fprintf(stderr, "bridge init err=%s\n", error);
+        goto out;
+    }
+    if (expect(make_request(&storage.manifest, &projection, &request, &envelope,
+                            payload, sizeof(payload), &payload_bytes, error,
+                            sizeof(error)) == 0,
+               "build VCPU_RUN") != 0 ||
+        expect(wvm_executor_bridge_dispatch(bridge, &envelope, error,
+                                            sizeof(error)) == 0 &&
+                   wait_exit(&exits, 1) == 0,
+               "production execute_handoff via bridge") != 0) {
+        fprintf(stderr, "dispatch err=%s\n", error);
+        goto out;
+    }
+
+    pthread_mutex_lock(&remote.lock);
+    if (expect(remote.completion_count >= 1, "remote memory ACK completed") !=
+            0 ||
+        expect(remote.completed_gpa == WVM_MEMORY_PAGE_BYTES,
+               "remote GPA") != 0 ||
+        expect(remote.completed_version == 9, "remote version") != 0 ||
+        expect(remote.completed_page[0] == 0x3c, "remote page bytes") != 0) {
+        pthread_mutex_unlock(&remote.lock);
+        goto out;
+    }
+    pthread_mutex_unlock(&remote.lock);
+
+    pthread_mutex_lock(&exits.lock);
+    if (expect(exits.result.status == WVM_VCPU_HANDOFF_RESULT_SUCCESS,
+               "VCPU_EXIT SUCCESS") != 0 ||
+        expect(exits.response.message_type == WVM_ENVELOPE_MSG_VCPU_EXIT,
+               "typed VCPU_EXIT") != 0 ||
+        expect(peer.run_count == 1, "TCG session run-once") != 0) {
+        pthread_mutex_unlock(&exits.lock);
+        goto out;
+    }
+    pthread_mutex_unlock(&exits.lock);
+
+    envelope.delivery_attempt_id = 2;
+    if (expect(wvm_executor_bridge_dispatch(bridge, &envelope, error,
+                                            sizeof(error)) == 0 &&
+                   wait_exit(&exits, 2) == 0,
+               "cached replay without second execute") != 0 ||
+        expect(peer.run_count == 1, "SPEC-vcpu-run-once cache holds") != 0) {
+        goto out;
+    }
+
+    puts("goal4 A14: executor_bridge → wvm_executor_runtime_execute_handoff");
+    puts("           → remote memory_service fault/ACK → TCG run-once PASS");
+    puts("(production entry; not test-local execute; not pause-stub READY)");
+    puts("(live multi-node guest OS/SSH still §7)");
+    exit_code = 0;
+
+out:
+    if (bridge) {
+        wvm_executor_bridge_dispatch_destroy(bridge);
+    }
+    if (session_started) {
+        peer.stop = 1;
+        pthread_join(session_thread, NULL);
+    }
+    if (session_pair[1] >= 0) {
+        close(session_pair[1]);
+    }
+    if (session_pair[0] >= 0) {
+        close(session_pair[0]);
+    }
+    if (bound) {
+        wvm_executor_runtime_unbind();
+    }
+    if (ack_started) {
+        pthread_mutex_lock(&remote.lock);
+        remote.stop = 1;
+        pthread_cond_broadcast(&remote.available);
+        pthread_mutex_unlock(&remote.lock);
+        pthread_join(ack_thread, NULL);
+    }
+    if (installed) {
+        wvm_memory_service_global_uninstall(&service);
+        wvm_memory_service_destroy(&service);
+    }
+    pthread_cond_destroy(&remote.available);
+    pthread_mutex_destroy(&remote.lock);
+    pthread_cond_destroy(&exits.available);
+    pthread_mutex_destroy(&exits.lock);
     wvm_route_runtime_destroy(&routes);
-    pthread_mutex_destroy(&state.lock);
-    puts("goal4 A14: execute_handoff → memory_service remote fault/ACK PASS");
-    puts("(not pause-stub READY; live multi-node guest OS still §7)");
-    return 0;
+    return exit_code;
 }
