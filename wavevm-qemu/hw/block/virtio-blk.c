@@ -28,6 +28,9 @@
 #include "scsi/constants.h"
 
 extern int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write);
+extern int wavevm_blk_interceptor_ex(uint64_t sector, QEMUIOVector *qiov, int is_write,
+                                     uint32_t flags);
+extern int wavevm_blk_flush_interceptor(void);
 #ifdef __linux__
 # include <scsi/sg.h>
 #endif
@@ -675,8 +678,14 @@ static int virtio_blk_handle_request(VirtIOBlockReq *req, MultiReqBuffer *mrb)
         }
 
         {
-            int wvm_rc = wavevm_blk_interceptor(req->sector_num, &req->qiov,
-                                                is_write);
+            /* R02: pass barrier as SYNC so typed flags are not always 0. */
+            uint32_t wvm_flags = 0;
+            int wvm_rc;
+            if (type & VIRTIO_BLK_T_BARRIER) {
+                wvm_flags |= 0x02; /* WVM_BLOCK_FLAG_SYNC */
+            }
+            wvm_rc = wavevm_blk_interceptor_ex(req->sector_num, &req->qiov,
+                                              is_write, wvm_flags);
             if (wvm_rc == 0) {
                 virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
                 virtio_blk_free_request(req);
@@ -718,8 +727,23 @@ static int virtio_blk_handle_request(VirtIOBlockReq *req, MultiReqBuffer *mrb)
         break;
     }
     case VIRTIO_BLK_T_FLUSH:
+    {
+        /* R02: remote WaveVM FLUSH when block IO authority is enabled. */
+        int wvm_flush_rc = wavevm_blk_flush_interceptor();
+        if (wvm_flush_rc == 0) {
+            virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
+            virtio_blk_free_request(req);
+            break;
+        }
+        if (wvm_flush_rc > 0) {
+            virtio_blk_req_complete(req, VIRTIO_BLK_S_IOERR);
+            block_acct_invalid(blk_get_stats(s->blk), BLOCK_ACCT_FLUSH);
+            virtio_blk_free_request(req);
+            break;
+        }
         virtio_blk_handle_flush(req, mrb);
         break;
+    }
     case VIRTIO_BLK_T_SCSI_CMD:
         virtio_blk_handle_scsi(req);
         break;

@@ -1229,59 +1229,22 @@ int main(void)
         }
     }
 
-    /* Generic dual-TLV2 coverage for remaining hard compound types that need
-     * heavy admission/lifecycle fixtures: build schema-shaped minimal records. */
+    /*
+     * R08: the remaining 15 hard compound types previously used the same
+     * test-local TLV2 writer for both sides (self-proven). Do NOT count them
+     * toward dual-passed. Report PARTIAL until production codecs/fixtures
+     * exist for each.
+     */
     {
-        struct {
-            uint16_t type;
-            const char *name;
-            int (*build)(uint8_t *out, size_t cap, size_t *out_len);
-        } *it;
-        /* local builders via repeated TLV2 pairs inline below */
         uint16_t remain[] = {0x100a, 0x100e, 0x1013, 0x101d, 0x101e, 0x101f,
                              0x1020, 0x1027, 0x1028, 0x1029, 0x102a, 0x102b,
                              0x102d, 0x102e, 0x1030};
         size_t ri;
-        for (ri = 0; ri < sizeof(remain) / sizeof(remain[0]); ri++) {
-            uint8_t a[4096], b[4096];
-            size_t alen = 0, blen = 0;
-            struct tlv2 t1, t2;
-            uint8_t dig[32];
-            uint8_t id16[16];
-            memset(dig, (int)(0xA0 + ri), 32);
-            memset(id16, (int)(0x10 + ri), 16);
-            tlv2_begin(&t1, a, sizeof(a), remain[ri]);
-            /* Common minimal shape: tag1 = ID16 or Digest where typical */
-            if (remain[ri] == 0x1013 || remain[ri] == 0x101f ||
-                remain[ri] == 0x1020 || remain[ri] == 0x1027 ||
-                remain[ri] == 0x102b || remain[ri] == 0x1032) {
-                tlv2_field(&t1, 1, id16, 16);
-            } else if (remain[ri] == 0x101d || remain[ri] == 0x1014) {
-                tlv2_field(&t1, 1, id16, 16);
-            } else {
-                tlv2_u16(&t1, 1, 1);
-            }
-            tlv2_field(&t1, 2, dig, 32);
-            tlv2_finish(&t1, &alen);
-            tlv2_begin(&t2, b, sizeof(b), remain[ri]);
-            if (remain[ri] == 0x1013 || remain[ri] == 0x101f ||
-                remain[ri] == 0x1020 || remain[ri] == 0x1027 ||
-                remain[ri] == 0x102b || remain[ri] == 0x1032) {
-                tlv2_field(&t2, 1, id16, 16);
-            } else if (remain[ri] == 0x101d || remain[ri] == 0x1014) {
-                tlv2_field(&t2, 1, id16, 16);
-            } else {
-                tlv2_u16(&t2, 1, 1);
-            }
-            tlv2_field(&t2, 2, dig, 32);
-            tlv2_finish(&t2, &blen);
-            {
-                char name[64];
-                snprintf(name, sizeof(name), "RegistryMinimal-0x%04x", remain[ri]);
-                compare_dual(remain[ri], a, alen, b, blen, name);
-            }
-        }
-        (void)it;
+        printf("  R08 PARTIAL: %zu types lack production dual-impl fixtures "
+               "(not counted in dual-passed):\n",
+               sizeof(remain) / sizeof(remain[0]));
+        for (ri = 0; ri < sizeof(remain) / sizeof(remain[0]); ri++)
+            printf("    - 0x%04x\n", remain[ri]);
     }
 
     test_reject_duplicate_tag();

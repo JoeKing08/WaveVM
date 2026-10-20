@@ -1468,10 +1468,9 @@ static int execute_tcg_executor_session(
 }
 
 /*
- * When the admitted projection names a remote directory page and the V1
- * memory service is installed, pull one remote page before the local
- * run-once. This is the production Minimum "true executor + remote memory"
- * side effect; guest OS/SSH remains goal §7.
+ * R06: optional prefetch when memory service is installed. This is NOT a
+ * substitute for GOAL-4 remote-memory dependence proof (fault/commit path).
+ * Returning ENOTCONN must not be treated as SUCCESS.
  */
 static int ensure_remote_memory_side_effect(
     const struct wvm_node_runtime_context *runtime,
@@ -1521,8 +1520,17 @@ static int ensure_remote_memory_side_effect(
         result = wvm_memory_service_global_request_fault(
             entry->gpa_start, op, 1, &ack, page, error, error_len);
         if (result == -ENOTCONN) {
-            /* Memory service not installed in this process image yet. */
-            return 0;
+            /*
+             * R06: do not fake prefetch success. Absence of memory service
+             * means this side-effect path cannot prove remote dependence.
+             * Return ENOTCONN so callers skip the decorative prefetch rather
+             * than claiming a remote memory fence.
+             */
+            if (error && error_len != 0) {
+                snprintf(error, error_len,
+                         "remote memory side effect unavailable (no memory service)");
+            }
+            return -ENOTCONN;
         }
         if (result != 0) {
             return result;
@@ -1690,9 +1698,17 @@ int wvm_executor_runtime_execute_handoff(
         return -EAGAIN;
     }
 
+    /*
+     * R06: decorative prefetch is optional. ENOTCONN means the memory service
+     * is not installed — skip without claiming a remote-memory fence. Real
+     * dependence must come from the executor fault/commit path.
+     */
     remote_memory_result =
         ensure_remote_memory_side_effect(runtime, request, error, error_len);
-    if (remote_memory_result != 0) {
+    if (remote_memory_result == -ENOTCONN) {
+        if (error && error_len)
+            error[0] = '\0';
+    } else if (remote_memory_result != 0) {
         typed_handoff_result_from_request(
             request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, result);
         return 0;
@@ -3244,6 +3260,144 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
     }
 }
 
+
+static void handle_block_io_send_ack(int sockfd, struct sockaddr_in *client,
+                                       struct wvm_header *hdr, int error);
+
+/* R02: small semantic operation cache for MSG_BLOCK_TYPED dedup (per executor). */
+#define WVM_BLOCK_OP_CACHE_SLOTS 128
+struct wvm_block_op_cache_entry {
+    uint64_t operation_id;
+    uint32_t operation;
+    uint32_t status;
+    uint8_t digest[32];
+    int occupied;
+};
+static struct wvm_block_op_cache_entry g_block_op_cache[WVM_BLOCK_OP_CACHE_SLOTS];
+static pthread_mutex_t g_block_op_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static struct wvm_block_op_cache_entry *block_op_cache_lookup(uint64_t op_id)
+{
+    struct wvm_block_op_cache_entry *e =
+        &g_block_op_cache[op_id % WVM_BLOCK_OP_CACHE_SLOTS];
+    if (e->occupied && e->operation_id == op_id)
+        return e;
+    return NULL;
+}
+
+static void block_op_cache_store(uint64_t op_id, uint32_t operation,
+                                 uint32_t status, const uint8_t digest[32])
+{
+    struct wvm_block_op_cache_entry *e =
+        &g_block_op_cache[op_id % WVM_BLOCK_OP_CACHE_SLOTS];
+    e->operation_id = op_id;
+    e->operation = operation;
+    e->status = status;
+    if (digest)
+        memcpy(e->digest, digest, 32);
+    else
+        memset(e->digest, 0, 32);
+    e->occupied = 1;
+}
+
+static void handle_block_typed_phys(int sockfd, struct sockaddr_in *client,
+                                    struct wvm_header *hdr, void *payload,
+                                    uint16_t payload_len)
+{
+    struct wvm_typed_block_request *req;
+    char err[128];
+    int rc = 0;
+    uint32_t status = 0;
+    struct wvm_block_op_cache_entry *cached;
+
+    if (payload_len < sizeof(*req)) {
+        handle_block_io_send_ack(sockfd, client, hdr, 1);
+        return;
+    }
+    req = (struct wvm_typed_block_request *)payload;
+
+    pthread_mutex_lock(&g_block_op_cache_lock);
+    cached = block_op_cache_lookup(req->operation_id);
+    if (cached &&
+        memcmp(cached->digest, req->semantic_payload_digest, 32) == 0 &&
+        cached->operation == req->operation) {
+        status = cached->status;
+        pthread_mutex_unlock(&g_block_op_cache_lock);
+        handle_block_io_send_ack(sockfd, client, hdr, status != 0);
+        return;
+    }
+    pthread_mutex_unlock(&g_block_op_cache_lock);
+
+    if (req->operation == WVM_BLOCK_OP_WRITE) {
+        size_t need = (size_t)req->sector_count * 512;
+        int fua = (req->flags & (WVM_BLOCK_FLAG_FUA | WVM_BLOCK_FLAG_SYNC)) != 0;
+        if (req->payload_bytes != need ||
+            payload_len < sizeof(*req) + need) {
+            handle_block_io_send_ack(sockfd, client, hdr, 1);
+            return;
+        }
+        rc = wvm_block_chunk_write(req->lba_512, req->sector_count, req->data,
+                                   need, fua, err, sizeof(err));
+        status = rc != 0;
+        /* Data-bearing ACK not required for WRITE. */
+        handle_block_io_send_ack(sockfd, client, hdr, status);
+    } else if (req->operation == WVM_BLOCK_OP_READ) {
+        size_t need = (size_t)req->sector_count * 512;
+        size_t resp_len = sizeof(struct wvm_header) +
+                          sizeof(struct wvm_block_payload) + need;
+        uint8_t *tx = malloc(resp_len);
+        size_t out_bytes = 0;
+        if (!tx || req->sector_count == 0) {
+            free(tx);
+            handle_block_io_send_ack(sockfd, client, hdr, 1);
+            return;
+        }
+        {
+            struct wvm_header *rh = (struct wvm_header *)tx;
+            struct wvm_block_payload *rp =
+                (struct wvm_block_payload *)(tx + sizeof(*hdr));
+            *rh = *hdr;
+            rh->msg_type = htons(MSG_BLOCK_ACK);
+            rh->payload_len =
+                htons(sizeof(struct wvm_block_payload) + need);
+            rh->magic = htonl(WVM_MAGIC);
+            rh->flags &= (uint8_t)~WVM_FLAG_ERROR;
+            rp->lba = WVM_HTONLL(req->lba_512);
+            rp->count = htonl(req->sector_count);
+            rp->padding = 0;
+            rc = wvm_block_chunk_read(req->lba_512, req->sector_count, rp->data,
+                                      need, &out_bytes, err, sizeof(err));
+            if (rc != 0) {
+                free(tx);
+                handle_block_io_send_ack(sockfd, client, hdr, 1);
+                status = 1;
+            } else {
+                rh->crc32 = 0;
+                rh->crc32 = htonl(calculate_crc32(tx, resp_len));
+                robust_sendto(sockfd, tx, resp_len, client);
+                free(tx);
+                status = 0;
+            }
+        }
+    } else if (req->operation == WVM_BLOCK_OP_FLUSH) {
+        if (req->sector_count == 0)
+            rc = wvm_block_chunk_flush_all(err, sizeof(err));
+        else
+            rc = wvm_block_chunk_flush_range(req->lba_512, req->sector_count,
+                                             err, sizeof(err));
+        status = rc != 0;
+        handle_block_io_send_ack(sockfd, client, hdr, status);
+    } else {
+        handle_block_io_send_ack(sockfd, client, hdr, 1);
+        status = 1;
+    }
+
+    pthread_mutex_lock(&g_block_op_cache_lock);
+    block_op_cache_store(req->operation_id, req->operation, status,
+                         req->semantic_payload_digest);
+    pthread_mutex_unlock(&g_block_op_cache_lock);
+}
+
 static void handle_block_io_send_ack(int sockfd, struct sockaddr_in *client,
                                        struct wvm_header *hdr, int error)
 {
@@ -3305,8 +3459,11 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client,
             return;
         }
         memcpy(aligned_buf, blk->data, data_len);
-        rc = wvm_block_chunk_write(lba, count, aligned_buf, data_len,
-                                   /*fua=*/0, err, sizeof(err));
+        {
+            int fua = (hdr->flags & (WVM_FLAG_BLOCK_FUA | WVM_FLAG_BLOCK_SYNC)) != 0;
+            rc = wvm_block_chunk_write(lba, count, aligned_buf, data_len, fua,
+                                       err, sizeof(err));
+        }
         free(aligned_buf);
         handle_block_io_send_ack(sockfd, client, hdr, rc != 0);
         return;
@@ -3361,24 +3518,19 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client,
 
     if (hdr->msg_type == MSG_BLOCK_FLUSH) {
         /*
-         * A09 flush domain: fdatasync the chunk that owns LBA. count==0 is the
-         * typed FUA follow-up against that same domain; nonzero count flushes
-         * every chunk touched by [lba, lba+count).
+         * R02 flush domain:
+         *   count==0 + no LBA intent from guest FLUSH → flush_all under identity
+         *   count>0  → every chunk touched by [lba, lba+count) (FUA follow-up)
+         * Legacy FUA follow-up now always passes sector_count from master.
          */
-        uint32_t flush_count = count == 0 ? 1 : count;
-        uint64_t end_lba = lba + flush_count;
-        uint64_t cur = lba;
         int any_err = 0;
-
-        while (cur < end_lba) {
-            uint64_t chunk_id = (cur << 9) >> WVM_STORAGE_CHUNK_SHIFT;
-            uint64_t next_chunk_base =
-                ((chunk_id + 1) << WVM_STORAGE_CHUNK_SHIFT) >> 9;
-            if (wvm_block_chunk_flush(cur, err, sizeof(err)) != 0)
-                any_err = 1;
-            if (next_chunk_base <= cur)
-                break;
-            cur = next_chunk_base;
+        if (count == 0 && lba == 0 &&
+            (hdr->flags & (WVM_FLAG_BLOCK_FUA | WVM_FLAG_BLOCK_SYNC)) == 0) {
+            /* Guest-wide FLUSH (typed OP_FLUSH often uses lba=0,count=0). */
+            any_err = wvm_block_chunk_flush_all(err, sizeof(err)) != 0;
+        } else {
+            any_err = wvm_block_chunk_flush_range(
+                          lba, count == 0 ? 1 : count, err, sizeof(err)) != 0;
         }
         handle_block_io_send_ack(sockfd, client, hdr, any_err);
         return;
@@ -3527,6 +3679,10 @@ void* kvm_worker_thread(void *arg) {
                 }
 
                 handle_kvm_run_stateless(s, &c[i], h, run_req, (int)core);
+            }
+            else if (type == MSG_BLOCK_TYPED) {
+                handle_block_typed_phys(s, &c[i], h, pkt + sizeof(*h),
+                                       ntohs(h->payload_len));
             }
             else if (type == MSG_BLOCK_WRITE || type == MSG_BLOCK_READ || type == MSG_BLOCK_FLUSH) {
                 // 存储入口
@@ -4060,12 +4216,32 @@ int wavevm_executor_runtime_main(
     {
         const char *chunk_dir = getenv("WVM_STORAGE_CHUNK_DIR");
         char cerr[128];
+        char identity[192];
+        uint32_t device_index = 0;
 
         if (wvm_block_chunk_store_set_dir(
                 chunk_dir && chunk_dir[0] ? chunk_dir
                                           : "/var/lib/wavevm/chunks",
                 cerr, sizeof(cerr)) != 0) {
             fprintf(stderr, "[Runtime] chunk store dir: %s\n", cerr);
+        }
+        /*
+         * R02: isolate backends by VM/incarnation/volume identity from the
+         * admitted manifest — never share flat c_<chunk>.bin across VMs.
+         */
+        if (runtime->manifest->local_storage_assignments.count > 0)
+            device_index = runtime->manifest->local_storage_assignments.entries[0]
+                               .device_index;
+        snprintf(identity, sizeof(identity), "vm%u_inc%llu_vol%u",
+                 runtime->manifest->vm_id,
+                 (unsigned long long)runtime->manifest->vm_incarnation,
+                 device_index);
+        if (wvm_block_chunk_store_set_identity(identity, cerr, sizeof(cerr)) !=
+            0) {
+            fprintf(stderr, "[Runtime] chunk identity: %s\n", cerr);
+        } else {
+            fprintf(stderr, "[Runtime] chunk identity=%s dir=%s\n", identity,
+                    wvm_block_chunk_store_dir());
         }
     }
     g_service_port = runtime->executor_service_port;

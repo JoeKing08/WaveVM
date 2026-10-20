@@ -1138,8 +1138,25 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         if (result != 0) {
             return result;
         }
-        mprotect((void *)aligned_addr, 4096, PROT_READ | PROT_WRITE);
-        memcpy((void *)aligned_addr, ack.data, WVM_MEMORY_PAGE_BYTES);
+        /*
+         * R05/A13: for write-prep (version==0 first write), install data under
+         * PROT_READ only. The worker then snapshots pre-image before RW.
+         * Publishing RW here opened a window where another CPU could dirty
+         * bytes that memcpy then overwrote or that skipped the diff path.
+         */
+        if (is_write) {
+            if (mprotect((void *)aligned_addr, 4096, PROT_READ | PROT_WRITE) != 0)
+                return -1;
+            memcpy((void *)aligned_addr, ack.data, WVM_MEMORY_PAGE_BYTES);
+            if (mprotect((void *)aligned_addr, 4096, PROT_READ) != 0)
+                return -1;
+        } else {
+            if (mprotect((void *)aligned_addr, 4096, PROT_READ | PROT_WRITE) != 0)
+                return -1;
+            memcpy((void *)aligned_addr, ack.data, WVM_MEMORY_PAGE_BYTES);
+            if (mprotect((void *)aligned_addr, 4096, PROT_READ) != 0)
+                return -1;
+        }
         set_local_page_version(gpa, ack.version);
         return 0;
     }

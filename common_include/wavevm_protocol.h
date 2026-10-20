@@ -67,7 +67,8 @@ enum {
     MSG_BLOCK_READ     = 50, // Master -> Slave (Pull Chunk)
     MSG_BLOCK_WRITE    = 51, // Master -> Slave (Push/Commit Chunk)
     MSG_BLOCK_ACK      = 52, // Slave -> Master
-    MSG_BLOCK_FLUSH    = 53
+    MSG_BLOCK_FLUSH    = 53,
+    MSG_BLOCK_TYPED    = 54  /* typed block envelope (identity/FUA/dedup) */
 };
 
 // --- 2. 通用包头 (Header) ---
@@ -92,6 +93,8 @@ struct wvm_header {
 #define WVM_FLAG_ZERO 0x01
 #define WVM_FLAG_ERROR 0x02
 #define WVM_FLAG_NEED_ACK 0x04
+#define WVM_FLAG_BLOCK_FUA  0x08  /* storage FUA on MSG_BLOCK_* */
+#define WVM_FLAG_BLOCK_SYNC 0x10  /* storage SYNC barrier */
 
 // --- 3. Payload 结构体 (Data Structures) ---
 

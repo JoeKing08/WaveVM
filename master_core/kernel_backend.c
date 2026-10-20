@@ -294,6 +294,7 @@ struct diff_task_t {
     void *pre_image;        // 4KB 快照 (修改前的数据)
     uint64_t gpa;           // Guest Physical Address
     uint64_t timestamp;     // 记录时间，用于防抖
+    uint8_t send_retries;   /* R04/A02: bounded resend of unique diff */
 };
 
 // --- ID 管理系统 ---
@@ -1832,13 +1833,35 @@ static int committer_thread_fn(void *data) {
                     wvm_clear_active_context();
                     k_free_packet(buffer);
                     if (send_rc != 0) {
+                        /*
+                         * R04/A02: do not drop the unique pre-image/diff.
+                         * Requeue with a bounded retry; page stays dirty.
+                         */
+                        const uint8_t max_retries = 8;
                         pr_warn_ratelimited(
-                            "wavevm: diff commit send failed gpa=0x%llx rc=%d\n",
-                            (unsigned long long)task->gpa, send_rc);
-                        vfree(task->pre_image);
-                        put_page(task->page);
-                        wvm_kernel_put_context(task->context);
-                        kfree(task);
+                            "wavevm: diff commit send failed gpa=0x%llx rc=%d "
+                            "retry=%u\n",
+                            (unsigned long long)task->gpa, send_rc,
+                            task->send_retries);
+                        if (task->send_retries < max_retries) {
+                            task->send_retries++;
+                            spin_lock_bh(&task->context->diff_lock);
+                            list_add_tail(&task->list,
+                                          &task->context->diff_queue);
+                            spin_unlock_bh(&task->context->diff_lock);
+                            atomic_inc(&g_diff_pending);
+                            wake_up_interruptible(&g_diff_wq);
+                        } else {
+                            pr_err_ratelimited(
+                                "wavevm: diff commit abandoned gpa=0x%llx "
+                                "after %u retries\n",
+                                (unsigned long long)task->gpa,
+                                task->send_retries);
+                            vfree(task->pre_image);
+                            put_page(task->page);
+                            wvm_kernel_put_context(task->context);
+                            kfree(task);
+                        }
                         continue;
                     }
                 }
@@ -1906,6 +1929,7 @@ static vm_fault_t wvm_page_mkwrite(struct vm_fault *vmf) {
     get_page(page);
     task->gpa = gpa;
     task->timestamp = k_get_time_us();
+    task->send_retries = 0;
 
     spin_lock_bh(&context->diff_lock);
     list_add_tail(&task->list, &context->diff_queue);
@@ -2185,8 +2209,9 @@ static void internal_process_single_packet(
     uint16_t type = ntohs(hdr->msg_type);
     
     // 3. [V30 核心修复] 识别 CPU/存储包，内核直接“踢”给本地 Slave 端口
-    if (type == MSG_VCPU_RUN || type == MSG_BLOCK_WRITE || 
-        type == MSG_BLOCK_READ || type == MSG_BLOCK_FLUSH) {
+    if (type == MSG_VCPU_RUN || type == MSG_BLOCK_WRITE ||
+        type == MSG_BLOCK_READ || type == MSG_BLOCK_FLUSH ||
+        type == MSG_BLOCK_TYPED) {
         
         struct sockaddr_in s_addr = {
             .sin_family = AF_INET,
@@ -2253,8 +2278,13 @@ static void internal_process_single_packet(
     
     // 8. [V28 继承] 其他信令转交 Logic Core
     // V29 的 Logic Core 需要知道是谁发的 (Source ID)
-    uint32_t src_id = ntohl(hdr->slave_id);
-    wvm_logic_process_packet(hdr, payload, src_id);
+    // R04/A01: bind RX context into the implicit WVM_CURRENT_VM_ID() chain.
+    {
+        uint32_t src_id = ntohl(hdr->slave_id);
+        wvm_set_active_context(context);
+        wvm_logic_process_packet(hdr, payload, src_id);
+        wvm_clear_active_context();
+    }
 }
 
 /* 
@@ -2980,9 +3010,12 @@ out:
 
 static void wvm_vma_close(struct vm_area_struct *vma);
 
+static void wvm_vma_open(struct vm_area_struct *vma);
+
 static const struct vm_operations_struct wvm_vm_ops = {
     .fault = wvm_fault_handler,
     .page_mkwrite = wvm_page_mkwrite,
+    .open = wvm_vma_open,   /* R04/A03: fork/VMA-split get */
     .close = wvm_vma_close, /* A03: put mmap context ref */
 };
 
@@ -3023,6 +3056,22 @@ static int wvm_mmap(struct file *filp, struct vm_area_struct *vma) {
     up_write(&context->mapping_sem);
     file_context->mapping = context->mapping;
     return 0;
+}
+
+/* R04/A03: fork or VMA split duplicates the VMA — take a matching get. */
+static void wvm_vma_open(struct vm_area_struct *vma)
+{
+    struct wvm_kernel_context *context = wvm_context_from_vma(vma);
+
+    if (!context)
+        return;
+    if (!atomic_inc_not_zero(&context->refs))
+        return;
+    down_write(&context->mapping_sem);
+    if (context->mapping && vma->vm_file &&
+        context->mapping == vma->vm_file->f_mapping)
+        atomic_inc(&context->mapping_file_refs);
+    up_write(&context->mapping_sem);
 }
 
 /* A03: last mapping owner drops the mmap context get on sleepable path. */

@@ -85,6 +85,13 @@ int wvm_route_runtime_query_retire_proof(
     const struct wvm_route_runtime *runtime,
     const struct wvm_route_snapshot_key *key, uint64_t *active_operation_refs,
     int *retention_horizon_complete, char *error, size_t error_len);
+int wvm_route_runtime_drain_result_deadlines(
+    struct wvm_route_runtime *runtime,
+    const struct wvm_vm_route_scope_key *scope, char *error,
+    size_t error_len);
+uint64_t wvm_route_runtime_operation_retention_horizon_ms(
+    const struct wvm_route_runtime *runtime,
+    const struct wvm_vm_route_scope_key *scope);
 
 /*
  * Look up one prevalidated V1 routed frame. The envelope's complete snapshot

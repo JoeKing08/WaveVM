@@ -371,13 +371,27 @@ int main(void)
             expect(wvm_route_runtime_query_retire_proof(
                        &proof_runtime, &snap.route_snapshot_key, &refs, &horizon,
                        proof_error, sizeof(proof_error)) == 0 &&
+                       refs == 0 && horizon == 0,
+                   "A05 proof incomplete while retention deadlines remain") ||
+            expect(wvm_route_runtime_retire(&proof_runtime,
+                                            &snap.route_snapshot_key,
+                                            proof_error,
+                                            sizeof(proof_error)) != 0,
+                   "A05 retire blocked while retention deadlines remain") ||
+            expect(wvm_route_runtime_drain_result_deadlines(
+                       &proof_runtime, &snap.route_snapshot_key.scope_key,
+                       proof_error, sizeof(proof_error)) == 0,
+                   "A05 drain result retention deadlines") ||
+            expect(wvm_route_runtime_query_retire_proof(
+                       &proof_runtime, &snap.route_snapshot_key, &refs, &horizon,
+                       proof_error, sizeof(proof_error)) == 0 &&
                        refs == 0 && horizon == 1,
-                   "A05 proof shows refs=0 complete") ||
+                   "A05 proof shows refs=0 deadlines drained") ||
             expect(wvm_route_runtime_retire(&proof_runtime,
                                             &snap.route_snapshot_key,
                                             proof_error,
                                             sizeof(proof_error)) == 0,
-                   "A05 retire after refs drained")) {
+                   "A05 retire after refs+deadlines drained")) {
             wvm_route_runtime_destroy(&proof_runtime);
             return 1;
         }

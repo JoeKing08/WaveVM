@@ -1347,7 +1347,8 @@ void* client_handler(void *socket_desc) {
 
                 /* Validate request */
                 if ((req->operation == WVM_BLOCK_OP_WRITE && payload_bytes != req->sector_count * 512) ||
-                    (req->operation == WVM_BLOCK_OP_READ && payload_bytes != 0)) {
+                    (req->operation == WVM_BLOCK_OP_READ && payload_bytes != 0) ||
+                    (req->operation == WVM_BLOCK_OP_FLUSH && payload_bytes != 0)) {
                     struct wvm_typed_block_completion completion = {
                         .operation_id = req->operation_id,
                         .status = WVM_BLOCK_STATUS_INVALID_OPERATION,
@@ -1368,63 +1369,67 @@ void* client_handler(void *socket_desc) {
                 uint8_t *rx_buf = malloc(rx_buf_size);
                 uint64_t rid = u_ops.alloc_req_id(rx_buf, (uint32_t)rx_buf_size);
 
-                /* Build legacy network packet for executor */
-                size_t blk_size = sizeof(struct wvm_block_payload) +
-                                 (req->operation == WVM_BLOCK_OP_WRITE ? payload_bytes : 0);
-                size_t pkt_len = sizeof(struct wvm_header) + blk_size;
+                /*
+                 * R02: keep the typed envelope on the wire (MSG_BLOCK_TYPED).
+                 * Do not demote to legacy MSG_BLOCK_{READ,WRITE,FLUSH} which
+                 * drops operation_id / flags / queue ordering and reallocates
+                 * a disconnected rid for semantic dedup.
+                 */
+                size_t typed_bytes = sizeof(struct wvm_typed_block_request) + payload_bytes;
+                size_t pkt_len = sizeof(struct wvm_header) + typed_bytes;
                 uint8_t *pkt = u_ops.alloc_packet(pkt_len, 0);
+                int success = 0;
 
-                if (pkt && rid != (uint64_t)-1) {
+                if (pkt && rid != (uint64_t)-1 && rx_buf) {
                     struct wvm_header *h = (struct wvm_header *)pkt;
+                    struct wvm_typed_block_request *wire =
+                        (struct wvm_typed_block_request *)(pkt + sizeof(*h));
+                    int send_rc;
+
+                    memset(h, 0, sizeof(*h));
                     h->magic = htonl(WVM_MAGIC);
-
-                    /* Map typed operation to legacy MSG */
-                    if (req->operation == WVM_BLOCK_OP_FLUSH) {
-                        h->msg_type = htons(MSG_BLOCK_FLUSH);
-                    } else if (req->operation == WVM_BLOCK_OP_WRITE) {
-                        h->msg_type = htons(MSG_BLOCK_WRITE);
-                    } else {
-                        h->msg_type = htons(MSG_BLOCK_READ);
-                    }
-
-                    h->payload_len = htons(blk_size);
+                    h->msg_type = htons(MSG_BLOCK_TYPED);
+                    h->payload_len = htons((uint16_t)typed_bytes);
                     h->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                     h->req_id = WVM_HTONLL(rid);
                     h->qos_level = 1;
+                    if (req->flags & WVM_BLOCK_FLAG_FUA)
+                        h->flags |= WVM_FLAG_BLOCK_FUA;
+                    if (req->flags & WVM_BLOCK_FLAG_SYNC)
+                        h->flags |= WVM_FLAG_BLOCK_SYNC;
 
-                    struct wvm_block_payload *p = (void*)(pkt + sizeof(*h));
-                    p->lba = WVM_HTONLL(req->lba_512);
-                    p->count = htonl(req->sector_count);
-                    if (req->operation == WVM_BLOCK_OP_WRITE) {
-                        memcpy(p->data, req->data, payload_bytes);
-                    }
+                    memcpy(wire, req, typed_bytes);
+                    /* Correlation: keep semantic operation_id; rid is transport. */
+                    wire->operation_id = req->operation_id;
 
                     h->crc32 = 0;
                     h->crc32 = htonl(calculate_crc32(pkt, pkt_len));
 
-                    u_ops.send_packet(pkt, pkt_len, target);
-
-                    /* Wait for remote response */
-                    uint64_t t_start = u_ops.get_time_us();
-                    int success = 0;
-                    while (u_ops.time_diff_us(t_start) < 5000000) {
-                        if (u_ops.check_req_status(rid) == 1) {
-                            struct wvm_header *rx_hdr = (struct wvm_header *)rx_buf;
-                            if (rx_hdr->flags & WVM_FLAG_ERROR) {
-                                success = 0;
-                            } else {
-                                success = 1;
+                    send_rc = u_ops.send_packet(pkt, pkt_len, target);
+                    if (send_rc != 0) {
+                        /* Fractal topology refuses legacy; typed MSG must also
+                         * fail closed rather than wait for a timeout. */
+                        fprintf(stderr,
+                                "[IPC] typed block send failed rc=%d target=%u\n",
+                                send_rc, target);
+                        success = 0;
+                    } else {
+                        uint64_t t_start = u_ops.get_time_us();
+                        while (u_ops.time_diff_us(t_start) < 5000000) {
+                            if (u_ops.check_req_status(rid) == 1) {
+                                struct wvm_header *rx_hdr = (struct wvm_header *)rx_buf;
+                                success = !(rx_hdr->flags & WVM_FLAG_ERROR);
+                                break;
                             }
-                            break;
+                            usleep(100);
                         }
-                        usleep(100);
                     }
 
                     /*
                      * storage-device-authority.md §4.3: FUA/SYNC writes require
                      * durable flush for that write even without a later FLUSH.
-                     * Legacy MSG_BLOCK_WRITE drops typed flags, so follow with
-                     * MSG_BLOCK_FLUSH on the same storage target before ACK.
+                     * R02: flush every chunk touched by [lba, lba+sector_count);
+                     * count=0 previously synced only the start chunk.
                      */
                     if (success && req->operation == WVM_BLOCK_OP_WRITE &&
                         (req->flags & (WVM_BLOCK_FLAG_FUA | WVM_BLOCK_FLAG_SYNC))) {
@@ -1442,6 +1447,7 @@ void* client_handler(void *socket_desc) {
                             struct wvm_header *fh = (struct wvm_header *)flush_pkt;
                             struct wvm_block_payload *fp =
                                 (void *)(flush_pkt + sizeof(*fh));
+                            int flush_send_rc;
                             memset(fh, 0, sizeof(*fh));
                             fh->magic = htonl(WVM_MAGIC);
                             fh->msg_type = htons(MSG_BLOCK_FLUSH);
@@ -1449,21 +1455,26 @@ void* client_handler(void *socket_desc) {
                             fh->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                             fh->req_id = WVM_HTONLL(flush_rid);
                             fh->qos_level = 1;
+                            fh->flags |= WVM_FLAG_BLOCK_FUA;
                             fp->lba = WVM_HTONLL(req->lba_512);
-                            fp->count = htonl(0);
+                            /* R02: cover all touched sectors, not count=0. */
+                            fp->count = htonl(req->sector_count ? req->sector_count : 1);
+                            fp->padding = 0;
                             fh->crc32 = 0;
                             fh->crc32 = htonl(calculate_crc32(flush_pkt, flush_pkt_len));
-                            u_ops.send_packet(flush_pkt, flush_pkt_len, target);
-                            t_start = u_ops.get_time_us();
+                            flush_send_rc = u_ops.send_packet(flush_pkt, flush_pkt_len, target);
                             success = 0;
-                            while (u_ops.time_diff_us(t_start) < 5000000) {
-                                if (u_ops.check_req_status(flush_rid) == 1) {
-                                    struct wvm_header *rx_hdr =
-                                        (struct wvm_header *)flush_rx;
-                                    success = !(rx_hdr->flags & WVM_FLAG_ERROR);
-                                    break;
+                            if (flush_send_rc == 0) {
+                                uint64_t t_start = u_ops.get_time_us();
+                                while (u_ops.time_diff_us(t_start) < 5000000) {
+                                    if (u_ops.check_req_status(flush_rid) == 1) {
+                                        struct wvm_header *rx_hdr =
+                                            (struct wvm_header *)flush_rx;
+                                        success = !(rx_hdr->flags & WVM_FLAG_ERROR);
+                                        break;
+                                    }
+                                    usleep(100);
                                 }
-                                usleep(100);
                             }
                             u_ops.free_req_id(flush_rid);
                         } else {
@@ -1488,9 +1499,13 @@ void* client_handler(void *socket_desc) {
                             (req->operation == WVM_BLOCK_OP_READ ? req->sector_count * 512 : payload_bytes) : 0;
 
                         if (success && req->operation == WVM_BLOCK_OP_READ) {
-                            struct wvm_block_payload *rx_p = (struct wvm_block_payload *)
-                                (rx_buf + sizeof(struct wvm_header));
-                            memcpy(completion->data, rx_p->data, response_data_size);
+                            /* MSG_BLOCK_TYPED ACK may carry data after header. */
+                            if (rx_buf_size >= sizeof(struct wvm_header) +
+                                sizeof(struct wvm_block_payload) + response_data_size) {
+                                struct wvm_block_payload *rx_p = (struct wvm_block_payload *)
+                                    (rx_buf + sizeof(struct wvm_header));
+                                memcpy(completion->data, rx_p->data, response_data_size);
+                            }
                         }
 
                         struct wvm_ipc_header_t resp_hdr = {

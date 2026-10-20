@@ -1,0 +1,11 @@
+{
+  "archive": "26c81873-updates.jsonl.gz",
+  "compressed_size_bytes": 893658,
+  "compression": "gzip",
+  "format": "wavevm-session-archive-shards",
+  "part_count": 1,
+  "part_prefix": "26c81873-updates.jsonl.gz.",
+  "part_size_bytes": 47185920,
+  "restore": "cat 26c81873-updates.jsonl.gz.[0-9][0-9][0-9] > 26c81873-updates.jsonl.gz",
+  "sha256": "51f11820c937af75609b0cf6a92f8a63f70d35b30b5ff42d64351bdb047842ae"
+}

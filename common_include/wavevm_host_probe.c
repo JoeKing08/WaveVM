@@ -12,6 +12,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <signal.h>
+#include <stdint.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
@@ -64,11 +66,36 @@ static void fill_probe_op_id(uint8_t out[WVM_IDENTITY_ID_BYTES], uint64_t stamp)
  * Restricted-host TCG fallback: anonymous page mprotect PROT_NONE -> PROT_READ
  * must succeed. This is the Minimum no-root SIGSEGV/mprotect path evidence.
  */
+/*
+ * R07: bounded SIGSEGV fault evidence — arm PROT_NONE, catch one fault via
+ * handler, restore permissions, and verify the fault address. Mere mprotect
+ * round-trips without a fault are not enough for Mode B AVAILABLE claims.
+ */
+static volatile sig_atomic_t g_probe_fault_hit;
+static volatile void *g_probe_fault_addr;
+static void *g_probe_fault_page;
+static size_t g_probe_fault_page_size;
+
+static void probe_sigsegv_handler(int sig, siginfo_t *info, void *uctx)
+{
+    (void)uctx;
+    if (sig != SIGSEGV || !info)
+        return;
+    g_probe_fault_hit = 1;
+    g_probe_fault_addr = info->si_addr;
+    /* Restore RW so the faulting load can retire without looping. */
+    if (g_probe_fault_page && g_probe_fault_page_size)
+        (void)mprotect(g_probe_fault_page, g_probe_fault_page_size,
+                       PROT_READ | PROT_WRITE);
+}
+
 static int probe_sigsegv_mprotect(void)
 {
     const size_t page = (size_t)sysconf(_SC_PAGESIZE);
     void *page_ptr;
     int rc = -1;
+    struct sigaction sa, old_sa;
+    volatile char sink = 0;
 
     if (page == 0 || page > (1U << 20)) {
         return -1;
@@ -78,16 +105,36 @@ static int probe_sigsegv_mprotect(void)
     if (page_ptr == MAP_FAILED) {
         return -1;
     }
-    ((volatile char *)page_ptr)[0] = 1;
+    ((volatile char *)page_ptr)[0] = 0x5a;
+    g_probe_fault_page = page_ptr;
+    g_probe_fault_page_size = page;
     if (mprotect(page_ptr, page, PROT_NONE) != 0) {
+        goto out;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = probe_sigsegv_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    g_probe_fault_hit = 0;
+    g_probe_fault_addr = NULL;
+    if (sigaction(SIGSEGV, &sa, &old_sa) != 0) {
+        goto out;
+    }
+    /* Trigger exactly one recoverable fault. */
+    sink = ((volatile char *)page_ptr)[0];
+    (void)sigaction(SIGSEGV, &old_sa, NULL);
+    if (!g_probe_fault_hit ||
+        (uintptr_t)g_probe_fault_addr < (uintptr_t)page_ptr ||
+        (uintptr_t)g_probe_fault_addr >= (uintptr_t)page_ptr + page) {
         goto out;
     }
     if (mprotect(page_ptr, page, PROT_READ | PROT_WRITE) != 0) {
         goto out;
     }
-    if (((volatile char *)page_ptr)[0] != 1) {
+    if (((volatile char *)page_ptr)[0] != 0x5a) {
         goto out;
     }
+    (void)sink;
     rc = 0;
 out:
     munmap(page_ptr, page);
@@ -139,21 +186,26 @@ static int probe_kvm(uint64_t *feature_bits, uint32_t *abi_version)
     vm_fd = ioctl(kvm_fd, KVM_CREATE_VM, 0);
     if (vm_fd >= 0) {
         *feature_bits |= WVM_HOST_PROBE_KVM_CREATE_VM;
+        /*
+         * R07: MANUAL_DIRTY_LOG_PROTECT2 / DIRTY_LOG_RING are optional
+         * accelerators, not proof that KVM_GET_DIRTY_LOG works. Keep them as
+         * diagnostic-only notes in the probe log path; do not set
+         * WVM_HOST_PROBE_KVM_DIRTY_LOG from these alone. Basic dirty-log
+         * availability remains unset until a memslot+GET_DIRTY_LOG op probe
+         * lands (Extended). CREATE_VM evidence stays below.
+         */
+        (void)0;
 #ifdef KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2
-        if (ioctl(kvm_fd, KVM_CHECK_EXTENSION,
-                  KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2) > 0) {
-            *feature_bits |= WVM_HOST_PROBE_KVM_DIRTY_LOG;
-        }
+        (void)ioctl(kvm_fd, KVM_CHECK_EXTENSION,
+                    KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2);
 #endif
 #ifdef KVM_CAP_DIRTY_LOG_RING
-        if (ioctl(kvm_fd, KVM_CHECK_EXTENSION, KVM_CAP_DIRTY_LOG_RING) > 0) {
-            *feature_bits |= WVM_HOST_PROBE_KVM_DIRTY_LOG;
-        }
+        (void)ioctl(kvm_fd, KVM_CHECK_EXTENSION, KVM_CAP_DIRTY_LOG_RING);
 #endif
         /*
-         * Do NOT treat KVM_CAP_SYNC_MMU (>=0 including "unsupported returns 0")
-         * as dirty-log proof (cross-review F8/F9). DIRTY_LOG bit stays clear
-         * unless a real dirty-log extension probed above succeeded.
+         * R07: Do NOT treat KVM_CAP_SYNC_MMU or optional dirty-log accelerators
+         * as KVM_GET_DIRTY_LOG proof. DIRTY_LOG bit stays clear until a real
+         * memslot+GET_DIRTY_LOG operation probe exists.
          */
         close(vm_fd);
         vm_fd = -1;

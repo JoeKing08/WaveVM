@@ -10,6 +10,7 @@ struct route_snapshot_copy {
     struct wvm_route_snapshot_key key;
     struct wvm_route_rule_record *rules;
     size_t rule_count;
+    uint64_t operation_retention_horizon_ms;
 };
 
 struct route_scope_slot {
@@ -21,6 +22,9 @@ struct route_scope_slot {
     int has_prepared;
     int has_predecessor;
     uint64_t outstanding_operation_refs;
+    /* R03: results/retries still inside retention must block retire proof. */
+    uint64_t pending_result_deadlines;
+    uint64_t operation_retention_horizon_ms;
 };
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
@@ -205,6 +209,7 @@ static int snapshot_copy_from_record(
     memcpy(copy->rules, record->next_hop_rules.entries, rule_bytes);
     copy->key = record->route_snapshot_key;
     copy->rule_count = record->next_hop_rules.count;
+    copy->operation_retention_horizon_ms = record->operation_retention_horizon_ms;
     return 0;
 }
 
@@ -404,6 +409,8 @@ int wvm_route_runtime_activate(struct wvm_route_runtime *runtime,
     memset(&scope->prepared, 0, sizeof(scope->prepared));
     scope->has_active = 1;
     scope->has_prepared = 0;
+    scope->operation_retention_horizon_ms =
+        scope->active.operation_retention_horizon_ms;
     pthread_rwlock_unlock(&runtime->lock);
     return 0;
 }
@@ -493,6 +500,12 @@ int wvm_route_runtime_retire(struct wvm_route_runtime *runtime,
         pthread_rwlock_unlock(&runtime->lock);
         set_error(error, error_len,
                   "route retirement blocked: outstanding operation refs remain");
+        return -1;
+    }
+    if (scope->pending_result_deadlines != 0) {
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len,
+                  "route retirement blocked: result retention deadlines remain");
         return -1;
     }
     if (scope->has_predecessor &&
@@ -713,6 +726,12 @@ int wvm_route_runtime_operation_ref_put(
         return -1;
     }
     slot->outstanding_operation_refs--;
+    /*
+     * R03: completed ops still occupy the retention/query window when the
+     * admitted snapshot names a nonzero horizon. Drain after fence/flush.
+     */
+    if (slot->operation_retention_horizon_ms > 0)
+        slot->pending_result_deadlines++;
     pthread_rwlock_unlock(&runtime->lock);
     return 0;
 }
@@ -740,11 +759,58 @@ int wvm_route_runtime_query_retire_proof(
     }
     *active_operation_refs = slot->outstanding_operation_refs;
     /*
-     * Horizon complete only when no outstanding ops and the named key is the
-     * only retained copy being retired (no extra prepared successor holding
-     * drain state for a different generation without proof).
+     * R03: horizon complete only when outstanding refs are zero AND no
+     * retry/result retention deadlines remain. refs==0 alone is not enough
+     * when operation_retention_horizon_ms keeps results queryable.
      */
-    *retention_horizon_complete = (slot->outstanding_operation_refs == 0) ? 1 : 0;
+    *retention_horizon_complete =
+        (slot->outstanding_operation_refs == 0 &&
+         slot->pending_result_deadlines == 0) ? 1 : 0;
     pthread_rwlock_unlock((pthread_rwlock_t *)&runtime->lock);
     return 0;
+}
+
+int wvm_route_runtime_drain_result_deadlines(
+    struct wvm_route_runtime *runtime,
+    const struct wvm_vm_route_scope_key *scope, char *error, size_t error_len)
+{
+    struct route_scope_slot *slot;
+
+    if (!runtime || !scope) {
+        set_error(error, error_len, "route deadline drain input is invalid");
+        return -1;
+    }
+    pthread_rwlock_wrlock(&runtime->lock);
+    slot = find_scope(runtime, scope);
+    if (!slot) {
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len, "route deadline drain scope missing");
+        return -1;
+    }
+    if (slot->outstanding_operation_refs != 0) {
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len,
+                  "cannot drain result deadlines while ops outstanding");
+        return -1;
+    }
+    slot->pending_result_deadlines = 0;
+    pthread_rwlock_unlock(&runtime->lock);
+    return 0;
+}
+
+uint64_t wvm_route_runtime_operation_retention_horizon_ms(
+    const struct wvm_route_runtime *runtime,
+    const struct wvm_vm_route_scope_key *scope)
+{
+    const struct route_scope_slot *slot;
+    uint64_t ms = 0;
+
+    if (!runtime || !scope)
+        return 0;
+    pthread_rwlock_rdlock((pthread_rwlock_t *)&runtime->lock);
+    slot = find_scope_const(runtime, scope);
+    if (slot)
+        ms = slot->operation_retention_horizon_ms;
+    pthread_rwlock_unlock((pthread_rwlock_t *)&runtime->lock);
+    return ms;
 }

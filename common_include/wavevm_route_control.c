@@ -736,7 +736,10 @@ static int apply_unlogged(struct wvm_route_control *control,
             return -1;
         }
         result_out->active_operation_refs = refs;
-        result_out->operation_retention_horizon_ms = 0;
+        /* R03: never advertise horizon_ms=0 when the snapshot named a window. */
+        result_out->operation_retention_horizon_ms =
+            wvm_route_runtime_operation_retention_horizon_ms(
+                control->runtime, &key.scope_key);
         result_out->retention_horizon_complete = horizon && refs == 0;
         if (!result_out->retention_horizon_complete) {
             set_error(error, error_len,

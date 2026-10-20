@@ -1,0 +1,18 @@
+{
+  "info": {
+    "id": "26c81873-d371-4156-a2ec-ac4198541f1c",
+    "cwd": "/home/joeking"
+  },
+  "session_summary": "WaveVM Minimum R01-R08 2026-10-20",
+  "generated_title": "WaveVM Minimum R01-R08 2026-10-20",
+  "created_at": "2026-10-12T08:27:00.000000Z",
+  "updated_at": "2026-10-20T03:38:01.560003Z",
+  "last_active_at": "2026-10-20T03:38:01.560003Z",
+  "num_messages": 4428,
+  "num_chat_messages": 876,
+  "current_model_id": "grok-4.7",
+  "chat_format_version": 1,
+  "grok_home": "/home/joeking/.grok",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off"
+}

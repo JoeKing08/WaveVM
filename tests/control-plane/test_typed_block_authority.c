@@ -193,8 +193,9 @@ static int typed_write(int sock, const struct sockaddr_in *slave, uint64_t lba,
         return -1;
     if (flags & (WVM_BLOCK_FLAG_FUA | WVM_BLOCK_FLAG_SYNC)) {
         rid = ++(*req_seq);
-        if (master_send_op(sock, slave, MSG_BLOCK_FLUSH, lba, 0, NULL, 0, rid,
-                           rx, sizeof(rx), &rx_len) != 0)
+        /* R02: FUA follow-up covers all touched sectors. */
+        if (master_send_op(sock, slave, MSG_BLOCK_FLUSH, lba, sectors, NULL, 0,
+                           rid, rx, sizeof(rx), &rx_len) != 0)
             return -1;
         rh = (struct wvm_header *)rx;
         if (rh->flags & WVM_FLAG_ERROR)
@@ -342,6 +343,75 @@ static int test_typed_ipc_path(const char *dir)
     return g_fail ? -1 : 0;
 }
 
+/* R01: write spanning 64 MiB chunk boundary must land in both chunk files. */
+static int test_chunk_boundary_cross(const char *dir)
+{
+    char err[128];
+    uint8_t wbuf[1024];
+    uint8_t rbuf[512];
+    size_t out = 0;
+    /* Last sector of chunk 0 is LBA 131071; next chunk starts at 131072. */
+    const uint64_t last_of_chunk0 = (1ULL << (WVM_STORAGE_CHUNK_SHIFT - 9)) - 1;
+    const uint64_t first_of_chunk1 = last_of_chunk0 + 1;
+
+    expect(wvm_block_chunk_store_set_dir(dir, err, sizeof(err)) == 0,
+           "boundary set chunk dir");
+    memset(wbuf, 0xA5, sizeof(wbuf));
+    expect(wvm_block_chunk_write(last_of_chunk0, 2, wbuf, sizeof(wbuf), 0, err,
+                                 sizeof(err)) == 0,
+           "boundary cross-chunk WRITE LBA=131071 sectors=2");
+    memset(rbuf, 0, sizeof(rbuf));
+    expect(wvm_block_chunk_read(first_of_chunk1, 1, rbuf, sizeof(rbuf), &out, err,
+                                sizeof(err)) == 0,
+           "boundary READ LBA=131072");
+    expect(out == 512, "boundary read length");
+    expect(rbuf[0] == 0xA5 && rbuf[511] == 0xA5,
+           "boundary data 0xA5 across chunk (R01)");
+    /* Also verify the last sector of chunk 0 retained its half. */
+    memset(rbuf, 0, sizeof(rbuf));
+    expect(wvm_block_chunk_read(last_of_chunk0, 1, rbuf, sizeof(rbuf), &out, err,
+                                sizeof(err)) == 0 &&
+               rbuf[0] == 0xA5,
+           "boundary trailing sector of chunk0");
+    return g_fail ? -1 : 0;
+}
+
+static int test_chunk_identity_isolation(const char *dir)
+{
+    char err[128];
+    uint8_t a[512], b[512], back[512];
+    size_t out = 0;
+
+    expect(wvm_block_chunk_store_set_dir(dir, err, sizeof(err)) == 0,
+           "identity set dir");
+    expect(wvm_block_chunk_store_set_identity("vm1_inc1_vol0", err,
+                                              sizeof(err)) == 0,
+           "set identity A");
+    memset(a, 0x11, sizeof(a));
+    expect(wvm_block_chunk_write(0, 1, a, 512, 0, err, sizeof(err)) == 0,
+           "write under identity A");
+    expect(wvm_block_chunk_store_set_identity("vm2_inc1_vol0", err,
+                                              sizeof(err)) == 0,
+           "set identity B");
+    memset(b, 0x22, sizeof(b));
+    expect(wvm_block_chunk_write(0, 1, b, 512, 0, err, sizeof(err)) == 0,
+           "write under identity B");
+    memset(back, 0, sizeof(back));
+    expect(wvm_block_chunk_read(0, 1, back, sizeof(back), &out, err,
+                                sizeof(err)) == 0 &&
+               back[0] == 0x22,
+           "B reads own data");
+    expect(wvm_block_chunk_store_set_identity("vm1_inc1_vol0", err,
+                                              sizeof(err)) == 0,
+           "restore identity A");
+    memset(back, 0, sizeof(back));
+    expect(wvm_block_chunk_read(0, 1, back, sizeof(back), &out, err,
+                                sizeof(err)) == 0 &&
+               back[0] == 0x11,
+           "A still has isolated data (R02)");
+    return g_fail ? -1 : 0;
+}
+
 static int test_main_wrapper_fua_wired(void)
 {
     /* Source oracle: FUA follow-up FLUSH must exist in main_wrapper. */
@@ -372,6 +442,7 @@ static int test_main_wrapper_fua_wired(void)
     fclose(f);
     ok = strstr(buf, "WVM_BLOCK_FLAG_FUA") != NULL &&
          strstr(buf, "MSG_BLOCK_FLUSH") != NULL &&
+         strstr(buf, "MSG_BLOCK_TYPED") != NULL &&
          strstr(buf, "storage-device-authority.md") != NULL;
     expect(ok, "main_wrapper FUA→FLUSH wired");
     free(buf);
@@ -390,13 +461,29 @@ int main(void)
     printf("=== typed block authority oracle ===\n");
     test_chunk_store_direct(dir_a);
     test_typed_ipc_path(dir_b);
+    {
+        char dir_c[] = "/tmp/wvm-block-auth-c.XXXXXX";
+        if (!mkdtemp(dir_c)) {
+            fail("mkdtemp boundary");
+            return 1;
+        }
+        test_chunk_boundary_cross(dir_c);
+    }
+    {
+        char dir_d[] = "/tmp/wvm-block-auth-d.XXXXXX";
+        if (!mkdtemp(dir_d)) {
+            fail("mkdtemp identity");
+            return 1;
+        }
+        test_chunk_identity_isolation(dir_d);
+    }
     test_main_wrapper_fua_wired();
     if (g_fail) {
         fprintf(stderr, "typed-block-authority: FAIL\n");
         return 1;
     }
     printf("typed-block-authority: PASS "
-           "(chunk-store R/W/FLUSH/FUA + typed-IPC→slave-equiv + "
-           "main_wrapper FUA wire)\n");
+           "(chunk-store R/W/FLUSH/FUA + boundary-cross R01 + "
+           "typed-IPC→slave-equiv + main_wrapper FUA wire)\n");
     return 0;
 }

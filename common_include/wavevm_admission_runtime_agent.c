@@ -389,10 +389,16 @@ static int stop_one_runtime(
         clear_stale_admitted_endpoints(runtime_manifest);
         fprintf(stderr,
                 "[runtime-agent] admitted child pid=%d required SIGKILL after "
-                "SIGTERM window; STOP participant teardown continues "
-                "(fence proof remains ROUTE_RETIRE)\n",
+                "SIGTERM window; cleanup done but STOP persistence/fence "
+                "NOT proven (R03)\n",
                 (int)pid);
-        return 0;
+        /*
+         * R03: hard-kill is cleanup, not successful durable STOP teardown.
+         * Callers must not treat this as fence/flush proof.
+         */
+        set_error(error, error_len,
+                  "admitted runtime required SIGKILL; STOP fence not proven");
+        return -EAGAIN;
     }
 }
 

@@ -1,0 +1,221 @@
+WaveVM R01-R08 修复复审 - Codex agent
+日期：2026-10-20
+审查基线：9981820c6b4fab39e80a04efd2b048322020dff4 + 当前工作区未提交修改
+输入：grok-r01-r08-fix-progress-2026-10-20.txt
+
+一、结论
+
+本轮有实质修复，但不能认定 R01-R08 已关闭，也不能认定 Minimum 只剩
+goal 6/7 与 Extended。仍有生产接线缺口及可复现回归。
+
+逐项判断：
+  R01：原跨 64 MiB chunk 读写错误已修，可关闭该具体反例。
+  R02：未关闭。新增 typed 消息没有打通 Mode B/fabric；READ 回包、重放及
+       去重语义还有错误。远端 FLUSH、FUA、存储身份等改动是有效进展。
+  R03：未关闭。保留计数没有生产释放路径，完成一次操作后就可能永久阻止
+       retire；最终 ACK 的 horizon 还会因先删除 scope 而归零。
+  R04：PARTIAL 合理，继续保持第二 Mode A 的拒绝门；不能把 RX 绑定及
+       有限重试认定为已经完整修复。
+  R05：未关闭。远端页安装阶段仍先开放公共映射 RW，原竞态窗口仍在。
+  R06：PARTIAL 合理。仍没有执行结果真正依赖远端页内容的 executor 小负载。
+  R07：未关闭且新增回归。真实 SIGSEGV 探测是进展，但 KVM 探测现在必失败。
+  R08：虚报完整覆盖的问题已纠正；真实覆盖为 37/52，完整双实现验证仍未完成。
+
+二、需要修复的问题，按影响排序
+
+[P1 / R07] 即使宿主 KVM 正常，生产 probe_kvm 也不可能成功
+
+位置：
+  common_include/wavevm_host_probe.c:186
+  common_include/wavevm_host_probe.c:214
+
+本轮删除了设置 WVM_HOST_PROBE_KVM_DIRTY_LOG 的旧逻辑，却仍在成功条件里
+要求该位。函数没有任何路径设置它，所以 API、CREATE_VM 全部成功也返回 -1。
+生产能力报告因此不提供可用 KVM，AUTO 会转 TCG，REQUIRE_KVM 会拒绝。
+
+直接调用实际生产 probe_kvm，以成功的 open/ioctl/close 替身复现：
+  successful mock API/CREATE_VM/extensions: probe_rc=-1 bits=0x5 dirty_bit=0 abi=12
+
+这是生产函数的合成宿主复现，不冒充真实机器上的 KVM 运行结果。
+
+修复方向：实现最小 memslot + GET_DIRTY_LOG 操作探测，按真实结果设置能力。
+不能恢复无证据置位，也不能以永久禁用 KVM 代替修复。正确的 KVM dirty/resync
+属于 Minimum；源码注释把这项基础操作探测推到 Extended 不符合当前纲领。
+
+[P1 / R02] MSG_BLOCK_TYPED 没有打通实际接收与规范 fabric 路径
+
+位置：
+  master_core/main_wrapper.c:1373
+  master_core/user_backend.c:880
+  master_core/user_backend.c:1329
+  slave_daemon/slave_hybrid.c:3649
+  slave_daemon/slave_hybrid.c:3684
+  common_include/wavevm_protocol.h:516
+
+main_wrapper 现在保留 typed block 请求字段，但外层仍是旧 36 字节 wvm_header，
+并不是 canonical wvm_envelope。换消息号不能补足 route scope、规范身份与摘要。
+请求结构仍是 u8 vm_id、u32 runtime_instance_id、u64 operation_id，不满足规范
+要求的完整身份及 128 位语义操作 ID。
+
+Mode B 的 is_slave_service_msg 没有加入 MSG_BLOCK_TYPED，远端请求不会按
+现有 slave 服务分流规则送入新增 handler。fractal 下 u_send_packet 直接拒绝
+旧头发送，所以“立即拒绝、不超时”只是安全失败，不是实现了分形存储服务。
+
+即使直接送到 slave worker，worker 已经 ntoh_header(h)，新增调用又对
+h->payload_len 做 ntohs，导致长度再次转换，可能错误拒绝合法包，或让 handler
+相信大于实际包体的长度。必须以实际接收字节数及解码后的长度一致校验。
+
+修复方向：补齐生产接收分流，并走已有规范 envelope/route dispatch；不要再用
+“typed”名称掩盖旧头旁路。flat/fractal 的合同不能靠 fractal 全拒绝来验收。
+
+[P1 / R02] 新 READ handler 的首包关联 ID 错误，重放又丢失数据
+
+位置：
+  slave_daemon/slave_hybrid.c:3319
+  slave_daemon/slave_hybrid.c:3355
+
+READ 分支复制已解码的 hdr，只对 magic/type/length 等部分字段转回网络序，
+req_id/slave_id/target_id/epoch 没有一致编码。首包关联 ID 因此被字节交换。
+同一 READ 命中结果缓存后，却调用仅发送包头的 handle_block_io_send_ack，
+没有保存并重放原 READ 数据，无法维持查询/重试的原结果语义。
+
+包含实际 slave_hybrid.c、调用实际 handle_block_typed_phys 的 UDP loopback
+复现结果如下；没有用测试自写 handler 替代生产函数：
+  READ pass=1 ack_bytes=564 decoded_req_id=8877665544332211 expected=1122334455667788 data_present=1
+  READ pass=2 ack_bytes=36 decoded_req_id=1122334455667788 expected=1122334455667788 data_present=0
+
+修复方向：统一 ACK 编码，并在保留期内保存 READ 原结果。重放必须返回原数据，
+不能只返回成功状态，也不能重新读盘后假称是原操作结果。
+
+[P1 / R02] 新 op-cache 不满足操作去重、冲突拒绝及保留期语义
+
+位置：
+  slave_daemon/slave_hybrid.c:3267
+  slave_daemon/slave_hybrid.c:3280
+  slave_daemon/slave_hybrid.c:3319
+  slave_daemon/slave_hybrid.c:3395
+
+缓存只按 operation_id 查找，没有完整 origin/VM/incarnation 身份。多个来源
+使用相同编号时可能被误判为同一请求。
+
+查缓存后先解锁再执行 I/O，没有 IN_FLIGHT 占位，并发重放可以同时执行。
+相同 operation_id 的摘要冲突会落入正常执行分支，不会被拒绝。
+op_id % 128 槽碰撞直接覆盖结果，没有尊重保留窗口。queue_sequence 没有用于
+处理操作顺序，新增发送路径也尚未形成真实的语义摘要计算与校验闭环。
+
+这些问题不需要等 guest 启动才存在。修复应复用现有操作身份、保留/查询及
+顺序机制，保留队列和批处理优化，不必另起一套完整存储引擎。
+
+[P1 / R03] pending_result_deadlines 是无到期机制的计数，生产 retire 会卡死
+
+位置：
+  common_include/wavevm_route_runtime.c:711
+  common_include/wavevm_route_runtime.c:739
+  common_include/wavevm_route_runtime.c:773
+  common_include/wavevm_route_control.c:725
+
+operation_ref_put 在 horizon 非零时增加 pending_result_deadlines；没有记录
+截止时间，也没有自然到期机制。query_retire_proof 要求该计数归零。
+新增 drain_result_deadlines 只有声明、定义和单测调用，没有生产调用方。
+因此一个已完成的内存操作就足以令后续 retire 一直拒绝，等待再久也不会恢复。
+
+此外，drain API 只检查 refs==0 就把计数清零，不验证 fence/flush 或到期证据。
+不能为使 STOP 通过就给生产路径补一个无条件清零调用。
+
+最后一个 scope 被 retire 删除之后，route_control 才查询 horizon，结果仍为 0，
+与“ROUTE_RETIRE ACK 报告真实保留窗口”的修复声明不符。
+
+复用生产 route runtime 及现有测试 fixture 的复现：
+  after completed op: refs=0 horizon_complete=0 horizon_ms=5000
+  after test-only drain + retire: retire_rc=0 horizon_ms=0
+
+修复方向：以实际保留截止时间或有证据的失效/清理完成驱动释放；把它接入生产
+STOP/retire，并在删除状态之前保留 ACK 所需证明。vCPU/block/cache 等参与路径
+的引用也仍未全部接通。SIGKILL 后返回 -EAGAIN 是合理的保守改进，应保留。
+
+[P1 / R05] “PROT_READ 安装”只发生在 memcpy 之后，竞态未关闭
+
+位置：
+  wavevm-qemu/accel/wavevm/wavevm-user-mem.c:1147
+  wavevm-qemu/accel/wavevm/wavevm-user-mem.c:1205
+
+request_page_sync 的 is_write 和 else 分支现在实际完全相同：
+  mprotect(公共页, READ|WRITE)
+  memcpy(公共页, 远端页)
+  mprotect(公共页, READ)
+  set_local_page_version(...)
+
+首次写触发远端取页后，仍会在复制及建立 pre-image 之前让其他 CPU/设备线程
+看到可写公共映射。并发写入可能被 memcpy 覆盖，或进入后续 pre-image 而丢失
+应提交的差异。末尾再设为只读不能撤销前面的可写窗口。
+
+修复方向：安装数据时使用不向 guest 写线程开放的途径，或以真正约束所有
+写入者的同步边界保证页内容、版本和 pre-image 建立后再开放写权限。不能只改
+注释或最终 mprotect 状态。该项是源码可确认的竞态，未声称做过并发实机复现。
+
+[P1 / R04] RX 临时绑定未恢复被中断任务上下文；重试耗尽仍丢唯一 diff
+
+位置：
+  master_core/kernel_backend.c:2284
+  master_core/kernel_backend.c:1829
+  master_core/kernel_backend.c:1856
+  master_core/kernel_backend.c:3018
+
+RX 调用 wvm_set_active_context(context) 后无条件 clear。它可能在软中断里
+打断已经绑定 context 的 fault/ioctl/committer 任务；返回时没有恢复此前绑定，
+被中断任务继续运行后就失去原上下文。需要显式 context 或正确的嵌套保存/恢复。
+新增一次 set/clear 不等于证明隐式 context 链已经安全。
+
+diff 发送失败重排队是进步，但达到重试上限后直接释放 task/pre_image，只记录日志，
+没有可靠保留，也没有令受影响 VM 显式暂停/失败。VM 继续运行不能算提交成功。
+应保留可恢复的待提交信息或对该 VM 明确失败，不能静默遗失唯一 pre-image。
+
+新增 vm_ops.open 的 VMA 引用配对可接受为源码修复；没有在本轮重载模块验证。
+完整 u32 VM 身份仍未支持，第二 Mode A 拒绝门必须继续保持。
+
+三、其余两项的真实边界
+
+R06：
+  slave_daemon/slave_hybrid.c:1475、:1707
+  ensure_remote_memory_side_effect 仍把任意远端页读入一个不参与指令执行的
+  局部数组。helper 不再把 ENOTCONN 当成功，但调用方仍消化其错误后继续。
+  没有证据表明实际 KVM/TCG 指令执行依赖该远端页。现有 wiring 测试的 PASS
+  不能替代远端依赖的小指令负载；这可以在完整 guest 矩阵之前完成。
+
+R08：
+  本轮移除了 15 个 TLV 对自身比较的伪双实现项，实际报告 37/52 PARTIAL。
+  “报告不再虚标完成”可以关闭；“所有 canonical 类型验证完成”不能关闭。
+  后续补真实双实现 fixture 即可，不需要因此重构整个序列化体系。
+
+四、本轮验证与限制
+
+已运行并通过：
+  tests/control-plane/test_typed_block_authority.sh
+  tests/control-plane/test_route_runtime.sh
+  tests/control-plane/test_stop_retire_ack_f5.sh
+  tests/control-plane/test_host_probe.sh
+  tests/control-plane/test_canonical_registry_coverage.sh（正确报告 PARTIAL 37/52）
+
+main_wrapper.c 与 slave_hybrid.c 的编译器语法检查通过，有警告；这不代表完整
+node runtime/QEMU 重建或运行验收。
+
+另运行了上述三个小复现：实际 typed READ handler、实际 KVM probe、实际 route
+runtime。前两者分别暴露回包/重放回归和 KVM 永不可用，后者暴露保留期不释放及
+删除后 horizon 丢失。临时源码和产物位于：
+  /tmp/wavevm-codex-rereview.3pCTvv
+这些产物很小，未生成大型日志或 guest 磁盘。
+
+现有 typed-block 测试主要通过测试内的等效 handler 和源码字符串 oracle 验证，
+没有覆盖新生产 handler 的 ACK 编码与重放分支，因此脚本 PASS 与上述失败并存。
+后续只需把关键反例加入实际生产路径的针对性验证，不建议再扩张大量镜像测试。
+
+没有重载内核模块，没有运行 guest E2E，没有推送或修改项目实现。
+本报告是 R01-R08 的增量复审，不是对整个仓库其余部分重新出具完整正确性保证。
+
+五、建议的下一轮收口
+
+先关闭本轮引入的确定性回归：KVM 探测、typed 接收分流/长度、READ ACK/重放。
+接着闭合真实 canonical storage 操作及其去重/保留语义，修复 retire 的生产释放
+与证明保存，关闭公共页安装的写入窗口和 Mode A 上下文/diff 丢失问题。
+R06 保持 PARTIAL，R08 保持真实覆盖率；不要把它们归为 Extended 或靠标题改名
+宣布完成。每条生产路径改完做少量直接验证，再进入下一条。
