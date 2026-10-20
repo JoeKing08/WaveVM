@@ -156,6 +156,48 @@ static int probe_userfaultfd(void)
     return 0;
 }
 
+static int probe_kvm_dirty_log(int vm_fd)
+{
+    struct kvm_userspace_memory_region region;
+    struct kvm_dirty_log dirty_log;
+    uint64_t dirty_bitmap = 0;
+    size_t page_size;
+    void *page;
+    int rc = -1;
+
+    page_size = (size_t)sysconf(_SC_PAGESIZE);
+    if (page_size == 0 || page_size > (1U << 20)) {
+        return -1;
+    }
+    page = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        return -1;
+    }
+
+    memset(&region, 0, sizeof(region));
+    region.slot = 0;
+    region.flags = KVM_MEM_LOG_DIRTY_PAGES;
+    region.guest_phys_addr = 0;
+    region.memory_size = page_size;
+    region.userspace_addr = (uint64_t)(uintptr_t)page;
+    if (ioctl(vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
+        goto out;
+    }
+
+    memset(&dirty_log, 0, sizeof(dirty_log));
+    dirty_log.slot = region.slot;
+    dirty_log.dirty_bitmap = &dirty_bitmap;
+    if (ioctl(vm_fd, KVM_GET_DIRTY_LOG, &dirty_log) < 0) {
+        goto out;
+    }
+    rc = 0;
+
+out:
+    munmap(page, page_size);
+    return rc;
+}
+
 static int probe_kvm(uint64_t *feature_bits, uint32_t *abi_version)
 {
     int kvm_fd;
@@ -177,24 +219,13 @@ static int probe_kvm(uint64_t *feature_bits, uint32_t *abi_version)
     *feature_bits |= WVM_HOST_PROBE_KVM_API;
 
     /*
-     * Dirty-log capture needs a usable KVM VM + dirty-log related caps.
-     * Probe CREATE_VM and at least one dirty-log-related extension when
-     * present; absence of the extension still allows API+CREATE evidence
-     * but leaves DIRTY_LOG bit clear so admission can fail-closed for KVM
-     * dirty path until Extended engines land.
+     * Dirty-log capture needs API, VM creation, and a real memslot +
+     * KVM_GET_DIRTY_LOG operation. Optional dirty-ring capabilities are not a
+     * substitute for probing the baseline ioctl used by the KVM path.
      */
     vm_fd = ioctl(kvm_fd, KVM_CREATE_VM, 0);
     if (vm_fd >= 0) {
         *feature_bits |= WVM_HOST_PROBE_KVM_CREATE_VM;
-        /*
-         * R07: MANUAL_DIRTY_LOG_PROTECT2 / DIRTY_LOG_RING are optional
-         * accelerators, not proof that KVM_GET_DIRTY_LOG works. Keep them as
-         * diagnostic-only notes in the probe log path; do not set
-         * WVM_HOST_PROBE_KVM_DIRTY_LOG from these alone. Basic dirty-log
-         * availability remains unset until a memslot+GET_DIRTY_LOG op probe
-         * lands (Extended). CREATE_VM evidence stays below.
-         */
-        (void)0;
 #ifdef KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2
         (void)ioctl(kvm_fd, KVM_CHECK_EXTENSION,
                     KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2);
@@ -202,11 +233,9 @@ static int probe_kvm(uint64_t *feature_bits, uint32_t *abi_version)
 #ifdef KVM_CAP_DIRTY_LOG_RING
         (void)ioctl(kvm_fd, KVM_CHECK_EXTENSION, KVM_CAP_DIRTY_LOG_RING);
 #endif
-        /*
-         * R07: Do NOT treat KVM_CAP_SYNC_MMU or optional dirty-log accelerators
-         * as KVM_GET_DIRTY_LOG proof. DIRTY_LOG bit stays clear until a real
-         * memslot+GET_DIRTY_LOG operation probe exists.
-         */
+        if (probe_kvm_dirty_log(vm_fd) == 0) {
+            *feature_bits |= WVM_HOST_PROBE_KVM_DIRTY_LOG;
+        }
         close(vm_fd);
         vm_fd = -1;
     }
