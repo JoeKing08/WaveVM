@@ -280,6 +280,34 @@ static int validate_memory_dispatch(
     return 0;
 }
 
+static int validate_storage_dispatch(
+    const struct wvm_runtime_storage_dispatch_list *list,
+    uint16_t topology_kind, char *error, size_t error_len)
+{
+    size_t i;
+
+    if (!list || (list->count != 0 && !list->entries) ||
+        list->count > list->capacity ||
+        list->count > WVM_STORAGE_ROUTE_TABLE_SIZE) {
+        set_error(error, error_len, "runtime storage dispatch list is invalid");
+        return -1;
+    }
+    for (i = 0; i < list->count; i++) {
+        const struct wvm_runtime_storage_dispatch *entry = &list->entries[i];
+
+        if (route_destination_validate(&entry->storage, topology_kind, error,
+                                       error_len) != 0 ||
+            entry->storage_physical_node_id == 0 ||
+            entry->storage_node_instance_id == 0 ||
+            (i != 0 && list->entries[i - 1].device_index >= entry->device_index)) {
+            set_error(error, error_len,
+                      "runtime storage dispatch entry is invalid");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 void wvm_runtime_dispatch_storage_init(
     struct wvm_runtime_dispatch_storage *storage)
 {
@@ -296,6 +324,7 @@ void wvm_runtime_dispatch_storage_free(
     }
     free(storage->cpu_entries);
     free(storage->memory_entries);
+    free(storage->storage_entries);
     memset(storage, 0, sizeof(*storage));
 }
 
@@ -329,7 +358,10 @@ int wvm_runtime_dispatch_projection_validate(
                               error_len) != 0 ||
         validate_memory_dispatch(&projection->memory_dispatch,
                                  projection->route_topology_kind, error,
-                                 error_len) != 0) {
+                                 error_len) != 0 ||
+        validate_storage_dispatch(&projection->storage_dispatch,
+                                  projection->route_topology_kind, error,
+                                  error_len) != 0) {
         set_error(error, error_len, "runtime dispatch projection is invalid");
         return -1;
     }
@@ -348,6 +380,7 @@ int wvm_runtime_dispatch_projection_build(
     const struct wvm_route_rule_record *local_route;
     struct wvm_runtime_cpu_dispatch_list cpu_dispatch;
     struct wvm_runtime_memory_dispatch_list memory_dispatch;
+    struct wvm_runtime_storage_dispatch_list storage_dispatch;
     struct wvm_runtime_route_destination local_primary;
     size_t i;
 
@@ -375,8 +408,12 @@ int wvm_runtime_dispatch_projection_build(
         candidate->vcpu_placements.count > projection->cpu_dispatch.capacity ||
         candidate->memory_placements.count >
             projection->memory_dispatch.capacity ||
+        candidate->storage_device_plan.assignments.count >
+            projection->storage_dispatch.capacity ||
         !projection->cpu_dispatch.entries ||
-        !projection->memory_dispatch.entries) {
+        !projection->memory_dispatch.entries ||
+        (projection->storage_dispatch.capacity != 0 &&
+         !projection->storage_dispatch.entries)) {
         set_error(error, error_len,
                   "cannot build runtime dispatch projection");
         return -1;
@@ -401,11 +438,14 @@ int wvm_runtime_dispatch_projection_build(
 
     cpu_dispatch = projection->cpu_dispatch;
     memory_dispatch = projection->memory_dispatch;
+    storage_dispatch = projection->storage_dispatch;
     memset(projection, 0, sizeof(*projection));
     projection->cpu_dispatch = cpu_dispatch;
     projection->memory_dispatch = memory_dispatch;
+    projection->storage_dispatch = storage_dispatch;
     projection->cpu_dispatch.count = 0;
     projection->memory_dispatch.count = 0;
+    projection->storage_dispatch.count = 0;
     memcpy(projection->candidate_manifest_digest,
            runtime_manifest->candidate_manifest_digest,
            sizeof(projection->candidate_manifest_digest));
@@ -486,6 +526,35 @@ int wvm_runtime_dispatch_projection_build(
                 .consistency_policy = assignment->consistency_policy,
             };
     }
+    for (i = 0; i < candidate->storage_device_plan.assignments.count; i++) {
+        const struct wvm_storage_assignment *assignment =
+            &candidate->storage_device_plan.assignments.entries[i];
+        struct wvm_runtime_route_destination storage;
+        const struct wvm_node_record *storage_node;
+
+        storage_node = find_node(records, assignment->storage_physical_node_id);
+        if (!storage_node || storage_node->node_instance_id == 0 ||
+            primary_destination_for_node(
+                records, assignment->storage_physical_node_id,
+                route_snapshot->topology_kind, &storage, error,
+                error_len) != 0 ||
+            !find_exact_route(route_snapshot, storage.destination_scope,
+                              storage.destination_vnode)) {
+            set_error(error, error_len,
+                      "storage device %u has no admitted runtime route",
+                      assignment->device_index);
+            return -1;
+        }
+        projection->storage_dispatch.entries[
+            projection->storage_dispatch.count++] =
+            (struct wvm_runtime_storage_dispatch){
+                .device_index = assignment->device_index,
+                .storage_physical_node_id =
+                    assignment->storage_physical_node_id,
+                .storage_node_instance_id = storage_node->node_instance_id,
+                .storage = storage,
+            };
+    }
     return wvm_runtime_dispatch_projection_validate(projection, error,
                                                     error_len);
 }
@@ -542,6 +611,35 @@ const struct wvm_runtime_memory_dispatch *wvm_runtime_dispatch_find_memory(
         }
     }
     return NULL;
+}
+
+static int encode_storage_list(
+    const struct wvm_runtime_storage_dispatch_list *list, uint8_t *bytes,
+    size_t byte_count)
+{
+    size_t i;
+
+    if (!list || !bytes ||
+        byte_count != sizeof(uint32_t) +
+                          list->count *
+                              WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES ||
+        list->count > UINT32_MAX) {
+        return -1;
+    }
+    write_be32(bytes, (uint32_t)list->count);
+    for (i = 0; i < list->count; i++) {
+        const struct wvm_runtime_storage_dispatch *source = &list->entries[i];
+        uint8_t *entry = bytes + sizeof(uint32_t) +
+                         i * WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES;
+
+        write_be32(entry, source->device_index);
+        write_be32(entry + 4, source->storage_physical_node_id);
+        write_be64(entry + 8, source->storage_node_instance_id);
+        write_be16(entry + 16, source->storage.destination_kind);
+        write_be64(entry + 18, source->storage.destination_scope);
+        write_be32(entry + 26, source->storage.destination_vnode);
+    }
+    return 0;
 }
 
 static int encode_cpu_list(const struct wvm_runtime_cpu_dispatch_list *list,
@@ -617,6 +715,7 @@ int wvm_runtime_dispatch_projection_encode(
     size_t endpoint_byte_count;
     size_t cpu_byte_count;
     size_t memory_byte_count;
+    size_t storage_byte_count;
 
     if (wvm_runtime_dispatch_projection_validate(projection, error,
                                                  error_len) != 0 ||
@@ -625,14 +724,21 @@ int wvm_runtime_dispatch_projection_encode(
                 WVM_RUNTIME_DISPATCH_CPU_ENTRY_BYTES ||
         projection->memory_dispatch.count >
             (SIZE_MAX - sizeof(uint32_t)) /
-                WVM_RUNTIME_DISPATCH_MEMORY_ENTRY_BYTES) {
+                WVM_RUNTIME_DISPATCH_MEMORY_ENTRY_BYTES ||
+        projection->storage_dispatch.count >
+            (SIZE_MAX - sizeof(uint32_t)) /
+                WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES) {
         return -1;
     }
     cpu_byte_count = sizeof(uint32_t) + projection->cpu_dispatch.count *
                                              WVM_RUNTIME_DISPATCH_CPU_ENTRY_BYTES;
     memory_byte_count = sizeof(uint32_t) + projection->memory_dispatch.count *
                                                 WVM_RUNTIME_DISPATCH_MEMORY_ENTRY_BYTES;
+    storage_byte_count =
+        sizeof(uint32_t) + projection->storage_dispatch.count *
+                               WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES;
     if (cpu_byte_count > UINT32_MAX || memory_byte_count > UINT32_MAX ||
+        storage_byte_count > UINT32_MAX ||
         wvm_route_snapshot_key_encode(
             &projection->required_route_snapshot_key, route_key_bytes,
             sizeof(route_key_bytes), &route_key_byte_count, error,
@@ -686,6 +792,10 @@ int wvm_runtime_dispatch_projection_encode(
                                     &field_value) != 0 ||
         encode_memory_list(&projection->memory_dispatch, field_value,
                            memory_byte_count) != 0 ||
+        wvm_canonical_field_reserve(&builder, 16, (uint32_t)storage_byte_count,
+                                    &field_value) != 0 ||
+        encode_storage_list(&projection->storage_dispatch, field_value,
+                            storage_byte_count) != 0 ||
         wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
         set_error(error, error_len, "cannot finish runtime dispatch projection");
         return -1;
@@ -694,8 +804,8 @@ int wvm_runtime_dispatch_projection_encode(
 }
 
 static int collect_fields(const uint8_t *bytes, size_t encoded_bytes,
-                          struct wvm_canonical_field fields[16],
-                          unsigned char present[16], char *error,
+                          struct wvm_canonical_field fields[17],
+                          unsigned char present[17], char *error,
                           size_t error_len)
 {
     struct wvm_canonical_record record;
@@ -708,10 +818,10 @@ static int collect_fields(const uint8_t *bytes, size_t encoded_bytes,
         set_error(error, error_len, "runtime dispatch record is malformed");
         return -1;
     }
-    memset(fields, 0, sizeof(struct wvm_canonical_field) * 16);
-    memset(present, 0, 16);
+    memset(fields, 0, sizeof(struct wvm_canonical_field) * 17);
+    memset(present, 0, 17);
     while ((next = wvm_canonical_record_next(&record, &offset, &field)) == 1) {
-        if (field.tag == 0 || field.tag > 15 || present[field.tag]) {
+        if (field.tag == 0 || field.tag > 16 || present[field.tag]) {
             set_error(error, error_len,
                       "runtime dispatch record has an unknown field");
             return -1;
@@ -723,7 +833,7 @@ static int collect_fields(const uint8_t *bytes, size_t encoded_bytes,
         set_error(error, error_len, "runtime dispatch record is malformed");
         return -1;
     }
-    for (size_t i = 1; i <= 15; i++) {
+    for (size_t i = 1; i <= 16; i++) {
         if (!present[i]) {
             set_error(error, error_len,
                       "runtime dispatch record misses field %zu", i);
@@ -777,6 +887,34 @@ static int decode_cpu_list(const struct wvm_canonical_field *field,
     return 0;
 }
 
+static int decode_storage_list(
+    const struct wvm_canonical_field *field,
+    struct wvm_runtime_storage_dispatch_list *list)
+{
+    size_t count;
+    size_t i;
+
+    if (!list ||
+        list_count(field, WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES,
+                   WVM_STORAGE_ROUTE_TABLE_SIZE, &count) != 0 ||
+        count > list->capacity || (count != 0 && !list->entries)) {
+        return -1;
+    }
+    list->count = count;
+    for (i = 0; i < count; i++) {
+        const uint8_t *entry = field->value + sizeof(uint32_t) +
+                               i * WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES;
+
+        list->entries[i].device_index = read_be32(entry);
+        list->entries[i].storage_physical_node_id = read_be32(entry + 4);
+        list->entries[i].storage_node_instance_id = read_be64(entry + 8);
+        list->entries[i].storage.destination_kind = read_be16(entry + 16);
+        list->entries[i].storage.destination_scope = read_be64(entry + 18);
+        list->entries[i].storage.destination_vnode = read_be32(entry + 26);
+    }
+    return 0;
+}
+
 static int decode_memory_list(
     const struct wvm_canonical_field *field,
     struct wvm_runtime_memory_dispatch_list *list)
@@ -815,10 +953,11 @@ int wvm_runtime_dispatch_projection_decode(
     struct wvm_runtime_dispatch_projection *projection, char *error,
     size_t error_len)
 {
-    struct wvm_canonical_field fields[16];
-    unsigned char present[16];
+    struct wvm_canonical_field fields[17];
+    unsigned char present[17];
     struct wvm_runtime_cpu_dispatch_list cpu_dispatch;
     struct wvm_runtime_memory_dispatch_list memory_dispatch;
+    struct wvm_runtime_storage_dispatch_list storage_dispatch;
 
     if (!projection ||
         collect_fields(bytes, encoded_bytes, fields, present, error,
@@ -835,9 +974,11 @@ int wvm_runtime_dispatch_projection_decode(
     }
     cpu_dispatch = projection->cpu_dispatch;
     memory_dispatch = projection->memory_dispatch;
+    storage_dispatch = projection->storage_dispatch;
     memset(projection, 0, sizeof(*projection));
     projection->cpu_dispatch = cpu_dispatch;
     projection->memory_dispatch = memory_dispatch;
+    projection->storage_dispatch = storage_dispatch;
     memcpy(projection->candidate_manifest_digest, fields[1].value,
            sizeof(projection->candidate_manifest_digest));
     projection->vm_id = read_be32(fields[2].value);
@@ -858,7 +999,8 @@ int wvm_runtime_dispatch_projection_decode(
                             &projection->local_sidecar_endpoint, error,
                             error_len) != 0 ||
         decode_cpu_list(&fields[14], &projection->cpu_dispatch) != 0 ||
-        decode_memory_list(&fields[15], &projection->memory_dispatch) != 0) {
+        decode_memory_list(&fields[15], &projection->memory_dispatch) != 0 ||
+        decode_storage_list(&fields[16], &projection->storage_dispatch) != 0) {
         set_error(error, error_len, "runtime dispatch list decoding failed");
         return -1;
     }
@@ -1056,16 +1198,19 @@ out:
 }
 
 static int find_dispatch_list_counts(const uint8_t *bytes, size_t byte_count,
-                                     size_t *cpu_count, size_t *memory_count)
+                                     size_t *cpu_count, size_t *memory_count,
+                                     size_t *storage_count)
 {
-    struct wvm_canonical_field fields[16];
-    unsigned char present[16];
+    struct wvm_canonical_field fields[17];
+    unsigned char present[17];
 
     if (collect_fields(bytes, byte_count, fields, present, NULL, 0) != 0 ||
         list_count(&fields[14], WVM_RUNTIME_DISPATCH_CPU_ENTRY_BYTES,
                    WVM_CPU_ROUTE_TABLE_SIZE, cpu_count) != 0 ||
         list_count(&fields[15], WVM_RUNTIME_DISPATCH_MEMORY_ENTRY_BYTES,
-                   WVM_MEMORY_ROUTE_TABLE_SIZE, memory_count) != 0) {
+                   WVM_MEMORY_ROUTE_TABLE_SIZE, memory_count) != 0 ||
+        list_count(&fields[16], WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES,
+                   WVM_STORAGE_ROUTE_TABLE_SIZE, storage_count) != 0) {
         return -1;
     }
     return 0;
@@ -1079,6 +1224,7 @@ int wvm_runtime_dispatch_file_load(
     uint8_t *bytes = NULL;
     size_t cpu_count;
     size_t memory_count;
+    size_t storage_count;
     int fd = -1;
     int result = -1;
 
@@ -1107,7 +1253,7 @@ int wvm_runtime_dispatch_file_load(
     }
     fd = -1;
     if (find_dispatch_list_counts(bytes, (size_t)st.st_size, &cpu_count,
-                                  &memory_count) != 0) {
+                                  &memory_count, &storage_count) != 0) {
         set_error(error, error_len, "runtime dispatch list layout is invalid");
         goto out;
     }
@@ -1116,7 +1262,11 @@ int wvm_runtime_dispatch_file_load(
                                   sizeof(*storage->cpu_entries));
     storage->memory_entries = calloc(memory_count ? memory_count : 1,
                                      sizeof(*storage->memory_entries));
-    if (!storage->cpu_entries || !storage->memory_entries) {
+    storage->storage_entries =
+        calloc(storage_count ? storage_count : 1,
+               sizeof(*storage->storage_entries));
+    if (!storage->cpu_entries || !storage->memory_entries ||
+        !storage->storage_entries) {
         set_error(error, error_len, "cannot allocate runtime dispatch lists");
         goto out;
     }
@@ -1124,6 +1274,8 @@ int wvm_runtime_dispatch_file_load(
     storage->projection.cpu_dispatch.capacity = cpu_count;
     storage->projection.memory_dispatch.entries = storage->memory_entries;
     storage->projection.memory_dispatch.capacity = memory_count;
+    storage->projection.storage_dispatch.entries = storage->storage_entries;
+    storage->projection.storage_dispatch.capacity = storage_count;
     if (wvm_runtime_dispatch_projection_decode(
             bytes, (size_t)st.st_size, &storage->projection, error,
             error_len) != 0) {

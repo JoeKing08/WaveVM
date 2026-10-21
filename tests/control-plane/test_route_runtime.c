@@ -2,8 +2,18 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "wavevm_route_runtime.h"
+
+static int test_sleep_ms(unsigned int milliseconds)
+{
+    struct timespec delay;
+
+    delay.tv_sec = (time_t)(milliseconds / 1000U);
+    delay.tv_nsec = (long)(milliseconds % 1000U) * 1000000L;
+    return nanosleep(&delay, NULL) == 0 ? 0 : 1;
+}
 
 static int expect(int condition, const char *message)
 {
@@ -343,6 +353,11 @@ int main(void)
             fprintf(stderr, "route-runtime A05 setup: %s\n", proof_error);
             return 1;
         }
+        /*
+         * R03: the proof is time-based, so use a short admitted window rather
+         * than sleeping for the default 5s fixture horizon.
+         */
+        snap.operation_retention_horizon_ms = 60;
         wvm_route_runtime_init(&proof_runtime);
         if (expect(wvm_route_runtime_prepare(&proof_runtime, &snap, proof_error,
                                              sizeof(proof_error)) == 0 &&
@@ -380,8 +395,13 @@ int main(void)
                    "A05 retire blocked while retention deadlines remain") ||
             expect(wvm_route_runtime_drain_result_deadlines(
                        &proof_runtime, &snap.route_snapshot_key.scope_key,
+                       proof_error, sizeof(proof_error)) != 0,
+                   "R03 drain refused while the retention window is open") ||
+            test_sleep_ms(80) ||
+            expect(wvm_route_runtime_drain_result_deadlines(
+                       &proof_runtime, &snap.route_snapshot_key.scope_key,
                        proof_error, sizeof(proof_error)) == 0,
-                   "A05 drain result retention deadlines") ||
+                   "R03 drain succeeds after the retention window") ||
             expect(wvm_route_runtime_query_retire_proof(
                        &proof_runtime, &snap.route_snapshot_key, &refs, &horizon,
                        proof_error, sizeof(proof_error)) == 0 &&
@@ -459,6 +479,19 @@ int main(void)
                 }
                 wvm_route_runtime_destroy(&race_runtime);
                 return 1;
+            }
+        }
+        /*
+         * Make sure the lookup threads actually started before the generation
+         * flip; otherwise a slow scheduler can produce zero samples and the
+         * race test fails without exercising anything.
+         */
+        {
+            unsigned int spins = 0;
+
+            while (atomic_load(&race.samples) == 0 && spins < 100000000U) {
+                __builtin_ia32_pause();
+                spins++;
             }
         }
         /* Flip active generation under concurrent lookups. */

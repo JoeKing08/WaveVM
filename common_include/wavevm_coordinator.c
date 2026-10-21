@@ -866,9 +866,6 @@ int wvm_coordinator_prepare(
         bytes_are_zero(transaction->manifest_id, sizeof(transaction->manifest_id)) ||
         wvm_vm_route_scope_key_validate(&transaction->route_scope_key, error,
                                         error_len) != 0 ||
-        /* Keep remote storage closed until identity, replay, ordering and
-         * persistence are verified across the complete typed execution path. */
-        request->storage_device_plan.assignments.count != 0 ||
         wvm_machine_config_validate(&options->guest_machine, error,
                                     error_len) != 0 ||
         wvm_execution_fault_profile_validate(&options->execution_profile, error,
@@ -949,6 +946,15 @@ int wvm_coordinator_prepare(
     placement_options.route_scope_key = transaction->route_scope_key;
     placement_options.listener_plans = options->node_listener_plans;
     placement_options.listener_plan_count = options->node_listener_plan_count;
+    /*
+     * Device contracts are placed on the VM host node. The planner rejects
+     * explicit remote pins, so remote storage remains closed while local
+     * devices travel the same typed admission projection as CPU and memory.
+     */
+    placement_options.storage_templates =
+        request->storage_device_plan.assignments.entries;
+    placement_options.storage_template_count =
+        request->storage_device_plan.assignments.count;
     if (wvm_admission_placement_plan_build(
             &constrained_snapshot.admission, &admission_request,
             &prepared_vm->admission_plan, prepared_vm->fence.fence_digest,

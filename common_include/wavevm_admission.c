@@ -1264,7 +1264,10 @@ int wvm_admission_placement_plan_build(
     if (!vcpus.entries || vcpus.capacity < request->requested_vcpu_slots ||
         !memory.entries || memory.capacity < required_memory_assignments ||
         requirements.capacity < admission_plan->reservation_count ||
-        (requirements.capacity != 0 && !requirements.entries)) {
+        (requirements.capacity != 0 && !requirements.entries) ||
+        (options->storage_template_count != 0 &&
+         (!storage.entries ||
+          storage.capacity < options->storage_template_count))) {
         set_error(error, error_len, "placement plan output buffers are too small");
         return -1;
     }
@@ -1395,9 +1398,56 @@ int wvm_admission_placement_plan_build(
             memory_index++;
         }
     }
+    if (options->storage_template_count != 0) {
+        const struct wvm_reservation_requirement *host_requirement = NULL;
+        uint32_t previous_device = 0;
+
+        for (i = 0; i < placement_plan->reservation_requirements.count; i++) {
+            if (placement_plan->reservation_requirements.entries[i]
+                    .physical_node_id ==
+                admission_plan->host_physical_node_id) {
+                host_requirement =
+                    &placement_plan->reservation_requirements.entries[i];
+                break;
+            }
+        }
+        if (!host_requirement) {
+            set_error(error, error_len,
+                      "placement storage host requirement is missing");
+            return -1;
+        }
+        for (i = 0; i < options->storage_template_count; i++) {
+            const struct wvm_storage_assignment *template =
+                &options->storage_templates[i];
+            struct wvm_storage_assignment *assignment = &storage.entries[i];
+
+            if (template->backend_kind == 0 ||
+                digest_is_zero(template->device_contract_digest) ||
+                (i != 0 && previous_device >= template->device_index) ||
+                (template->storage_physical_node_id != 0 &&
+                 template->storage_physical_node_id !=
+                     admission_plan->host_physical_node_id)) {
+                set_error(error, error_len,
+                          "storage device contract is invalid or remote");
+                return -1;
+            }
+            previous_device = template->device_index;
+            memset(assignment, 0, sizeof(*assignment));
+            assignment->device_index = template->device_index;
+            assignment->storage_physical_node_id =
+                admission_plan->host_physical_node_id;
+            assignment->backend_kind = template->backend_kind;
+            memcpy(assignment->reservation_id, host_requirement->reservation_id,
+                   sizeof(assignment->reservation_id));
+            memcpy(assignment->device_contract_digest,
+                   template->device_contract_digest,
+                   sizeof(assignment->device_contract_digest));
+        }
+        storage.count = options->storage_template_count;
+    }
     placement_plan->vcpu_assignments.count = vcpu_index;
     placement_plan->memory_assignments.count = memory_index;
-    placement_plan->storage_assignments.count = 0;
+    placement_plan->storage_assignments.count = storage.count;
 
     if (vcpu_index != request->requested_vcpu_slots ||
         gpa_start != request->requested_memory_bytes) {

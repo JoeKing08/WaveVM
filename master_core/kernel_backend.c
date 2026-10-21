@@ -162,6 +162,14 @@ struct wvm_kernel_context {
 
     /* Per-context dirty-commit queue (was shared on g_module_transport). */
     struct list_head diff_queue;
+    /*
+     * R04: commits that exhausted their retry budget.  The unique pre-image is
+     * retained here (never silently dropped); the context records the failure
+     * so a later teardown/diagnostic can see it.
+     */
+    struct list_head failed_diffs;
+    unsigned int failed_diff_count;
+    int diff_failure;
     spinlock_t diff_lock;
 };
 
@@ -527,6 +535,7 @@ static struct wvm_kernel_context *wvm_kernel_allocate_context(uint32_t vm_id)
     }
     ctx->transport = g_module_transport;
     INIT_LIST_HEAD(&ctx->diff_queue);
+    INIT_LIST_HEAD(&ctx->failed_diffs);
     spin_lock_init(&ctx->diff_lock);
     INIT_RADIX_TREE(&ctx->page_tree, GFP_ATOMIC);
     spin_lock_init(&ctx->page_tree_lock);
@@ -612,6 +621,8 @@ static void wvm_drain_context_diff_tasks(struct wvm_kernel_context *ctx)
         return;
     spin_lock_bh(&ctx->diff_lock);
     list_splice_init(&ctx->diff_queue, &local);
+    list_splice_init(&ctx->failed_diffs, &local);
+    ctx->failed_diff_count = 0;
     spin_unlock_bh(&ctx->diff_lock);
 
     list_for_each_entry_safe(task, tmp, &local, list) {
@@ -1852,15 +1863,24 @@ static int committer_thread_fn(void *data) {
                             atomic_inc(&g_diff_pending);
                             wake_up_interruptible(&g_diff_wq);
                         } else {
+                            /*
+                             * R04: never free the only pre-image while the VM
+                             * keeps running.  Park the task (data, page and
+                             * context ref included) on the context's failed
+                             * list and record the failure for teardown.
+                             */
                             pr_err_ratelimited(
-                                "wavevm: diff commit abandoned gpa=0x%llx "
-                                "after %u retries\n",
-                                (unsigned long long)task->gpa,
+                                "wavevm: diff commit failed permanently "
+                                "gpa=0x%llx rc=%d after %u retries; "
+                                "retaining pre-image\n",
+                                (unsigned long long)task->gpa, send_rc,
                                 task->send_retries);
-                            vfree(task->pre_image);
-                            put_page(task->page);
-                            wvm_kernel_put_context(task->context);
-                            kfree(task);
+                            task->context->diff_failure = send_rc;
+                            spin_lock_bh(&task->context->diff_lock);
+                            list_add_tail(&task->list,
+                                          &task->context->failed_diffs);
+                            task->context->failed_diff_count++;
+                            spin_unlock_bh(&task->context->diff_lock);
                         }
                         continue;
                     }
@@ -2281,9 +2301,16 @@ static void internal_process_single_packet(
     // R04/A01: bind RX context into the implicit WVM_CURRENT_VM_ID() chain.
     {
         uint32_t src_id = ntohl(hdr->slave_id);
+        /*
+         * R04: this runs from the socket softirq and may interrupt a task that
+         * already bound another context (fault/ioctl/committer).  Save and
+         * restore the previous binding instead of clearing it unconditionally.
+         */
+        struct wvm_kernel_context *previous = wvm_active_context();
+
         wvm_set_active_context(context);
         wvm_logic_process_packet(hdr, payload, src_id);
-        wvm_clear_active_context();
+        wvm_set_active_context(previous);
     }
 }
 

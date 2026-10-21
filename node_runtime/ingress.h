@@ -52,6 +52,10 @@ struct wvm_ingress_config {
     void *vcpu_dispatch_opaque;
     wvm_ingress_dispatch_fn vcpu_result_dispatch;
     void *vcpu_result_dispatch_opaque;
+    wvm_ingress_dispatch_fn block_dispatch;
+    void *block_dispatch_opaque;
+    wvm_ingress_dispatch_fn block_result_dispatch;
+    void *block_result_dispatch_opaque;
     wvm_ingress_control_dispatch_fn control_dispatch;
     void *control_dispatch_opaque;
 };

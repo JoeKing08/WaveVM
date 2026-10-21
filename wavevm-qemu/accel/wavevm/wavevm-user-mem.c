@@ -97,6 +97,8 @@ static long wait_for_directory_ack_safe(void);
 static int internal_connect_master(void);
 static int internal_connect_master_role(uint32_t role);
 static int ensure_local_shm_shadow(void);
+static int install_page_bytes(uint64_t gpa, uintptr_t aligned_addr,
+                              const uint8_t *data, int is_write);
 static void send_diff_via_ipc(void *buf, size_t len);
 static int write_all_fd(int fd, const void *buf, size_t len);
 static void flush_aggregator(void);
@@ -1093,6 +1095,55 @@ static void kvm_proactive_page_fetch(uint64_t gpa)
 // [链路 A] 同步缺页处理 (Master IPC / Slave UDP)
 // =============================================================
 
+/*
+ * R05: publish remote page bytes without ever exposing the guest mapping as
+ * writable on the authoritative multi-vCPU process.
+ *
+ * Master: the guest RAM is mapped from the VM shared-memory file.  A second
+ * MAP_SHARED mapping of the same file (g_shm_shadow) aliases the same pages,
+ * so the copy can be performed there while the guest mapping stays
+ * PROT_READ.  A concurrent vCPU or device DMA store therefore still faults
+ * and reaches the write-tracking path instead of being silently overwritten
+ * by this memcpy.
+ *
+ * Slave TCG helper: the guest mapping is anonymous and has no alias.  The
+ * helper runs exactly one vCPU and exports no device model, so the faulting
+ * vCPU itself is the only thread that can touch this page while its fault is
+ * being resolved; no concurrent guest writer exists to race the copy.
+ */
+static int install_page_bytes(uint64_t gpa, uintptr_t aligned_addr,
+                              const uint8_t *data, int is_write)
+{
+    (void)is_write;
+
+    if (!g_is_slave) {
+        uint8_t *target = NULL;
+
+        if (ensure_local_shm_shadow() == 0 && g_shm_shadow && g_ram_base &&
+            g_ram_size != 0) {
+            uint64_t offset = aligned_addr - (uintptr_t)g_ram_base;
+
+            if (offset <= g_ram_size - WVM_MEMORY_PAGE_BYTES)
+                target = (uint8_t *)g_shm_shadow + offset;
+        }
+        if (!target) {
+            safe_log("[WVM] page install has no writable SHM alias; failing "
+                     "closed instead of exposing guest RAM writable\n");
+            return -1;
+        }
+        memcpy(target, data, WVM_MEMORY_PAGE_BYTES);
+        return 0;
+    }
+
+    if (mprotect((void *)aligned_addr, WVM_MEMORY_PAGE_BYTES,
+                 PROT_READ | PROT_WRITE) != 0)
+        return -1;
+    memcpy((void *)aligned_addr, data, WVM_MEMORY_PAGE_BYTES);
+    if (mprotect((void *)aligned_addr, WVM_MEMORY_PAGE_BYTES, PROT_READ) != 0)
+        return -1;
+    return 0;
+}
+
 static int request_page_sync(uintptr_t fault_addr, bool is_write) {
     uint64_t gpa = hva_to_gpa_safe(fault_addr);
     if (gpa == (uint64_t)-1) return -1;
@@ -1139,24 +1190,14 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
             return result;
         }
         /*
-         * R05/A13: for write-prep (version==0 first write), install data under
-         * PROT_READ only. The worker then snapshots pre-image before RW.
-         * Publishing RW here opened a window where another CPU could dirty
-         * bytes that memcpy then overwrote or that skipped the diff path.
+         * R05: install through an alias where one exists (master) and keep the
+         * guest mapping read-only for the whole copy.  The old code opened a
+         * PROT_READ|PROT_WRITE window in both branches, letting concurrent
+         * stores bypass write tracking or be overwritten by this memcpy.
          */
-        if (is_write) {
-            if (mprotect((void *)aligned_addr, 4096, PROT_READ | PROT_WRITE) != 0)
-                return -1;
-            memcpy((void *)aligned_addr, ack.data, WVM_MEMORY_PAGE_BYTES);
-            if (mprotect((void *)aligned_addr, 4096, PROT_READ) != 0)
-                return -1;
-        } else {
-            if (mprotect((void *)aligned_addr, 4096, PROT_READ | PROT_WRITE) != 0)
-                return -1;
-            memcpy((void *)aligned_addr, ack.data, WVM_MEMORY_PAGE_BYTES);
-            if (mprotect((void *)aligned_addr, 4096, PROT_READ) != 0)
-                return -1;
-        }
+        if (install_page_bytes(gpa, aligned_addr, ack.data,
+                               is_write ? 1 : 0) != 0)
+            return -1;
         set_local_page_version(gpa, ack.version);
         return 0;
     }

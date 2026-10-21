@@ -14,6 +14,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "../common_include/wavevm_block_chunk_store.h"
+#include "block_client.h"
+#include "block_service.h"
 #include "executor_bridge.h"
 #include "executor_runtime.h"
 #include "ingress.h"
@@ -317,6 +320,122 @@ static int send_runtime_envelope(void *opaque,
 {
     return wvm_envelope_emit_network_frames(
         envelope, send_sidecar_frame, opaque, error, error_len);
+}
+
+/*
+ * The block service executes only devices that this runtime was actually
+ * assigned.  A device number is not a hint: an unassigned device must fail
+ * closed instead of aliasing another device's backend.
+ */
+struct block_runtime_context {
+    const struct wvm_node_runtime_manifest *manifest;
+    const struct wvm_route_runtime *route_runtime;
+    struct memory_network_context *network;
+};
+
+static int block_device_is_local(const struct block_runtime_context *context,
+                                 uint32_t device_index)
+{
+    size_t i;
+
+    if (!context || !context->manifest)
+        return 0;
+    for (i = 0; i < context->manifest->local_storage_assignments.count; i++) {
+        if (context->manifest->local_storage_assignments.entries[i]
+                .device_index == device_index)
+            return 1;
+    }
+    return 0;
+}
+
+static int execute_local_block(void *opaque, uint32_t device_index,
+                               uint16_t operation, uint32_t flags,
+                               uint64_t lba_512, uint32_t sector_count,
+                               const uint8_t *data, size_t data_bytes,
+                               uint8_t *out, size_t out_capacity,
+                               size_t *out_bytes, char *error, size_t error_len)
+{
+    struct block_runtime_context *context = opaque;
+
+    if (!block_device_is_local(context, device_index)) {
+        if (error && error_len != 0)
+            snprintf(error, error_len,
+                     "block device %u has no admitted local assignment",
+                     device_index);
+        return -ENODEV;
+    }
+    if (operation == WVM_BLOCK_OPERATION_READ)
+        return wvm_block_chunk_read(lba_512, sector_count, out, out_capacity,
+                                    out_bytes, error, error_len);
+    if (operation == WVM_BLOCK_OPERATION_WRITE)
+        return wvm_block_chunk_write(lba_512, sector_count, data, data_bytes,
+                                     (flags & WVM_BLOCK_ORDER_FUA) != 0, error,
+                                     error_len);
+    if (sector_count == 0)
+        return wvm_block_chunk_flush_all(error, error_len);
+    return wvm_block_chunk_flush_range(lba_512, sector_count, error, error_len);
+}
+
+static int resolve_block_route(void *opaque, uint16_t destination_kind,
+                               uint64_t destination_scope,
+                               uint32_t destination_vnode,
+                               struct wvm_envelope_route *route, char *error,
+                               size_t error_len)
+{
+    struct block_runtime_context *context = opaque;
+    struct wvm_route_runtime_next_hop next_hop;
+
+    if (!context || !context->manifest || !context->route_runtime)
+        return -1;
+    if (wvm_route_runtime_lookup_destination(
+            context->route_runtime,
+            &context->manifest->required_route_snapshot_key, destination_kind,
+            destination_scope, destination_vnode, &next_hop, error,
+            error_len) != 0)
+        return -1;
+    memset(route, 0, sizeof(*route));
+    route->destination_kind = destination_kind;
+    route->destination_scope = destination_scope;
+    route->destination_vnode_or_endpoint = destination_vnode;
+    route->hop_limit = next_hop.hop_limit;
+    return 0;
+}
+
+static int send_block_envelope(void *opaque,
+                               const struct wvm_envelope *envelope, char *error,
+                               size_t error_len)
+{
+    struct block_runtime_context *context = opaque;
+
+    if (!context || !context->network)
+        return -1;
+    return send_runtime_envelope(context->network, envelope, error, error_len);
+}
+
+/* A05: one route-scope ref covers one in-flight block operation. */
+static int pin_block_scope(void *opaque, char *error, size_t error_len)
+{
+    struct block_runtime_context *context = opaque;
+
+    if (!context || !context->route_runtime || !context->manifest)
+        return -1;
+    return wvm_route_runtime_operation_ref_get(
+        (struct wvm_route_runtime *)context->route_runtime,
+        &context->manifest->required_route_snapshot_key.scope_key, error,
+        error_len);
+}
+
+static void unpin_block_scope(void *opaque)
+{
+    struct block_runtime_context *context = opaque;
+    char discard[128];
+
+    if (!context || !context->route_runtime || !context->manifest)
+        return;
+    (void)wvm_route_runtime_operation_ref_put(
+        (struct wvm_route_runtime *)context->route_runtime,
+        &context->manifest->required_route_snapshot_key.scope_key, discard,
+        sizeof(discard));
 }
 
 static int complete_memory_fault(
@@ -686,6 +805,11 @@ static int run_runtime_main(int argc, char **argv)
     struct wvm_runtime_dispatch_storage dispatch_storage;
     struct wvm_route_runtime route_runtime;
     struct wvm_memory_service memory_service;
+    struct wvm_block_service block_service;
+    struct wvm_block_client block_client;
+    struct block_runtime_context block_context;
+    struct wvm_block_service_config block_config;
+    struct wvm_block_client_config block_client_config;
     struct wvm_vcpu_handoff_coordinator vcpu_coordinator;
     struct wvm_vcpu_service vcpu_service;
     struct memory_network_context memory_network;
@@ -1030,6 +1154,83 @@ static int run_runtime_main(int argc, char **argv)
                 return 1;
             }
         }
+        /*
+         * Install the target-side block service before ingress starts routing
+         * block envelopes.  Its retention window is the admitted route
+         * operation horizon, not a private default.
+         */
+        memset(&block_context, 0, sizeof(block_context));
+        block_context.manifest = &storage.manifest;
+        block_context.route_runtime = &route_runtime;
+        block_context.network = &memory_network;
+        memset(&block_config, 0, sizeof(block_config));
+        block_config.vm_id = storage.manifest.vm_id;
+        block_config.vm_incarnation = storage.manifest.vm_incarnation;
+        block_config.manifest_generation =
+            storage.manifest.manifest_generation;
+        block_config.local_physical_node_id = (uint32_t)physical_node_id;
+        block_config.local_runtime_instance_id = node_instance_id;
+        block_config.pin_scope = pin_block_scope;
+        block_config.unpin_scope = unpin_block_scope;
+        block_config.scope_opaque = &block_context;
+        block_config.retention_ms = (uint32_t)completion_timeout_ms;
+        block_config.tombstone_ms = (uint32_t)completion_timeout_ms;
+        block_config.execute = execute_local_block;
+        block_config.resolve_route = resolve_block_route;
+        block_config.send_envelope = send_block_envelope;
+        block_config.opaque = &block_context;
+        if (wvm_block_service_init(&block_service, &block_config, error,
+                                   sizeof(error)) != 0) {
+            fprintf(stderr,
+                    "[node-runtime] cannot initialize V1 block service: %s\n",
+                    error[0] ? error : "invalid V1 block state");
+            wvm_vcpu_service_global_uninstall(&vcpu_service);
+            wvm_vcpu_service_destroy(&vcpu_service);
+            wvm_memory_service_global_uninstall(&memory_service);
+            wvm_memory_service_destroy(&memory_service);
+            wvm_vcpu_handoff_coordinator_destroy(&vcpu_coordinator);
+            wvm_executor_bridge_dispatch_destroy(executor_dispatch_opaque);
+            destroy_memory_network_context(&memory_network);
+            wvm_runtime_manifest_storage_free(&storage);
+            wvm_runtime_dispatch_storage_free(&dispatch_storage);
+            wvm_route_runtime_destroy(&route_runtime);
+            return 1;
+        }
+
+        memset(&block_client_config, 0, sizeof(block_client_config));
+        block_client_config.dispatch = &dispatch_storage.projection;
+        block_client_config.resolve_route = resolve_block_route;
+        block_client_config.local_physical_node_id =
+            (uint32_t)physical_node_id;
+        block_client_config.local_runtime_instance_id = node_instance_id;
+        block_client_config.pin_scope = pin_block_scope;
+        block_client_config.unpin_scope = unpin_block_scope;
+        block_client_config.scope_opaque = &block_context;
+        block_client_config.timeout_ms = (uint32_t)completion_timeout_ms;
+        block_client_config.send_envelope = send_block_envelope;
+        block_client_config.opaque = &block_context;
+        if (wvm_block_client_init(&block_client, &block_client_config, error,
+                                  sizeof(error)) != 0 ||
+            wvm_block_client_global_install(&block_client, error,
+                                            sizeof(error)) != 0) {
+            fprintf(stderr,
+                    "[node-runtime] cannot initialize V1 block client: %s\n",
+                    error[0] ? error : "invalid V1 block client state");
+            wvm_block_client_destroy(&block_client);
+            wvm_block_service_destroy(&block_service);
+            wvm_vcpu_service_global_uninstall(&vcpu_service);
+            wvm_vcpu_service_destroy(&vcpu_service);
+            wvm_memory_service_global_uninstall(&memory_service);
+            wvm_memory_service_destroy(&memory_service);
+            wvm_vcpu_handoff_coordinator_destroy(&vcpu_coordinator);
+            wvm_executor_bridge_dispatch_destroy(executor_dispatch_opaque);
+            destroy_memory_network_context(&memory_network);
+            wvm_runtime_manifest_storage_free(&storage);
+            wvm_runtime_dispatch_storage_free(&dispatch_storage);
+            wvm_route_runtime_destroy(&route_runtime);
+            return 1;
+        }
+
         memset(&ingress_config, 0, sizeof(ingress_config));
         ingress_config.manifest = &storage.manifest;
         ingress_config.runtime_gate = &gate;
@@ -1041,10 +1242,17 @@ static int run_runtime_main(int argc, char **argv)
         ingress_config.vcpu_result_dispatch =
             wvm_vcpu_handoff_coordinator_dispatch;
         ingress_config.vcpu_result_dispatch_opaque = &vcpu_coordinator;
+        ingress_config.block_dispatch = wvm_block_service_dispatch;
+        ingress_config.block_dispatch_opaque = &block_service;
+        ingress_config.block_result_dispatch = wvm_block_client_dispatch_ack;
+        ingress_config.block_result_dispatch_opaque = &block_client;
         if (wvm_ingress_global_init(&ingress_config, error,
                                        sizeof(error)) != 0) {
             fprintf(stderr, "[node-runtime] cannot initialize V1 ingress: %s\n",
                     error[0] ? error : "invalid admitted ingress state");
+            wvm_block_client_global_uninstall();
+            wvm_block_client_destroy(&block_client);
+            wvm_block_service_destroy(&block_service);
             wvm_vcpu_service_global_uninstall(&vcpu_service);
             wvm_vcpu_service_destroy(&vcpu_service);
             wvm_memory_service_global_uninstall(&memory_service);
@@ -1063,6 +1271,9 @@ static int run_runtime_main(int argc, char **argv)
     if (pthread_create(&executor_thread, NULL, run_executor_role,
                        &executor_launch) != 0) {
         perror("[node-runtime] cannot start local executor role");
+        wvm_block_client_global_uninstall();
+        wvm_block_client_destroy(&block_client);
+        wvm_block_service_destroy(&block_service);
         wvm_vcpu_service_global_uninstall(&vcpu_service);
         wvm_vcpu_service_destroy(&vcpu_service);
         wvm_memory_service_global_uninstall(&memory_service);
@@ -1113,6 +1324,9 @@ static int run_runtime_main(int argc, char **argv)
         perror("[node-runtime] cannot start node-runtime coordinator role");
         g_shutdown_requested = 1;
         pthread_join(executor_thread, &executor_result);
+        wvm_block_client_global_uninstall();
+        wvm_block_client_destroy(&block_client);
+        wvm_block_service_destroy(&block_service);
         wvm_vcpu_service_global_uninstall(&vcpu_service);
         wvm_vcpu_service_destroy(&vcpu_service);
         wvm_memory_service_global_uninstall(&memory_service);
@@ -1129,6 +1343,9 @@ static int run_runtime_main(int argc, char **argv)
     pthread_join(master_thread, &master_result);
     g_shutdown_requested = 1;
     pthread_join(executor_thread, &executor_result);
+    wvm_block_client_global_uninstall();
+    wvm_block_client_destroy(&block_client);
+    wvm_block_service_destroy(&block_service);
     wvm_vcpu_service_global_uninstall(&vcpu_service);
     wvm_vcpu_service_destroy(&vcpu_service);
     wvm_memory_service_global_uninstall(&memory_service);

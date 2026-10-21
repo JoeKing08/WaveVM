@@ -118,6 +118,8 @@ int main(void)
     struct wvm_vcpu_assignment vcpu_assignments[3];
     struct wvm_memory_chunk_assignment memory_assignments[4];
     struct wvm_reservation_requirement reservation_requirements[2];
+    struct wvm_storage_assignment storage_assignments[2];
+    struct wvm_storage_assignment storage_templates[2];
     struct wvm_admission_node_listener_plan listener_plans[2];
     struct wvm_exclusive_lease listener_leases[2][3];
     struct wvm_placement_plan placement_plan;
@@ -248,6 +250,9 @@ int main(void)
     placement_plan.reservation_requirements.entries = reservation_requirements;
     placement_plan.reservation_requirements.capacity =
         sizeof(reservation_requirements) / sizeof(reservation_requirements[0]);
+    placement_plan.storage_assignments.entries = storage_assignments;
+    placement_plan.storage_assignments.capacity =
+        sizeof(storage_assignments) / sizeof(storage_assignments[0]);
     if (expect(wvm_admission_placement_plan_build(
                    &snapshot, &request, &proposed_plan, eligibility_fence_digest,
                    &options, &placement_plan, error, sizeof(error)) == 0,
@@ -268,6 +273,89 @@ int main(void)
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
     }
+
+    /*
+     * Storage device contracts are pinned to the VM host and bound to the host
+     * reservation. Remote pins and malformed/oversized lists must fail closed.
+     */
+    memset(storage_templates, 0, sizeof(storage_templates));
+    storage_templates[0].device_index = 0;
+    storage_templates[0].backend_kind = 1;
+    memset(storage_templates[0].device_contract_digest, 0x71, 32);
+    storage_templates[1].device_index = 1;
+    storage_templates[1].backend_kind = 1;
+    memset(storage_templates[1].device_contract_digest, 0x72, 32);
+    options.storage_templates = storage_templates;
+    options.storage_template_count = 2;
+    if (expect(wvm_admission_placement_plan_build(
+                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
+                   &options, &placement_plan, error, sizeof(error)) == 0,
+               "place storage device contracts") ||
+        expect(placement_plan.storage_assignments.count == 2 &&
+                   placement_plan.storage_assignments.entries[0].device_index ==
+                       0 &&
+                   placement_plan.storage_assignments.entries[1].device_index ==
+                       1,
+               "preserve storage device order") ||
+        expect(placement_plan.storage_assignments.entries[0]
+                       .storage_physical_node_id ==
+                   placement_plan.host_node &&
+                   placement_plan.storage_assignments.entries[1]
+                           .storage_physical_node_id ==
+                       placement_plan.host_node,
+               "pin storage devices to the VM host") ||
+        expect(memcmp(placement_plan.storage_assignments.entries[0]
+                          .reservation_id,
+                      placement_plan.reservation_requirements.entries[0]
+                          .reservation_id,
+                      WVM_IDENTITY_ID_BYTES) == 0,
+               "bind storage devices to the host reservation") ||
+        expect(wvm_placement_plan_encode(
+                   &placement_plan, placement_bytes, sizeof(placement_bytes),
+                   &placement_bytes_used, placement_digest, error,
+                   sizeof(error)) == 0,
+               "encode plan with storage assignments")) {
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+    storage_templates[0].storage_physical_node_id = 99;
+    if (expect(wvm_admission_placement_plan_build(
+                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
+                   &options, &placement_plan, error, sizeof(error)) != 0,
+               "reject an explicit remote storage pin")) {
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+    storage_templates[0].storage_physical_node_id = 0;
+    storage_templates[0].device_index = 2;
+    if (expect(wvm_admission_placement_plan_build(
+                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
+                   &options, &placement_plan, error, sizeof(error)) != 0,
+               "reject unordered storage device contracts")) {
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+    storage_templates[0].device_index = 0;
+    placement_plan.storage_assignments.capacity = 1;
+    if (expect(wvm_admission_placement_plan_build(
+                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
+                   &options, &placement_plan, error, sizeof(error)) != 0,
+               "reject short storage assignment buffers")) {
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+    placement_plan.storage_assignments.capacity = 2;
+    storage_templates[0].backend_kind = 0;
+    if (expect(wvm_admission_placement_plan_build(
+                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
+                   &options, &placement_plan, error, sizeof(error)) != 0,
+               "reject a zero storage backend kind")) {
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+    storage_templates[0].backend_kind = 1;
+    options.storage_templates = NULL;
+    options.storage_template_count = 0;
 
     options.kernel_accelerator_required = 1;
     listener_plans[0].kernel_accelerator_required = 1;

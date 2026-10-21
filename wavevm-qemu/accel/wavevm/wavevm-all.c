@@ -986,7 +986,12 @@ static void *wavevm_executor_session_thread(void *opaque)
             /* Build and send error result */
             struct wvm_vcpu_handoff_result error_result;
             memset(&error_result, 0, sizeof(error_result));
-            error_result.status = WVM_VCPU_EXIT_FAILED;
+            /*
+             * Pre-existing build break at HEAD: this symbol belongs to the
+             * exit-class enum, not the handoff result status.  A rejected
+             * request is an executor failure for this handoff.
+             */
+            error_result.status = WVM_VCPU_HANDOFF_RESULT_EXECUTOR_FAILURE;
             error_result.context_bytes = 0;
 
             size_t error_payload_bytes = 0;
@@ -2447,7 +2452,8 @@ struct wvm_ipc_block_req {
  * Replaces legacy {lba,len,is_write} with typed envelope and completion.
  */
 int wvm_send_typed_block_request(uint64_t lba_512, void *buf, uint32_t sector_count,
-                                   uint32_t operation, uint32_t flags)
+                                   uint32_t operation, uint32_t flags,
+                                   uint32_t device_index)
 {
     WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
     uint64_t operation_id;
@@ -2508,6 +2514,7 @@ int wvm_send_typed_block_request(uint64_t lba_512, void *buf, uint32_t sector_co
     /* semantic_payload_digest: compute SHA256 for write data if needed */
     memset(req->semantic_payload_digest, 0, 32);
     req->queue_id = 0;
+    req->device_index = device_index;
     req->operation = operation;
     req->flags = flags;
     req->lba_512 = lba_512;

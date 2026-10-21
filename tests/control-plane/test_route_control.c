@@ -191,6 +191,7 @@ int main(void)
     struct wvm_envelope lookup;
     struct wvm_route_runtime_next_hop next_hop;
     struct wvm_route_control_snapshot loaded_snapshot = {0};
+    struct wvm_route_control_result retire_result;
     uint8_t snapshot_bytes[8192];
     uint8_t key_bytes[8192];
     size_t snapshot_byte_count;
@@ -378,9 +379,15 @@ int main(void)
     }
     make_request(&request, WVM_ENVELOPE_MSG_ROUTE_RETIRE, 8, key_bytes,
                  key_byte_count);
-    if (expect(wvm_route_control_apply(&first_control, &request, NULL, error,
-                                       sizeof(error)) == 0,
-               "retire predecessor snapshot")) {
+    memset(&retire_result, 0, sizeof(retire_result));
+    if (expect(wvm_route_control_apply(&first_control, &request, &retire_result,
+                                       error, sizeof(error)) == 0,
+               "retire predecessor snapshot") ||
+        expect(retire_result.recorded_state == 4 &&
+                   retire_result.active_operation_refs == 0 &&
+                   retire_result.retention_horizon_complete == 1 &&
+                   retire_result.operation_retention_horizon_ms == 5000,
+               "R03 retire ACK reports the admitted retention window")) {
         wvm_route_control_close(&first_control);
         wvm_route_runtime_destroy(&first_runtime);
         unlink(journal);

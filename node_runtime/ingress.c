@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "../common_include/wavevm_block_wire.h"
 #include "../common_include/wavevm_memory.h"
 #include "../common_include/wavevm_vcpu_handoff.h"
 
@@ -161,6 +162,51 @@ static int dispatch_complete_envelope(struct wvm_ingress *ingress,
             }
             dispatch = ingress->config.vcpu_dispatch;
             dispatch_opaque = ingress->config.vcpu_dispatch_opaque;
+            break;
+        }
+        case WVM_ENVELOPE_MSG_BLOCK_READ:
+        case WVM_ENVELOPE_MSG_BLOCK_WRITE:
+        case WVM_ENVELOPE_MSG_BLOCK_FLUSH: {
+            struct wvm_block_request block_request;
+            const uint8_t *block_data = NULL;
+            size_t block_data_bytes = 0;
+
+            if (!ingress->config.block_dispatch) {
+                set_error(error, error_len,
+                          "block operation has no local storage executor");
+                return WVM_INGRESS_UNSUPPORTED;
+            }
+            if (wvm_block_request_decode(
+                    envelope->payload, envelope->payload_bytes,
+                    &block_request, &block_data, &block_data_bytes, error,
+                    error_len) != 0) {
+                return WVM_INGRESS_REJECTED;
+            }
+            (void)block_data;
+            dispatch = ingress->config.block_dispatch;
+            dispatch_opaque = ingress->config.block_dispatch_opaque;
+            break;
+        }
+        case WVM_ENVELOPE_MSG_BLOCK_ACK: {
+            struct wvm_block_completion block_completion;
+            const uint8_t *block_data = NULL;
+            size_t block_data_bytes = 0;
+
+            if (!ingress->config.block_result_dispatch) {
+                set_error(error, error_len,
+                          "block completion has no local coordinator");
+                return WVM_INGRESS_UNSUPPORTED;
+            }
+            if (wvm_block_completion_decode(
+                    envelope->payload, envelope->payload_bytes,
+                    &block_completion, &block_data, &block_data_bytes, error,
+                    error_len) != 0) {
+                return WVM_INGRESS_REJECTED;
+            }
+            (void)block_data;
+            (void)block_data_bytes;
+            dispatch = ingress->config.block_result_dispatch;
+            dispatch_opaque = ingress->config.block_result_dispatch_opaque;
             break;
         }
         case WVM_ENVELOPE_MSG_VCPU_EXIT: {

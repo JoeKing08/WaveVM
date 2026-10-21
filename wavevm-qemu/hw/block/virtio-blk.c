@@ -29,8 +29,8 @@
 
 extern int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write);
 extern int wavevm_blk_interceptor_ex(uint64_t sector, QEMUIOVector *qiov, int is_write,
-                                     uint32_t flags);
-extern int wavevm_blk_flush_interceptor(void);
+                                     uint32_t flags, void *device);
+extern int wavevm_blk_flush_interceptor(void *device);
 #ifdef __linux__
 # include <scsi/sg.h>
 #endif
@@ -685,7 +685,7 @@ static int virtio_blk_handle_request(VirtIOBlockReq *req, MultiReqBuffer *mrb)
                 wvm_flags |= 0x02; /* WVM_BLOCK_FLAG_SYNC */
             }
             wvm_rc = wavevm_blk_interceptor_ex(req->sector_num, &req->qiov,
-                                              is_write, wvm_flags);
+                                              is_write, wvm_flags, s);
             if (wvm_rc == 0) {
                 virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
                 virtio_blk_free_request(req);
@@ -729,7 +729,7 @@ static int virtio_blk_handle_request(VirtIOBlockReq *req, MultiReqBuffer *mrb)
     case VIRTIO_BLK_T_FLUSH:
     {
         /* R02: remote WaveVM FLUSH when block IO authority is enabled. */
-        int wvm_flush_rc = wavevm_blk_flush_interceptor();
+        int wvm_flush_rc = wavevm_blk_flush_interceptor(s);
         if (wvm_flush_rc == 0) {
             virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
             virtio_blk_free_request(req);

@@ -487,42 +487,71 @@ static int valid_text(const char *text, size_t max_bytes)
     return memchr(text, '\0', bytes) == NULL;
 }
 
-static int storage_assignment_size(const struct wvm_storage_assignment *assignment,
-                                   size_t *encoded_size)
+static int storage_assignment_validate_common(
+    const struct wvm_storage_assignment *assignment, int allow_template,
+    char *error, size_t error_len);
+
+static int storage_assignment_size_common(
+    const struct wvm_storage_assignment *assignment, int allow_template,
+    size_t *encoded_size)
 {
     static const size_t fields[] = {4, 4, 2, WVM_IDENTITY_ID_BYTES,
                                     WVM_SHA256_DIGEST_BYTES};
 
-    if (wvm_storage_assignment_validate(assignment, NULL, 0) != 0) {
+    if (storage_assignment_validate_common(assignment, allow_template, NULL,
+                                           0) != 0) {
         return -1;
     }
     return canonical_record_size(fields, sizeof(fields) / sizeof(fields[0]),
                                  encoded_size);
 }
 
-int wvm_storage_assignment_validate(
-    const struct wvm_storage_assignment *assignment, char *error,
-    size_t error_len)
+static int storage_assignment_size(const struct wvm_storage_assignment *assignment,
+                                   size_t *encoded_size)
 {
-    if (!assignment || assignment->storage_physical_node_id == 0 ||
-        assignment->backend_kind == 0 ||
-        bytes_are_zero(assignment->reservation_id,
-                       sizeof(assignment->reservation_id)) ||
+    return storage_assignment_size_common(assignment, 0, encoded_size);
+}
+
+static int storage_assignment_size_request(
+    const struct wvm_storage_assignment *assignment, size_t *encoded_size)
+{
+    return storage_assignment_size_common(assignment, 1, encoded_size);
+}
+
+static int storage_assignment_validate_common(
+    const struct wvm_storage_assignment *assignment, int allow_template,
+    char *error, size_t error_len)
+{
+    if (!assignment || assignment->backend_kind == 0 ||
         bytes_are_zero(assignment->device_contract_digest,
-                       sizeof(assignment->device_contract_digest))) {
+                       sizeof(assignment->device_contract_digest)) ||
+        (!allow_template &&
+         (assignment->storage_physical_node_id == 0 ||
+          bytes_are_zero(assignment->reservation_id,
+                         sizeof(assignment->reservation_id))))) {
         set_error(error, error_len, "storage assignment has invalid metadata");
         return -1;
     }
     return 0;
 }
 
-int wvm_storage_assignment_encode(
-    const struct wvm_storage_assignment *assignment, uint8_t *bytes,
-    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len)
+int wvm_storage_assignment_validate(
+    const struct wvm_storage_assignment *assignment, char *error,
+    size_t error_len)
+{
+    return storage_assignment_validate_common(assignment, 0, error, error_len);
+}
+
+
+static int storage_assignment_encode_common(
+    const struct wvm_storage_assignment *assignment, int allow_template,
+    uint8_t *bytes, size_t capacity, size_t *encoded_bytes, char *error,
+    size_t error_len)
 {
     struct wvm_canonical_builder builder;
 
-    if (wvm_storage_assignment_validate(assignment, error, error_len) != 0 ||
+    if (storage_assignment_validate_common(assignment, allow_template, error,
+                                           error_len) != 0 ||
         wvm_canonical_record_begin(&builder, bytes, capacity,
                                    WVM_RECORD_STORAGE_ASSIGNMENT) != 0 ||
         wvm_canonical_field_append_u32(&builder, 1, assignment->device_index) !=
@@ -543,9 +572,26 @@ int wvm_storage_assignment_encode(
     return 0;
 }
 
-int wvm_storage_assignment_decode(
+int wvm_storage_assignment_encode(
+    const struct wvm_storage_assignment *assignment, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len)
+{
+    return storage_assignment_encode_common(assignment, 0, bytes, capacity,
+                                            encoded_bytes, error, error_len);
+}
+
+static int storage_assignment_encode_request(
+    const struct wvm_storage_assignment *assignment, uint8_t *bytes,
+    size_t capacity, size_t *encoded_bytes, char *error, size_t error_len)
+{
+    return storage_assignment_encode_common(assignment, 1, bytes, capacity,
+                                            encoded_bytes, error, error_len);
+}
+
+static int storage_assignment_decode_common(
     const uint8_t *bytes, size_t encoded_bytes,
-    struct wvm_storage_assignment *assignment, char *error, size_t error_len)
+    struct wvm_storage_assignment *assignment, int allow_template, char *error,
+    size_t error_len)
 {
     struct wvm_canonical_field fields[5];
 
@@ -569,7 +615,24 @@ int wvm_storage_assignment_decode(
            sizeof(assignment->reservation_id));
     memcpy(assignment->device_contract_digest, fields[4].value,
            sizeof(assignment->device_contract_digest));
-    return wvm_storage_assignment_validate(assignment, error, error_len);
+    return storage_assignment_validate_common(assignment, allow_template, error,
+                                              error_len);
+}
+
+int wvm_storage_assignment_decode(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_storage_assignment *assignment, char *error, size_t error_len)
+{
+    return storage_assignment_decode_common(bytes, encoded_bytes, assignment, 0,
+                                            error, error_len);
+}
+
+static int storage_assignment_decode_request(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_storage_assignment *assignment, char *error, size_t error_len)
+{
+    return storage_assignment_decode_common(bytes, encoded_bytes, assignment, 1,
+                                            error, error_len);
 }
 
 static int exclusive_lease_size(const struct wvm_exclusive_lease *lease,
@@ -1134,6 +1197,28 @@ static int storage_assignment_decode_adapter(const uint8_t *bytes,
 {
     return wvm_storage_assignment_decode(bytes, encoded_bytes, entry, error,
                                          error_len);
+}
+
+static int storage_assignment_size_request_adapter(const void *entry,
+                                                   size_t *encoded_size)
+{
+    return storage_assignment_size_request(entry, encoded_size);
+}
+
+static int storage_assignment_encode_request_adapter(
+    const void *entry, uint8_t *bytes, size_t capacity, size_t *encoded_bytes,
+    char *error, size_t error_len)
+{
+    return storage_assignment_encode_request(entry, bytes, capacity,
+                                             encoded_bytes, error, error_len);
+}
+
+static int storage_assignment_decode_request_adapter(
+    const uint8_t *bytes, size_t encoded_bytes, void *entry, char *error,
+    size_t error_len)
+{
+    return storage_assignment_decode_request(bytes, encoded_bytes, entry, error,
+                                             error_len);
 }
 
 static int requirement_decode_adapter(const uint8_t *bytes,
@@ -2387,8 +2472,9 @@ int wvm_execution_fault_profile_decode(
     return wvm_execution_fault_profile_validate(profile, error, error_len);
 }
 
-int wvm_storage_device_plan_validate(
-    const struct wvm_storage_device_plan *plan, char *error, size_t error_len)
+static int storage_device_plan_validate_common(
+    const struct wvm_storage_device_plan *plan, int allow_template, char *error,
+    size_t error_len)
 {
     size_t i;
 
@@ -2400,8 +2486,9 @@ int wvm_storage_device_plan_validate(
         return -1;
     }
     for (i = 0; i < plan->assignments.count; i++) {
-        if (wvm_storage_assignment_validate(&plan->assignments.entries[i], error,
-                                            error_len) != 0 ||
+        if (storage_assignment_validate_common(&plan->assignments.entries[i],
+                                               allow_template, error,
+                                               error_len) != 0 ||
             (i != 0 && plan->assignments.entries[i - 1].device_index >=
                            plan->assignments.entries[i].device_index)) {
             set_error(error, error_len,
@@ -2412,16 +2499,31 @@ int wvm_storage_device_plan_validate(
     return 0;
 }
 
-static int storage_device_plan_size(const struct wvm_storage_device_plan *plan,
-                                    size_t *encoded_size)
+int wvm_storage_device_plan_validate(
+    const struct wvm_storage_device_plan *plan, char *error, size_t error_len)
+{
+    return storage_device_plan_validate_common(plan, 0, error, error_len);
+}
+
+static int storage_device_plan_validate_request(
+    const struct wvm_storage_device_plan *plan, char *error, size_t error_len)
+{
+    return storage_device_plan_validate_common(plan, 1, error, error_len);
+}
+
+static int storage_device_plan_size_common(
+    const struct wvm_storage_device_plan *plan, int allow_template,
+    size_t *encoded_size)
 {
     size_t assignments_bytes;
 
-    if (wvm_storage_device_plan_validate(plan, NULL, 0) != 0 ||
-        record_list_size(plan->assignments.entries, plan->assignments.count,
-                         sizeof(*plan->assignments.entries),
-                         storage_assignment_size_adapter,
-                         &assignments_bytes) != 0) {
+    if (storage_device_plan_validate_common(plan, allow_template, NULL, 0) != 0 ||
+        record_list_size(
+            plan->assignments.entries, plan->assignments.count,
+            sizeof(*plan->assignments.entries),
+            allow_template ? storage_assignment_size_request_adapter
+                           : storage_assignment_size_adapter,
+            &assignments_bytes) != 0) {
         return -1;
     }
     return canonical_record_size(
@@ -2429,28 +2531,47 @@ static int storage_device_plan_size(const struct wvm_storage_device_plan *plan,
         encoded_size);
 }
 
-int wvm_storage_device_plan_encode(
-    const struct wvm_storage_device_plan *plan, uint8_t *bytes, size_t capacity,
-    size_t *encoded_bytes, char *error, size_t error_len)
+static int storage_device_plan_size(const struct wvm_storage_device_plan *plan,
+                                    size_t *encoded_size)
+{
+    return storage_device_plan_size_common(plan, 0, encoded_size);
+}
+
+static int storage_device_plan_size_request(
+    const struct wvm_storage_device_plan *plan, size_t *encoded_size)
+{
+    return storage_device_plan_size_common(plan, 1, encoded_size);
+}
+
+static int storage_device_plan_encode_common(
+    const struct wvm_storage_device_plan *plan, int allow_template,
+    uint8_t *bytes, size_t capacity, size_t *encoded_bytes, char *error,
+    size_t error_len)
 {
     struct wvm_canonical_builder builder;
     uint8_t *field_value;
     size_t assignments_bytes;
 
-    if (wvm_storage_device_plan_validate(plan, error, error_len) != 0 ||
-        record_list_size(plan->assignments.entries, plan->assignments.count,
-                         sizeof(*plan->assignments.entries),
-                         storage_assignment_size_adapter,
-                         &assignments_bytes) != 0 ||
+    if (storage_device_plan_validate_common(plan, allow_template, error,
+                                            error_len) != 0 ||
+        record_list_size(
+            plan->assignments.entries, plan->assignments.count,
+            sizeof(*plan->assignments.entries),
+            allow_template ? storage_assignment_size_request_adapter
+                           : storage_assignment_size_adapter,
+            &assignments_bytes) != 0 ||
         wvm_canonical_record_begin(&builder, bytes, capacity,
                                    WVM_RECORD_STORAGE_DEVICE_PLAN) != 0 ||
         wvm_canonical_field_reserve(&builder, 1, assignments_bytes,
                                     &field_value) != 0 ||
-        record_list_encode(plan->assignments.entries, plan->assignments.count,
-                           sizeof(*plan->assignments.entries),
-                           storage_assignment_size_adapter,
-                           storage_assignment_encode_adapter, field_value,
-                           assignments_bytes, error, error_len) != 0 ||
+        record_list_encode(
+            plan->assignments.entries, plan->assignments.count,
+            sizeof(*plan->assignments.entries),
+            allow_template ? storage_assignment_size_request_adapter
+                           : storage_assignment_size_adapter,
+            allow_template ? storage_assignment_encode_request_adapter
+                           : storage_assignment_encode_adapter,
+            field_value, assignments_bytes, error, error_len) != 0 ||
         wvm_canonical_field_append(
             &builder, 2, plan->qemu_device_configuration_digest,
             sizeof(plan->qemu_device_configuration_digest)) != 0 ||
@@ -2461,9 +2582,26 @@ int wvm_storage_device_plan_encode(
     return 0;
 }
 
-int wvm_storage_device_plan_decode(
+int wvm_storage_device_plan_encode(
+    const struct wvm_storage_device_plan *plan, uint8_t *bytes, size_t capacity,
+    size_t *encoded_bytes, char *error, size_t error_len)
+{
+    return storage_device_plan_encode_common(plan, 0, bytes, capacity,
+                                             encoded_bytes, error, error_len);
+}
+
+static int storage_device_plan_encode_request(
+    const struct wvm_storage_device_plan *plan, uint8_t *bytes, size_t capacity,
+    size_t *encoded_bytes, char *error, size_t error_len)
+{
+    return storage_device_plan_encode_common(plan, 1, bytes, capacity,
+                                             encoded_bytes, error, error_len);
+}
+
+static int storage_device_plan_decode_common(
     const uint8_t *bytes, size_t encoded_bytes,
-    struct wvm_storage_device_plan *plan, char *error, size_t error_len)
+    struct wvm_storage_device_plan *plan, int allow_template, char *error,
+    size_t error_len)
 {
     struct wvm_canonical_field fields[2];
     struct wvm_storage_assignment_list assignments;
@@ -2483,13 +2621,32 @@ int wvm_storage_device_plan_decode(
                            plan->assignments.entries, plan->assignments.capacity,
                            sizeof(*plan->assignments.entries),
                            &plan->assignments.count,
-                           storage_assignment_decode_adapter, error,
-                           error_len) != 0) {
+                           allow_template
+                               ? storage_assignment_decode_request_adapter
+                               : storage_assignment_decode_adapter,
+                           error, error_len) != 0) {
         return -1;
     }
     memcpy(plan->qemu_device_configuration_digest, fields[1].value,
            sizeof(plan->qemu_device_configuration_digest));
-    return wvm_storage_device_plan_validate(plan, error, error_len);
+    return storage_device_plan_validate_common(plan, allow_template, error,
+                                               error_len);
+}
+
+int wvm_storage_device_plan_decode(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_storage_device_plan *plan, char *error, size_t error_len)
+{
+    return storage_device_plan_decode_common(bytes, encoded_bytes, plan, 0,
+                                              error, error_len);
+}
+
+static int storage_device_plan_decode_request(
+    const uint8_t *bytes, size_t encoded_bytes,
+    struct wvm_storage_device_plan *plan, char *error, size_t error_len)
+{
+    return storage_device_plan_decode_common(bytes, encoded_bytes, plan, 1,
+                                              error, error_len);
 }
 
 static int required_member_size_adapter(const void *entry, size_t *encoded_size)
@@ -3569,8 +3726,8 @@ int wvm_vm_request_validate(const struct wvm_vm_request *request, char *error,
                                       error_len) != 0 ||
         wvm_consistency_policy_validate(&request->consistency_policy, error,
                                         error_len) != 0 ||
-        wvm_storage_device_plan_validate(&request->storage_device_plan, error,
-                                         error_len) != 0 ||
+        storage_device_plan_validate_request(&request->storage_device_plan,
+                                             error, error_len) != 0 ||
         wvm_lifecycle_policy_validate(&request->lifecycle_policy, error,
                                       error_len) != 0) {
         set_error(error, error_len, "VM request is invalid");
@@ -3605,8 +3762,8 @@ int wvm_vm_request_encode(const struct wvm_vm_request *request, uint8_t *bytes,
                                   &constraint_bytes) != 0 ||
         consistency_policy_size(&request->consistency_policy,
                                 &consistency_bytes) != 0 ||
-        storage_device_plan_size(&request->storage_device_plan, &storage_bytes) !=
-            0 ||
+        storage_device_plan_size_request(&request->storage_device_plan,
+                                         &storage_bytes) != 0 ||
         lifecycle_policy_size(&request->lifecycle_policy, &lifecycle_bytes) !=
             0 ||
         wvm_canonical_record_begin(&builder, bytes, capacity,
@@ -3640,9 +3797,10 @@ int wvm_vm_request_encode(const struct wvm_vm_request *request, uint8_t *bytes,
                                       &consistency_bytes, error, error_len) != 0 ||
         wvm_canonical_field_reserve(&builder, 12, (uint32_t)storage_bytes,
                                     &constraint_value) != 0 ||
-        wvm_storage_device_plan_encode(&request->storage_device_plan,
-                                       constraint_value, storage_bytes,
-                                       &storage_bytes, error, error_len) != 0 ||
+        storage_device_plan_encode_request(&request->storage_device_plan,
+                                           constraint_value, storage_bytes,
+                                           &storage_bytes, error,
+                                           error_len) != 0 ||
         wvm_canonical_field_reserve(&builder, 13, (uint32_t)lifecycle_bytes,
                                     &constraint_value) != 0 ||
         wvm_lifecycle_policy_encode(&request->lifecycle_policy,
@@ -3724,9 +3882,10 @@ int wvm_vm_request_decode(const uint8_t *bytes, size_t encoded_bytes,
         wvm_consistency_policy_decode(fields[11].value, fields[11].value_bytes,
                                       &request->consistency_policy, error,
                                       error_len) != 0 ||
-        wvm_storage_device_plan_decode(fields[12].value, fields[12].value_bytes,
-                                       &request->storage_device_plan, error,
-                                       error_len) != 0 ||
+        storage_device_plan_decode_request(fields[12].value,
+                                            fields[12].value_bytes,
+                                            &request->storage_device_plan,
+                                            error, error_len) != 0 ||
         wvm_lifecycle_policy_decode(fields[13].value, fields[13].value_bytes,
                                     &request->lifecycle_policy, error,
                                     error_len) != 0) {

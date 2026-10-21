@@ -29,6 +29,9 @@ struct coordinator_entry {
     uint8_t *result_payload;
     size_t result_payload_bytes;
     uint64_t retained_until_ms;
+    uint64_t in_flight_deadline_ms;
+    int route_ref_held;
+    int timed_out;
 };
 
 struct coordinator_lane {
@@ -130,6 +133,26 @@ static void entry_clear(struct coordinator_entry *entry)
     memset(entry, 0, sizeof(*entry));
 }
 
+/*
+ * R03: an in-flight handoff pins the route scope so retirement cannot complete
+ * under a send that is still outstanding. The pin is released on terminal
+ * completion, on the in-flight timeout (degraded to a timed-out result), and
+ * on coordinator destruction.
+ */
+static void entry_release_route_ref_locked(
+    struct wvm_vcpu_handoff_coordinator *coordinator,
+    struct coordinator_entry *entry)
+{
+    if (!entry || !entry->route_ref_held) {
+        return;
+    }
+    (void)wvm_route_runtime_operation_ref_put(
+        (struct wvm_route_runtime *)coordinator->config.route_runtime,
+        &coordinator->config.manifest->required_route_snapshot_key.scope_key,
+        NULL, 0);
+    entry->route_ref_held = 0;
+}
+
 static void prune_locked(struct wvm_vcpu_handoff_coordinator *coordinator,
                          uint64_t now_ms)
 {
@@ -139,8 +162,17 @@ static void prune_locked(struct wvm_vcpu_handoff_coordinator *coordinator,
     for (i = 0; i < coordinator->capacity; i++) {
         struct coordinator_entry *entry = &entry_array[i];
 
-        if ((entry->state == COORDINATOR_ENTRY_COMPLETED ||
-             entry->state == COORDINATOR_ENTRY_FAILED) &&
+        if (entry->state == COORDINATOR_ENTRY_REMOTE_IN_FLIGHT &&
+            !entry->timed_out && entry->in_flight_deadline_ms <= now_ms) {
+            entry_release_route_ref_locked(coordinator, entry);
+            entry->timed_out = 1;
+            entry->in_flight_deadline_ms = UINT64_MAX;
+            entry->retained_until_ms = retained_until(
+                now_ms, coordinator->config.operation_retention_horizon_ms);
+        }
+        if (((entry->state == COORDINATOR_ENTRY_COMPLETED ||
+              entry->state == COORDINATOR_ENTRY_FAILED) ||
+             entry->timed_out) &&
             entry->retained_until_ms <= now_ms) {
             entry_clear(entry);
         }
@@ -417,6 +449,13 @@ void wvm_vcpu_handoff_coordinator_destroy(
         return;
     }
     entry_array = entries(coordinator);
+    if (entry_array && coordinator->initialized) {
+        pthread_mutex_lock(&coordinator->lock);
+        for (i = 0; i < coordinator->capacity; i++) {
+            entry_release_route_ref_locked(coordinator, &entry_array[i]);
+        }
+        pthread_mutex_unlock(&coordinator->lock);
+    }
     for (i = 0; entry_array && i < coordinator->capacity; i++) {
         entry_clear(&entry_array[i]);
     }
@@ -498,6 +537,12 @@ int wvm_vcpu_handoff_coordinator_submit(
             set_error(error, error_len,
                       "vCPU handoff result is cached; query instead of resubmit");
             return -EALREADY;
+        }
+        if (entry->timed_out) {
+            pthread_mutex_unlock(&coordinator->lock);
+            set_error(error, error_len,
+                      "vCPU handoff exceeded its in-flight deadline");
+            return -ETIMEDOUT;
         }
         if (entry->state != COORDINATOR_ENTRY_REMOTE_IN_FLIGHT ||
             entry->request_envelope.delivery_attempt_id == UINT64_MAX) {
@@ -616,6 +661,19 @@ int wvm_vcpu_handoff_coordinator_submit(
            sizeof(entry->operation_id));
     entry->request_payload = payload;
     entry->request_payload_bytes = payload_bytes;
+    entry->in_flight_deadline_ms = retained_until(
+        monotonic_milliseconds(),
+        coordinator->config.operation_retention_horizon_ms);
+    if (wvm_route_runtime_operation_ref_get(
+            (struct wvm_route_runtime *)coordinator->config.route_runtime,
+            &coordinator->config.manifest->required_route_snapshot_key
+                 .scope_key,
+            error, error_len) != 0) {
+        entry_clear(entry);
+        pthread_mutex_unlock(&coordinator->lock);
+        return -ESTALE;
+    }
+    entry->route_ref_held = 1;
     lane->next_handoff_sequence++;
     outgoing = entry->request_envelope;
     pthread_mutex_unlock(&coordinator->lock);
@@ -682,6 +740,12 @@ int wvm_vcpu_handoff_coordinator_dispatch(
         }
         return -ENOENT;
     }
+    if (entry->timed_out) {
+        pthread_mutex_unlock(&coordinator->lock);
+        set_error(error, error_len,
+                  "typed vCPU exit arrived after its in-flight deadline");
+        return -ETIMEDOUT;
+    }
     if (!terminal_status(result.status)) {
         pthread_mutex_unlock(&coordinator->lock);
         return 0;
@@ -720,6 +784,7 @@ int wvm_vcpu_handoff_coordinator_dispatch(
     entry->state = result.status == WVM_VCPU_HANDOFF_RESULT_SUCCESS
                        ? COORDINATOR_ENTRY_COMPLETED
                        : COORDINATOR_ENTRY_FAILED;
+    entry_release_route_ref_locked(coordinator, entry);
     complete_result = coordinator->config.complete != NULL;
     pthread_mutex_unlock(&coordinator->lock);
 
@@ -751,6 +816,12 @@ int wvm_vcpu_handoff_coordinator_lookup_completed(
         pthread_mutex_unlock(&coordinator->lock);
         set_error(error, error_len, "vCPU handoff operation is unknown");
         return -ENOENT;
+    }
+    if (entry->timed_out) {
+        pthread_mutex_unlock(&coordinator->lock);
+        set_error(error, error_len,
+                  "vCPU handoff exceeded its in-flight deadline");
+        return -ETIMEDOUT;
     }
     if (entry->state == COORDINATOR_ENTRY_REMOTE_IN_FLIGHT) {
         pthread_mutex_unlock(&coordinator->lock);

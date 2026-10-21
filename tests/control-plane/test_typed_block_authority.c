@@ -414,7 +414,11 @@ static int test_chunk_identity_isolation(const char *dir)
 
 static int test_main_wrapper_fua_wired(void)
 {
-    /* Source oracle: FUA follow-up FLUSH must exist in main_wrapper. */
+    /*
+     * Source oracle: the QEMU-facing typed block path must go through the
+     * admitted client (device identity + FUA ordering + client status), not
+     * through a legacy header or a follow-up FLUSH workaround.
+     */
     FILE *f = fopen("master_core/main_wrapper.c", "r");
     char *buf = NULL;
     long sz;
@@ -440,11 +444,11 @@ static int test_main_wrapper_fua_wired(void)
     }
     buf[sz] = 0;
     fclose(f);
-    ok = strstr(buf, "WVM_BLOCK_FLAG_FUA") != NULL &&
-         strstr(buf, "MSG_BLOCK_FLUSH") != NULL &&
-         strstr(buf, "MSG_BLOCK_TYPED") != NULL &&
-         strstr(buf, "storage-device-authority.md") != NULL;
-    expect(ok, "main_wrapper FUA→FLUSH wired");
+    ok = strstr(buf, "wvm_block_client_global_request") != NULL &&
+         strstr(buf, "req->device_index") != NULL &&
+         strstr(buf, "WVM_BLOCK_ORDER_FUA") != NULL &&
+         strstr(buf, "WVM_BLOCK_WIRE_SUCCESS") != NULL;
+    expect(ok, "main_wrapper routes typed block through the admitted client");
     free(buf);
     return g_fail ? -1 : 0;
 }
@@ -484,6 +488,6 @@ int main(void)
     }
     printf("typed-block-authority: PASS "
            "(chunk-store R/W/FLUSH/FUA + boundary-cross R01 + "
-           "typed-IPC→slave-equiv + main_wrapper FUA wire)\n");
+           "typed-IPC→slave-equiv + main_wrapper client wire)\n");
     return 0;
 }

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 struct route_snapshot_copy {
     struct wvm_route_snapshot_key key;
@@ -22,10 +23,24 @@ struct route_scope_slot {
     int has_prepared;
     int has_predecessor;
     uint64_t outstanding_operation_refs;
-    /* R03: results/retries still inside retention must block retire proof. */
-    uint64_t pending_result_deadlines;
+    /*
+     * R03: the latest instant at which a completed operation's result may
+     * still be queried or retried.  This is a deadline, not a count: it is
+     * derived from the admitted snapshot horizon and expires with wall time
+     * (monotonic clock), so a finished operation cannot pin retirement
+     * forever.
+     */
+    uint64_t result_query_deadline_ms;
     uint64_t operation_retention_horizon_ms;
 };
+
+static uint64_t route_now_ms(void)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000U + (uint64_t)now.tv_nsec / 1000000U;
+}
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
 {
@@ -502,10 +517,11 @@ int wvm_route_runtime_retire(struct wvm_route_runtime *runtime,
                   "route retirement blocked: outstanding operation refs remain");
         return -1;
     }
-    if (scope->pending_result_deadlines != 0) {
+    if (scope->result_query_deadline_ms != 0 &&
+        route_now_ms() < scope->result_query_deadline_ms) {
         pthread_rwlock_unlock(&runtime->lock);
         set_error(error, error_len,
-                  "route retirement blocked: result retention deadlines remain");
+                  "route retirement blocked: result retention window is open");
         return -1;
     }
     if (scope->has_predecessor &&
@@ -727,11 +743,21 @@ int wvm_route_runtime_operation_ref_put(
     }
     slot->outstanding_operation_refs--;
     /*
-     * R03: completed ops still occupy the retention/query window when the
-     * admitted snapshot names a nonzero horizon. Drain after fence/flush.
+     * R03: a completed operation keeps its result queryable only until the
+     * admitted retention horizon elapses.  Record the latest deadline; the
+     * proof query compares it with the monotonic clock instead of waiting for
+     * a counter that nothing would ever decrement.
      */
-    if (slot->operation_retention_horizon_ms > 0)
-        slot->pending_result_deadlines++;
+    if (slot->operation_retention_horizon_ms > 0) {
+        uint64_t now = route_now_ms();
+        uint64_t deadline =
+            now > UINT64_MAX - slot->operation_retention_horizon_ms
+                ? UINT64_MAX
+                : now + slot->operation_retention_horizon_ms;
+
+        if (deadline > slot->result_query_deadline_ms)
+            slot->result_query_deadline_ms = deadline;
+    }
     pthread_rwlock_unlock(&runtime->lock);
     return 0;
 }
@@ -759,13 +785,16 @@ int wvm_route_runtime_query_retire_proof(
     }
     *active_operation_refs = slot->outstanding_operation_refs;
     /*
-     * R03: horizon complete only when outstanding refs are zero AND no
-     * retry/result retention deadlines remain. refs==0 alone is not enough
-     * when operation_retention_horizon_ms keeps results queryable.
+     * R03: horizon complete when no operation is in flight AND the result
+     * query window has actually elapsed.  refs==0 alone is not enough while
+     * the admitted horizon keeps completions queryable.
      */
     *retention_horizon_complete =
         (slot->outstanding_operation_refs == 0 &&
-         slot->pending_result_deadlines == 0) ? 1 : 0;
+         (slot->result_query_deadline_ms == 0 ||
+          route_now_ms() >= slot->result_query_deadline_ms))
+            ? 1
+            : 0;
     pthread_rwlock_unlock((pthread_rwlock_t *)&runtime->lock);
     return 0;
 }
@@ -793,7 +822,21 @@ int wvm_route_runtime_drain_result_deadlines(
                   "cannot drain result deadlines while ops outstanding");
         return -1;
     }
-    slot->pending_result_deadlines = 0;
+    /*
+     * Expire only what time has already made unreachable.  Unconditionally
+     * zeroing the window would let a caller retire a scope while a client can
+     * still legitimately query its completion.
+     */
+    if (slot->result_query_deadline_ms != 0 &&
+        route_now_ms() < slot->result_query_deadline_ms) {
+        uint64_t remaining = slot->result_query_deadline_ms - route_now_ms();
+        pthread_rwlock_unlock(&runtime->lock);
+        set_error(error, error_len,
+                  "result retention window is still open for %llu ms",
+                  (unsigned long long)remaining);
+        return -1;
+    }
+    slot->result_query_deadline_ms = 0;
     pthread_rwlock_unlock(&runtime->lock);
     return 0;
 }

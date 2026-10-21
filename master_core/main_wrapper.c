@@ -41,6 +41,7 @@
 #include "../common_include/wavevm_runtime_names.h"
 #include "../common_include/wavevm_local_memory.h"
 #include "../common_include/wavevm_memory.h"
+#include "../node_runtime/block_client.h"
 #include "../node_runtime/memory_service.h"
 #include "../node_runtime/vcpu_service.h"
 #include "../node_runtime/runtime_context.h"
@@ -1337,18 +1338,27 @@ void* client_handler(void *socket_desc) {
             }
             case WVM_IPC_TYPE_TYPED_BLOCK_REQUEST: {
                 struct wvm_typed_block_request *req = (void*)payload_buf;
+                uint32_t payload_bytes;
+                uint32_t wire_flags = 0;
+                uint16_t wire_status = WVM_BLOCK_STATUS_IO_ERROR;
+                size_t read_capacity = 0;
+                size_t read_bytes = 0;
+                uint8_t *read_buffer = NULL;
+                char block_error[160] = {0};
+                int block_rc;
+
                 if (ipc_hdr.len < sizeof(*req)) {
                     fprintf(stderr, "[IPC] malformed typed block request\n");
                     break;
                 }
-
-                uint32_t target = wvm_get_storage_node_id(req->lba_512);
-                uint32_t payload_bytes = req->payload_bytes;
-
-                /* Validate request */
-                if ((req->operation == WVM_BLOCK_OP_WRITE && payload_bytes != req->sector_count * 512) ||
-                    (req->operation == WVM_BLOCK_OP_READ && payload_bytes != 0) ||
-                    (req->operation == WVM_BLOCK_OP_FLUSH && payload_bytes != 0)) {
+                payload_bytes = req->payload_bytes;
+                if ((req->operation == WVM_BLOCK_OP_WRITE &&
+                     payload_bytes != req->sector_count * 512) ||
+                    (req->operation == WVM_BLOCK_OP_READ &&
+                     payload_bytes != 0) ||
+                    (req->operation == WVM_BLOCK_OP_FLUSH &&
+                     payload_bytes != 0) ||
+                    ipc_hdr.len < sizeof(*req) + payload_bytes) {
                     struct wvm_typed_block_completion completion = {
                         .operation_id = req->operation_id,
                         .status = WVM_BLOCK_STATUS_INVALID_OPERATION,
@@ -1363,177 +1373,95 @@ void* client_handler(void *socket_desc) {
                     break;
                 }
 
-                /* Allocate RX buffer for remote response */
-                size_t rx_buf_size = sizeof(struct wvm_header) + sizeof(struct wvm_block_payload) +
-                                     (req->operation == WVM_BLOCK_OP_READ ? req->sector_count * 512 : 0);
-                uint8_t *rx_buf = malloc(rx_buf_size);
-                uint64_t rid = u_ops.alloc_req_id(rx_buf, (uint32_t)rx_buf_size);
-
                 /*
-                 * R02: keep the typed envelope on the wire (MSG_BLOCK_TYPED).
-                 * Do not demote to legacy MSG_BLOCK_{READ,WRITE,FLUSH} which
-                 * drops operation_id / flags / queue ordering and reallocates
-                 * a disconnected rid for semantic dedup.
+                 * R02: the QEMU host is not a storage authority.  Every block
+                 * operation goes through the admitted block client, which
+                 * resolves device -> storage node -> route leaf from the
+                 * runtime projection and correlates the typed completion by
+                 * operation key.  The old path sent a 36-byte header and then
+                 * parsed the ACK payload as if it began with a header.
                  */
-                size_t typed_bytes = sizeof(struct wvm_typed_block_request) + payload_bytes;
-                size_t pkt_len = sizeof(struct wvm_header) + typed_bytes;
-                uint8_t *pkt = u_ops.alloc_packet(pkt_len, 0);
-                int success = 0;
-
-                if (pkt && rid != (uint64_t)-1 && rx_buf) {
-                    struct wvm_header *h = (struct wvm_header *)pkt;
-                    struct wvm_typed_block_request *wire =
-                        (struct wvm_typed_block_request *)(pkt + sizeof(*h));
-                    int send_rc;
-
-                    memset(h, 0, sizeof(*h));
-                    h->magic = htonl(WVM_MAGIC);
-                    h->msg_type = htons(MSG_BLOCK_TYPED);
-                    h->payload_len = htons((uint16_t)typed_bytes);
-                    h->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
-                    h->req_id = WVM_HTONLL(rid);
-                    h->qos_level = 1;
-                    if (req->flags & WVM_BLOCK_FLAG_FUA)
-                        h->flags |= WVM_FLAG_BLOCK_FUA;
-                    if (req->flags & WVM_BLOCK_FLAG_SYNC)
-                        h->flags |= WVM_FLAG_BLOCK_SYNC;
-
-                    memcpy(wire, req, typed_bytes);
-                    /* Correlation: keep semantic operation_id; rid is transport. */
-                    wire->operation_id = req->operation_id;
-
-                    h->crc32 = 0;
-                    h->crc32 = htonl(calculate_crc32(pkt, pkt_len));
-
-                    send_rc = u_ops.send_packet(pkt, pkt_len, target);
-                    if (send_rc != 0) {
-                        /* Fractal topology refuses legacy; typed MSG must also
-                         * fail closed rather than wait for a timeout. */
-                        fprintf(stderr,
-                                "[IPC] typed block send failed rc=%d target=%u\n",
-                                send_rc, target);
-                        success = 0;
-                    } else {
-                        uint64_t t_start = u_ops.get_time_us();
-                        while (u_ops.time_diff_us(t_start) < 5000000) {
-                            if (u_ops.check_req_status(rid) == 1) {
-                                struct wvm_header *rx_hdr = (struct wvm_header *)rx_buf;
-                                success = !(rx_hdr->flags & WVM_FLAG_ERROR);
-                                break;
-                            }
-                            usleep(100);
-                        }
-                    }
-
+                if (req->flags & WVM_BLOCK_FLAG_FUA)
+                    wire_flags |= WVM_BLOCK_ORDER_FUA;
+                if (req->flags & WVM_BLOCK_FLAG_SYNC)
+                    wire_flags |= WVM_BLOCK_ORDER_SYNC;
+                if (req->operation == WVM_BLOCK_OP_READ) {
+                    read_capacity = (size_t)req->sector_count * 512;
+                    read_buffer = malloc(read_capacity ? read_capacity : 1);
+                }
+                if (!wvm_block_client_global_request) {
+                    snprintf(block_error, sizeof(block_error),
+                             "no admitted block path in this runtime");
+                    block_rc = -ENOSYS;
+                } else if (req->operation == WVM_BLOCK_OP_READ && !read_buffer) {
+                    snprintf(block_error, sizeof(block_error),
+                             "block read buffer is exhausted");
+                    block_rc = -ENOMEM;
+                } else {
+                    block_rc = wvm_block_client_global_request(
+                        req->device_index, req->operation, wire_flags,
+                        req->lba_512, req->sector_count,
+                        req->operation == WVM_BLOCK_OP_WRITE ? req->data : NULL,
+                        payload_bytes, read_buffer, read_capacity, &read_bytes,
+                        &wire_status, block_error, sizeof(block_error));
+                }
+                if (block_rc != 0) {
+                    fprintf(stderr, "[IPC] typed block request failed: %s\n",
+                            block_error[0] ? block_error : "unknown block error");
+                    wire_status = WVM_BLOCK_STATUS_IO_ERROR;
+                    read_bytes = 0;
+                } else if (wire_status == WVM_BLOCK_WIRE_SUCCESS) {
+                    wire_status = WVM_BLOCK_STATUS_SUCCESS;
+                } else if (wire_status == WVM_BLOCK_WIRE_INVALID) {
+                    wire_status = WVM_BLOCK_STATUS_INVALID_OPERATION;
+                } else {
                     /*
-                     * storage-device-authority.md §4.3: FUA/SYNC writes require
-                     * durable flush for that write even without a later FLUSH.
-                     * R02: flush every chunk touched by [lba, lba+sector_count);
-                     * count=0 previously synced only the start chunk.
+                     * CONFLICT and EXPIRED are terminal outcomes for this
+                     * operation id; the guest sees an I/O error and must not
+                     * silently retry as a new write.
                      */
-                    if (success && req->operation == WVM_BLOCK_OP_WRITE &&
-                        (req->flags & (WVM_BLOCK_FLAG_FUA | WVM_BLOCK_FLAG_SYNC))) {
-                        size_t flush_pkt_len = sizeof(struct wvm_header) +
-                                              sizeof(struct wvm_block_payload);
-                        uint8_t *flush_pkt = u_ops.alloc_packet(flush_pkt_len, 0);
-                        uint8_t *flush_rx = malloc(sizeof(struct wvm_header) +
-                                                  sizeof(struct wvm_block_payload));
-                        uint64_t flush_rid = (uint64_t)-1;
-                        if (flush_pkt && flush_rx)
-                            flush_rid = u_ops.alloc_req_id(
-                                flush_rx, (uint32_t)(sizeof(struct wvm_header) +
-                                                     sizeof(struct wvm_block_payload)));
-                        if (flush_pkt && flush_rid != (uint64_t)-1) {
-                            struct wvm_header *fh = (struct wvm_header *)flush_pkt;
-                            struct wvm_block_payload *fp =
-                                (void *)(flush_pkt + sizeof(*fh));
-                            int flush_send_rc;
-                            memset(fh, 0, sizeof(*fh));
-                            fh->magic = htonl(WVM_MAGIC);
-                            fh->msg_type = htons(MSG_BLOCK_FLUSH);
-                            fh->payload_len = htons(sizeof(*fp));
-                            fh->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
-                            fh->req_id = WVM_HTONLL(flush_rid);
-                            fh->qos_level = 1;
-                            fh->flags |= WVM_FLAG_BLOCK_FUA;
-                            fp->lba = WVM_HTONLL(req->lba_512);
-                            /* R02: cover all touched sectors, not count=0. */
-                            fp->count = htonl(req->sector_count ? req->sector_count : 1);
-                            fp->padding = 0;
-                            fh->crc32 = 0;
-                            fh->crc32 = htonl(calculate_crc32(flush_pkt, flush_pkt_len));
-                            flush_send_rc = u_ops.send_packet(flush_pkt, flush_pkt_len, target);
-                            success = 0;
-                            if (flush_send_rc == 0) {
-                                uint64_t t_start = u_ops.get_time_us();
-                                while (u_ops.time_diff_us(t_start) < 5000000) {
-                                    if (u_ops.check_req_status(flush_rid) == 1) {
-                                        struct wvm_header *rx_hdr =
-                                            (struct wvm_header *)flush_rx;
-                                        success = !(rx_hdr->flags & WVM_FLAG_ERROR);
-                                        break;
-                                    }
-                                    usleep(100);
-                                }
-                            }
-                            u_ops.free_req_id(flush_rid);
-                        } else {
-                            success = 0;
-                        }
-                        if (flush_pkt)
-                            u_ops.free_packet(flush_pkt);
-                        free(flush_rx);
-                    }
+                    wire_status = WVM_BLOCK_STATUS_IO_ERROR;
+                }
 
-                    /* Send typed completion to QEMU */
-                    uint32_t response_data_size = (success && req->operation == WVM_BLOCK_OP_READ) ?
-                                                  req->sector_count * 512 : 0;
-                    size_t completion_size = sizeof(struct wvm_typed_block_completion) + response_data_size;
+                {
+                    uint32_t response_data_size =
+                        (wire_status == WVM_BLOCK_STATUS_SUCCESS &&
+                         req->operation == WVM_BLOCK_OP_READ)
+                            ? (uint32_t)read_bytes
+                            : 0;
+                    size_t completion_size =
+                        sizeof(struct wvm_typed_block_completion) +
+                        response_data_size;
                     uint8_t *completion_buf = malloc(completion_size);
 
                     if (completion_buf) {
-                        struct wvm_typed_block_completion *completion = (void*)completion_buf;
+                        struct wvm_typed_block_completion *completion =
+                            (void *)completion_buf;
+
                         completion->operation_id = req->operation_id;
-                        completion->status = success ? WVM_BLOCK_STATUS_SUCCESS : WVM_BLOCK_STATUS_IO_ERROR;
-                        completion->transferred_bytes = success ?
-                            (req->operation == WVM_BLOCK_OP_READ ? req->sector_count * 512 : payload_bytes) : 0;
-
-                        if (success && req->operation == WVM_BLOCK_OP_READ) {
-                            /* MSG_BLOCK_TYPED ACK may carry data after header. */
-                            if (rx_buf_size >= sizeof(struct wvm_header) +
-                                sizeof(struct wvm_block_payload) + response_data_size) {
-                                struct wvm_block_payload *rx_p = (struct wvm_block_payload *)
-                                    (rx_buf + sizeof(struct wvm_header));
-                                memcpy(completion->data, rx_p->data, response_data_size);
-                            }
+                        completion->status = wire_status;
+                        completion->transferred_bytes =
+                            wire_status == WVM_BLOCK_STATUS_SUCCESS
+                                ? (req->operation == WVM_BLOCK_OP_READ
+                                       ? (uint32_t)read_bytes
+                                       : payload_bytes)
+                                : 0;
+                        if (response_data_size != 0)
+                            memcpy(completion->data, read_buffer,
+                                   response_data_size);
+                        {
+                            struct wvm_ipc_header_t resp_hdr = {
+                                .type = WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION,
+                                .len = completion_size,
+                            };
+                            write_exact(qemu_fd, &resp_hdr, sizeof(resp_hdr));
+                            write_exact(qemu_fd, completion_buf,
+                                        completion_size);
                         }
-
-                        struct wvm_ipc_header_t resp_hdr = {
-                            .type = WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION,
-                            .len = completion_size,
-                        };
-                        write_exact(qemu_fd, &resp_hdr, sizeof(resp_hdr));
-                        write_exact(qemu_fd, completion_buf, completion_size);
                         free(completion_buf);
                     }
-                } else {
-                    /* Allocation failed, send error completion */
-                    struct wvm_typed_block_completion completion = {
-                        .operation_id = req->operation_id,
-                        .status = WVM_BLOCK_STATUS_IO_ERROR,
-                        .transferred_bytes = 0,
-                    };
-                    struct wvm_ipc_header_t resp_hdr = {
-                        .type = WVM_IPC_TYPE_TYPED_BLOCK_COMPLETION,
-                        .len = sizeof(completion),
-                    };
-                    write_exact(qemu_fd, &resp_hdr, sizeof(resp_hdr));
-                    write_exact(qemu_fd, &completion, sizeof(completion));
                 }
-
-                if (pkt) u_ops.free_packet(pkt);
-                if (rid != (uint64_t)-1) u_ops.free_req_id(rid);
-                free(rx_buf);
+                free(read_buffer);
                 break;
             }
             case WVM_IPC_TYPE_BLOCK_IO: {

@@ -38,6 +38,22 @@ struct wvm_runtime_memory_dispatch {
     uint16_t consistency_policy;
 };
 
+/*
+ * Device placement projection.  A block request names its device; the runtime
+ * resolves that device to the admitted storage node and to the route leaf that
+ * the completion must return on.  Nothing here may be re-derived from a legacy
+ * hash ring at request time.
+ */
+struct wvm_runtime_storage_dispatch {
+    uint32_t device_index;
+    uint32_t storage_physical_node_id;
+    uint64_t storage_node_instance_id;
+    struct wvm_runtime_route_destination storage;
+};
+
+#define WVM_RUNTIME_DISPATCH_STORAGE_ENTRY_BYTES 30U
+#define WVM_STORAGE_ROUTE_TABLE_SIZE 16U
+
 struct wvm_runtime_cpu_dispatch_list {
     struct wvm_runtime_cpu_dispatch *entries;
     size_t count;
@@ -46,6 +62,12 @@ struct wvm_runtime_cpu_dispatch_list {
 
 struct wvm_runtime_memory_dispatch_list {
     struct wvm_runtime_memory_dispatch *entries;
+    size_t count;
+    size_t capacity;
+};
+
+struct wvm_runtime_storage_dispatch_list {
+    struct wvm_runtime_storage_dispatch *entries;
     size_t count;
     size_t capacity;
 };
@@ -64,12 +86,14 @@ struct wvm_runtime_dispatch_projection {
     struct wvm_endpoint local_sidecar_endpoint;
     struct wvm_runtime_cpu_dispatch_list cpu_dispatch;
     struct wvm_runtime_memory_dispatch_list memory_dispatch;
+    struct wvm_runtime_storage_dispatch_list storage_dispatch;
 };
 
 struct wvm_runtime_dispatch_storage {
     struct wvm_runtime_dispatch_projection projection;
     struct wvm_runtime_cpu_dispatch *cpu_entries;
     struct wvm_runtime_memory_dispatch *memory_entries;
+    struct wvm_runtime_storage_dispatch *storage_entries;
 };
 
 void wvm_runtime_dispatch_storage_init(
@@ -104,6 +128,35 @@ const struct wvm_runtime_cpu_dispatch *wvm_runtime_dispatch_find_cpu(
     uint32_t guest_vcpu_index);
 const struct wvm_runtime_memory_dispatch *wvm_runtime_dispatch_find_memory(
     const struct wvm_runtime_dispatch_projection *projection, uint64_t gpa);
+/*
+ * Inline so a block client can resolve placement without linking the whole
+ * canonical dispatch module.  Entries are validated strictly increasing.
+ */
+static inline const struct wvm_runtime_storage_dispatch *
+wvm_runtime_dispatch_find_storage(
+    const struct wvm_runtime_dispatch_projection *projection,
+    uint32_t device_index)
+{
+    size_t left = 0;
+    size_t right;
+
+    if (!projection || !projection->storage_dispatch.entries)
+        return NULL;
+    right = projection->storage_dispatch.count;
+    while (left < right) {
+        size_t middle = left + (right - left) / 2U;
+        const struct wvm_runtime_storage_dispatch *entry =
+            &projection->storage_dispatch.entries[middle];
+
+        if (entry->device_index == device_index)
+            return entry;
+        if (entry->device_index < device_index)
+            left = middle + 1U;
+        else
+            right = middle;
+    }
+    return NULL;
+}
 
 int wvm_runtime_dispatch_projection_encode(
     const struct wvm_runtime_dispatch_projection *projection, uint8_t *bytes,

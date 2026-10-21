@@ -530,6 +530,11 @@ struct wvm_typed_block_request {
     uint64_t lba_512;
     uint32_t sector_count;
     uint32_t payload_bytes;
+    /*
+     * Guest device identity.  The runtime resolves it through the admitted
+     * storage dispatch; it is not an implicit "single disk" constant.
+     */
+    uint32_t device_index;
     uint8_t data[0];
 } __attribute__((packed));
 

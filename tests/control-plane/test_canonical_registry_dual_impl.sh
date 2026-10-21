@@ -14,6 +14,9 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_control.c" \
     "$repo_root/common_include/wavevm_capability.c" \
     "$repo_root/common_include/wavevm_lifecycle.c" \
+    "$repo_root/common_include/wavevm_runtime_profile.c" \
+    "$repo_root/common_include/wavevm_runtime_dispatch.c" \
+    "$repo_root/common_include/wavevm_admission_stage.c" \
     "$repo_root/tests/control-plane/test_canonical_registry_dual_impl.c" \
     -o "$tmpdir/test_canonical_registry_dual_impl"
 "$tmpdir/test_canonical_registry_dual_impl"

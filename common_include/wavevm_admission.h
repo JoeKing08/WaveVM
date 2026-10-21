@@ -157,6 +157,13 @@ struct wvm_admission_placement_options {
     struct wvm_vm_route_scope_key route_scope_key;
     const struct wvm_admission_node_listener_plan *listener_plans;
     size_t listener_plan_count;
+    /*
+     * Storage device contracts from the VM request. The planner pins each
+     * device to the VM host node and fills the reservation id; remote storage
+     * stays closed until the full typed path is verified.
+     */
+    const struct wvm_storage_assignment *storage_templates;
+    size_t storage_template_count;
 };
 
 /*
