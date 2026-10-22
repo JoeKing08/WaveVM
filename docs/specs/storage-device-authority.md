@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: guest-visible device authority, remote block I/O dispatch, read/write
 ordering, flush/FUA semantics, idempotency, error mapping, and interaction with
@@ -195,15 +194,15 @@ must carry VM identity, source device identity, delivery sequence, and typed
 status through the node runtime; QEMU remains responsible for guest IRQ/APIC
 delivery and duplicate suppression.
 
-## 7. Current Code Mapping and Known Deviations
+## 7. Implementation Touchpoints and Requirements
 
-| Current file or symbol | Current behavior | Required migration direction |
-| --- | --- | --- |
-| `wavevm-qemu/.../wavevm-all.c:wvm_send_ipc_block_io` | Serializes local block IPC on one persistent socket and sends `{lba,len,is_write}`. | Add request identity, queue ordering, flags, typed completion, and manifest validation. |
-| `slave_daemon/slave_hybrid.c:handle_block_io_phys` | Handles `MSG_BLOCK_READ/WRITE/FLUSH` with simple payload/ACK flow. | Implement operation cache, real backend durability, status/error mapping, and bounds checks under the canonical schema. |
-| `common_include/wavevm_protocol.h` | Defines `MSG_BLOCK_*` and minimal `wvm_block_payload`. | Treat as legacy decoder until versioned block payload is negotiated. |
-| Gateway/node runtime paths | Forward block packets alongside generic RPC traffic. | Preserve node-runtime authority, queue QoS, and strict VM route identity. |
-| VFIO paths | Can emit `MSG_VFIO_IRQ`. | Keep as future device-event source; do not claim V1 distributed device authority. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `wavevm-qemu/.../wavevm-all.c:wvm_send_ipc_block_io` | Add request identity, queue ordering, flags, typed completion, and manifest validation. |
+| `slave_daemon/slave_hybrid.c:handle_block_io_phys` | Implement operation cache, real backend durability, status/error mapping, and bounds checks under the canonical schema. |
+| `common_include/wavevm_protocol.h` | Treat as legacy decoder until versioned block payload is negotiated. |
+| Gateway/node runtime paths | Preserve node-runtime authority, queue QoS, and strict VM route identity. |
+| VFIO paths | Keep as future device-event source; do not claim V1 distributed device authority. |
 
 ## 8. Compatibility and Migration
 

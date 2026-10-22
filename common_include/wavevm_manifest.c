@@ -2505,6 +2505,40 @@ int wvm_storage_device_plan_validate(
     return storage_device_plan_validate_common(plan, 0, error, error_len);
 }
 
+int wvm_storage_device_plan_ensure_default_local(
+    struct wvm_storage_device_plan *plan, char *error, size_t error_len)
+{
+    struct wvm_storage_assignment *assignment;
+
+    if (!plan) {
+        set_error(error, error_len, "storage device plan is missing");
+        return -1;
+    }
+    if (plan->assignments.count != 0)
+        return 0;
+    if (bytes_are_zero(plan->qemu_device_configuration_digest,
+                       sizeof(plan->qemu_device_configuration_digest))) {
+        /* Explicit diskless request — leave empty. */
+        return 0;
+    }
+    if (!plan->assignments.entries || plan->assignments.capacity == 0) {
+        set_error(error, error_len,
+                  "storage plan has no capacity for the default local disk");
+        return -1;
+    }
+    assignment = &plan->assignments.entries[0];
+    memset(assignment, 0, sizeof(*assignment));
+    assignment->device_index = 0;
+    assignment->storage_physical_node_id = 0; /* place on VM host */
+    assignment->backend_kind = 1;
+    memcpy(assignment->device_contract_digest,
+           plan->qemu_device_configuration_digest,
+           sizeof(assignment->device_contract_digest));
+    plan->assignments.count = 1;
+    return storage_device_plan_validate_common(plan, 1, error, error_len);
+}
+
+
 static int storage_device_plan_validate_request(
     const struct wvm_storage_device_plan *plan, char *error, size_t error_len)
 {

@@ -638,6 +638,7 @@ static int transport_participant_stage(
     struct wvm_runtime_dispatch_projection projection;
     struct wvm_runtime_cpu_dispatch *cpu_entries = NULL;
     struct wvm_runtime_memory_dispatch *memory_entries = NULL;
+    struct wvm_runtime_storage_dispatch *storage_entries = NULL;
     int result;
 
     if (candidate_matches_runtime(candidate, runtime_manifest, error,
@@ -658,7 +659,9 @@ static int transport_participant_stage(
             candidate->vcpu_placements.count >
                 SIZE_MAX / sizeof(*cpu_entries) ||
             candidate->memory_placements.count >
-                SIZE_MAX / sizeof(*memory_entries)) {
+                SIZE_MAX / sizeof(*memory_entries) ||
+            candidate->storage_device_plan.assignments.count >
+                SIZE_MAX / sizeof(*storage_entries)) {
             set_error(error, error_len,
                       "activation has no captured dispatch authorities");
             return -1;
@@ -671,7 +674,13 @@ static int transport_participant_stage(
                                     ? candidate->memory_placements.count
                                     : 1U,
                                 sizeof(*memory_entries));
-        if (!cpu_entries || !memory_entries) {
+        storage_entries = calloc(
+            candidate->storage_device_plan.assignments.count
+                ? candidate->storage_device_plan.assignments.count
+                : 1U,
+            sizeof(*storage_entries));
+        if (!cpu_entries || !memory_entries || !storage_entries) {
+            free(storage_entries);
             free(memory_entries);
             free(cpu_entries);
             set_error(error, error_len,
@@ -684,10 +693,14 @@ static int transport_participant_stage(
         projection.memory_dispatch.entries = memory_entries;
         projection.memory_dispatch.capacity =
             candidate->memory_placements.count;
+        projection.storage_dispatch.entries = storage_entries;
+        projection.storage_dispatch.capacity =
+            candidate->storage_device_plan.assignments.count;
         if (wvm_runtime_dispatch_projection_build(
                 candidate, runtime_manifest, transport->delivery_records,
                 transport->delivery_route_snapshot, &projection, error,
                 error_len) != 0) {
+            free(storage_entries);
             free(memory_entries);
             free(cpu_entries);
             return -1;
@@ -703,6 +716,7 @@ static int transport_participant_stage(
                            candidate->manifest_generation,
                            &runtime_manifest->required_route_snapshot_key,
                            encode_participant_stage, &stage, error, error_len);
+    free(storage_entries);
     free(memory_entries);
     free(cpu_entries);
     return result;

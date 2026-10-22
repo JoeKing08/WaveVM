@@ -1135,6 +1135,20 @@ static int install_page_bytes(uint64_t gpa, uintptr_t aligned_addr,
         return 0;
     }
 
+    /*
+     * R05: slave helper must be single-writer (smp=1, -nodefaults). Without an
+     * SHM alias the install briefly raises PROT_WRITE on the guest mapping;
+     * refuse rather than open that window on a multi-vCPU helper.
+     */
+    {
+        const char *smp = getenv("WVM_SLAVE_VCPU_COUNT");
+        if (!smp || strcmp(smp, "1") != 0) {
+            safe_log("[WVM] slave page install refused: WVM_SLAVE_VCPU_COUNT!=1 "
+                     "(single-writer invariant)
+");
+            return -1;
+        }
+    }
     if (mprotect((void *)aligned_addr, WVM_MEMORY_PAGE_BYTES,
                  PROT_READ | PROT_WRITE) != 0)
         return -1;

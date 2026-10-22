@@ -74,6 +74,7 @@ static void free_participant_storage(
     free(storage->candidate_storage.reservation_requirement_leases);
     free(storage->dispatch_cpu_entries);
     free(storage->dispatch_memory_entries);
+    free(storage->dispatch_storage_entries);
     free(storage->runtime_vcpu_assignments);
     free(storage->runtime_memory_assignments);
     free(storage->runtime_storage_assignments);
@@ -115,6 +116,8 @@ static int allocate_participant_storage(
     ALLOC_FIELD(candidate->reservation_requirement_leases, lease_count);
     ALLOC_FIELD(storage->dispatch_cpu_entries, config->max_vcpus);
     ALLOC_FIELD(storage->dispatch_memory_entries, config->max_memory_chunks);
+    ALLOC_FIELD(storage->dispatch_storage_entries,
+                config->max_storage_assignments);
     ALLOC_FIELD(storage->runtime_vcpu_assignments, config->max_vcpus);
     ALLOC_FIELD(storage->runtime_memory_assignments, config->max_memory_chunks);
     ALLOC_FIELD(storage->runtime_storage_assignments,
@@ -136,6 +139,7 @@ static int allocate_participant_storage(
         config->max_leases_per_requirement;
     storage->dispatch_cpu_capacity = config->max_vcpus;
     storage->dispatch_memory_capacity = config->max_memory_chunks;
+    storage->dispatch_storage_capacity = config->max_storage_assignments;
     storage->runtime_vcpu_assignment_capacity = config->max_vcpus;
     storage->runtime_memory_assignment_capacity = config->max_memory_chunks;
     storage->runtime_storage_assignment_capacity =

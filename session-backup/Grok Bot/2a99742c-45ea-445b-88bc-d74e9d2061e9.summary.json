@@ -1,0 +1,18 @@
+{
+  "info": {
+    "id": "2a99742c-45ea-445b-88bc-d74e9d2061e9",
+    "cwd": "/home/joeking"
+  },
+  "session_summary": "WaveVM Grok Bot 2026-10-22",
+  "generated_title": "WaveVM Grok Bot 2026-10-22",
+  "created_at": "2026-10-12T08:27:00.000000Z",
+  "updated_at": "2026-10-22T05:21:14.000001Z",
+  "last_active_at": "2026-10-22T05:21:14.000001Z",
+  "num_messages": 5144,
+  "num_chat_messages": 936,
+  "current_model_id": "grok-4.7",
+  "chat_format_version": 1,
+  "grok_home": "/home/joeking/.grok",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off"
+}

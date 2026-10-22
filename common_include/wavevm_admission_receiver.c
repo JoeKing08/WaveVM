@@ -896,7 +896,10 @@ static int resolve_slot(struct wvm_admission_receiver *receiver,
                                       error_len) != 0 ||
         !slot || !slot->runtime_manifest_path ||
         slot->runtime_manifest_path[0] == '\0') {
-        set_error(error, error_len, "local runtime slot is unavailable");
+        /* Prefer resolve_slot's specific error when present. */
+        if (!error || !error[0]) {
+            set_error(error, error_len, "local runtime slot is unavailable");
+        }
         return -1;
     }
     *slot_out = slot;

@@ -2,6 +2,9 @@
 
 Status: normative implementation specification.
 
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
+
 Scope: exact V1 WVM-TLV schemas for control-plane, membership, route,
 admission, manifest, and local-runtime records. It completes the generic
 container defined by `wire-ipc-abi.md`. Memory, vCPU, and block data-plane

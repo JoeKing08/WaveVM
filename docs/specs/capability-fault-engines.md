@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: host capability discovery, versioned capability profiles, execution and
 fault-engine selection, userfaultfd and SIGSEGV/mprotect behavior, KVM dirty
@@ -339,15 +338,15 @@ security settings, enable userfaultfd system-wide, load a module implicitly, or
 relax container isolation. Such policy changes are explicit operator actions
 outside this specification.
 
-## 7. Current Code Mapping and Known Deviations
+## 7. Implementation Touchpoints and Requirements
 
-| Current file or mechanism | Current behavior | Required migration direction |
-| --- | --- | --- |
-| `wavevm-qemu/accel/wavevm/wavevm-user-mem.c` | Uses QEMU RAM mappings, SIGSEGV/mprotect paths, version tracking, dirty flush, and KVM-specific active page synchronization. | Split behavior into a manifest-bound fault engine context; preserve KVM's no-`PROT_NONE` rule and move unsafe signal work out of the handler. |
-| `wavevm-qemu/accel/wavevm/wavevm-cpu.c` | Couples dirty flush and vCPU handoff preparation. | Consume `DirtyJournal`/fence results from the selected engine under the vCPU handoff contract. |
-| QEMU KVM dirty-log code | Supplies native KVM dirty tracking mechanics. | Treat as one capture provider, not page-directory or resync authority. |
-| `master_core/kernel_backend.c` and `common_include/wavevm_ioctl.h` | Expose legacy global/module-oriented acceleration controls. | Publish capability evidence and bind all acceleration to per-VM contexts. |
-| CI/run scripts | Choose modes through environment and host assumptions. | Record probe results/profile selection and fail early when no correct engine exists. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `wavevm-qemu/accel/wavevm/wavevm-user-mem.c` | Split behavior into a manifest-bound fault engine context; preserve KVM's no-`PROT_NONE` rule and move unsafe signal work out of the handler. |
+| `wavevm-qemu/accel/wavevm/wavevm-cpu.c` | Consume `DirtyJournal`/fence results from the selected engine under the vCPU handoff contract. |
+| QEMU KVM dirty-log code | Treat as one capture provider, not page-directory or resync authority. |
+| `master_core/kernel_backend.c` and `common_include/wavevm_ioctl.h` | Publish capability evidence and bind all acceleration to per-VM contexts. |
+| CI/run scripts | Record probe results/profile selection and fail early when no correct engine exists. |
 
 ## 8. Compatibility and Migration
 

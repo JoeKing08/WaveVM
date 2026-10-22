@@ -950,11 +950,36 @@ int wvm_coordinator_prepare(
      * Device contracts are placed on the VM host node. The planner rejects
      * explicit remote pins, so remote storage remains closed while local
      * devices travel the same typed admission projection as CPU and memory.
+     * R02: if the (const) request omitted assignments but carried a qemu
+     * device-config digest, synthesize one local disk template for placement.
      */
-    placement_options.storage_templates =
-        request->storage_device_plan.assignments.entries;
-    placement_options.storage_template_count =
-        request->storage_device_plan.assignments.count;
+    {
+        static __thread struct wvm_storage_assignment default_disk;
+        struct wvm_storage_device_plan default_plan =
+            request->storage_device_plan;
+
+        if (default_plan.assignments.count == 0 &&
+            !bytes_are_zero(
+                default_plan.qemu_device_configuration_digest,
+                sizeof(default_plan.qemu_device_configuration_digest))) {
+            default_plan.assignments.entries = &default_disk;
+            default_plan.assignments.capacity = 1;
+            default_plan.assignments.count = 0;
+            if (wvm_storage_device_plan_ensure_default_local(
+                    &default_plan, error, error_len) != 0) {
+                goto out;
+            }
+            placement_options.storage_templates =
+                default_plan.assignments.entries;
+            placement_options.storage_template_count =
+                default_plan.assignments.count;
+        } else {
+            placement_options.storage_templates =
+                request->storage_device_plan.assignments.entries;
+            placement_options.storage_template_count =
+                request->storage_device_plan.assignments.count;
+        }
+    }
     if (wvm_admission_placement_plan_build(
             &constrained_snapshot.admission, &admission_request,
             &prepared_vm->admission_plan, prepared_vm->fence.fence_digest,

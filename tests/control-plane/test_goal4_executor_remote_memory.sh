@@ -44,6 +44,7 @@ gcc -Wall -Wextra -Werror -std=gnu11 -D_DEFAULT_SOURCE \
     "$nr/memory_service.c" \
     "$nr/executor_bridge.c" \
     "$nr/kvm_page_cache.c" \
+    "$nr/kvm_execution_fetch.c" \
     "$nr/slave_hybrid.o" \
     "$nr/slave_vfio.o" \
     "$repo_root/tests/control-plane/test_goal4_executor_remote_memory.c" \

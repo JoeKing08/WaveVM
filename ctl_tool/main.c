@@ -334,6 +334,15 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         free(constraints);
         return 0;
     }
+    /* R02: normal CREATE_VM with a device-config digest but no assignments
+     * gets one default local disk template before admission/placement. */
+    if (wvm_storage_device_plan_ensure_default_local(
+            &vm_request.storage_device_plan, error, error_len) != 0) {
+        result->status_code = WVM_CONTROL_RESULT_INVALID_REQUEST;
+        free(storage_assignments);
+        free(constraints);
+        return 0;
+    }
     memset(&id_provider, 0, sizeof(id_provider));
     id_provider.context = context;
     id_provider.allocate_id16 = allocate_random_id16;

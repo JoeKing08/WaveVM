@@ -174,4 +174,16 @@ int wvm_membership_control_dispatch(
     const struct wvm_member_key *authenticated_actor, char *error,
     size_t error_len);
 
+/*
+ * Encode canonical 0x102a RejoinMemberRequest for production senders and
+ * dual-impl fixtures. PRIOR_MEMBER may be NULL; recovery digest must be
+ * nonzero. Layout matches decode_rejoin_request / canonical-record-schema.
+ */
+int wvm_membership_rejoin_request_encode(
+    const uint8_t *member_record, size_t member_record_bytes,
+    const struct wvm_member_key *prior_member,
+    const uint8_t recovery_evidence_digest[WVM_SHA256_DIGEST_BYTES],
+    uint8_t *bytes, size_t capacity, size_t *encoded_bytes, char *error,
+    size_t error_len);
+
 #endif /* WAVEVM_MEMBERSHIP_CONTROL_H */

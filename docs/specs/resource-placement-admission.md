@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: registered allocatable capacity, VM resource requests, deterministic
 placement, host selection, reservations, admission, multi-VM isolation, and
@@ -498,18 +497,18 @@ member may release its inventory after route/membership rules finish; removing
 a member with active VM allocations is governed by the drain restrictions in
 `cluster-membership-topology-lifecycle.md`.
 
-## 9. Current Code Mapping and Known Deviations
+## 9. Implementation Touchpoints and Requirements
 
-| Current file or mechanism | Current behavior | Required migration direction |
-| --- | --- | --- |
-| `common_include/wavevm_resources.[ch]` | Defines static CPU/memory resource descriptions and placement helpers. | Become a parser/compatibility adapter for versioned inventory, eligibility fences, complete plans, explicit reservations, and host overhead. |
-| `common_include/wavevm_admission.[ch]` | Validates captured V1 inventory, normalized requests, and complete pre-activation reservations without mutating runtime state. | Grow into the coordinator-owned admission model and canonical-record renderer before it drives live reservation RPCs. |
-| `common_include/wavevm_admission_orchestrator.[ch]` | Composes durable begin/prepare/activate/commit/abort stages around route, reservation, and participant callbacks. | Connect production control transports and recovery reconciliation; do not bypass the durable coordinator with launch-script policy. |
-| `common_include/wavevm_admission_recovery.c` | Reconciles durable `ACTIVATION_DECIDED`, `COMMITTED`, `RUNNING`, and `ABORTING` states using identity-bound projections and idempotent transport callbacks. | Replace fixture-owned reconstruction with the production journal/recovery loader and participant query protocol. |
-| `ctl_tool/main.c` | Builds test-oriented node/resource configuration. | Submit normalized VM requests, report deterministic plans/rejections, and drive reservation/lifecycle APIs. |
-| `master_core/logic_core.c` | Consumes CPU/memory route state after launch. | Consume only manifest-derived per-VM placement and reject unreserved assignments. |
-| `gateway_service/aggregator.c` | Forwards according to static/learned routes. | Consume route snapshots generated for admitted participants; never decide capacity or placement. |
-| `artifacts/*/run.sh` and CI fixtures | Manually choose node counts, paths, and topology. | Remain test inputs rendered from request/manifest fixtures, not capacity truth. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `common_include/wavevm_resources.[ch]` | Become a parser/compatibility adapter for versioned inventory, eligibility fences, complete plans, explicit reservations, and host overhead. |
+| `common_include/wavevm_admission.[ch]` | Grow into the coordinator-owned admission model and canonical-record renderer before it drives live reservation RPCs. |
+| `common_include/wavevm_admission_orchestrator.[ch]` | Connect production control transports and recovery reconciliation; do not bypass the durable coordinator with launch-script policy. |
+| `common_include/wavevm_admission_recovery.c` | Replace fixture-owned reconstruction with the production journal/recovery loader and participant query protocol. |
+| `ctl_tool/main.c` | Submit normalized VM requests, report deterministic plans/rejections, and drive reservation/lifecycle APIs. |
+| `master_core/logic_core.c` | Consume only manifest-derived per-VM placement and reject unreserved assignments. |
+| `gateway_service/aggregator.c` | Consume route snapshots generated for admitted participants; never decide capacity or placement. |
+| `artifacts/*/run.sh` and CI fixtures | Remain test inputs rendered from request/manifest fixtures, not capacity truth. |
 
 ## 10. Compatibility and Migration
 

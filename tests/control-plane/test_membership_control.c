@@ -202,33 +202,13 @@ static int encode_rejoin(const uint8_t *member_record,
                          uint8_t output[8192], size_t *output_bytes,
                          char *error, size_t error_len)
 {
-    struct wvm_canonical_builder builder;
-    uint8_t prior_bytes[128];
-    uint8_t *field_value;
-    size_t prior_byte_count;
-    size_t actual_bytes;
     uint8_t recovery_evidence[WVM_SHA256_DIGEST_BYTES];
 
+    /* R08: use production encoder — do not keep a test-local wire layout. */
     memset(recovery_evidence, 0x7e, sizeof(recovery_evidence));
-    if (wvm_member_key_encode(prior_member, prior_bytes, sizeof(prior_bytes),
-                              &prior_byte_count, error, error_len) != 0 ||
-        wvm_canonical_record_begin(&builder, output, 8192, 0x102a) != 0 ||
-        wvm_canonical_field_reserve(&builder, 1, member_record_bytes,
-                                    &field_value) != 0) {
-        return -1;
-    }
-    memcpy(field_value, member_record, member_record_bytes);
-    if (wvm_canonical_field_reserve(&builder, 2, prior_byte_count,
-                                    &field_value) != 0 ||
-        wvm_member_key_encode(prior_member, field_value, prior_byte_count,
-                              &actual_bytes, error, error_len) != 0 ||
-        actual_bytes != prior_byte_count ||
-        wvm_canonical_field_append(&builder, 3, recovery_evidence,
-                                   sizeof(recovery_evidence)) != 0 ||
-        wvm_canonical_record_finish(&builder, output_bytes) != 0) {
-        return -1;
-    }
-    return 0;
+    return wvm_membership_rejoin_request_encode(
+        member_record, member_record_bytes, prior_member, recovery_evidence,
+        output, 8192, output_bytes, error, error_len);
 }
 
 static int build_ack_set(struct wvm_required_ack_set *ack_set,

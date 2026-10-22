@@ -673,7 +673,9 @@ int wvm_admission_participant_stage_decode(
         (present[5] &&
          ((storage->dispatch_cpu_capacity && !storage->dispatch_cpu_entries) ||
           (storage->dispatch_memory_capacity &&
-           !storage->dispatch_memory_entries)))) {
+           !storage->dispatch_memory_entries) ||
+          (storage->dispatch_storage_capacity &&
+           !storage->dispatch_storage_entries)))) {
         return -1;
     }
     memset(stage, 0, sizeof(*stage));
@@ -690,6 +692,10 @@ int wvm_admission_participant_stage_decode(
             storage->dispatch_memory_entries;
         storage->dispatch_projection.memory_dispatch.capacity =
             storage->dispatch_memory_capacity;
+        storage->dispatch_projection.storage_dispatch.entries =
+            storage->dispatch_storage_entries;
+        storage->dispatch_projection.storage_dispatch.capacity =
+            storage->dispatch_storage_capacity;
         if (wvm_runtime_dispatch_projection_decode(
                 fields[5].value, fields[5].value_bytes,
                 &storage->dispatch_projection, error, error_len) != 0) {

@@ -86,6 +86,9 @@ struct wvm_admission_participant_stage_storage {
     size_t dispatch_cpu_capacity;
     struct wvm_runtime_memory_dispatch *dispatch_memory_entries;
     size_t dispatch_memory_capacity;
+    /* R02: storage_dispatch rides the same ACTIVATE projection as CPU/memory. */
+    struct wvm_runtime_storage_dispatch *dispatch_storage_entries;
+    size_t dispatch_storage_capacity;
     struct wvm_vcpu_assignment *runtime_vcpu_assignments;
     size_t runtime_vcpu_assignment_capacity;
     struct wvm_memory_chunk_assignment *runtime_memory_assignments;

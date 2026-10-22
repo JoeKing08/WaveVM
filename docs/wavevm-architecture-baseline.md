@@ -5,6 +5,10 @@ Scope: this document defines architectural authority, boundaries, invariants, an
 first-version decisions. It does not claim that every item is already implemented,
 and it is not a substitute for subsystem implementation specifications.
 
+The [Document Maintenance](wavevm-refactor-roadmap.md#document-maintenance)
+rules govern this baseline and all subsystem specifications. Implementation
+progress and verification results belong in separate plan and audit records.
+
 The WaveVM design documentation has three levels:
 
 1. This baseline defines what the system is and which component owns each class
@@ -273,10 +277,10 @@ process boundary:
 - The local executor ABI must carry VM identity, incarnation, manifest/route
   generation, operation identity, completion status, and enough ordering
   information to satisfy the memory and vCPU contracts. It must be specified
-  by the memory, vCPU, and local IPC specifications before it replaces current
+  by the memory, vCPU, and local IPC specifications before it replaces legacy
   master-to-slave messages.
-  - The current `master_core` to `slave_daemon` IPC is implementation debt.
-    It is not a supported ABI and must be replaced by the typed
+  - Legacy `master_core` to `slave_daemon` IPC is not a supported production
+    ABI and must be replaced by the typed
     node-runtime/executor interface.
 - Removing a process hop is permitted only after the same role boundary,
   concurrency model, backpressure behavior, and fault behavior have regression
@@ -324,9 +328,10 @@ Forbidden responsibilities:
 - Owning a separate copy of cluster topology as the source of truth.
 - Owning another independent logic_core state machine unless that state is explicitly per-VM and synchronized by user-space control.
 
-Current caveat:
-
-- The current `wavevm.ko` has module-global state. That makes it unsuitable for multiple concurrent VM instances on the same physical host unless redesigned.
+VM-specific state must be owned by explicit kernel contexts. Shared
+module-wide transports and workers require context references and safe
+lifetimes; they cannot authorize sharing VM identity or semantic state.
+Multi-VM capability remains subject to the isolation gate in Section 14.
 
 ## 5. Mode Model
 
@@ -459,15 +464,17 @@ The identity terms are distinct:
 - `vnode_id` identifies a DHT/routing slot inside one VM namespace. A physical
   node may own multiple vnodes.
 - `primary_vnode` is the designated vnode used to identify a physical node in
-  code paths that currently accept only one raw node ID. It is not the physical
+  legacy code paths that accept only one raw node ID. It is not the physical
   node ID.
 - `WVM_INSTANCE_ID` is a local runtime discriminator used to derive socket and
   file names. It may differ between physical nodes participating in the same VM
   and must not be used as a network identity.
 - A process instance ID is diagnostic identity for one process lifetime. It is
   not a VM, node, or routing identity.
-- A network-visible composite ID is the current encoding of `{vm_id,
-  vnode_id}` in `slave_id` or `target_id`.
+- A network-visible composite ID identifies a VM-scoped routing target. The
+  legacy `slave_id` / `target_id` encoding combines `{vm_id, vnode_id}`;
+  production traffic must also meet the incarnation and route-scope
+  requirements of the wire and identity/routing specifications.
 
 V1 identity rules:
 
@@ -482,9 +489,10 @@ V1 identity rules:
   logs, and temporary paths must be explicitly parameterized by the
   registered node instance. A host-global default is invalid when two node
   instances share one host.
-- The current legacy wire header has no `vm_incarnation` field. Until a complete
-  path negotiates V1 identity, a nonzero legacy `vm_id` must not be reused while
-  old routes, packets, or processes from its previous lifetime can still exist.
+- A legacy wire path that cannot validate `vm_incarnation` must not permit
+  reuse of a nonzero legacy `vm_id` while old routes, packets, or processes
+  from its previous lifetime can still exist. The complete path must negotiate
+  V1 identity before incarnation-scoped reuse is permitted.
 - The lifecycle and wire specifications must add incarnation validation before
   immediate `vm_id` reuse is supported. The existing node `epoch` field must
   not silently be repurposed as VM incarnation.
@@ -522,13 +530,10 @@ published namespace rather than participating in a hash cycle.
 
 A VM's host node is the physical node that runs the authoritative QEMU frontend for that VM.
 
-Current limitation:
+Host placement requirements:
 
-- Host placement is implicitly derived from the first vCPU placement block.
-
-Long-term rule:
-
-- Host placement must be explicit.
+- Host placement must be explicit, not inferred from the first vCPU placement
+  block.
 - The control plane must be able to accept a VM creation request on any physical node and then choose the host node.
 - The host node does not have to be the node where the request was submitted.
 - Host placement must account for QEMU/control-plane overhead, not only guest vCPU and guest RAM.
@@ -677,8 +682,8 @@ degraded, paused, or failed lifecycle outcome; it must not be reported as
 healthy. A physical-host failure marks every hosted compute/gateway role
 unreachable together; host removal drains all hosted roles before stop.
 
-The current `WVM_SLAVE_BITS=12` implementation reserves 4096 logical vnode
-slots. This is not a permanent flat-domain, leaf-Pod, or global cluster limit.
+A 12-bit vnode-slot budget (`WVM_SLAVE_BITS=12`) represents 4096 logical slots;
+it must not define a permanent flat-domain, leaf-Pod, or global cluster limit.
 Cluster membership capacity, per-domain vnode capacity, gateway adjacency and
 route capacity, and per-VM admission workspace must have independent resource
 budgets. Storage follows actual records within those budgets, not the largest
@@ -693,24 +698,17 @@ or prefix, and leaf domains resolve local vnodes. Both topologies use the same
 semantic services and snapshot rules. The formal destination field is `u32`
 with `0xffffffff` reserved; its address space is not a tested cluster-capacity
 claim. Exact addressing, capacity checks, and acceptance tests belong to
-`docs/specs/identity-routing.md`. Existing fixed-array limits remain real until
-their consumers are migrated and verified; increasing a macro alone does not
-complete that work.
+`docs/specs/identity-routing.md`. Every consumer must enforce its declared
+capacity and be verified before a higher capacity is advertised; increasing a
+macro alone cannot establish supported scale.
 
 ## 9. Consistency Model
 
-Current implementation baseline:
-
-- User-space `page_meta_t` currently represents a directory entry with a page
-  version, subscriber/copyset state, and page data.
-- It does not currently contain a complete explicit MESI-style page-state enum
-  or a documented exclusive-owner field.
-- Existing message names such as invalidate, downgrade, and write-back do not
-  by themselves prove that a complete MESI state machine exists.
-
-V1 must first formalize the semantics of the existing directory, monotonically
-versioned pages, and subscriber/copyset model in
-`docs/specs/memory-consistency.md`. An explicit owner or page-state field may be
+The consistency contract is the user-space directory, monotonically versioned
+pages, and subscriber/copyset model specified in
+`docs/specs/memory-consistency.md`. Names such as invalidate, downgrade, and
+write-back do not by themselves establish a MESI state machine. An explicit
+owner or page-state field may be
 added only when that specification demonstrates why it is required and defines
 its transitions. Documentation and code must not claim stronger coherence than
 the accepted contract actually provides.
@@ -835,7 +833,7 @@ user-authored VM creation input. At cluster bootstrap an operator supplies
 member endpoints, role/capability declarations, Pod membership, and the desired
 topology graph. The control plane compiles those records into immutable,
 versioned next-hop snapshots and distributes them to node runtimes, sidecars,
-and gateways. Current `NODE` and `ROUTE` files are compatibility/bootstrap
+and gateways. Legacy `NODE` and `ROUTE` files are compatibility/bootstrap
 inputs only.
 
 ### 10.3 VM Route Namespace
@@ -860,9 +858,9 @@ V1 route lookup rules are strict:
 - `WVM_NODE_AUTO_ROUTE` is a sentinel, not an identity. Its resolution must
   produce a VM-scoped composite target before cross-node transmission.
 
-The fallback currently present in `gateway_service/aggregator.c` is a migration
-compatibility behavior, not the target contract. It must be restricted or
-removed when the identity/routing specification is implemented.
+Any legacy fallback in `gateway_service/aggregator.c` is subject to the
+identity/routing migration constraints; its presence cannot authorize a raw-ID
+fallback for admitted production traffic.
 
 ### 10.4 Static vs Learned Routes
 
@@ -919,8 +917,9 @@ Do not silently replace a required feature with a workaround that changes semant
 
 ## 13. Mode A Repositioning
 
-Current Mode A is too large semantically. It contains kernel-side logic that
-overlaps user-space node-runtime responsibilities.
+Mode A must not transfer user-space node-runtime semantic authority into the
+kernel. Kernel-side acceleration must not become an independent implementation
+of those responsibilities.
 
 Target Mode A shape:
 
@@ -968,13 +967,14 @@ Target invariants:
 - No module-global route table as semantic truth.
 - No module-global memory mapping pointer that can be overwritten by another VM.
 
-The migration gate stays closed while A01–A04 remain open: QUERY_CAPS
-advertises `SINGLE_CONTEXT` with max=1, and admission rejects a second Mode A
-VM via the fixed `"kernel-context"` exclusive lease. Explicit per-VM contexts
-and targeted isolation tests are scaffolding toward reopening, not evidence
-that multi-VM Mode A is safe today. Module-global VM identity and
-directory/route fallbacks must still leave the final path. Guest login/SSH E2E
-remains goal §7 and is not implied by dual Mode A stub READY.
+Before multi-context isolation is verified, capability discovery must advertise
+`SINGLE_CONTEXT` with a maximum of one context, and admission must reject a
+second Mode A VM on that node. Raising the limit requires explicit context
+ownership across sleepable and asynchronous paths, safe TX/VMA/destroy
+references, full u32 VM identity, and isolation/teardown acceptance evidence.
+Module-global VM identity and directory/route fallbacks are prohibited in the
+target path. Stub READY results cannot satisfy the Minimum guest login/SSH and
+remote-resource acceptance criteria.
 
 ## 15. Invariants
 
@@ -1050,9 +1050,9 @@ ABIs without choosing contradictory alternatives.
   topology from connectivity, route-aggregation needs, and resource budgets;
   exceeding the old constant alone does not force hierarchy. An operator does
   not hand-author one route per VM destination. Global membership and admission
-  storage must not inherit a leaf-domain budget. Current fixed-array limits
-  remain implementation restrictions until migrated and tested in both
-  topologies; neither wide IDs nor hierarchy alone prove supported scale.
+  storage must not inherit a leaf-domain budget. Declared capacities must fit
+  every consumer and be verified in both topologies before being advertised;
+  neither wide IDs nor hierarchy alone prove supported scale.
 - V1 supports controlled member registration, cordon, and drain only through
   prepared/acknowledged route snapshots with a persisted required-survivor ACK
   set. Adding a member may make capacity available to future VM admissions; it
@@ -1077,7 +1077,8 @@ ABIs without choosing contradictory alternatives.
 - UFFD is an optional fault engine. SIGSEGV/mprotect remains the restricted-host
   fallback where valid, and KVM dirty logging remains a distinct capability.
 - The kernel accelerator uses the explicit per-VM context model from Section
-  14. Until implemented, Mode A is single-VM-per-physical-node.
+  14. Until its isolation acceptance criteria are met, admission must reject
+  a second Mode A VM on the same physical node.
 - Each participating physical node has one logical node-runtime instance for
   each `{vm_id, vm_incarnation, physical_node_id}`. It may host master-role
   coordination and slave-role execution in one process or multiple local

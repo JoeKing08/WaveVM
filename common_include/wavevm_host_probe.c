@@ -120,8 +120,14 @@ static int probe_sigsegv_mprotect(void)
     if (sigaction(SIGSEGV, &sa, &old_sa) != 0) {
         goto out;
     }
-    /* Trigger exactly one recoverable fault. */
+    /*
+     * -O2 may otherwise hoist/sink the load around mprotect/sigaction because
+     * the compiler does not model those syscalls as memory clobbers. Force a
+     * compiler barrier so the faulting load executes after PROT_NONE.
+     */
+    __asm__ __volatile__("" ::: "memory");
     sink = ((volatile char *)page_ptr)[0];
+    __asm__ __volatile__("" ::: "memory");
     (void)sigaction(SIGSEGV, &old_sa, NULL);
     if (!g_probe_fault_hit ||
         (uintptr_t)g_probe_fault_addr < (uintptr_t)page_ptr ||

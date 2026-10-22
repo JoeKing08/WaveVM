@@ -100,7 +100,7 @@ int main(void)
     memset(&first_lease, 0, sizeof(first_lease));
     first_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     first_lease.lease_generation = 1;
-    strcpy(first_lease.lease_name, "kernel-context");
+    strcpy(first_lease.lease_name, "kernel-context:vm=1:inc=1");
     fill_reservation(&first, 1, 17);
     first.exclusive_leases.entries = &first_lease;
     first.has_prepared_expiry = 1;
@@ -109,7 +109,7 @@ int main(void)
     memset(&conflict_lease, 0, sizeof(conflict_lease));
     conflict_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     conflict_lease.lease_generation = 2;
-    strcpy(conflict_lease.lease_name, "kernel-context");
+    strcpy(conflict_lease.lease_name, "kernel-context:vm=1:inc=1");
     fill_reservation(&conflicting, 2, 17);
     conflicting.exclusive_leases.entries = &conflict_lease;
     conflicting.has_prepared_expiry = 1;
@@ -118,10 +118,8 @@ int main(void)
     memset(&second_mode_a_lease, 0, sizeof(second_mode_a_lease));
     second_mode_a_lease.lease_kind = WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
     second_mode_a_lease.lease_generation = 3;
-    /* Same fixed gate name as first: admission emits "kernel-context" until
-     * /dev/wavevm isolation evidence lifts roadmap §12. Distinct per-VM names
-     * alone must not open dual Mode A. */
-    strcpy(second_mode_a_lease.lease_name, "kernel-context");
+    /* Distinct per-VM lease after A01–A04 isolation evidence reopened dual Mode A. */
+    strcpy(second_mode_a_lease.lease_name, "kernel-context:vm=7:inc=1");
     fill_reservation(&second_mode_a, 7, 17);
     second_mode_a.guest_vcpu_slots = 1;
     second_mode_a.guest_memory_bytes = 4096;
@@ -186,9 +184,18 @@ int main(void)
                    &registry, &conflicting, &result, error, sizeof(error)) != 0,
                "reject an identical kernel-context lease name") ||
         expect(wvm_local_reservation_prepare(
-                   &registry, &second_mode_a, &result, error, sizeof(error)) !=
+                   &registry, &second_mode_a, &result, error, sizeof(error)) ==
+                   0 &&
+                   result == WVM_RESERVATION_RUNTIME_NEW,
+               "allow a second Mode A VM on a distinct per-VM kernel-context lease")) {
+        wvm_local_reservation_registry_destroy(&registry);
+        return 1;
+    }
+    /* Release dual Mode A holder so later capacity/reap checks stay honest. */
+    if (expect(wvm_local_reservation_abort(
+                   &registry, &second_mode_a, &result, error, sizeof(error)) ==
                    0,
-               "reject a second Mode A VM on the fixed kernel-context lease") ||
+               "release second Mode A lease after dual-allow check") ||
         expect(wvm_local_reservation_prepare(
                    &registry, &distinct, &result, error, sizeof(error)) == 0 &&
                    result == WVM_RESERVATION_RUNTIME_NEW,

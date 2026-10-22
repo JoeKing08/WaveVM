@@ -789,6 +789,60 @@ static int decode_rejoin_request(const uint8_t *bytes, size_t byte_count,
     return 0;
 }
 
+/*
+ * Production encoder for canonical 0x102a RejoinMemberRequest.
+ * Field layout matches docs/specs/canonical-record-schema.md and
+ * decode_rejoin_request above: tag1 member_record, optional tag2 prior
+ * MemberKey, required nonzero tag3 recovery_evidence digest.
+ */
+int wvm_membership_rejoin_request_encode(
+    const uint8_t *member_record, size_t member_record_bytes,
+    const struct wvm_member_key *prior_member,
+    const uint8_t recovery_evidence_digest[WVM_SHA256_DIGEST_BYTES],
+    uint8_t *bytes, size_t capacity, size_t *encoded_bytes, char *error,
+    size_t error_len)
+{
+    struct wvm_canonical_builder builder;
+    uint8_t prior_bytes[128];
+    uint8_t *field_value;
+    size_t prior_byte_count = 0;
+
+    if (!member_record || member_record_bytes == 0 || !recovery_evidence_digest ||
+        !bytes || !encoded_bytes ||
+        bytes_are_zero(recovery_evidence_digest, WVM_SHA256_DIGEST_BYTES)) {
+        set_error(error, error_len, "rejoin encode input is invalid");
+        return -1;
+    }
+    if (prior_member &&
+        wvm_member_key_encode(prior_member, prior_bytes, sizeof(prior_bytes),
+                              &prior_byte_count, error, error_len) != 0) {
+        return -1;
+    }
+    if (wvm_canonical_record_begin(&builder, bytes, capacity,
+                                   WVM_MEMBERSHIP_CONTROL_REJOIN_RECORD) != 0 ||
+        wvm_canonical_field_reserve(&builder, 1, member_record_bytes,
+                                    &field_value) != 0) {
+        set_error(error, error_len, "rejoin encode cannot begin record");
+        return -1;
+    }
+    memcpy(field_value, member_record, member_record_bytes);
+    if (prior_member) {
+        if (wvm_canonical_field_reserve(&builder, 2, prior_byte_count,
+                                        &field_value) != 0) {
+            set_error(error, error_len, "rejoin encode cannot reserve prior");
+            return -1;
+        }
+        memcpy(field_value, prior_bytes, prior_byte_count);
+    }
+    if (wvm_canonical_field_append(&builder, 3, recovery_evidence_digest,
+                                   WVM_SHA256_DIGEST_BYTES) != 0 ||
+        wvm_canonical_record_finish(&builder, encoded_bytes) != 0) {
+        set_error(error, error_len, "rejoin encode finish failed");
+        return -1;
+    }
+    return 0;
+}
+
 static int encode_member_record_alloc(
     const struct wvm_membership_controller_member_entry *entry,
     uint8_t **bytes_out, size_t *byte_count_out, char *error, size_t error_len)

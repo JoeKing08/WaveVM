@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: the user-facing VM request, the immutable admitted launch manifest,
 per-node runtime manifests, manifest publication, VM lifecycle state, startup,
@@ -302,8 +301,9 @@ the embedded total memory must exactly match the candidate's admitted memory
 placement total. The local executor service/control ports are loopback-only
 implementation endpoints, never cluster-membership or gateway endpoints.
 
-The two currently bound UDP listener ports are materialized as the reservation's
-exclusive leases before activation: the node-runtime data listener uses its
+The node-runtime data and local-executor service UDP listener ports must be
+materialized as the reservation's exclusive leases before activation: the
+node-runtime data listener uses its
 wildcard binding scope, while the local-executor service listener uses its
 loopback binding scope. A launch-plan control port is not an exclusive lease
 unless the corresponding runtime implementation actually binds it. Lease
@@ -607,16 +607,16 @@ Timeout is a control-plane observation, not proof that a remote side effect did
 not occur. Retrying a prepare, commit, or stop sends the same operation ID and
 queries the recorded result before creating a new action.
 
-## 8. Current Code Mapping and Known Deviations
+## 8. Implementation Touchpoints and Requirements
 
-| Current file or mechanism | Current behavior | Required migration direction |
-| --- | --- | --- |
-| `ctl_tool/main.c` and `common_include/wavevm_resources.[ch]` | Build static resource and route inputs for test deployments. | Parse/validate a request, invoke admission, and emit canonical manifests rather than being the only runtime truth. |
-| `artifacts/*/run.sh` and CI scripts | Encode node IDs, ports, mode, QEMU arguments, and launch order. | Generate a test manifest and derived scripts; retain scripts as fixtures rather than policy authority. |
-| `master_core/main_wrapper.c` / `user_backend.c` | Consume environment/configuration and create per-process runtime state. | In an admitted launch, consume only the validated per-node manifest, matching route snapshot, and derived dispatch projection before serving local QEMU or fabric traffic. |
-| `slave_daemon/slave_hybrid.c` | Starts workers from local flags and socket paths. | Register only manifest-assigned local executor roles and return lifecycle-ready state. |
-| `wavevm-qemu/accel/wavevm/` | Reads local WaveVM configuration and connects to local services. | Bind every connection, SHM registration, and accelerator operation to manifest identity/digest. |
-| `master_core/kernel_backend.c` | Receives global/module-style configuration through legacy IOCTLs. | Attach only to a prepared per-VM kernel context from `kernel-accelerator.md`. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `ctl_tool/main.c` and `common_include/wavevm_resources.[ch]` | Parse/validate a request, invoke admission, and emit canonical manifests rather than being the only runtime truth. |
+| `artifacts/*/run.sh` and CI scripts | Generate a test manifest and derived scripts; retain scripts as fixtures rather than policy authority. |
+| `master_core/main_wrapper.c` / `user_backend.c` | In an admitted launch, consume only the validated per-node manifest, matching route snapshot, and derived dispatch projection before serving local QEMU or fabric traffic. |
+| `slave_daemon/slave_hybrid.c` | Register only manifest-assigned local executor roles and return lifecycle-ready state. |
+| `wavevm-qemu/accel/wavevm/` | Bind every connection, SHM registration, and accelerator operation to manifest identity/digest. |
+| `master_core/kernel_backend.c` | Attach only to a prepared per-VM kernel context from `kernel-accelerator.md`. |
 
 ## 9. Compatibility and Migration
 

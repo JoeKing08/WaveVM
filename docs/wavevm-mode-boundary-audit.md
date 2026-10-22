@@ -1,17 +1,8 @@
 # WaveVM Mode A/Mode B Boundary Audit
 
-Status: Phase 1 architecture inventory **plus 2026-10-20 gate restore**.
-Explicit per-VM kernel contexts (ABI v3 BIND), private `address_space`, and
-per-context dir/route scaffolding exist, but the Mode A second-VM gate is
-**restored** (fixed `"kernel-context"` lease + QUERY_CAPS SINGLE_CONTEXT max=1)
-until A01–A04 isolation correctness closes. Module-wide UDP/TX rings remain
-shared plumbing with context-tagged slots (see `kernel-accelerator.md`
-§1.2/§8) and are not a second control plane. Guest login/SSH E2E remains goal
-§7.
-
-Legacy text below retains the historical inventory of duplicated semantic
-state. Where older paragraphs claim the gate is lifted, prefer this header and
-`kernel-accelerator.md` §1.2.
+This is an audit record, not part of the normative architecture charter.
+Requirements are defined by the [architecture baseline](wavevm-architecture-baseline.md),
+[roadmap](wavevm-refactor-roadmap.md), and owning subsystem specifications.
 
 ---
 

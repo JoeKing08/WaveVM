@@ -155,18 +155,24 @@ static int test_context_isolation(void)
     }
 
     /*
-     * Gate restored: QUERY_CAPS must advertise SINGLE_CONTEXT with max=1
-     * until A01-A04 isolation evidence reopens multi-context Mode A.
+     * Multi-context gate open: QUERY_CAPS must advertise CONTEXT_BIND with
+     * max>=2 and without SINGLE_CONTEXT after A01-A04 isolation evidence.
      */
-    if (!(caps.feature_bits & WVM_KERNEL_CAP_SINGLE_CONTEXT) ||
-        caps.max_concurrent_contexts != 1U) {
+    if ((caps.feature_bits & WVM_KERNEL_CAP_SINGLE_CONTEXT) ||
+        caps.max_concurrent_contexts < 2U) {
         fprintf(stderr,
-                "[FAIL] single-context gate not advertised (feature_bits=%llx max=%u)\n",
+                "[FAIL] multi-context not advertised (feature_bits=%llx max=%u)\n",
                 (unsigned long long)caps.feature_bits,
                 caps.max_concurrent_contexts);
-        return 1;
+        return -1;
     }
-    printf("[OK] single-context gate advertised (active=%u max=%u)\n",
+    if (caps.active_contexts < 2) {
+        fprintf(stderr,
+                "[FAIL] expected dual active contexts, got %u\n",
+                caps.active_contexts);
+        return -1;
+    }
+    printf("[OK] multi-context advertised (active=%u max=%u)\n",
            caps.active_contexts, caps.max_concurrent_contexts);
 
     return 0;
@@ -341,27 +347,58 @@ int main(int argc, char **argv)
     }
     printf("[OK] Opened /dev/wavevm for VM2 (fd=%d)\n", g_dev_fd2);
 
-    /* Gate closed: first bind OK; second Mode A bind must be rejected. */
+    /* Dual Mode A bind required for isolation evidence. */
     if (bind_vm_context(g_dev_fd1, TEST_VM1_IDENTITY, "VM1") < 0) {
         ret = 1;
         goto cleanup;
     }
-    if (bind_vm_context(g_dev_fd2, TEST_VM2_IDENTITY, "VM2") == 0) {
-        fprintf(stderr,
-                "[FAIL] second Mode A bind succeeded while gate is closed\n");
+    if (bind_vm_context(g_dev_fd2, TEST_VM2_IDENTITY, "VM2") < 0) {
+        fprintf(stderr, "[FAIL] second Mode A bind rejected\n");
         ret = 1;
         goto cleanup;
     }
-    printf("[OK] second Mode A bind rejected (gate closed)\n");
+    printf("[OK] dual Mode A contexts bound\n");
 
     if (test_context_isolation() < 0) {
         ret = 1;
         goto cleanup;
     }
 
+    /* Distinct GPA layouts for fault isolation body. */
+    {
+        struct wvm_ioctl_mem_layout layout;
+        memset(&layout, 0, sizeof(layout));
+        layout.count = 1;
+        layout.slots[0].start = TEST_GPA_BASE_1;
+        layout.slots[0].size = TEST_MEMORY_SIZE;
+        if (ioctl(g_dev_fd1, IOCTL_SET_MEM_LAYOUT, &layout) < 0) {
+            fprintf(stderr, "[FAIL] SET_MEM_LAYOUT VM1: %s\n", strerror(errno));
+            ret = 1;
+            goto cleanup;
+        }
+        layout.slots[0].start = TEST_GPA_BASE_2;
+        if (ioctl(g_dev_fd2, IOCTL_SET_MEM_LAYOUT, &layout) < 0) {
+            fprintf(stderr, "[FAIL] SET_MEM_LAYOUT VM2: %s\n", strerror(errno));
+            ret = 1;
+            goto cleanup;
+        }
+    }
+
+    if (test_memory_isolation() < 0) {
+        ret = 1;
+        goto cleanup;
+    }
+    if (test_fault_isolation() < 0) {
+        ret = 1;
+        goto cleanup;
+    }
+    if (test_teardown_isolation() < 0) {
+        ret = 1;
+        goto cleanup;
+    }
+
     printf("\n====================================\n");
-    printf("Mode A second-VM gate CLOSED (caps+BIND): PASS\n");
-    printf("Dual isolation body deferred until A01-A04 close.\n");
+    printf("Mode A dual-VM isolation: PASS\n");
     printf("====================================\n");
 
 cleanup:

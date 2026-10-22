@@ -115,6 +115,38 @@ int main(void)
     expect(wvm_vm_request_validate(&request, error, sizeof(error)) == 0,
            "a concrete node hint is still a valid request");
 
+    /* R02: default local disk when digest set and assignments empty. */
+    {
+        struct wvm_storage_assignment slot;
+        struct wvm_storage_device_plan plan;
+
+        memset(&plan, 0, sizeof(plan));
+        memset(&slot, 0, sizeof(slot));
+        memset(plan.qemu_device_configuration_digest, 0x33, 32);
+        plan.assignments.entries = &slot;
+        plan.assignments.capacity = 1;
+        expect(wvm_storage_device_plan_ensure_default_local(
+                   &plan, error, sizeof(error)) == 0 &&
+                   plan.assignments.count == 1 &&
+                   plan.assignments.entries[0].device_index == 0 &&
+                   plan.assignments.entries[0].backend_kind == 1 &&
+                   plan.assignments.entries[0].storage_physical_node_id == 0 &&
+                   memcmp(plan.assignments.entries[0].device_contract_digest,
+                          plan.qemu_device_configuration_digest, 32) == 0,
+               "R02 synthesize default local disk from qemu digest");
+        expect(wvm_storage_device_plan_ensure_default_local(
+                   &plan, error, sizeof(error)) == 0 &&
+                   plan.assignments.count == 1,
+               "R02 ensure_default is idempotent when assignments exist");
+        memset(&plan, 0, sizeof(plan));
+        plan.assignments.entries = &slot;
+        plan.assignments.capacity = 1;
+        expect(wvm_storage_device_plan_ensure_default_local(
+                   &plan, error, sizeof(error)) == 0 &&
+                   plan.assignments.count == 0,
+               "R02 zero digest stays diskless");
+    }
+
     if (failures != 0) {
         fprintf(stderr, "storage-placement tests: %d failure(s)\n", failures);
         return 1;

@@ -22,6 +22,7 @@
 #include "wavevm_runtime_profile.h"
 #include "wavevm_sha256.h"
 #include "wavevm_admission_stage.h"
+#include "wavevm_membership_control.h"
 #include "wavevm_envelope.h"
 
 static int g_fail;
@@ -564,6 +565,86 @@ static int tlv2_port_pool(struct tlv2 *t, uint16_t tag, const uint16_t *ports,
     for (size_t i = 0; i < count; i++)
         tlv2_be16(buf + 4 + i * 2, ports[i]);
     return tlv2_field(t, tag, buf, 4U + count * 2U);
+}
+
+
+static int dual_rejoin_member_request(void)
+{
+    /* R08: production encode vs independent TLV2 rebuild for 0x102a. */
+    struct wvm_node_record node;
+    struct wvm_member_key prior;
+    uint32_t gateway_ids[1] = {7};
+    uint8_t member_bytes[2048];
+    uint8_t recovery[WVM_SHA256_DIGEST_BYTES];
+    uint8_t a[8192];
+    size_t member_len = 0;
+    size_t alen = 0;
+    char err[192];
+
+    memset(&node, 0, sizeof(node));
+    memset(&prior, 0, sizeof(prior));
+    memset(recovery, 0xa5, sizeof(recovery));
+    node.physical_node_id = 17;
+    node.node_instance_id = 101;
+    node.failure_domain_id = 3;
+    node.control_endpoint.data_transport = WVM_DATA_TRANSPORT_UDP;
+    node.control_endpoint.data_address_bytes = 4;
+    node.control_endpoint.data_address[0] = 192;
+    node.control_endpoint.data_address[1] = 0;
+    node.control_endpoint.data_address[2] = 2;
+    node.control_endpoint.data_address[3] = 17;
+    node.control_endpoint.data_port = 19100;
+    node.control_endpoint.control_transport = WVM_CONTROL_TRANSPORT_TLS_TCP;
+    node.control_endpoint.control_port = 19101;
+    node.sidecar_endpoint = node.control_endpoint;
+    node.sidecar_endpoint.data_port = 19120;
+    node.sidecar_endpoint.control_port = 19121;
+    node.role_bits = 1;
+    node.pod_id = 1;
+    node.local_vnode_count = 16;
+    node.inventory.physical_node_id = 17;
+    node.inventory.node_instance_id = 101;
+    node.inventory.failure_domain_id = 3;
+    node.inventory.inventory_revision = 1;
+    node.inventory.registered_vcpu_slots = 8;
+    node.inventory.registered_memory_bytes = 16ULL * 1024ULL * 1024ULL;
+    node.inventory.reserved_host_cpu_slots = 1;
+    node.inventory.reserved_host_memory_bytes = 1024ULL * 1024ULL;
+    node.inventory.reserved_gateway_cpu_slots = 1;
+    node.inventory.reserved_gateway_memory_bytes = 1024ULL * 1024ULL;
+    node.inventory.hosted_gateway_role_ids = gateway_ids;
+    node.inventory.hosted_gateway_role_id_count = 1;
+    node.inventory.hosted_gateway_role_id_capacity = 1;
+    node.inventory.allocatable_vcpu_slots = 6;
+    node.inventory.allocatable_memory_bytes = 14ULL * 1024ULL * 1024ULL;
+    memset(node.inventory.storage_capabilities_digest, 0x11, 32);
+    memset(node.inventory.accelerator_fault_capabilities_digest, 0x12, 32);
+    memset(node.inventory.exclusive_resource_inventory_digest, 0x13, 32);
+    node.capability.physical_node_id = 17;
+    node.capability.node_instance_id = 101;
+    node.capability.profile_generation = 1;
+    memset(node.capability.profile_digest, 0x21, 32);
+    node.desired_membership_state = WVM_MANIFEST_MEMBER_ACTIVE;
+    node.observed_health_state = 1;
+    node.membership_revision = 1;
+    node.topology_revision = 1;
+    wvm_node_record_init_single_host_defaults(&node);
+    prior.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    prior.role_id = 17;
+    prior.instance_id = 99;
+    if (wvm_node_record_encode(&node, member_bytes, sizeof(member_bytes),
+                               &member_len, err, sizeof(err)) != 0) {
+        fprintf(stderr, "0x102a member encode: %s\n", err);
+        return expect(0, "0x102a member record encode");
+    }
+    if (wvm_membership_rejoin_request_encode(
+            member_bytes, member_len, &prior, recovery, a, sizeof(a), &alen,
+            err, sizeof(err)) != 0) {
+        fprintf(stderr, "0x102a encode: %s\n", err);
+        return expect(0, "0x102a production encode");
+    }
+    return dual_via_typed_and_parse_rebuild(0x102a, "RejoinMemberRequest", a,
+                                            alen);
 }
 
 static int dual_admission_eligibility_fence(void)
@@ -2879,20 +2960,8 @@ int main(void)
     dual_node_runtime_profile();
     dual_admission_reservation_stage();
     dual_admission_participant_stage();
+    dual_rejoin_member_request();
 
-    /*
-     * R08: remaining hard compound type(s) without a production encoder still
-     * use no dual-impl fixture. Do NOT count them toward dual-passed.
-     */
-    {
-        uint16_t remain[] = {0x102a};
-        size_t ri;
-        printf("  R08 PARTIAL: %zu types lack production dual-impl fixtures "
-               "(not counted in dual-passed):\n",
-               sizeof(remain) / sizeof(remain[0]));
-        for (ri = 0; ri < sizeof(remain) / sizeof(remain[0]); ri++)
-            printf("    - 0x%04x\n", remain[ri]);
-    }
 
     test_reject_duplicate_tag();
     test_self_digest_zeroing();

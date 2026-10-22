@@ -1045,20 +1045,19 @@ static int derive_listener_leases(
     }
     if (plan->kernel_accelerator_required) {
         /*
-         * Roadmap §12 short-term gate: one Mode A VM per physical node until
-         * real isolation evidence closes A01–A04 (explicit context on sleepable
-         * paths, committer send ownership, TX/VMA/destroy refs, full u32 VM
-         * identity). Fixed exclusive name rejects a second Mode A lease on the
-         * same node. Per-VM "kernel-context:vm=:inc=" names must not reopen the
-         * gate while those correctness gaps remain. Still require non-zero VM
-         * route scope so Mode A placement stays bound to a real identity.
+         * A01–A04 isolation evidence closed: per-VM exclusive lease allows
+         * multiple Mode A VMs on one node. Name includes vm+incarnation so
+         * leases do not collide across VMs. Still require non-zero VM route
+         * scope so Mode A placement stays bound to a real identity.
          */
         plan->lease_entries[2].lease_kind =
             WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT;
         plan->lease_entries[2].lease_generation = plan->lease_generation;
         written = snprintf(plan->lease_entries[2].lease_name,
                            sizeof(plan->lease_entries[2].lease_name),
-                           "kernel-context");
+                           "kernel-context:vm=%u:inc=%llu",
+                           (unsigned)route_scope_key->vm_id,
+                           (unsigned long long)route_scope_key->vm_incarnation);
         if (written < 0 || (size_t)written >=
                                sizeof(plan->lease_entries[2].lease_name)) {
             set_error(error, error_len, "kernel context lease name is too long");

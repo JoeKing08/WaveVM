@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: one VM incarnation's guest RAM across its QEMU frontend, local node
 runtime, local execution runtime, directory nodes, sidecar/gateway fabric, and
@@ -20,8 +19,9 @@ and local-execution role respectively; they are not required to remain separate
 processes. This specification's authority and ordering rules apply regardless
 of that deployment choice.
 
-This specification is normative for new work. It records current behavior where
-useful, but current behavior is not automatically conforming.
+This specification defines required behavior. Source mappings identify where
+to apply the contract; observed implementation deviations belong in separate
+audits and do not relax it.
 
 ## 1. Goal and Non-Goals
 
@@ -338,13 +338,12 @@ handoff barriers actually supplied by this specification.
 | Recovery | `MSG_FORCE_SYNC` or explicit full read response | High priority correction | Replacing an older local copy is harmless. |
 | Handoff fence | Local IPC `COMMIT_DIFF_SYNC` plus explicit commit ACKs | High priority | Fence result is tied to a VM-scoped sequence, not `SYNC_MAGIC` alone. |
 
-`SYNC_MAGIC` currently overloads `MSG_PING` and `MSG_MEM_ACK` as a fence marker.
-It is a temporary compatibility mechanism, not the stable ABI. The wire/local
-IPC specification must replace it with typed, VM-incarnation-scoped fence
-records before multi-VM production support is claimed.
+The legacy `SYNC_MAGIC` marker overloads `MSG_PING` and `MSG_MEM_ACK`.
+Production fences must use typed, VM-incarnation-scoped records under the
+wire/local IPC specification; recognizing that marker cannot establish fence
+completion.
 
-`MSG_MEM_WRITE` is currently used by some KVM dirty-page and emergency paths
-but carries no base version. It is legacy compatibility traffic and cannot be
+Legacy `MSG_MEM_WRITE` traffic carries no base version and cannot be
 the canonical multi-writer commit mechanism. It must be converted to the
 versioned commit contract or restricted to a documented single-writer,
 directory-authorized acceleration path.
@@ -409,33 +408,37 @@ the canonical versioned commit semantics.
 Timeouts are liveness policy, not a reason to relax version checks. Retries
 must be bounded and logged with a rate limit.
 
-## 8. Current Code Mapping and Known Deviations
+## 8. Implementation Touchpoints and Requirements
 
-| Current location | Current role | Required direction |
-| --- | --- | --- |
-| `master_core/logic_core.c` | Directory table, page versions, subscribers, reads, commits, force-sync. | Keep semantic authority in user space; align its paths with this state machine. |
-| `master_core/main_wrapper.c` | Local QEMU IPC, commit window, drain before CPU handoff. | Preserve per-connection fence; make commit result/version explicit. |
-| `master_core/user_backend.c` | Request table, local executor forwarding, push delivery. | Namespace request records by VM incarnation and preserve full ACK payloads. |
-| `wavevm-qemu/accel/wavevm/wavevm-user-mem.c` | TCG/KVM dirty capture, local version cache, reorder window, local fence. | Keep capture mechanics backend-specific; obey the shared commit/fence contract. |
-| `slave_daemon/slave_hybrid.c` | KVM dirty harvesting and MPSC sender. | Preserve async MPSC normal path; convert versionless fallback writes. |
-| `master_core/kernel_backend.c` | Optional kernel fault/dirty/queue acceleration and a second linked logic core. | Remove semantic authority and module-global VM state; retain only context-scoped acceleration. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `master_core/logic_core.c` | Keep semantic authority in user space; align its paths with this state machine. |
+| `master_core/main_wrapper.c` | Preserve per-connection fence; make commit result/version explicit. |
+| `master_core/user_backend.c` | Namespace request records by VM incarnation and preserve full ACK payloads. |
+| `wavevm-qemu/accel/wavevm/wavevm-user-mem.c` | Keep capture mechanics backend-specific; obey the shared commit/fence contract. |
+| `slave_daemon/slave_hybrid.c` | Preserve async MPSC normal path; convert versionless fallback writes. |
+| `master_core/kernel_backend.c` | Remove semantic authority and module-global VM state; retain only context-scoped acceleration. |
 
-Known nonconforming or incomplete behavior to resolve through targeted patches:
+Required invariants across all affected paths:
 
-1. Commit ACKs currently use a one-byte success result in some paths and do not
-   always return the resulting page version.
-2. The directory accepts a full-page version catchup exception that has no
-   explicit writer lease or resync proof.
-3. `MSG_MEM_WRITE` is versionless and is used by some dirty-page paths.
-4. `SYNC_MAGIC` is not VM-incarnation-scoped and overloads unrelated message
-   types.
-5. The kernel-linked `logic_core` duplicates directory and route semantics.
-6. Some current page-lock paths perform push/QEMU notification work before
-   releasing the lock.
-7. The current subscriber set has no specified expiry or removal policy.
+1. Commit ACKs must return typed status and the resulting page version;
+   a one-byte success marker cannot satisfy the commit contract.
+2. A full-page version catchup must carry explicit directory-authorized writer
+   lease or resync proof; it cannot bypass base-version validation.
+3. Dirty-page normal and emergency paths must use versioned commit semantics
+   or an explicitly specified directory-authorized acceleration path;
+   a versionless `MSG_MEM_WRITE` cannot independently authorize a mutation.
+4. Memory fences must be typed, VM-incarnation-scoped operations; `SYNC_MAGIC`
+   cannot overload unrelated message types as a production fence.
+5. Kernel-linked code must use derived context-scoped acceleration state and
+   must not duplicate user-space directory or route authority.
+6. Page-lock critical sections must release the lock before push or QEMU
+   notification delivery, under the ordering rules in Section 6.
+7. Subscribers must follow the identity, lease, expiry, and removal rules in
+   Section 4.5 before delivery can count toward a fence or safe identity reuse.
 
-These are migration items, not permission for a broad rewrite. Each fix must
-preserve the normal concurrent data path described in Section 6.
+Apply these requirements with targeted changes that preserve the normal
+concurrent data path described in Section 6.
 
 ## 9. Compatibility and Migration
 

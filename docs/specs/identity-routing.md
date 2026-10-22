@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: identity allocation, identity lifetime, flat and fractal route scope,
 route lookup, route-snapshot ownership, compatibility with the current 32-bit
@@ -350,17 +349,17 @@ validation, prepare/ack/publish/retire lifecycle. A gateway's `ADD_ROUTE` or
 future delete command is only a derived-snapshot installation primitive; it
 cannot independently create, remove, or reactivate a member.
 
-## 8. Current Code Mapping and Known Deviations
+## 8. Implementation Touchpoints and Requirements
 
-| Current file or symbol | Current behavior | Required migration direction |
-| --- | --- | --- |
-| `common_include/wavevm_protocol.h` | Encodes `vm_id` in the high 8 bits and an unstructured 24-bit node field. | Define a versioned route key carrying incarnation and fractal scope in the next ABI. |
-| `common_include/wavevm_config.h` | Sets `WVM_SLAVE_BITS=12`, `WVM_MAX_SLAVES`, and route-sized arrays. | Replace shared fixed limits with independent resource budgets and storage sized for actual records; 4096 is not a permanent flat/leaf ceiling. |
-| `common_include/wavevm_cluster.c`, `wavevm_admission.[ch]`, and `wavevm_runtime_dispatch.c` | Bound whole-cluster records, admission arrays, or local vnode values by the old shared constants. | Separate member/plan capacities from domain occupancy and ID validity; validate complete scoped destinations without dense-ID assumptions. |
-| `master_core/user_backend.c` | Checks raw target IDs against `WVM_MAX_GATEWAYS` even though normal sends use the local sidecar. | Cache only local sidecar/derived next-hop state; do not require every destination to fit one local array. |
-| `gateway_service/aggregator.c` | Looks up composite IDs, falls back to raw IDs, and may learn/update route addresses. | Use strict complete keys and immutable snapshot lookup; retain legacy fallback only for `vm_id=0` during migration. |
-| `common_include/wavevm_resources.c` | Allocates sequential vnodes from static `NODE` records. | Import as bootstrap data into a versioned member/topology registry. |
-| `master_core/kernel_backend.c` | Indexes module-global route cache by raw node ID. | Convert to a context-scoped derived accelerator cache after kernel specification acceptance. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `common_include/wavevm_protocol.h` | Define a versioned route key carrying incarnation and fractal scope in the next ABI. |
+| `common_include/wavevm_config.h` | Replace shared fixed limits with independent resource budgets and storage sized for actual records; 4096 is not a permanent flat/leaf ceiling. |
+| `common_include/wavevm_cluster.c`, `wavevm_admission.[ch]`, and `wavevm_runtime_dispatch.c` | Separate member/plan capacities from domain occupancy and ID validity; validate complete scoped destinations without dense-ID assumptions. |
+| `master_core/user_backend.c` | Cache only local sidecar/derived next-hop state; do not require every destination to fit one local array. |
+| `gateway_service/aggregator.c` | Use strict complete keys and immutable snapshot lookup; retain legacy fallback only for `vm_id=0` during migration. |
+| `common_include/wavevm_resources.c` | Import as bootstrap data into a versioned member/topology registry. |
+| `master_core/kernel_backend.c` | Convert to a context-scoped derived accelerator cache after kernel specification acceptance. |
 
 ## 9. Compatibility and Migration
 

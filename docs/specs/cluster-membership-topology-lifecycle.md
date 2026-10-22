@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: cluster membership, physical-node and gateway registration, health,
 flat/fractal topology, Pod membership, route-snapshot publication, scheduling
@@ -379,7 +378,7 @@ optional predecessor-drain status, but its silence cannot block successor
 commit. New normal traffic changes only after every surviving required source
 has prepared the same snapshot key/digest.
 
-The implemented V1 controller primitive is deliberately fail-closed and
+The Minimum gateway-drain primitive must be fail-closed and
 bounded to one affected VM route scope. It accepts a drain only when the
 departing healthy `ACTIVE` gateway has exactly one registered dependency for
 that VM incarnation, the successor has `topology_revision = current + 1`, the
@@ -598,25 +597,24 @@ restart, it reconciles the persisted transaction/ACK set with participants and
 either completes one known activation/retirement or aborts it; it must not infer
 completion from a member process still being alive.
 
-## 8. Current Code Mapping and Known Deviations
+## 8. Implementation Touchpoints and Requirements
 
-| Current code | Current behavior | Required migration direction |
-| --- | --- | --- |
-| `common_include/wavevm_resources.c` | Parses static `NODE` records and allocates sequential vnode ranges at startup. | Import as bootstrap input into the control-plane registry; do not make it the long-term authority. |
-| `common_include/wavevm_membership_controller.c` and `wavevm_membership_control.c` | The authority persists authenticated node/gateway registration, desired and observed member state, dependency counts, route prepare/ACK/commit/retire decisions, cluster-scope enrollment proof prepare/ACK/commit/abort decisions, one-scope fail-closed gateway-drain prepare/commit/abort frames, and fenced compute/gateway cordon transitions. The controller-owned proof builder binds a target's canonical record digest, current revision fence, caller-validated capability/topology evidence digests, and a deterministic ACK set without creating a VM route scope. The V1 receiver exposes canonical `GatewayDrainRequest` and `MemberCordonRequest` only to transport-authenticated `EXECUTOR` actors accepted by separately configured route-management and membership-management callbacks, and durably replays successful registration, rejoin, drain, and cordon results. | Connect the proof builder to the topology-aware planner and real authenticated enrollment transport. Its current conservative ACK set includes all active healthy control-plane members; production selection must reduce this to the members affected by the candidate topology while preserving the same immutable proof/revision binding. Extend the bounded one-scope drain into an explicit aggregate transaction before permitting multi-scope gateway or host drains. Bind both management authorization callbacks to the real executor/control-plane trust domain rather than test adapters. The coordinator/topology owner captures deep-copied controller records, then combines that immutable membership revision with separately owned capability and reservation evidence. It must not construct runtime membership from `NODE`/`ROUTE` files. |
-| `common_include/wavevm_control_transport.[ch]` | Provides a length-prefixed, reliable ordered stream adapter for the authenticated membership receiver. It decodes local V1 envelopes, bounds frame allocation, obtains actor identity only from the transport authentication callback, invokes the one owner dispatch, and writes the fixed 72-byte `CTRL_RESULT` on the same stream. | Bind the adapter to the real control-plane owner and its authenticated stream listener lifecycle. The adapter must remain transport-only: it must not create a second membership authority or infer actor identity from packet fields, source addresses, or payloads. |
-| `common_include/wavevm_control_owner.[ch]` | Provides the lifecycle boundary for one protected local Unix stream listener, creates one transport instance per accepted client, and joins client threads during shutdown. It owns no membership or route records; typed `authenticate` and `apply`/`dispatch` callbacks remain the only authority boundary. | Embed this owner in the user-space control-plane service that supplies the durable membership plane and real authentication policy. A remote authenticated stream may use the same transport contract, but it must not bypass the owner or create a second membership cache. |
-| `common_include/wavevm_membership_coordinator.c` | Composes authenticated join, compute cordon/drain/remove, and one-scope gateway successor prepare/required-ACK/commit-or-abort operations. Replays committed or removed operations from the controller's durable state and uses a lock-safe member status copy. | Connect this coordinator to the real control-plane transport and manifest/topology planner. Aggregate multiple affected VM scopes and host-role drains before allowing production removal. |
-| `gateway_service/aggregator.c` | Parses `ROUTE` groups, learns addresses, and offers an in-place route add/update control path. | Consume prepared immutable snapshots; do not infer membership from packet source or modify live maps as membership operations. |
-| `master_core/user_backend.c` | Uses a fixed `WVM_MAX_GATEWAYS` table and sends through a local sidecar. | Keep only local sidecar/derived next-hop state in the node runtime; remove global flat-target assumptions after the route-scope contract exists. |
-| `master_core/kernel_backend.c` | Holds module-global route state keyed by current fixed limits. | Convert to versioned per-VM accelerator cache after `kernel-accelerator.md`; it cannot be membership truth. |
-| `common_include/wavevm_cluster.c` and `wavevm_admission.[ch]` | Whole-cluster validation, snapshot/plan arrays, and scratch arrays use `WVM_MAX_SLAVES`/`WVM_MAX_GATEWAYS`. | Use caller-owned bounded member, gateway, and admission storage sized for actual records; do not inherit a single domain's vnode budget. |
-| Test scripts | Materialize one-off `NODE` and `ROUTE` files. | Generate bounded fixtures from manifests and topology records. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `common_include/wavevm_resources.c` | Import as bootstrap input into the control-plane registry; do not make it the long-term authority. |
+| `common_include/wavevm_membership_controller.c` and `wavevm_membership_control.c` | Bind topology-aware enrollment proofs to authenticated transport, immutable member/revision evidence, and the required ACK set for the affected topology. Bind both management authorization callbacks to the executor/control-plane trust domain. Capture deep-copied controller records and combine that immutable membership revision with capability and reservation evidence; do not construct membership from `NODE`/`ROUTE` files. Multi-scope gateway or host drains require an explicit aggregate transaction before removal is permitted. |
+| `common_include/wavevm_control_transport.[ch]` | Bind the adapter to the real control-plane owner and its authenticated stream listener lifecycle. The adapter must remain transport-only: it must not create a second membership authority or infer actor identity from packet fields, source addresses, or payloads. |
+| `common_include/wavevm_control_owner.[ch]` | Embed this owner in the user-space control-plane service that supplies the durable membership plane and real authentication policy. A remote authenticated stream may use the same transport contract, but it must not bypass the owner or create a second membership cache. |
+| `common_include/wavevm_membership_coordinator.c` | Connect this coordinator to the real control-plane transport and manifest/topology planner. Aggregate multiple affected VM scopes and host-role drains before allowing production removal. |
+| `gateway_service/aggregator.c` | Consume prepared immutable snapshots; do not infer membership from packet source or modify live maps as membership operations. |
+| `master_core/user_backend.c` | Keep only local sidecar/derived next-hop state in the node runtime; remove global flat-target assumptions after the route-scope contract exists. |
+| `master_core/kernel_backend.c` | Convert to versioned per-VM accelerator cache after `kernel-accelerator.md`; it cannot be membership truth. |
+| `common_include/wavevm_cluster.c` and `wavevm_admission.[ch]` | Use caller-owned bounded member, gateway, and admission storage sized for actual records; do not inherit a single domain's vnode budget. |
+| Test scripts | Generate bounded fixtures from manifests and topology records. |
 
-The current gateway control structure names `DEL_ROUTE`, but the current receive
-path handles only add/update. Even a complete delete opcode would still be
-insufficient without the state, acknowledgement, drain, and VM-dependency rules
-in this specification.
+A `DEL_ROUTE` opcode alone cannot implement member removal. Removal must obey
+the state, acknowledgement, drain, and VM-dependency rules in this
+specification regardless of the gateway's packet-control interface.
 
 ## 9. Compatibility and Migration
 

@@ -112,15 +112,15 @@ int main(void)
         return 1;
     before = caps.active_contexts;
     if (!(caps.feature_bits & WVM_KERNEL_CAP_CONTEXT_BIND) ||
-        !(caps.feature_bits & WVM_KERNEL_CAP_SINGLE_CONTEXT) ||
-        caps.max_concurrent_contexts != 1U) {
+        (caps.feature_bits & WVM_KERNEL_CAP_SINGLE_CONTEXT) ||
+        caps.max_concurrent_contexts < 2U) {
         fprintf(stderr,
-                "FAIL: single-context gate not advertised (max=%u feats=%llx)\n",
+                "FAIL: multi-context not advertised (max=%u feats=%llx)\n",
                 caps.max_concurrent_contexts,
                 (unsigned long long)caps.feature_bits);
         return 1;
     }
-    printf("[OK] single-context gate advertised (max=%u active_before=%u)\n",
+    printf("[OK] multi-context advertised (max=%u active_before=%u)\n",
            caps.max_concurrent_contexts, before);
 
     if (bind_vm(fd1, vm1) != 0) {
@@ -129,8 +129,8 @@ int main(void)
         close(fd2);
         return 1;
     }
-    if (bind_vm(fd2, vm2) == 0) {
-        fprintf(stderr, "FAIL: second Mode A bind succeeded while gate closed\n");
+    if (bind_vm(fd2, vm2) != 0) {
+        fprintf(stderr, "FAIL: second Mode A bind rejected\n");
         close(fd1);
         close(fd2);
         return 1;
@@ -138,24 +138,37 @@ int main(void)
     if (query_caps(fd1, &caps) != 0)
         return 1;
     after_bind = caps.active_contexts;
-    if (after_bind != before + 1) {
+    if (after_bind != before + 2) {
         fprintf(stderr,
-                "FAIL: expected %u active after single bind, got %u\n",
-                before + 1, after_bind);
+                "FAIL: expected %u active after dual bind, got %u\n",
+                before + 2, after_bind);
         return 1;
     }
-    printf("[OK] second bind rejected; active=%u (gate closed)\n", after_bind);
+    printf("[OK] dual bind active=%u\n", after_bind);
 
     if (set_layout(fd1, 0x100000000ULL, 64 * 1024) != 0)
         return 1;
-    printf("[OK] SET_MEM_LAYOUT accepted for the single admitted context\n");
+    if (set_layout(fd2, 0x200000000ULL, 64 * 1024) != 0)
+        return 1;
+    printf("[OK] SET_MEM_LAYOUT accepted for both contexts\n");
 
     if (unbind_vm(fd1, vm1) != 0)
         return 1;
     close(fd1);
     fd1 = -1;
+    if (query_caps(fd2, &caps) != 0)
+        return 1;
+    if (caps.active_contexts < 1) {
+        fprintf(stderr, "FAIL: sibling teardown destroyed peer context\n");
+        return 1;
+    }
+    printf("[OK] peer context survived sibling unbind (active=%u)\n",
+           caps.active_contexts);
+
+    if (unbind_vm(fd2, vm2) != 0)
+        return 1;
     close(fd2);
     fd2 = -1;
-    printf("Mode A second-VM gate CLOSED (caps+BIND reject): PASS\n");
+    printf("Mode A dual-context bind/teardown: PASS\n");
     return 0;
 }

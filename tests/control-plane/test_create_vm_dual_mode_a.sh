@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Mode A second-VM gate restore: first Mode A CREATE→RUNNING, second rejected.
-# 双 = acceptance floor (roadmap §12); gate stays closed while A01–A04 open.
-# Cites: architecture-baseline §1/§14, resource-placement-admission fixed
-# "kernel-context" exclusive lease, runtime-manifest-lifecycle §5.2.
-# Does NOT claim guest E2E (§7) and does NOT claim multi-context Mode A.
+# Mode A dual CREATE: two Mode A VMs → RUNNING after A01–A04 isolation evidence.
+# 双 = acceptance floor (roadmap §12); per-VM kernel-context lease.
+# Cites: architecture-baseline §1/§14, resource-placement-admission,
+# runtime-manifest-lifecycle §5.2. Does NOT claim guest E2E (§7).
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -254,24 +253,21 @@ if [[ "$create1_out" != status=0* ]]; then
     dump_failure vm1 "$create1_out"
     exit 1
 fi
-# Second Mode A must fail on the fixed "kernel-context" exclusive lease.
-# status=6 is PRECONDITION_FAILED / lease conflict on CREATE_VM path.
+# Second Mode A must succeed on a distinct per-VM kernel-context lease.
 create2_out=$(wait_create_running mode-a-vm2 81) || true
-if [[ "$create2_out" == status=0* ]]; then
-    echo "second Mode A CREATE_VM unexpectedly succeeded: $create2_out" >&2
-    dump_failure vm2-should-reject "$create2_out"
-    exit 1
-fi
-# Accept explicit reject statuses (6 PRECONDITION / 5 CONFLICT / non-zero).
-if [[ "$create2_out" != status=[1-9]* && "$create2_out" != status=1[0-9]* ]]; then
-    echo "second Mode A CREATE_VM did not return a failure status: $create2_out" >&2
-    dump_failure vm2-reject "$create2_out"
+if [[ "$create2_out" != status=0* ]]; then
+    dump_failure vm2 "$create2_out"
     exit 1
 fi
 
 vm1_id=$(printf '%s\n' "$create1_out" | sed -n 's/.*vm_id=\([0-9]*\).*/\1/p')
-if [[ -z "$vm1_id" || "$vm1_id" == "0" ]]; then
-    echo "Mode A CREATE_VM missing vm1_id ($create1_out)" >&2
+vm2_id=$(printf '%s\n' "$create2_out" | sed -n 's/.*vm_id=\([0-9]*\).*/\1/p')
+if [[ -z "$vm1_id" || "$vm1_id" == "0" || -z "$vm2_id" || "$vm2_id" == "0" ]]; then
+    echo "Mode A CREATE_VM missing vm ids ($create1_out / $create2_out)" >&2
+    exit 1
+fi
+if [[ "$vm1_id" == "$vm2_id" ]]; then
+    echo "Mode A dual CREATE produced identical vm_id=$vm1_id" >&2
     exit 1
 fi
 
@@ -282,6 +278,6 @@ kill -TERM "$ctl_pid"
 wait "$ctl_pid" || true
 ctl_pid=
 
-echo "Mode A gate restore: vm1 RUNNING, vm2 REJECTED: PASS"
+echo "Mode A dual CREATE RUNNING: PASS"
 echo "  vm1=$create1_out"
 echo "  vm2=$create2_out"

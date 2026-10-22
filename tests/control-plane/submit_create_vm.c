@@ -172,6 +172,16 @@ int main(int argc, char **argv)
     request.consistency_policy.max_commit_latency_ms = 1000;
     memset(request.storage_device_plan.qemu_device_configuration_digest, 0x41,
            sizeof(request.storage_device_plan.qemu_device_configuration_digest));
+    {
+        static struct wvm_storage_assignment default_disk;
+        request.storage_device_plan.assignments.entries = &default_disk;
+        request.storage_device_plan.assignments.capacity = 1;
+        if (wvm_storage_device_plan_ensure_default_local(
+                &request.storage_device_plan, error, sizeof(error)) != 0) {
+            fprintf(stderr, "submit CREATE_VM: default storage: %s\n", error);
+            return 1;
+        }
+    }
     request.lifecycle_policy.start_policy = 1;
     request.lifecycle_policy.failure_policy = 1;
     request.lifecycle_policy.completion_query_horizon_ms = 1000;

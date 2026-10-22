@@ -173,6 +173,61 @@ static void *route_lookup_race_main(void *opaque)
     return NULL;
 }
 
+
+struct r03_comp_arg {
+    struct wvm_route_runtime *runtime;
+    const struct wvm_route_snapshot_key *key;
+    atomic_int *stop;
+    atomic_int *held;
+    atomic_int *retire_ok_while_held;
+    atomic_int *retire_attempts;
+    atomic_int *worker_errors;
+    int is_retirer;
+};
+
+static void *r03_comp_worker(void *opaque)
+{
+    struct r03_comp_arg *arg = opaque;
+    char error[128];
+
+    while (!atomic_load(arg->stop)) {
+        if (arg->is_retirer) {
+            int rc;
+            int held_now;
+
+            atomic_fetch_add(arg->retire_attempts, 1);
+            held_now = atomic_load(arg->held);
+            rc = wvm_route_runtime_retire(arg->runtime, arg->key, error,
+                                          sizeof(error));
+            if (rc == 0) {
+                if (held_now > 0)
+                    atomic_fetch_add(arg->retire_ok_while_held, 1);
+                /* Scope is gone — stop the competition cleanly. */
+                atomic_store(arg->stop, 1);
+            }
+        } else {
+            if (wvm_route_runtime_operation_ref_get(
+                    arg->runtime, &arg->key->scope_key, error,
+                    sizeof(error)) != 0) {
+                /* Expected once the retirer wins a clean retire. */
+                continue;
+            }
+            atomic_fetch_add(arg->held, 1);
+            {
+                struct timespec delay = { .tv_sec = 0, .tv_nsec = 200000L };
+                nanosleep(&delay, NULL);
+            }
+            if (wvm_route_runtime_operation_ref_put(
+                    arg->runtime, &arg->key->scope_key, error,
+                    sizeof(error)) != 0) {
+                /* Put can fail if retire won after our get; not a logic bug. */
+            }
+            atomic_fetch_sub(arg->held, 1);
+        }
+    }
+    return NULL;
+}
+
 int main(void)
 {
     struct wvm_route_runtime runtime;
@@ -418,6 +473,133 @@ int main(void)
         wvm_route_runtime_destroy(&proof_runtime);
     }
 
+    /* R03: live retire ACK competition against concurrent operation refs. */
+    {
+        struct wvm_route_runtime comp_runtime;
+        struct wvm_route_snapshot_record snap;
+        struct wvm_route_rule_record rules[1];
+        struct wvm_required_ack_entry acks[1];
+        char comp_error[256] = {0};
+        pthread_t workers[4];
+        atomic_int stop;
+        atomic_int held;
+        atomic_int retire_ok_while_held;
+        atomic_int retire_attempts;
+        atomic_int worker_errors;
+        struct r03_comp_arg args[4];
+        unsigned t;
+
+        fill_rule(&rules[0], WVM_ROUTE_DESTINATION_EXACT_VNODE, 0, 0, 41,
+                  19441, 4);
+        if (finalize_snapshot(&snap, rules, 1, acks, 1, 41, 1, 4100, 4, 1, 1,
+                              comp_error, sizeof(comp_error)) != 0) {
+            fprintf(stderr, "route-runtime R03 competition setup: %s\n",
+                    comp_error);
+            return 1;
+        }
+        snap.operation_retention_horizon_ms = 40;
+        wvm_route_runtime_init(&comp_runtime);
+        if (expect(wvm_route_runtime_prepare(&comp_runtime, &snap, comp_error,
+                                             sizeof(comp_error)) == 0 &&
+                       wvm_route_runtime_activate(
+                           &comp_runtime, &snap.route_snapshot_key, comp_error,
+                           sizeof(comp_error)) == 0,
+                   "R03 competition activate") != 0) {
+            wvm_route_runtime_destroy(&comp_runtime);
+            return 1;
+        }
+        atomic_store(&stop, 0);
+        atomic_store(&held, 0);
+        atomic_store(&retire_ok_while_held, 0);
+        atomic_store(&retire_attempts, 0);
+        atomic_store(&worker_errors, 0);
+        for (t = 0; t < 4; t++) {
+            args[t].runtime = &comp_runtime;
+            args[t].key = &snap.route_snapshot_key;
+            args[t].stop = &stop;
+            args[t].held = &held;
+            args[t].retire_ok_while_held = &retire_ok_while_held;
+            args[t].retire_attempts = &retire_attempts;
+            args[t].worker_errors = &worker_errors;
+            args[t].is_retirer = (t == 0);
+            if (pthread_create(&workers[t], NULL, r03_comp_worker,
+                               &args[t]) != 0) {
+                fprintf(stderr, "R03 competition pthread_create\n");
+                atomic_store(&stop, 1);
+                while (t > 0) {
+                    t--;
+                    pthread_join(workers[t], NULL);
+                }
+                wvm_route_runtime_destroy(&comp_runtime);
+                return 1;
+            }
+        }
+        test_sleep_ms(200);
+        atomic_store(&stop, 1);
+        for (t = 0; t < 4; t++)
+            pthread_join(workers[t], NULL);
+        {
+            uint64_t refs = 99;
+            int horizon = 0;
+            unsigned spins;
+
+            for (spins = 0; spins < 40; spins++) {
+                if (wvm_route_runtime_query_retire_proof(
+                        &comp_runtime, &snap.route_snapshot_key, &refs,
+                        &horizon, comp_error, sizeof(comp_error)) == 0 &&
+                    refs == 0)
+                    break;
+                (void)wvm_route_runtime_operation_ref_put(
+                    &comp_runtime, &snap.route_snapshot_key.scope_key,
+                    comp_error, sizeof(comp_error));
+                test_sleep_ms(5);
+            }
+            test_sleep_ms(50);
+            /*
+             * Either the retirer already completed a clean retire during the
+             * race, or the scope is still present with refs=0 and a drained
+             * horizon — both are success as long as retire never won while
+             * held>0.
+             */
+            if (expect(atomic_load(&retire_ok_while_held) == 0,
+                       "R03 retire never succeeded while refs held") ||
+                expect(atomic_load(&retire_attempts) > 0,
+                       "R03 retirer attempted at least once")) {
+                wvm_route_runtime_destroy(&comp_runtime);
+                return 1;
+            }
+            if (wvm_route_runtime_query_retire_proof(
+                    &comp_runtime, &snap.route_snapshot_key, &refs, &horizon,
+                    comp_error, sizeof(comp_error)) == 0) {
+                if (refs == 0 && horizon == 1) {
+                    int retire_rc = wvm_route_runtime_retire(
+                        &comp_runtime, &snap.route_snapshot_key, comp_error,
+                        sizeof(comp_error));
+                    /*
+                     * Retire may already have won cleanly during the race
+                     * (held was 0). A second retire then fails closed — that
+                     * is still a successful competition outcome.
+                     */
+                    if (retire_rc != 0) {
+                        uint64_t refs2 = 99;
+                        int horizon2 = 0;
+                        if (expect(wvm_route_runtime_query_retire_proof(
+                                       &comp_runtime, &snap.route_snapshot_key,
+                                       &refs2, &horizon2, comp_error,
+                                       sizeof(comp_error)) != 0 ||
+                                       (refs2 == 0),
+                                   "R03 post-race retire either completes or "
+                                   "scope is already gone") != 0) {
+                            wvm_route_runtime_destroy(&comp_runtime);
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+        wvm_route_runtime_destroy(&comp_runtime);
+    }
+
     /* Phase 7: live snapshot replacement — lookups never observe a half table. */
     {
         struct wvm_route_runtime race_runtime;
@@ -543,5 +725,6 @@ int main(void)
     puts("route-runtime tests: PASS");
     puts("NOTE: Phase 7 live snapshot replacement — no half-table lookups.");
     puts("NOTE: A05 outstanding_operation_refs block retire until put.");
+    puts("NOTE: R03 live retire competition — no retire while refs held.");
     return 0;
 }

@@ -107,9 +107,8 @@ static struct kmem_cache *wvm_pkt_cache = NULL;
 /*
  * Per-VM kernel context boundary.
  *
- * Registry scaffolding allows WVM_KERNEL_MAX_CONCURRENT_CONTEXTS identities,
- * but the Mode A second-VM gate (admission + QUERY_CAPS + BIND) currently
- * advertises and enforces max=1 until A01–A04 isolation evidence lands.
+ * Registry + QUERY_CAPS + BIND advertise/enforce
+ * WVM_KERNEL_MAX_CONCURRENT_CONTEXTS after A01–A04 isolation evidence.
  * Data-plane lookups resolve through the bound context; there is no module-
  * global VM identity mirror on the final path.
  */
@@ -844,9 +843,14 @@ static int wvm_wire_encode_id(uint32_t vm_id, uint32_t node_id, uint32_t *out)
 static struct wvm_kernel_context *wvm_context_for_file(
     const struct wvm_kernel_file_context *file_context)
 {
-    if (file_context && file_context->context)
+    /*
+     * A01 fail-closed: IOCTL/mmap must use the FD's bound context only.
+     * Never fall back to the task-active slot — that would let an unbound
+     * (or wrong) FD operate on another VM's context.
+     */
+    if (file_context && file_context->bound && file_context->context)
         return file_context->context;
-    return wvm_active_context();
+    return NULL;
 }
 
 static struct wvm_kernel_context *wvm_context_from_vma(
@@ -1917,6 +1921,16 @@ static vm_fault_t wvm_page_mkwrite(struct vm_fault *vmf) {
     if (!context || !page)
         return VM_FAULT_SIGBUS;
 
+    /*
+     * R04: a permanent diff-commit failure retains the only pre-image on
+     * failed_diffs. Further guest stores must not open a new write window
+     * while that unrecovered failure is outstanding — fail closed so
+     * userspace QUERY_DIFF_STATUS / pause can take effect.
+     */
+    if (READ_ONCE(context->diff_failure) != 0 ||
+        READ_ONCE(context->failed_diff_count) != 0)
+        return VM_FAULT_SIGBUS;
+
     /* Must lock when returning VM_FAULT_LOCKED (mm unlocks afterward). */
     lock_page(page);
 
@@ -2583,8 +2597,8 @@ static int wvm_context_bind_file(
     }
 
     if (!ctx) {
-        /* Match QUERY_CAPS: gate closed → max 1 concurrent Mode A context. */
-        if (g_active_context_count >= 1) {
+        /* Match QUERY_CAPS advertised max (multi-context after A01–A04). */
+        if (g_active_context_count >= WVM_KERNEL_MAX_CONCURRENT_CONTEXTS) {
             mutex_unlock(&g_context_mutex);
             return -ENOSPC;
         }
@@ -2762,17 +2776,44 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         caps.magic = WVM_KERNEL_CONTEXT_MAGIC;
         caps.version = WVM_KERNEL_CONTEXT_ABI_VERSION;
         /*
-         * Gate restored: advertise single-context until A01–A04 isolation
-         * evidence exists. Registry may still hold migration scaffolding;
-         * BIND enforces this advertised max=1.
+         * Multi-context advertised after A01–A04 isolation evidence.
+         * BIND enforces this advertised maximum with -ENOSPC.
          */
-        caps.max_concurrent_contexts = 1U;
+        caps.max_concurrent_contexts = WVM_KERNEL_MAX_CONCURRENT_CONTEXTS;
         mutex_lock(&g_context_mutex);
         caps.active_contexts = (uint32_t)g_active_context_count;
         mutex_unlock(&g_context_mutex);
-        caps.feature_bits =
-            WVM_KERNEL_CAP_CONTEXT_BIND | WVM_KERNEL_CAP_SINGLE_CONTEXT;
+        caps.feature_bits = WVM_KERNEL_CAP_CONTEXT_BIND;
         if (copy_to_user(argp, &caps, sizeof(caps))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        ret = 0;
+        goto out;
+    }
+    case IOCTL_WVM_QUERY_DIFF_STATUS: {
+        struct wvm_ioctl_diff_status st;
+        struct wvm_kernel_context *context = wvm_context_for_file(file_context);
+        struct diff_task_t *task;
+
+        memset(&st, 0, sizeof(st));
+        st.magic = WVM_KERNEL_DIFF_STATUS_MAGIC;
+        st.version = WVM_KERNEL_DIFF_STATUS_VERSION;
+        if (!context) {
+            ret = -ENOTCONN;
+            goto out;
+        }
+        spin_lock_bh(&context->diff_lock);
+        st.last_failure = context->diff_failure;
+        st.failed_diff_count = context->failed_diff_count;
+        if (!list_empty(&context->failed_diffs)) {
+            task = list_first_entry(&context->failed_diffs, struct diff_task_t,
+                                   list);
+            st.oldest_failed_gpa = task->gpa;
+            st.oldest_send_retries = task->send_retries;
+        }
+        spin_unlock_bh(&context->diff_lock);
+        if (copy_to_user(argp, &st, sizeof(st))) {
             ret = -EFAULT;
             goto out;
         }

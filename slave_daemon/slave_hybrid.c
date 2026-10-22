@@ -50,6 +50,7 @@
 #include "../common_include/wavevm_x86_context.h"
 #include "../node_runtime/executor_runtime.h"
 #include "../node_runtime/kvm_page_cache.h"
+#include "../node_runtime/kvm_execution_fetch.h"
 #include "../node_runtime/memory_service.h"
 #include "../node_runtime/runtime_context.h"
 
@@ -2773,44 +2774,26 @@ static int ensure_kvm_page_snapshot(
     const struct wvm_header *hdr, uint64_t gpa, uint8_t *hva,
     uint64_t *version_out)
 {
-    uint8_t state = WVM_KVM_PAGE_ABSENT;
-    uint64_t version = 0;
     uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
-    uint8_t page[WVM_MEMORY_PAGE_BYTES];
-    struct wvm_mem_ack ack;
     char error[256] = {0};
     int result;
 
-    if (!hva || !version_out ||
-        wvm_kvm_page_cache_global_lookup(
-            gpa, &state, &version, error, sizeof(error)) != 0) {
+    if (!hva || !version_out) {
         return -EINVAL;
     }
-    if (state == WVM_KVM_PAGE_CLEAN && version != 0) {
-        *version_out = version;
-        return 0;
-    }
-    if (state == WVM_KVM_PAGE_DIRTY ||
-        state == WVM_KVM_PAGE_SUBMITTING) {
-        return -EBUSY;
-    }
-
     build_kvm_snapshot_operation_id(hdr, gpa, operation_id);
-    memset(&ack, 0, sizeof(ack));
-    result = wvm_memory_service_global_request_fault(
-        gpa, operation_id, 1, &ack, page, error, sizeof(error));
-    if (result != 0 || ack.status != WVM_MEM_ACK_SUCCESS ||
-        ack.version == 0 || ack.data_bytes != WVM_MEMORY_PAGE_BYTES) {
-        return result != 0 ? result : -EIO;
+    /*
+     * R06: production fetch path shared with the micro KVM evidence harness.
+     * Instruction bytes land in HVA before KVM_RUN; execution therefore
+     * depends on remote page content, not on a discarded prefetch buffer.
+     */
+    result = wvm_kvm_fetch_execution_page(gpa, operation_id, hva, version_out,
+                                          error, sizeof(error));
+    if (result != 0 && error[0] != '\0') {
+        fprintf(stderr, "[KVM cache] execution page fetch GPA=%#llx: %s\n",
+                (unsigned long long)gpa, error);
     }
-    result = wvm_kvm_page_cache_global_install_full(
-        gpa, ack.version, error, sizeof(error));
-    if (result != 0) {
-        return result;
-    }
-    memcpy(hva, page, WVM_MEMORY_PAGE_BYTES);
-    *version_out = ack.version;
-    return 0;
+    return result;
 }
 
 static int ensure_kvm_execution_page(
@@ -4010,6 +3993,12 @@ static int spawn_tcg_processes(int base_id) {
             setenv("WVM_SOCK_REQ", fd_r, 1);  
             setenv("WVM_SOCK_PUSH", fd_p, 1); 
             setenv("WVM_ROLE", "SLAVE", 1);
+            /*
+             * R05: each TCG helper is a single-vCPU, -nodefaults process so the
+             * page-install path may briefly raise PROT_WRITE without a concurrent
+             * guest writer. Advertise that invariant to the QEMU helper.
+             */
+            setenv("WVM_SLAVE_VCPU_COUNT", "1", 1);
             char session_fd_str[16];
             snprintf(session_fd_str, sizeof(session_fd_str), "%d",
                      session_pair[1]);
@@ -4046,6 +4035,8 @@ static int spawn_tcg_processes(int base_id) {
             qemu_argv[ai++] = "-nographic";
             qemu_argv[ai++] = "-S";
             qemu_argv[ai++] = "-nodefaults";
+            qemu_argv[ai++] = "-smp";
+            qemu_argv[ai++] = "1";
             qemu_argv[ai] = NULL;
 
             execvp(qemu_bin, qemu_argv);

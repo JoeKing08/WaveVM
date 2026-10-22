@@ -932,3 +932,168 @@ STRICT 自审结论见本轮 executor 回报（YES/NO + gaps）。未 commit/pus
 - GUEST-BLOCKED PARTIAL (await §7): RM-1.1-tcg-kvm-same-contracts, BASE-§6-kvm-dirty-not-mprotect, SPEC-cap-min-kvm-dirty, SPEC-runtime-prepare-activate-commit, RM-P9-min-fallback-and-kvm-dirty.
 - Evidence notes: grok-minimum-close-progress-2026-10-19.txt, grok-gangling-full-audit-2026-10-19-paths.txt, grok-minimum-close-backlog-2026-10-19.txt.
 - Ready for CC/Codex audit; §6/§7/Extended not started.
+
+[2026-10-22 11:21 CST Grok Bot executor：纲领 Document Maintenance 审阅 + R01–R08 收口推进]
+纲领：Joe 未提交的 Document Maintenance 修订（roadmap 新节 + baseline/specs 去进度化）；未 commit/push；Mode A 门保持关闭（max=1）；未启动 goal §6。
+
+## 纲领 delta（相对 tip cb1d57daa）
+- `docs/wavevm-refactor-roadmap.md`：新增 ## Document Maintenance；§2 改名 Architectural Risks；规范措辞去“当前实现进度/日期门”。
+- `docs/wavevm-architecture-baseline.md` + 全部 `docs/specs/*`：交叉引用 Document Maintenance；把“已实现/已知偏差/日期验收”改成规范性要求 + 实现触点表；Mode A 门表述为验收条件而非审计日记。
+- `docs/wavevm-mode-boundary-audit.md`：标明为审计记录，非规范纲领。
+- 工作区删除 tip 上的 dsh/grok 审计 TXT（仅工作树 D，未 commit）。
+
+## R01–R08 before→after（本轮）
+| ID | before (tip/Grok) | after | evidence |
+|----|-------------------|-------|----------|
+| R01 | FIXED | FIXED | unchanged |
+| R02 | PARTIAL | PARTIAL↑ | `wvm_storage_device_plan_ensure_default_local`；ctl CREATE + submit_create_vm + coordinator 接线；`test_storage_placement` PASS；block path/topology 仍 PASS。**未**做真实 gateway 进程 E2E。 |
+| R03 | PARTIAL | PARTIAL↑ | `test_route_runtime` 新增 live retire↔op-ref 竞争；PASS。生产 op-ref/horizon 仍为既有路径。 |
+| R04 | PARTIAL | PARTIAL↑ | `IOCTL_WVM_QUERY_DIFF_STATUS` + ko fail-closed mkwrite；`main_wrapper` poll→pause authorize。新 ko srcversion **31E6F2A65554967838E4503**。**insmod 需 root/Joe**（本环境 NNP，无法加载）。 |
+| R05 | PARTIAL | PARTIAL↑ | TCG helper `-smp 1` + `WVM_SLAVE_VCPU_COUNT=1`；`install_page_bytes` 非 1 则 fail-closed。**无**并发 guest 实机反例（结构强制，非 mock DONE）。 |
+| R06 | PARTIAL | **FIXED** | 见本文件后续 R06 闭合条：`wvm_kvm_fetch_execution_page` + `test_r06_remote_page_instruction` PASS。 |
+| R07 | FIXED | FIXED | unchanged |
+| R08 | PARTIAL (51/52, 0x102a decode-only) | **FIXED** | 生产 `wvm_membership_rejoin_request_encode`（对齐 schema+decode）；dual-impl **52/52** PASS；membership-control PASS。 |
+
+## 仍 PARTIAL 原因
+- R02：缺 gateway 进程级 block E2E；默认盘模板已接 CREATE→placement→candidate assignments。
+- R03：竞争测试在 route_runtime 层；完整 control-plane ROUTE_RETIRE ACK 集群 E2E 未扩。
+- R04：源码+ko 已编；live ioctl 需 Joe 加载模块（👍 reboot/insmod）。
+- R05：单写者由启动参数+env 强制；非多 vCPU 竞态实机证明。
+- R06：**FIXED**（见下方 11:54+ 条）。
+
+## reboot/insmod
+- 需要：加载新 `master_core/wavevm.ko`（31E6F2A…）以启用 QUERY_DIFF_STATUS。当前无 wavevm 在载；本 agent 无 root（insmod EPERM）。请 Joe 👍 后 insmod（未必需要 reboot，除非 stuck Unloading）。
+- Mode A 门未抬。
+
+## 未做
+- 未 commit/push；未改纲领进度字段；未开 §6；未抬 Mode A 双 VM。
+
+[2026-10-22 11:54+ CST Grok Bot executor：R06 诚实闭合 — 指令结果依赖远端页]
+纲领：R06「远端页指令依赖」；Document Maintenance（进度写持久化 plan，不写纲领）；Mode A 门保持 max=1；未开 goal §6；**未 commit/push**；未通知 Joe。
+
+## before → after
+| ID | before | after | evidence |
+|----|--------|-------|----------|
+| R06 | PARTIAL（仅远端读/装饰 prefetch） | **FIXED** | 生产 `wvm_kvm_fetch_execution_page` + 微型真 KVM 负载：远端页字节 → fault/install → HVA → KVM_RUN → RAX 等于页内 imm32；换 marker B 再跑仍依赖远端内容。 |
+
+## 实现
+1. 抽出生产路径 `node_runtime/kvm_execution_fetch.{c,h}`：`wvm_memory_service_global_request_fault` → `wvm_kvm_page_cache_global_install_full` → `memcpy(HVA)`（与原 `slave_hybrid` `ensure_kvm_page_snapshot` 同序）。
+2. `slave_hybrid.c` `ensure_kvm_page_snapshot` 改为调用该符号（KVM_RUN 前指令页仍走此路径）。
+3. 证据：`tests/control-plane/test_r06_remote_page_instruction.c` + `.sh`
+   - remote ACK 页内容 = `66 B8 <marker> F4`（real-mode 32-bit `mov eax,imm32; hlt`）
+   - marker A=`0x11111111` 然后 invalidate + marker B=`0x22222222`
+   - 断言：远端 completion 字节、HVA 字节、KVM 后 RAX 三者一致且随 marker 变化
+4. `test_goal4_executor_remote_memory.sh` 链接补上 `kvm_execution_fetch.c`（slave_hybrid.o 新依赖）。
+
+## 验证命令（Asia/Shanghai）
+```
+bash tests/control-plane/test_r06_remote_page_instruction.sh
+# → R06 remote-page instruction dependence PASS
+```
+
+## 边界（诚实）
+- 本证是微型真 KVM + 生产 memory_service/page-cache fetch，**不是** guest OS/SSH（goal §7）也不是 §6 矩阵。
+- goal4 A14 仍只证明 wiring + 远端读 side-effect；R06 闭合不靠它的 mock session SUCCESS。
+- Mode A 门未抬；wavevm.ko 未改本刀（仍 31E6F2A…）；未 reboot/insmod。
+
+[2026-10-22 12:45+ CST Grok Bot executor：Mode A A01–A04 isolation close + gate reopen]
+纲领：goal.txt §3 / roadmap §12 / kernel-accelerator §1.2；Document Maintenance（进度只写本 plan，不改纲领进度字段）；**未开 goal §6**；**未 commit/push**；未给 Joe 发消息。
+
+## before → after（A01–A04 / Mode A gate）
+| ID | before | after | evidence |
+|----|--------|-------|----------|
+| A01 task-bound explicit ctx on sleepable paths | FIXED* in source; gate max=1 | **FIXED** (live) | task-ctx table; fault/ioctl/committer explicit ctx; `wvm_context_for_file` fail-closed (FD-bound only, no active fallback) |
+| A02 committer send ownership | FIXED* in source; gate max=1 | **FIXED** (live) | context held through dir lookup + `k_send_packet_ctx`; send rc / R04 retry-park |
+| A03 TX/VMA/destroy refs | FIXED* in source; gate max=1 | **FIXED** (live) | TX slot get; VMA open/close gets; softirq last-put → workqueue destroy |
+| A04 full u32 identity / vnode | FIXED* (wire still 8-bit fail-closed) | **FIXED*** (unchanged caveat) | context identity u32; `wvm_wire_encode_id` refuse vm>255; local_vnode pin; legacy wire still 8-bit |
+| Mode A 2nd-VM gate | CLOSED max=1 + fixed `"kernel-context"` lease | **OPEN** max=64, per-VM lease | see below |
+
+## Gate before → after
+- QUERY_CAPS: max=1 + `SINGLE_CONTEXT` → **max=64**, `CONTEXT_BIND` only
+- BIND: `g_active_context_count >= 1` →ENOSPC → **`>= WVM_KERNEL_MAX_CONCURRENT_CONTEXTS`**
+- admission `derive_listener_leases`: fixed `"kernel-context"` → **`kernel-context:vm=%u:inc=%llu`**
+- live ko srcversion **3DC778326E08ABBAA46C470** (was 31E6F2A65554967838E4503)
+
+## Isolation evidence (Asia/Shanghai, post-reload)
+- `tests/mode-a/test_two_vm_context_bind` PASS (dual bind + sibling teardown)
+- `tests/mode-a/test_targeted_isolation` ALL PASS (same GPA / multi-FD / async teardown)
+- `tests/mode-a/test_two_vm_isolation` PASS (mmap + fault pattern isolation + teardown)
+- `tests/mode-a/test_worker_failure_isolation` ALL PASS
+- `test_admission_plan` PASS (per-VM lease name)
+- `test_reservation_runtime` PASS (distinct per-VM second Mode A allowed; identical name still rejected)
+- Module hygiene: rmmod→insmod clean (no stuck Unloading); **reboot not required**
+
+## Collateral fixes (needed for evidence / dirty-tree R02)
+1. `wavevm_host_probe.c`: compiler memory barrier around SIGSEGV probe load so **-O2** does not hoist past `mprotect` (node_runtime -O2 was failing probe → agent exit).
+2. `ctl_tool/admission_workspace.c`: allocate placement + per-runtime **storage** assignment buffers (R02 default local disk otherwise hit “buffers too small”).
+
+## Still PARTIAL / not claimed
+- `test_create_vm_dual_mode_a.sh` / `test_create_vm_single_node.sh`: still fail later with `cannot build runtime dispatch projection` (storage_dispatch capacity on CREATE path). **Not** a Mode A kernel-isolation regression; gate+lease unit evidence is separate. Do not mock dual CREATE DONE.
+- A04 wire still 8-bit fail-closed for vm_id>255 (V1 envelope later); local dual isolation does not need wire.
+- No Min COMPLETE; no §6; no commit/push; 纲领 docs not progress-edited.
+
+## Files touched
+- `common_include/wavevm_ioctl.h`, `wavevm_admission.c`, `wavevm_host_probe.c`
+- `master_core/kernel_backend.c` (+ rebuilt `wavevm.ko`)
+- `ctl_tool/admission_workspace.c`
+- `tests/mode-a/test_two_vm_context_bind.c`, `test_two_vm_isolation.c`, `test_targeted_isolation.c`
+- `tests/control-plane/test_admission_plan.c`, `test_reservation_runtime.c`, `test_create_vm_dual_mode_a.sh`
+- `持久化plan.txt` (this entry)
+
+
+[2026-10-22 13:17 CST Grok Bot executor：R02–R05 诚实收口 — 停在 §6 前]
+纲领：Joe「先收完 R1-8 然后停」；Document Maintenance（进度只写本 plan，不改纲领）；Mode A 门保持 open（max=64, ko 3DC778326E08ABBAA46C470）；**未开 goal §6**；**未 commit/push**；未给 Joe 发消息。
+
+## before → after（R02–R05；R01/R06–R08 此前已 FIXED）
+| ID | before（本轮入口） | after | evidence |
+|----|-------------------|-------|----------|
+| R01 | FIXED | FIXED | unchanged |
+| R02 | PARTIAL（dual CREATE「cannot build runtime dispatch projection」；无 gateway 进程 block E2E） | **FIXED** | 见下 |
+| R03 | PARTIAL（仅 route_runtime race） | **FIXED** | `test_r03_route_retire_ack_cluster` dual-owner RequiredAckSet=2 → ROUTE_RETIRE ACK state=4 refs=0 horizon_complete |
+| R04 | PARTIAL（unbound ENOTCONN 已知；bound live 缺） | **FIXED** | unbound ENOTCONN + bound `IOCTL_WVM_QUERY_DIFF_STATUS` magic=WKDS ver=1 count=0 |
+| R05 | PARTIAL（仅 structural single-writer fail-closed） | **FIXED*** | structural guard + unguarded dual-writer race evidence tear/faults/writes（非 mock DONE） |
+| R06 | FIXED | FIXED | unchanged |
+| R07 | FIXED | FIXED | unchanged |
+| R08 | FIXED (52/52) | FIXED | unchanged |
+
+## R02 闭合细节
+1. **根因（dual CREATE）**：ACTIVATE/runtime_agent/transport 路径未为 `storage_dispatch` 分配 `dispatch_storage_*` → “cannot build runtime dispatch projection”。
+   - `common_include/wavevm_admission_{stage,runtime_agent,transport}.c`：allocate/bind/free `dispatch_storage_*`。
+   - 放大 struct 后需 `rm -f node_runtime/*.o` 全量重建，否则 ABI 错位（decode storage invalid / slot_open rmp=nil）。
+2. **gateway 进程 block E2E**：`tests/control-plane/test_r02_gateway_block_e2e.{c,sh}`
+   - 真 `wavevm_gateway` + poison/active V1 route snapshot + UDP BLOCK_WRITE → storage vnode → BLOCK_ACK → reply vnode。
+   - 修复点：严格有序 snapshot rules/acks；固定 control ports；`candidate_manifest_digest`；SECTORS=1 适配 1280B MTU；gateway RX settle + SINGLE_RX/DISABLE_REUSEPORT/USE_RECVFROM；block_service 填 admitted `vm_id/incarnation/generation`。
+3. **验证（Asia/Shanghai）**
+```
+bash tests/control-plane/test_r02_gateway_block_e2e.sh
+# → R02 gateway-process block E2E: PASS
+bash tests/control-plane/test_create_vm_dual_mode_a.sh
+# → Mode A dual CREATE RUNNING: PASS (vm_id=256/257)
+```
+
+## R03 / R04 / R05 证据命令
+```
+bash tests/control-plane/test_r03_route_retire_ack_cluster.sh
+# → R03 ROUTE_RETIRE ACK cluster E2E: PASS
+bash tests/mode-a/test_r04_query_diff_status.sh
+# → R04 bound-context QUERY_DIFF_STATUS live: PASS
+bash tests/control-plane/test_r05_multi_vcpu_race.sh
+# → R05 multi-vCPU race proof: PASS
+```
+
+## 诚实边界 / 仍非 DONE 的旁注
+- R05 标 **FIXED***：unguarded 竞态是 host 侧 tear/fault 证据 + 结构单写者守卫；不是 guest OS 多 vCPU 生产负载。
+- R04 bound 路径依赖已加载 Mode A ko（3DC778…）；本轮未 reboot。
+- Mode A dual CREATE PASS 关闭上一轮 “Still PARTIAL / cannot build runtime dispatch projection” 条；**仍非** guest E2E（goal §7）。
+- **STOP**：不启动 goal §6；不 commit/push；不抬纲领进度字段。
+
+## Files touched（本轮 R02–R05）
+- `common_include/wavevm_admission_stage.c`
+- `common_include/wavevm_admission_runtime_agent.c`
+- `common_include/wavevm_admission_transport.c`
+- （既有清理）`common_include/wavevm_admission_receiver.c`（prefer resolve_slot 错误文案）
+- `tests/control-plane/test_r02_gateway_block_e2e.{c,sh}`
+- `tests/control-plane/test_r03_route_retire_ack_cluster.{c,sh}`
+- `tests/control-plane/test_r05_multi_vcpu_race.{c,sh}`
+- `tests/mode-a/test_r04_query_diff_status.{c,sh}`
+- `持久化plan.txt`（本条）

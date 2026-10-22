@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: remote vCPU execution between a QEMU frontend, node runtimes, local
 execution runtimes, KVM workers, and TCG helper QEMU processes. This document
@@ -215,9 +214,9 @@ For KVM, the contract includes at least:
   must complete a previous exit before the next KVM run.
 - Exit class, error detail, and valid-field indicators.
 
-The current `wvm_kvm_context_t` already contains registers, copied sregs,
-LAPIC, vCPU events, FPU, XCRS, MP state, TSC-related MSRs, and small IO/MMIO
-records. It must become an explicitly versioned schema; a raw native
+`wvm_kvm_context_t` export/import must preserve the required register, sregs,
+LAPIC, event, FPU, XCRS, MP, TSC/MSR, and IO/MMIO state through an explicitly
+versioned schema; a raw native
 `sizeof(wvm_kvm_context_t)` packet is not a portable contract.
 
 ### 4.2 TCG Context
@@ -232,9 +231,9 @@ For TCG, the contract includes at least:
   guest virtual-clock epoch, not copied as an unrelated host/QEMU timestamp.
 - Exit class and device completion state.
 
-The current `wvm_tcg_context_t` carries much of this state. Its large fixed
-layout and QEMU-internal assumptions require schema versioning and capability
-negotiation before heterogeneous builds can claim compatibility.
+`wvm_tcg_context_t` export/import must preserve the required state through
+schema versioning and capability negotiation. A fixed host layout or
+QEMU-internal assumption cannot establish compatibility across builds.
 
 ### 4.3 Backend Compatibility
 
@@ -369,16 +368,16 @@ bits that would restart an already initialized AP.
 - Completion-cache eviction must retain an entry at least through the origin's
   documented retry/query horizon or return a clear `RESULT_EXPIRED` error.
 
-## 9. Current Code Mapping and Known Deviations
+## 9. Implementation Touchpoints and Requirements
 
-| Current file or symbol | Current behavior | Required migration direction |
-| --- | --- | --- |
-| `wavevm-qemu/.../wavevm-cpu.c` | Captures KVM/TCG state, flushes TCG dirty pages, sends local CPU IPC, then imports ACK. | Bind capture/import to explicit handoff sequence, fence result, event watermark, and versioned context schema. |
-| `master_core/main_wrapper.c` | Resolves a target then forwards `MSG_VCPU_RUN` through `wvm_rpc_call`. | Node runtime validates manifest/route generation and maintains per-vCPU ownership/correlation. |
-| `master_core/logic_core.c` | Uses request contexts and long timeout/retry behavior. | Split delivery retry from execution completion; use a deduplicated result query/replay model. |
-| `slave_daemon/slave_hybrid.c` | Caches some VCPU exits, creates KVM vCPUs, imports/exports context, and executes `KVM_RUN`. | Make cache key/lifetime VM-incarnation-scoped and expose typed `IN_PROGRESS`/completion state. |
-| `wavevm-qemu/.../wavevm-all.c` | Helper-QEMU path imports, executes, exports, and may serialize some Mode B execution. | Preserve required device/IRQ semantics without making serial execution the universal normal path. |
-| `common_include/wavevm_protocol.h` | Defines host-native KVM/TCG context containers. | Add versioned field maps and capability negotiation. |
+| File, symbol, or boundary | Required responsibility |
+| --- | --- |
+| `wavevm-qemu/.../wavevm-cpu.c` | Bind capture/import to explicit handoff sequence, fence result, event watermark, and versioned context schema. |
+| `master_core/main_wrapper.c` | Node runtime validates manifest/route generation and maintains per-vCPU ownership/correlation. |
+| `master_core/logic_core.c` | Split delivery retry from execution completion; use a deduplicated result query/replay model. |
+| `slave_daemon/slave_hybrid.c` | Make cache key/lifetime VM-incarnation-scoped and expose typed `IN_PROGRESS`/completion state. |
+| `wavevm-qemu/.../wavevm-all.c` | Preserve required device/IRQ semantics without making serial execution the universal normal path. |
+| `common_include/wavevm_protocol.h` | Add versioned field maps and capability negotiation. |
 
 ## 10. Compatibility and Migration
 

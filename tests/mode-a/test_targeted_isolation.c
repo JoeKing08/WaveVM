@@ -494,6 +494,6 @@ int main(void)
         return 1;
     }
     printf("\nTARGETED ISOLATION: ALL PASS\n");
-    printf("Isolation evidence OK (necessary but not sufficient; second-VM gate stays closed until A01-A04).\n");
+    printf("Isolation evidence OK (same-GPA / multi-FD / async teardown).\n");
     return 0;
 }

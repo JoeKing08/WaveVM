@@ -541,6 +541,16 @@ int wvm_storage_device_plan_decode(
     const uint8_t *bytes, size_t encoded_bytes,
     struct wvm_storage_device_plan *plan, char *error, size_t error_len);
 
+/*
+ * R02: when CREATE_VM carries a qemu device-config digest but no device
+ * assignments, synthesize one local disk template (device_index=0,
+ * backend_kind=1, contract digest = qemu digest). Intentionally empty plans
+ * with a zero digest remain empty. STORAGE_PHYSICAL_NODE_ID 0 means "place on
+ * VM host" for the admission planner.
+ */
+int wvm_storage_device_plan_ensure_default_local(
+    struct wvm_storage_device_plan *plan, char *error, size_t error_len);
+
 int wvm_lifecycle_policy_validate(
     const struct wvm_lifecycle_policy *policy, char *error, size_t error_len);
 int wvm_lifecycle_policy_encode(

@@ -54,6 +54,9 @@ extern int user_backend_init(
 void *g_shm_ptr = NULL;
 size_t g_shm_size = 0;
 int g_dev_fd = -1;
+/* R04: set when QUERY_DIFF_STATUS reports retained failed diffs. */
+static int g_mode_a_diff_paused = 0;
+static struct wvm_ioctl_diff_status g_mode_a_diff_status;
 extern int g_my_node_id;
 uint32_t g_my_vm_id = 0;
 static const struct wvm_runtime_manifest_storage *g_runtime_storage_ptr;
@@ -331,6 +334,8 @@ static int runtime_gate_register_qemu(
     return result;
 }
 
+static int poll_mode_a_diff_status(void);
+
 static int runtime_gate_authorize_connection(uint64_t connection_id)
 {
     struct wvm_runtime_operation operation;
@@ -340,6 +345,15 @@ static int runtime_gate_authorize_connection(uint64_t connection_id)
 
     if (!g_runtime_gate_active) {
         return 0;
+    }
+    /* R04: refuse new work once Mode A has a retained permanent diff failure. */
+    if (poll_mode_a_diff_status() > 0 || g_mode_a_diff_paused) {
+        fprintf(stderr,
+                "[R04] runtime authorize refused: Mode A paused after diff "
+                "failure count=%u gpa=%#llx\n",
+                g_mode_a_diff_status.failed_diff_count,
+                (unsigned long long)g_mode_a_diff_status.oldest_failed_gpa);
+        return -EIO;
     }
     memset(&operation, 0, sizeof(operation));
     operation_id = __sync_fetch_and_add(&g_runtime_operation_sequence, 1);
@@ -370,6 +384,55 @@ static int runtime_gate_authorize_connection(uint64_t connection_id)
                 error[0] ? error : "authorization failure");
     }
     return result;
+}
+
+
+/*
+ * R04 userspace consumer: poll Mode A permanent diff-commit failures and pause
+ * further authorized runtime work. The kernel retains pre-images on
+ * failed_diffs and fails closed on subsequent mkwrite; this side surfaces the
+ * failure to the control/runtime path instead of letting the VM run as if
+ * commits succeeded.
+ */
+static int poll_mode_a_diff_status(void)
+{
+    struct wvm_ioctl_diff_status st;
+
+    if (g_dev_fd < 0 ||
+        g_runtime_storage.manifest.negotiated_profile.kernel_accelerator_bits ==
+            0) {
+        return 0;
+    }
+    memset(&st, 0, sizeof(st));
+    if (ioctl(g_dev_fd, IOCTL_WVM_QUERY_DIFF_STATUS, &st) != 0) {
+        if (errno == ENOTTY || errno == EINVAL) {
+            /* Older ko without the ioctl — do not invent success. */
+            return 0;
+        }
+        fprintf(stderr,
+                "[R04] QUERY_DIFF_STATUS failed errno=%d (%s)\n", errno,
+                strerror(errno));
+        return -1;
+    }
+    if (st.magic != WVM_KERNEL_DIFF_STATUS_MAGIC ||
+        st.version < WVM_KERNEL_DIFF_STATUS_VERSION) {
+        fprintf(stderr, "[R04] QUERY_DIFF_STATUS ABI mismatch magic=%u ver=%u\n",
+                st.magic, (unsigned)st.version);
+        return -1;
+    }
+    g_mode_a_diff_status = st;
+    if (st.failed_diff_count != 0 || st.last_failure != 0) {
+        if (!g_mode_a_diff_paused) {
+            fprintf(stderr,
+                    "[R04] Mode A diff commit failed permanently "
+                    "count=%u last_failure=%d oldest_gpa=%#llx — pausing VM\n",
+                    st.failed_diff_count, st.last_failure,
+                    (unsigned long long)st.oldest_failed_gpa);
+        }
+        g_mode_a_diff_paused = 1;
+        return 1;
+    }
+    return 0;
 }
 
 static int bind_kernel_context_from_manifest(uint32_t physical_node_id)

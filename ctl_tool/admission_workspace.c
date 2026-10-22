@@ -10,12 +10,14 @@ enum buffer_index {
     SELECTED_MEMBERS,
     VCPUS,
     MEMORY,
+    STORAGE,
     REQUIREMENTS,
     CAPABILITIES,
     RESERVATIONS,
     RUNTIMES,
     LOCAL_VCPUS,
     LOCAL_MEMORY,
+    LOCAL_STORAGE,
     DEPENDENCIES,
     ACTIVATION_ROUTES,
     PLACEMENT_BYTES,
@@ -40,12 +42,15 @@ int wvm_ctl_admission_buffers_reset(
         {member_count, sizeof(struct wvm_required_member), 0},
         {requested_vcpus, sizeof(struct wvm_vcpu_assignment), 0},
         {node_count * 2U, sizeof(struct wvm_memory_chunk_assignment), 0},
+        /* R02 default local disk (+ headroom); placement rejects if capacity < templates. */
+        {8U, sizeof(struct wvm_storage_assignment), 0},
         {node_count, sizeof(struct wvm_reservation_requirement), 0},
         {member_count, sizeof(struct wvm_capability_ref), 0},
         {node_count, sizeof(struct wvm_resource_reservation), 0},
         {node_count, sizeof(struct wvm_node_runtime_manifest), 0},
         {requested_vcpus, sizeof(struct wvm_vcpu_assignment), 0},
         {node_count * 2U, sizeof(struct wvm_memory_chunk_assignment), 0},
+        {8U, sizeof(struct wvm_storage_assignment), 0},
         {member_count, sizeof(struct wvm_startup_dependency), 0},
         {1, sizeof(struct wvm_route_snapshot_key), 0},
         {WVM_ENVELOPE_MAX_LOCAL_PAYLOAD, 1, 0},
@@ -110,6 +115,8 @@ int wvm_ctl_admission_buffers_reset(
     prepared->placement_plan.vcpu_assignments.capacity = requested_vcpus;
     prepared->placement_plan.memory_assignments.entries = parts[MEMORY];
     prepared->placement_plan.memory_assignments.capacity = node_count * 2U;
+    prepared->placement_plan.storage_assignments.entries = parts[STORAGE];
+    prepared->placement_plan.storage_assignments.capacity = 8U;
     prepared->placement_plan.reservation_requirements.entries = parts[REQUIREMENTS];
     prepared->placement_plan.reservation_requirements.capacity = node_count;
     prepared->candidate.required_capabilities.entries = parts[CAPABILITIES];
@@ -130,6 +137,9 @@ int wvm_ctl_admission_buffers_reset(
             (struct wvm_memory_chunk_assignment *)parts[LOCAL_MEMORY] +
             i * (node_count * 2U);
         runtime->local_memory_assignments.capacity = node_count * 2U;
+        runtime->local_storage_assignments.entries =
+            (struct wvm_storage_assignment *)parts[LOCAL_STORAGE] + i * 8U;
+        runtime->local_storage_assignments.capacity = 8U;
         runtime->startup_dependencies.entries =
             (struct wvm_startup_dependency *)parts[DEPENDENCIES] +
             i * member_count;

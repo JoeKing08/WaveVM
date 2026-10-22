@@ -55,21 +55,19 @@ struct wvm_ioctl_mem_layout {
  * Context-bound Mode A admission.
  *
  * Manifest-gated launch must BIND its VM identity before using /dev/wavevm.
- * Mode A second-VM gate is restored (A01–A04 open): QUERY_CAPS advertises
- * SINGLE_CONTEXT with max_concurrent_contexts=1. Per-VM context registry code
- * remains, but admission+caps must not claim multi-context until isolation
- * evidence closes those gaps. BIND still enforces the advertised max (-ENOSPC).
- * SET_VM_ID is retired (-EOPNOTSUPP).
+ * After A01–A04 isolation evidence, QUERY_CAPS advertises CONTEXT_BIND with
+ * max_concurrent_contexts=WVM_KERNEL_MAX_CONCURRENT_CONTEXTS (no SINGLE_CONTEXT).
+ * BIND enforces the advertised max (-ENOSPC). SET_VM_ID is retired (-EOPNOTSUPP).
  */
 #define WVM_KERNEL_CONTEXT_MAGIC       0x574b4358U /* "WKCX" */
 #define WVM_KERNEL_CONTEXT_ABI_VERSION 3U /* F11: +node_instance_id; needs new ko */
 #define WVM_KERNEL_DIGEST_BYTES        32U
 #define WVM_KERNEL_FENCE_BYTES         16U
-/* Registry hard cap (code); QUERY_CAPS advertises 1 while the gate is closed. */
+/* Registry + QUERY_CAPS advertised concurrent Mode A context limit. */
 #define WVM_KERNEL_MAX_CONCURRENT_CONTEXTS 64U
 
 #define WVM_KERNEL_CAP_CONTEXT_BIND    (1ULL << 0)
-#define WVM_KERNEL_CAP_SINGLE_CONTEXT  (1ULL << 1) /* set while second-VM gate closed */
+#define WVM_KERNEL_CAP_SINGLE_CONTEXT  (1ULL << 1) /* legacy; unset when multi-context open */
 
 struct wvm_ioctl_route_snapshot_key {
     struct {
@@ -110,5 +108,26 @@ struct wvm_ioctl_context_caps {
 #define IOCTL_WVM_BIND_CONTEXT  _IOW('G', 30, struct wvm_ioctl_context_bind)
 #define IOCTL_WVM_UNBIND_CONTEXT _IOW('G', 31, struct wvm_ioctl_context_bind)
 #define IOCTL_WVM_QUERY_CAPS    _IOR('G', 32, struct wvm_ioctl_context_caps)
+
+/*
+ * R04: userspace consumer for permanent Mode A diff-commit failures.
+ * Bound context reports retained failed_diffs / last errno so the runtime can
+ * pause or fail the VM instead of silently continuing after pre-image park.
+ */
+#define WVM_KERNEL_DIFF_STATUS_MAGIC 0x574b4453U /* "WKDS" */
+#define WVM_KERNEL_DIFF_STATUS_VERSION 1U
+
+struct wvm_ioctl_diff_status {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t reserved;
+    int32_t last_failure; /* 0 = none; else negated errno or send_rc */
+    uint32_t failed_diff_count;
+    uint64_t oldest_failed_gpa; /* 0 when count==0 */
+    uint32_t oldest_send_retries;
+    uint32_t reserved2;
+};
+
+#define IOCTL_WVM_QUERY_DIFF_STATUS     _IOR('G', 33, struct wvm_ioctl_diff_status)
 
 #endif // WAVEVM_IOCTL_H

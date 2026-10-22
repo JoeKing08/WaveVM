@@ -370,8 +370,8 @@ int main(void)
                        WVM_EXCLUSIVE_LEASE_KIND_KERNEL_CONTEXT &&
                    strcmp(placement_plan.reservation_requirements.entries[0]
                               .exclusive_leases.entries[2].lease_name,
-                          "kernel-context") == 0,
-               "kernel profile reserves fixed kernel-context lease (gate closed)")) {
+                          "kernel-context:vm=256:inc=1") == 0,
+               "kernel profile reserves per-VM kernel-context lease")) {
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
     }

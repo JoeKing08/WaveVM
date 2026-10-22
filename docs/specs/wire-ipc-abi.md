@@ -2,9 +2,8 @@
 
 Status: normative implementation specification.
 
-RM-3.1 gate (2026-10-19): accepted — document already defines goal/non-goals,
-semantic authority, structures/ABI, state/sequences, concurrency/backpressure,
-failure/recovery, compatibility/migration, and acceptance tests per roadmap §3.1.
+The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
+rules apply to this specification.
 
 Scope: network framing, header validation, byte order, payload bounds, request
 identity, QoS, duplicate/retry semantics, local QEMU-to-node-runtime IPC,
@@ -15,19 +14,19 @@ specifications. The admitted manifest and capability profile decide which
 participants and ABI features are valid; this document does not make those
 admission decisions.
 
-The current ABI is not a stable production ABI. It contains legacy overloads,
-fixed-layout host-native local IPC, `SYNC_MAGIC`, raw-ID fallback, and messages
-whose payload or idempotency semantics are incomplete. New work must target the
-contract below and retain current decoding only as bounded compatibility.
+Legacy headers, host-native local IPC, `SYNC_MAGIC`, raw-ID fallback, and
+untyped completion markers do not establish the required identity or
+idempotency contract. Production traffic must satisfy the framing and semantic
+validation below; any legacy decoder is subject to the migration constraints.
 
 ## 1. Framing and Versioning
 
 Every network packet and local IPC record has an explicit versioned envelope.
 Receivers validate the full envelope before interpreting message-specific data.
 
-### 1.1 Current Network Header
+### 1.1 Legacy Network Header
 
-The current packed `struct wvm_header` contains:
+The legacy packed `struct wvm_header` has this layout:
 
 ```text
 magic, msg_type, payload_len,
@@ -35,22 +34,23 @@ slave_id, target_id, req_id/target_gpa,
 qos_level, flags, mode_tcg, node_state, epoch, crc32
 ```
 
-Current multi-byte network fields are network byte order except fields inside
-some legacy payloads. That inconsistency is not a valid future contract.
+The legacy outer header uses network byte order but does not define portable
+encoding for every payload. That layout cannot establish the production wire
+contract.
 
-The current header remains a legacy decoder only. New semantic traffic uses the
+Any decoder for this header is limited to legacy input. New semantic traffic uses the
 fixed V1 envelope below. No receiver may infer version from payload length
 alone.
 
-### 1.2 Current Local IPC Header
+### 1.2 Legacy Local IPC Header
 
-Current QEMU IPC starts with:
+The legacy QEMU IPC prefix is:
 
 ```text
 wvm_ipc_header_t { uint32_t type; uint32_t len; }
 ```
 
-The current local header remains a compatibility framing prefix. New local IPC
+This header describes legacy framing only. New local IPC
 uses the same semantic envelope as network traffic, optionally preceded by a
 four-byte big-endian stream frame length. Local Unix sockets, shared memory,
 an in-process call, and a kernel ioctl may use different transport mechanics,
