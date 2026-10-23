@@ -67,6 +67,8 @@ static int g_runtime_dispatch_active = 0;
 static pthread_mutex_t g_runtime_gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_runtime_operation_sequence = 1;
 volatile sig_atomic_t g_shutdown_requested = 0;
+/* Closed from the SIGTERM handler to unblock accept() (AS-safe wake). */
+static volatile sig_atomic_t g_master_listen_fd = -1;
 
 /* These objects are owned by node_runtime/main.c and outlive both roles. */
 #define g_runtime_storage (*g_runtime_storage_ptr)
@@ -90,9 +92,15 @@ static int runtime_route_key_equal(const struct wvm_route_snapshot_key *left,
 
 static void request_shutdown(int signal_number)
 {
+    int fd;
+
     (void)signal_number;
-    fprintf(stderr, "[System] signal shutdown requested\n");
+    /* Async-signal-safe only: no fprintf (can deadlock on stderr lock). */
     g_shutdown_requested = 1;
+    fd = (int)g_master_listen_fd;
+    if (fd >= 0) {
+        (void)shutdown(fd, SHUT_RDWR);
+    }
 }
 
 static int install_shutdown_handlers(void)
@@ -1958,6 +1966,7 @@ int wavevm_master_runtime_main(
            "owned by the control plane.\n");
 
     // 14. 主循环：接受 QEMU 连接
+    g_master_listen_fd = listen_fd;
     while (!g_shutdown_requested) {
         int client_fd = accept(listen_fd, NULL, NULL);
         if (client_fd < 0) {
@@ -2027,6 +2036,7 @@ int wavevm_master_runtime_main(
                     error[0] ? error : "unknown error");
         }
     }
+    g_master_listen_fd = -1;
     close(listen_fd);
     if (sock_path && sock_path[0] != '\0') {
         unlink(sock_path);

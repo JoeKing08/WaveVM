@@ -1173,9 +1173,34 @@ static int gateway_route_control_apply_inner(
         return 0;
     }
     result->recorded_state = route_result.recorded_state;
-    result->applied_revision = route_result.route_snapshot_key.route_generation;
-    result->expiry_or_retention_deadline =
-        route_result.operation_retention_horizon_ms;
+    if (request->message_type == WVM_ENVELOPE_MSG_ROUTE_RETIRE) {
+        /*
+         * Mirror admission_receiver F5 ACK contract: applied_revision =
+         * active refs; expiry 0 = retention horizon complete. Do not publish
+         * route_generation / horizon_ms here — stream transport rejects that
+         * as refs!=0 (fractal STOP was failing status=6 on gateway ACK).
+         */
+        if (!route_result.retention_horizon_complete ||
+            route_result.active_operation_refs != 0) {
+            if (error && error_len != 0) {
+                snprintf(error, error_len,
+                         "ROUTE_RETIRE owner is not retirement-ready "
+                         "(refs=%llu horizon_complete=%d)",
+                         (unsigned long long)route_result.active_operation_refs,
+                         route_result.retention_horizon_complete ? 1 : 0);
+            }
+            result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+            return 0;
+        }
+        result->applied_revision = route_result.active_operation_refs;
+        result->expiry_or_retention_deadline = 0;
+        result->result_flags = 0;
+    } else {
+        result->applied_revision =
+            route_result.route_snapshot_key.route_generation;
+        result->expiry_or_retention_deadline =
+            route_result.operation_retention_horizon_ms;
+    }
     result->status_code = WVM_CONTROL_RESULT_SUCCESS;
     return 0;
 }

@@ -74,6 +74,8 @@ static void executor_request_process_shutdown(const char *why)
 // --- 全局配置变量 ---
 static int g_service_port = 9000;
 static int g_nonblock_recv = 0;
+/* KVM worker UDP fd — shutdown/poke unblocks recvmmsg on STOP (R4). */
+static volatile sig_atomic_t g_kvm_worker_sock = -1;
 static long g_num_cores = 0;
 static int *g_tcg_session_fds;
 static pid_t *g_tcg_helper_pids;
@@ -82,6 +84,69 @@ static int *g_tcg_proxy_socks;
 static long g_tcg_proxy_sock_capacity;
 static long g_tcg_proxy_sock_count;
 static pthread_mutex_t g_tcg_proxy_sock_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+ * §6 / production: MSG_VCPU_RUN is request/reply. Track the external requester
+ * so MSG_VCPU_EXIT from the local QEMU helper returns to that client instead of
+ * only the NAT gateway (which may already be locked to the master). Do not let
+ * VCPU_RUN itself lock the gateway — that would steal MEM upstream from master.
+ */
+#define TCG_PENDING_VCPU_REPLY_SLOTS 64
+typedef struct {
+    uint64_t req_id;
+    struct sockaddr_in client;
+    int valid;
+} tcg_pending_vcpu_reply_t;
+static tcg_pending_vcpu_reply_t g_tcg_pending_vcpu_reply[TCG_PENDING_VCPU_REPLY_SLOTS];
+static pthread_mutex_t g_tcg_pending_vcpu_reply_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void tcg_pending_vcpu_reply_put(uint64_t req_id,
+                                       const struct sockaddr_in *client)
+{
+    int i;
+    if (!client) {
+        return;
+    }
+    pthread_mutex_lock(&g_tcg_pending_vcpu_reply_lock);
+    for (i = 0; i < TCG_PENDING_VCPU_REPLY_SLOTS; i++) {
+        if (!g_tcg_pending_vcpu_reply[i].valid ||
+            g_tcg_pending_vcpu_reply[i].req_id == req_id) {
+            g_tcg_pending_vcpu_reply[i].req_id = req_id;
+            g_tcg_pending_vcpu_reply[i].client = *client;
+            g_tcg_pending_vcpu_reply[i].valid = 1;
+            pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
+            return;
+        }
+    }
+    /* Overwrite slot 0 on overflow — probe traffic is low volume. */
+    g_tcg_pending_vcpu_reply[0].req_id = req_id;
+    g_tcg_pending_vcpu_reply[0].client = *client;
+    g_tcg_pending_vcpu_reply[0].valid = 1;
+    pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
+}
+
+static int tcg_pending_vcpu_reply_take(uint64_t req_id,
+                                       struct sockaddr_in *out)
+{
+    int i;
+    int found = 0;
+    if (!out) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_tcg_pending_vcpu_reply_lock);
+    for (i = 0; i < TCG_PENDING_VCPU_REPLY_SLOTS; i++) {
+        if (g_tcg_pending_vcpu_reply[i].valid &&
+            g_tcg_pending_vcpu_reply[i].req_id == req_id) {
+            *out = g_tcg_pending_vcpu_reply[i].client;
+            g_tcg_pending_vcpu_reply[i].valid = 0;
+            found = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
+    return found;
+}
+
 static int g_ram_mb = 1024;
 static uint64_t g_slave_ram_size = 1024UL * 1024 * 1024;
 static int g_base_id = 0;
@@ -2448,6 +2513,17 @@ kvm_run_done:
             dbg_ie++;
         }
     }
+    if (t_kvm_run->exit_reason == 9) { /* KVM_EXIT_FAIL_ENTRY */
+        static int dbg_fe = 0;
+        if (dbg_fe < 10) {
+            fprintf(stderr,
+                    "[DBG-FAIL_ENTRY] req=%llu hardware_failure=0x%llx rip=0x%llx\n",
+                    (unsigned long long)hdr->req_id,
+                    (unsigned long long)t_kvm_run->fail_entry.hardware_entry_failure_reason,
+                    (unsigned long long)req->ctx.kvm.rip);
+            dbg_fe++;
+        }
+    }
     if (t_kvm_run->exit_reason == 8) {
         fprintf(stderr, "[DBG-SHUTDOWN] req=%llu -- triple fault!\n",
                 (unsigned long long)hdr->req_id);
@@ -3679,6 +3755,33 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client,
  * [关键逻辑] 绑定多播/复用端口，利用 recvmmsg 批量捕获包头，根据消息类型分流至执行引擎或内存处理程序。
  * [后果] 它是 Slave 节点的总入口。其效率直接决定了 Slave 对 Master 请求的“首包响应时间（TTFB）”。
  */
+
+static void kvm_wake_worker_sock(void)
+{
+    int sock;
+    int worker;
+    struct sockaddr_in addr;
+    uint8_t poke = 0;
+    long i;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((uint16_t)g_service_port);
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock >= 0) {
+        for (i = 0; i < 16; i++) {
+            (void)sendto(sock, &poke, 1, 0, (struct sockaddr *)&addr,
+                         sizeof(addr));
+        }
+        close(sock);
+    }
+    worker = (int)__atomic_load_n(&g_kvm_worker_sock, __ATOMIC_ACQUIRE);
+    if (worker >= 0) {
+        (void)shutdown(worker, SHUT_RDWR);
+    }
+}
+
 void* kvm_worker_thread(void *arg) {
     long core = (long)arg;
     int s = socket(AF_INET, SOCK_DGRAM, 0); int opt=1; setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
@@ -3700,6 +3803,8 @@ void* kvm_worker_thread(void *arg) {
     } else if (core == 0) {
         fprintf(stderr, "[SLAVE-BIND] port=%d ok\n", g_service_port);
     }
+    /* Publish fd so STOP can unblock MSG_WAITFORONE recvmmsg. */
+    __atomic_store_n(&g_kvm_worker_sock, s, __ATOMIC_RELEASE);
     
     // Worker 0 初始化 VFIO
     if (core == 0 && g_vfio_config_path) {
@@ -3832,6 +3937,9 @@ void* kvm_worker_thread(void *arg) {
             else handle_kvm_mem(s, &c[i], h, pkt+sizeof(*h));
         }
     }
+    free(rx_pool);
+    __atomic_store_n(&g_kvm_worker_sock, -1, __ATOMIC_RELEASE);
+    close(s);
     return NULL;
 }
 
@@ -3913,6 +4021,7 @@ static int spawn_tcg_processes(int base_id) {
      */
     const char *tcg_machine = getenv("WVM_TCG_QEMU_MACHINE");
     const char *tcg_ram_mb = getenv("WVM_TCG_QEMU_MEM_MB");
+    const char *tcg_datadir = getenv("WVM_TCG_QEMU_DATADIR");
     if (!tcg_ram_mb || !*tcg_ram_mb) {
         tcg_ram_mb = ram_str;
     }
@@ -3994,6 +4103,12 @@ static int spawn_tcg_processes(int base_id) {
             setenv("WVM_SOCK_PUSH", fd_p, 1); 
             setenv("WVM_ROLE", "SLAVE", 1);
             /*
+             * TCG PROXY helpers must stay on the TCG cpu_exec path. Auto-KVM
+             * bootstrap otherwise makes kvm_enabled() true and the service loop
+             * routes mode_tcg=1 requests into KVM_RUN (hang / wrong backend).
+             */
+            setenv("WVM_DISABLE_AUTO_KVM", "1", 1);
+            /*
              * R05: each TCG helper is a single-vCPU, -nodefaults process so the
              * page-install path may briefly raise PROT_WRITE without a concurrent
              * guest writer. Advertise that invariant to the QEMU helper.
@@ -4020,10 +4135,14 @@ static int spawn_tcg_processes(int base_id) {
 
             cpu_set_t cpuset; CPU_ZERO(&cpuset); CPU_SET(i, &cpuset); sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
             
-            char *qemu_argv[16];
+            char *qemu_argv[20];
             int ai = 0;
 
             qemu_argv[ai++] = (char *)qemu_bin;
+            if (tcg_datadir && *tcg_datadir) {
+                qemu_argv[ai++] = "-L";
+                qemu_argv[ai++] = (char *)tcg_datadir;
+            }
             qemu_argv[ai++] = "-accel";
             qemu_argv[ai++] = "wavevm";
             if (tcg_machine && *tcg_machine) {
@@ -4250,16 +4369,37 @@ void* tcg_proxy_thread(void *arg) {
                   __big++;
               }
             }
-            if (hdr->magic != htonl(WVM_MAGIC)) continue;
+            if (hdr->magic != htonl(WVM_MAGIC)) {
+                static int __badmagic;
+                if (__badmagic < 8) {
+                    fprintf(stderr, "[Proxy] drop bad magic=0x%08x len=%u from %s:%u\n",
+                            (unsigned)ntohl(hdr->magic), (unsigned)msgs[i].msg_len,
+                            inet_ntoa(src_addrs[i].sin_addr),
+                            (unsigned)ntohs(src_addrs[i].sin_port));
+                    __badmagic++;
+                }
+                continue;
+            }
 
             /* In single-host tests gateway packets can also come from 127.0.0.1.
              * Only treat packets from known TCG endpoint ports as local upstream. */
             int from_local_tcg = (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) &&
                                  is_local_tcg_endpoint_port(src_addrs[i].sin_port);
-            // 1. Upstream (Local QEMU -> Gateway)
+            // 1. Upstream (Local QEMU -> Gateway / pending VCPU_EXIT client)
             if (from_local_tcg) {
                 // [VFIO Intercept] TCG 模式下的本地显卡拦截
                 uint16_t msg_type = ntohs(hdr->msg_type);
+                {
+                    static int __up;
+                    if (__up < 20 && (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT)) {
+                        fprintf(stderr,
+                                "[Proxy] UP-local type=%u len=%u from %s:%u\n",
+                                (unsigned)msg_type, (unsigned)msgs[i].msg_len,
+                                inet_ntoa(src_addrs[i].sin_addr),
+                                (unsigned)ntohs(src_addrs[i].sin_port));
+                        __up++;
+                    }
+                }
                 int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
                 uint16_t payload_len = ntohs(hdr->payload_len);
                 if (msg_type == MSG_MEM_WRITE) {
@@ -4280,25 +4420,68 @@ void* tcg_proxy_thread(void *arg) {
                         }
                     }
                 }
+                if (msg_type == MSG_VCPU_EXIT) {
+                    struct sockaddr_in reply_client;
+                    uint64_t rid = WVM_NTOHLL(hdr->req_id);
+                    if (tcg_pending_vcpu_reply_take(rid, &reply_client)) {
+                        fprintf(stderr,
+                                "[Proxy] VCPU_EXIT demux req_id=0x%llx -> %s:%u len=%u\n",
+                                (unsigned long long)rid,
+                                inet_ntoa(reply_client.sin_addr),
+                                (unsigned)ntohs(reply_client.sin_port),
+                                (unsigned)msgs[i].msg_len);
+                        sendto(sockfd, pkt, msgs[i].msg_len, 0,
+                               (struct sockaddr *)&reply_client,
+                               sizeof(reply_client));
+                        continue;
+                    }
+                    fprintf(stderr,
+                            "[Proxy] VCPU_EXIT no pending req_id=0x%llx (fwd gateway=%d)\n",
+                            (unsigned long long)rid, g_gateway_known);
+                }
                 
                 if (g_gateway_known) 
                     sendto(sockfd, pkt, msgs[i].msg_len, 0, (struct sockaddr*)&g_upstream_gateway, sizeof(struct sockaddr_in));
             }
-            // 2. Downstream (Gateway -> Local QEMU)
+            // 2. Downstream (Gateway / external -> Local QEMU)
             else {
-                if (!g_gateway_init_done) {
+                uint32_t target_raw = ntohl(hdr->target_id);
+                uint16_t msg_type = ntohs(hdr->msg_type);
+                {
+                    static int __dn;
+                    if (__dn < 40) {
+                        fprintf(stderr,
+                                "[Proxy] DN type=%u len=%u target=0x%x from %s:%u\n",
+                                (unsigned)msg_type, (unsigned)msgs[i].msg_len,
+                                target_raw, inet_ntoa(src_addrs[i].sin_addr),
+                                (unsigned)ntohs(src_addrs[i].sin_port));
+                        __dn++;
+                    }
+                }
+                int core_idx = (target_raw != WVM_NODE_AUTO_ROUTE)
+                    ? (int)(WVM_GET_NODEID(target_raw) - g_base_id)
+                    : 0;
+
+                /* VCPU_RUN is request/reply: remember client, do not steal gateway. */
+                if (msg_type == MSG_VCPU_RUN) {
+                    tcg_pending_vcpu_reply_put(WVM_NTOHLL(hdr->req_id),
+                                               &src_addrs[i]);
+                    fprintf(stderr,
+                            "[Proxy] VCPU_RUN pending req_id=0x%llx from %s:%u "
+                            "-> core=%d cmd_port=%u len=%u\n",
+                            (unsigned long long)WVM_NTOHLL(hdr->req_id),
+                            inet_ntoa(src_addrs[i].sin_addr),
+                            (unsigned)ntohs(src_addrs[i].sin_port),
+                            core_idx,
+                            (unsigned)ntohs(tcg_endpoints[core_idx].cmd_addr.sin_port),
+                            (unsigned)msgs[i].msg_len);
+                } else if (!g_gateway_init_done) {
                     if (__sync_bool_compare_and_swap(&g_gateway_init_done, 0, 1)) {
                         memcpy(&g_upstream_gateway, &src_addrs[i], sizeof(struct sockaddr_in));
                         g_gateway_known = 1;
                         printf("[Proxy] Gateway Locked: %s:%d\n", inet_ntoa(src_addrs[i].sin_addr), ntohs(src_addrs[i].sin_port));
                     }
                 }
-                
-                uint32_t target_raw = ntohl(hdr->target_id);
-                uint16_t msg_type = ntohs(hdr->msg_type);
-                int core_idx = (target_raw != WVM_NODE_AUTO_ROUTE)
-                    ? (int)(WVM_GET_NODEID(target_raw) - g_base_id)
-                    : 0;
 
                 if (core_idx < 0 || core_idx >= g_num_cores) continue;
 
@@ -4498,8 +4681,18 @@ int wavevm_executor_runtime_main(
         if (wvm_executor_runtime_wait_ready() != 0) {
             executor_request_process_shutdown("kvm wait_ready failed");
         }
+        /*
+         * Mirror TCG: do not join the worker until shutdown. Worker blocks in
+         * recvmmsg(MSG_WAITFORONE); without a poke/shutdown, SIGTERM only
+         * flips g_shutdown_requested and the process never exits (R4 STOP).
+         */
+        while (!g_shutdown_requested) {
+            usleep(100000);
+        }
+        kvm_wake_worker_sock();
         for(long i=0; i<total_threads; i++) pthread_join(threads[i], NULL);
         free(threads);
+        __atomic_store_n(&g_kvm_worker_sock, -1, __ATOMIC_RELEASE);
     } else {
         printf("[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on %s:%d\n",
                g_executor_local_only ? "127.0.0.1" : "0.0.0.0",

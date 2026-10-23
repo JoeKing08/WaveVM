@@ -1,0 +1,9 @@
+# WaveVM: persist /dev/wavevm ownership/mode when miscdevice appears after insmod.
+# miscdevice in master_core/kernel_backend.c sets no .mode; without this rule the
+# node is root:root and Mode A tests need a one-shot chmod (see ci_dual_node.sh).
+#
+# Mirrors distro /dev/kvm policy (GROUP=kvm MODE=0660) rather than world-writable
+# 0666. Test/dev users must be in group kvm (usermod -aG kvm <user>).
+# Do NOT auto-load wavevm via modules-load.d: ko is out-of-tree and Mode B/TCG
+# paths explicitly require the module absent.
+KERNEL=="wavevm", SUBSYSTEM=="misc", GROUP="kvm", MODE="0660"

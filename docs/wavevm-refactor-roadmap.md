@@ -654,6 +654,10 @@ This phase is a minimum usable release gate, not optional hardening. Mode A may
 remain disabled on hosts that lack the capability, but a host that advertises
 Mode A for multiple VMs must provide independent contexts and teardown.
 
+Deliverables:
+
+- `docs/specs/kernel-accelerator.md`
+
 Short-term gate:
 
 - Keep Mode A single-VM-per-physical-node.

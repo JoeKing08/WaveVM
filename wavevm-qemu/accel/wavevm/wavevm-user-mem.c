@@ -19,6 +19,7 @@
 #include <sys/eventfd.h>
 #include <ucontext.h>
 #include <unistd.h>
+#include <sched.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -1144,8 +1145,7 @@ static int install_page_bytes(uint64_t gpa, uintptr_t aligned_addr,
         const char *smp = getenv("WVM_SLAVE_VCPU_COUNT");
         if (!smp || strcmp(smp, "1") != 0) {
             safe_log("[WVM] slave page install refused: WVM_SLAVE_VCPU_COUNT!=1 "
-                     "(single-writer invariant)
-");
+                     "(single-writer invariant)");
             return -1;
         }
     }
@@ -1334,6 +1334,7 @@ static void *fault_worker_thread_fn(void *arg)
 static int start_fault_worker(void)
 {
     unsigned i;
+    struct timespec ts_start, ts_now;
     if (g_fault_wake_fd >= 0) {
         return 0;
     }
@@ -1344,6 +1345,7 @@ static int start_fault_worker(void)
         g_fault_slots[i].is_write = 0;
     }
     atomic_store(&g_fault_slot_cursor, 0);
+    atomic_store(&g_fault_worker_ready, 0);
     g_fault_wake_fd = eventfd(0, EFD_CLOEXEC);
     if (g_fault_wake_fd < 0) {
         return -1;
@@ -1356,14 +1358,41 @@ static int start_fault_worker(void)
         g_fault_wake_fd = -1;
         return -1;
     }
-    /* Wait briefly for ready flag so first fault cannot race an unready worker. */
-    for (i = 0; i < 100000; i++) {
+    /*
+     * Wait for ready under load (fractal gateway + dual helpers). A pure
+     * PAUSE spin of ~1-5ms is too short when the new thread is delayed;
+     * fail-closed _exit then leaves CREATE stuck IN_PROGRESS.
+     */
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+    for (;;) {
         if (atomic_load(&g_fault_worker_ready)) {
             return 0;
         }
-        __builtin_ia32_pause();
+        clock_gettime(CLOCK_MONOTONIC, &ts_now);
+        long elapsed_ms = (ts_now.tv_sec - ts_start.tv_sec) * 1000L +
+                          (ts_now.tv_nsec - ts_start.tv_nsec) / 1000000L;
+        if (elapsed_ms >= 2000) {
+            break;
+        }
+        sched_yield();
+        usleep(1000);
     }
-    return atomic_load(&g_fault_worker_ready) ? 0 : -1;
+    if (atomic_load(&g_fault_worker_ready)) {
+        return 0;
+    }
+    /* Timed out: tear down so a retry (or FATAL) does not leak fds/threads. */
+    g_fault_worker_running = false;
+    {
+        uint64_t one = 1;
+        (void)write(g_fault_wake_fd, &one, sizeof(one));
+    }
+    (void)pthread_join(g_fault_worker_thread, NULL);
+    close(g_fault_wake_fd);
+    g_fault_wake_fd = -1;
+    atomic_store(&g_fault_worker_ready, 0);
+    fprintf(stderr,
+            "[WaveVM-User] deferred fault worker ready timed out after 2s\n");
+    return -1;
 }
 
 /*

@@ -1069,7 +1069,7 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
     while (!cpu->unplug) {
         struct wvm_ipc_cpu_run_req req;
         struct wvm_ipc_cpu_run_ack ack;
-        bool local_is_tcg = !kvm_enabled();
+        bool local_is_tcg;
         int exec_ret = -1;
         int dirty_flush_ret = 0;
 
@@ -1083,6 +1083,11 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
         }
         memcpy(&req, &g_slave_exec_req, sizeof(req));
         qemu_mutex_unlock(&g_slave_exec_lock);
+        /*
+         * mode_tcg requests must take cpu_exec even when Auto-KVM bootstrap
+         * left kvm_enabled() true — otherwise KVM_RUN hangs short-exec probes.
+         */
+        local_is_tcg = !kvm_enabled() || req.mode_tcg;
         static unsigned int run_log_count;
         bool log_run = run_log_count++ < 20;
         if (log_run) {
@@ -1662,11 +1667,23 @@ static void *wavevm_slave_net_thread(void *arg) {
     /* Detect kernel module presence — determines async (Mode A) vs sync (Mode B)
      * for MSG_VCPU_RUN handling. Mode B sync path avoids cross-node IPI deadlock
      * caused by async worker holding vCPU while net thread can't deliver IPIs. */
-    bool local_kernel_mode = (access("/dev/wavevm", R_OK | W_OK) == 0);
+    /*
+     * TCG helper slaves (WVM_ROLE=SLAVE) must use the sync Mode B path:
+     * /dev/wavevm may be readable for the joeking:kvm udev node without this
+     * process being a Mode A kernel client, and async+SIGUSR2 has been flaky
+     * for short-exec probes against -accel wavevm helpers.
+     */
+    bool role_slave = false;
+    {
+        const char *role = getenv("WVM_ROLE");
+        role_slave = role && strcmp(role, "SLAVE") == 0;
+    }
+    bool local_kernel_mode =
+        !role_slave && (access("/dev/wavevm", R_OK | W_OK) == 0);
 
-    printf("[WaveVM-Slave] Network Loop Active (Engine: %s, FD: %d, vcpu_dispatch: %s).\n",
+    printf("[WaveVM-Slave] Network Loop Active (Engine: %s, FD: %d, vcpu_dispatch: %s, role_slave=%d).\n",
            kvm_enabled() ? "KVM" : "TCG", s->master_sock,
-           local_kernel_mode ? "async" : "sync");
+           local_kernel_mode ? "async" : "sync", role_slave ? 1 : 0);
 
     WvmVcpuRunWorker *w = &g_vcpu_run_worker;
 

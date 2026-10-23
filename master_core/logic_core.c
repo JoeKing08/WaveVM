@@ -270,12 +270,23 @@ static pthread_mutex_t g_dir_table_locks[LOCK_SHARDS];
 
 #ifndef __KERNEL__
 static uint8_t *resolve_page_data(page_meta_t *page, uint64_t gpa) {
-    if (page->base_page_data) {
+    /*
+     * Prefer live WVM_SHM_FILE mapping whenever it exists. An early heap
+     * allocation (before SHM attach) must not permanently shadow guest RAM —
+     * §6 TCG short-exec writes code into SHM and helpers fault-fetch via this
+     * directory; zeros here mean the helper executes empty pages.
+     */
+    if (g_shm_ptr && g_shm_size >= 4096 && gpa <= g_shm_size - 4096) {
+        uint8_t *shm_page = (uint8_t *)g_shm_ptr + gpa;
+        if (page->base_page_data && page->base_page_data != shm_page) {
+            memcpy(shm_page, page->base_page_data, 4096);
+            /* prior heap page intentionally leaked — rare bring-up path */
+        }
+        page->base_page_data = shm_page;
         return page->base_page_data;
     }
 
-    if (g_shm_ptr && g_shm_size >= 4096 && gpa <= g_shm_size - 4096) {
-        page->base_page_data = (uint8_t*)g_shm_ptr + gpa;
+    if (page->base_page_data) {
         return page->base_page_data;
     }
 
@@ -1418,8 +1429,16 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
     
     page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
     if (page) {
-        // 直接内存拷贝
-        memcpy(page_buffer, page->base_page_data, 4096);
+#ifndef __KERNEL__
+        /* Authoritative bytes are the live SHM image when attached. */
+        if (g_shm_ptr && g_shm_size >= 4096 && gpa <= g_shm_size - 4096) {
+            memcpy(page_buffer, (uint8_t *)g_shm_ptr + gpa, 4096);
+            page->base_page_data = (uint8_t *)g_shm_ptr + gpa;
+        } else
+#endif
+        {
+            memcpy(page_buffer, page->base_page_data, 4096);
+        }
         if (version_out) {
             *version_out = page->version;
         }

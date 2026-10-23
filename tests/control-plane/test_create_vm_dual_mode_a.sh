@@ -9,6 +9,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/wavevm-create-vm-dual-mode-a.XXXXXX")
 ctl_pid=
 agent_pid=
+# shellcheck source=s6_cell_common.sh
+source "$repo_root/tests/control-plane/s6_cell_common.sh"
 
 cleanup() {
     if [[ -n "${agent_pid:-}" ]]; then
@@ -26,10 +28,7 @@ trap cleanup EXIT
 export PATH="${HOME}/.local/bin:/home/box/.local/bin:${PATH}"
 make -C "$repo_root/ctl_tool" -B -j2 >/dev/null
 make -C "$repo_root/node_runtime" -j2 >/dev/null
-gcc -Wall -Wextra -Werror -std=c11 \
-    "$repo_root/tests/control-plane/tcg_helper_stub.c" \
-    -o "$tmpdir/tcg_helper_stub"
-export WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"
+s6_select_tcg_helper
 
 common_objs=(
     "$repo_root/common_include/wavevm_sha256.c"
@@ -50,6 +49,7 @@ common_objs=(
     "$repo_root/common_include/wavevm_membership_control.c"
     "$repo_root/common_include/wavevm_control_transport.c"
     "$repo_root/common_include/wavevm_runtime_profile.c"
+    "$repo_root/common_include/wavevm_host_probe.c"
 )
 
 gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
@@ -91,9 +91,11 @@ profile_svc1=$((base_port + 8))
 
 mkdir "$tmpdir/ctl-state" "$tmpdir/node-state" "$tmpdir/runtime" "$tmpdir/evidence"
 
+seed_flags=$(s6_seed_extra_flags)
+# shellcheck disable=SC2086
 digest=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 801 802 1 1 \
     "$profile_data0" "$profile_data1" "$profile_svc0" "$profile_svc1" \
-    "$agent_control_port")
+    "$agent_control_port" $seed_flags)
 [[ ${#digest} -eq 64 ]]
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -166,7 +168,7 @@ agent_args=(agent
 cp "$tmpdir/evidence/capabilities-801.record" "$tmpdir/ctl-state/"
 cp "$tmpdir/evidence/runtime-profile-801.record" "$tmpdir/ctl-state/"
 
-env WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"     "$repo_root/wavevm_node_runtime" "${agent_args[@]}" >"$tmpdir/agent.log" 2>&1 &
+env WVM_TCG_QEMU_BIN="$WVM_TCG_QEMU_BIN" WVM_TCG_QEMU_DATADIR="${WVM_TCG_QEMU_DATADIR:-}" WVM_TCG_QEMU_MACHINE="${WVM_TCG_QEMU_MACHINE:-}" WVM_TCG_QEMU_MEM_MB="${WVM_TCG_QEMU_MEM_MB:-}"     "$repo_root/wavevm_node_runtime" "${agent_args[@]}" >"$tmpdir/agent.log" 2>&1 &
 agent_pid=$!
 for ((attempt = 0; attempt < 100; attempt++)); do
     if [[ -S "$tmpdir/node.sock" ]] && kill -0 "$agent_pid" 2>/dev/null; then
@@ -269,6 +271,25 @@ fi
 if [[ "$vm1_id" == "$vm2_id" ]]; then
     echo "Mode A dual CREATE produced identical vm_id=$vm1_id" >&2
     exit 1
+fi
+
+# R4: STOP both VMs while agent still up
+s6_finish_running_vm "$create1_out" "$tmpdir/submit_stop_vm" || true
+# Preserve first cleanup; second STOP merge
+_evid_save=${WVM_S6_EVIDENCE_DIR:-}
+if [[ -n "$_evid_save" && -f "$_evid_save/cleanup.manifest" ]]; then
+  cp -a "$_evid_save/cleanup.manifest" "$_evid_save/cleanup.manifest.vm1"
+fi
+s6_finish_running_vm "$create2_out" "$tmpdir/submit_stop_vm" || true
+if [[ -n "$_evid_save" && -f "$_evid_save/cleanup.manifest.vm1" ]]; then
+  cat "$_evid_save/cleanup.manifest.vm1" "$_evid_save/cleanup.manifest" 2>/dev/null \
+    | sort -u >"$_evid_save/cleanup.manifest.merged" || true
+  mv "$_evid_save/cleanup.manifest.merged" "$_evid_save/cleanup.manifest"
+  # Re-check leftovers for merged set
+  if grep -q '^cleanup_ok=0' "$_evid_save/cleanup.ok" 2>/dev/null; then
+    echo "dual STOP/cleanup reported fail" >&2
+    exit 1
+  fi
 fi
 
 kill -TERM "$agent_pid"

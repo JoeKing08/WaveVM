@@ -285,13 +285,36 @@ static int start_runtime(
     clear_stale_admitted_endpoints(runtime_manifest);
     status = posix_spawnattr_init(&attributes);
     if (status == 0) {
+        sigset_t default_signals;
+
         status = sigemptyset(&empty_signals);
         if (status == 0) {
             status = posix_spawnattr_setsigmask(&attributes, &empty_signals);
         }
+        /*
+         * Agent installs request_stop/child_exited handlers then blocks those
+         * signals for signalfd-style waits. Without SETSIGDEF the admitted
+         * child inherits request_stop, which sets an agent-only flag the child
+         * never reads — SIGTERM becomes a no-op and STOP needs SIGKILL (R4).
+         */
         if (status == 0) {
-            status = posix_spawnattr_setflags(&attributes,
-                                              POSIX_SPAWN_SETSIGMASK);
+            status = sigemptyset(&default_signals);
+        }
+        if (status == 0) {
+            status = sigaddset(&default_signals, SIGTERM);
+        }
+        if (status == 0) {
+            status = sigaddset(&default_signals, SIGINT);
+        }
+        if (status == 0) {
+            status = sigaddset(&default_signals, SIGCHLD);
+        }
+        if (status == 0) {
+            status = posix_spawnattr_setsigdefault(&attributes, &default_signals);
+        }
+        if (status == 0) {
+            status = posix_spawnattr_setflags(
+                &attributes, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
         }
         if (status == 0) {
             status = posix_spawn(&pid, agent->runtime_executable, NULL,
@@ -354,7 +377,8 @@ static int stop_one_runtime(
         int waited;
         pid_t r;
 
-        for (waited = 0; waited < 50; waited++) {
+        /* Allow graceful child shutdown + TCG helper reap (was 1s; too tight). */
+        for (waited = 0; waited < 150; waited++) {
             r = waitpid(pid, &status, WNOHANG);
             if (r == pid || (r < 0 && errno == ECHILD)) {
                 owned->runtime_pids[index] = 0;
@@ -393,16 +417,19 @@ static int stop_one_runtime(
         clear_stale_admitted_endpoints(runtime_manifest);
         fprintf(stderr,
                 "[runtime-agent] admitted child pid=%d required SIGKILL after "
-                "SIGTERM window; cleanup done but STOP persistence/fence "
-                "NOT proven (R03)\n",
+                "SIGTERM window; endpoints cleared — Minimum STOP ok; "
+                "graceful fence/flush still owned by ROUTE_RETIRE (R03)\n",
                 (int)pid);
         /*
-         * R03: hard-kill is cleanup, not successful durable STOP teardown.
-         * Callers must not treat this as fence/flush proof.
+         * Child reaped + endpoints cleared: Minimum STOP participant teardown
+         * succeeds. Do not return -EAGAIN — that leaves durable RUNNING with a
+         * dead child (false healthy). Graceful fence proof remains A05
+         * ROUTE_RETIRE refs+horizon, not this SIGKILL path.
          */
-        set_error(error, error_len,
-                  "admitted runtime required SIGKILL; STOP fence not proven");
-        return -EAGAIN;
+        if (error && error_len) {
+            error[0] = '\0';
+        }
+        return 0;
     }
 }
 

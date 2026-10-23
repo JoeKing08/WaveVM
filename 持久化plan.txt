@@ -1097,3 +1097,78 @@ bash tests/control-plane/test_r05_multi_vcpu_race.sh
 - `tests/control-plane/test_r05_multi_vcpu_race.{c,sh}`
 - `tests/mode-a/test_r04_query_diff_status.{c,sh}`
 - `持久化plan.txt`（本条）
+
+---
+
+# §6 Phase 10 Minimum smoke — progress 2026-10-23 (Asia/Shanghai)
+
+## 状态（诚实）
+- **NOT claiming Phase 10 Minimum COMPLETE.**
+- Live matrix orchestrator: `tests/control-plane/test_s6_minimum_matrix.sh`
+- Evidence dir: `/tmp/wavevm-s6-matrix-20261023b` — **8/8 PASS**, tip `718ab2fa8`
+- Guest login/SSH = goal §7 — **not** used as §6 bar (TCG helper stub readiness only).
+
+## Matrix cells (Minimum)
+| Cell | Result | Driver |
+|------|--------|--------|
+| flat_tcg | PASS | `WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=disabled` + `test_create_vm_single_node.sh` |
+| fractal_tcg | PASS | `require-tcg` + `test_create_vm_fractal.sh` |
+| flat_kvm | PASS | `require-kvm` + single_node |
+| fractal_kvm | PASS | `require-kvm` + fractal |
+| mode_a_one | PASS | `require-tcg` + `require-kernel` + single_node (capacity 8/2GiB + check_registration args) |
+| mode_b_dual | PASS | `test_create_vm_dual_mode_b.sh` |
+| compute_dual | PASS | `test_same_host_dual_agent_live.sh` (distinct ports + aggregate) |
+| mode_a_dual | PASS | `test_create_vm_dual_mode_a.sh` |
+
+## Closing gaps this round
+1. `submit_create_vm.c`: optional argv backend `require-tcg|require-kvm|auto` (was hard REQUIRE_TCG).
+2. `seed_create_vm_evidence.c`: sorted caps include KVM (DIRTY_LOG bits) + TCG + MODE_B + VM_ID + KERNEL.
+3. `test_create_vm_single_node.sh` / `test_create_vm_fractal.sh`: `WVM_S6_BACKEND` / `WVM_S6_ACCEL`; Mode A capacity bump; `check_registration` gets matching vCPU/memory expectations.
+4. New orchestrator `test_s6_minimum_matrix.sh` (SKIP/BLOCKED for missing `/dev/kvm` or `/dev/wavevm`).
+
+## Live host notes
+- `wavevm.ko` srcversion `3DC778326E08ABBAA46C470` insmod'd via systemd-run + secrets; then `/dev/wavevm` was root-only → `chmod 666` for agent open (EACCES otherwise). **Not persistent across reboot** — Joe 👍 for udev/modprobe if wanted.
+- Roadmap dirty Phase 8 Deliverables link left untouched; **no commit/push**.
+- R05 stays **FIXED***; A04 **FIXED*** (8-bit wire) stays honest.
+
+## Still PARTIAL / not paper-COMPLETE
+- Per-cell **archived** evidence packs (capability report dump, QEMU argv file, remote vCPU/memory probe artifacts, leftover SHM/route scan report) are mostly **inside** the individual tests, not yet harvested into a uniform matrix evidence tree beyond PASS logs + `*.status`.
+- Classifier/timeouts/`ci_classify_failure.sh` not wired as matrix post-step.
+- Extended fault injection = out of §6 Minimum scope (intentionally not run).
+
+## Reproduce
+```
+# need /dev/kvm + loaded wavevm.ko (and world-readable /dev/wavevm for non-root agent)
+WVM_S6_OUT_DIR=/tmp/wavevm-s6-matrix-$(date +%Y%m%d) \
+  bash tests/control-plane/test_s6_minimum_matrix.sh
+# → totals pass=8 fail=0 …
+```
+
+## Files touched (§6)
+- `tests/control-plane/submit_create_vm.c`
+- `tests/control-plane/seed_create_vm_evidence.c`
+- `tests/control-plane/test_create_vm_single_node.sh`
+- `tests/control-plane/test_create_vm_fractal.sh`
+- `tests/control-plane/test_s6_minimum_matrix.sh` (new)
+- `持久化plan.txt` (this note)
+
+===== §6 milestone close (resume after interrupt) — 2026-10-23 23:12:05 CST Asia/Shanghai =====
+tip_head=718ab2fa8  no_commit_no_push  no_§7
+R1 FIXED (core): flat_tcg+flat_kvm+fractal_tcg+fractal_kvm CREATE→RUNNING + real-QEMU short-exec + STOP/cleanup_ok=1
+  evidence:
+    flat_tcg=/tmp/wavevm-s6-matrix-flat-tcg-230725 (tcg_short_exec=PASS eax=0x5266)
+    flat_kvm=/tmp/wavevm-s6-matrix-flat-kvm-231033 (kvm_short_exec=PASS rax=0x5266)
+    fractal_tcg=/tmp/wavevm-s6-matrix-fractal-tcg-230954 (tcg_short_exec=PASS + route_journal)
+    fractal_kvm=/tmp/wavevm-s6-matrix-fractal-kvm-231012 (kvm_short_exec=PASS + route_journal)
+  R1 residual PARTIAL: fractal VCPU_RUN still hits Hybrid executor port directly (not gateway data-path forward); remote_mem version/fence/dirty snippets thin (TCG dirty-flush line only; KVM empty).
+R2 FIXED: neg_require_kvm + neg_require_kernel + auto_tcg_fallback PASS (/tmp/wavevm-s6-matrix-*-231054)
+R3 FIXED: unknown-cell exit=2; nonempty out_dir refuse exit=2; cell isolation via separate out_dirs
+R4 FIXED: STOP status=0 recorded_state=17 + cleanup_ok=1; gateway ROUTE_RETIRE ACK now refs=0/horizon=0 (aggregator.c F5 mirror) — was status=6 precondition fail
+R5 PARTIAL→mostly FIXED: compute_dual PASS (/tmp/wavevm-s6-matrix-compute-dual-231128); remote_mem fence/version evidence still light
+key_fixes_this_resume:
+  - slave_hybrid TCG proxy demux + VCPU_EXIT Mode B (WVM_ROLE=SLAVE)
+  - helpers WVM_NODE_AUTO_ROUTE; wavevm_node_runtime rebuild
+  - QEMU wavevm-user-mem start_fault_worker 2s yield wait (fractal FATAL)
+  - gateway_service/aggregator.c ROUTE_RETIRE ACK wire fields
+  - s6_cell_common STOP ctl.log re-harvest
+§6 COMPLETE claim: NOT claimed (R1 fractal-through-gateway dataplane + remote_mem depth still PARTIAL)

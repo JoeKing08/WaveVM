@@ -8,10 +8,18 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# §6 matrix: require-tcg (default) | require-kvm | auto. Guest login/SSH is §7.
+s6_backend=${WVM_S6_BACKEND:-require-tcg}
+case "$s6_backend" in
+    require-tcg|require-kvm|auto) ;;
+    *) echo "WVM_S6_BACKEND must be require-tcg|require-kvm|auto (got: $s6_backend)" >&2; exit 2 ;;
+esac
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/wavevm-create-vm-fractal.XXXXXX")
 ctl_pid=
 gw_pid=
 agent_pid=
+# shellcheck source=s6_cell_common.sh
+source "$repo_root/tests/control-plane/s6_cell_common.sh"
 
 cleanup() {
     for pid_var in agent_pid gw_pid ctl_pid; do
@@ -21,7 +29,7 @@ cleanup() {
             wait "$pid" 2>/dev/null || true
         fi
     done
-    rm -rf -- "$tmpdir"
+    if [[ "${WVM_S6_KEEP_TMP:-0}" == "1" ]]; then echo "keeping tmpdir=$tmpdir" >&2; else rm -rf -- "$tmpdir"; fi
 }
 trap cleanup EXIT
 
@@ -50,6 +58,7 @@ common_objs=(
     "$repo_root/common_include/wavevm_membership_control.c"
     "$repo_root/common_include/wavevm_control_transport.c"
     "$repo_root/common_include/wavevm_runtime_profile.c"
+    "$repo_root/common_include/wavevm_host_probe.c"
 )
 
 gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
@@ -88,10 +97,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_membership_controller.c" \
     "$repo_root/tests/control-plane/check_fractal_cluster.c" \
     -pthread -o "$tmpdir/check_fractal"
-gcc -Wall -Wextra -Werror -std=c11 \
-    "$repo_root/tests/control-plane/tcg_helper_stub.c" \
-    -o "$tmpdir/tcg_helper_stub"
-export WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"
+s6_select_tcg_helper
 
 wait_compute_active() {
     local attempts=$1
@@ -147,9 +153,12 @@ mkdir -p "$tmpdir/ctl-state" "$tmpdir/gw-state/enrollment" \
     "$tmpdir/node-a" "$tmpdir/runtime-a" "$tmpdir/evidence"
 : > "$tmpdir/gw-empty.conf"
 
+seed_flags=$(s6_seed_extra_flags)
+# shellcheck disable=SC2086
 digest_a=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 801 802 1 1 \
     "$a_profile_data0" "$a_profile_data1" "$a_profile_svc0" "$a_profile_svc1" \
-    "$a_control")
+    "$a_control" $seed_flags)
+echo "s6 seed flags='$seed_flags' digest_prefix=${digest_a:0:16}..."
 [[ ${#digest_a} -eq 64 ]]
 cp "$tmpdir/evidence/capabilities-801.record" "$tmpdir/ctl-state/"
 cp "$tmpdir/evidence/runtime-profile-801.record" "$tmpdir/ctl-state/"
@@ -189,7 +198,10 @@ done
 [[ -S "$tmpdir/ctl.sock" ]]
 
 # Phase A: compute-only ACTIVE → FRACTAL CREATE_VM must fail-closed (no gateway).
-stdbuf -o0 -e0 env WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub" \
+stdbuf -o0 -e0 env WVM_TCG_QEMU_BIN="$WVM_TCG_QEMU_BIN" \
+    WVM_TCG_QEMU_DATADIR="${WVM_TCG_QEMU_DATADIR:-}" \
+    WVM_TCG_QEMU_MACHINE="${WVM_TCG_QEMU_MACHINE:-}" \
+    WVM_TCG_QEMU_MEM_MB="${WVM_TCG_QEMU_MEM_MB:-}" \
     "$repo_root/wavevm_node_runtime" agent \
     --state-dir "$tmpdir/node-a" --runtime-dir "$tmpdir/runtime-a" \
     --socket "$tmpdir/node-a.sock" \
@@ -231,7 +243,7 @@ fi
 echo "compute-only ACTIVE; probing FRACTAL fail-closed without gateway"
 
 fail_out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" \
-    fractal-no-gw 1 compact a1 || true)
+    fractal-no-gw 1 compact a1 disabled "$s6_backend" || true)
 echo "fail-closed probe: $fail_out"
 # PRECONDITION_FAILED = 6 (honest fail-closed; not SUCCESS/RUNNING).
 if [[ "$fail_out" != status=6* ]]; then
@@ -290,7 +302,7 @@ echo "gateway+compute ACTIVE; submitting FRACTAL CREATE_VM"
 create_out=""
 for ((attempt = 0; attempt < 80; attempt++)); do
     create_out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" \
-        fractal-create 1 compact b2 || true)
+        fractal-create 1 compact b2 disabled "$s6_backend" || true)
     echo "attempt=$attempt $create_out"
     if [[ "$create_out" == status=0* ]]; then
         break
@@ -317,11 +329,20 @@ if [[ ! -s "$tmpdir/gw-state/route.journal" ]]; then
     exit 1
 fi
 
+# Alias fractal layout to s6_finish expected paths
+ln -sfn "$tmpdir/agent-a.log" "$tmpdir/agent.log" 2>/dev/null || cp -a "$tmpdir/agent-a.log" "$tmpdir/agent.log"
+ln -sfn "$tmpdir/runtime-a" "$tmpdir/runtime" 2>/dev/null || true
+ln -sfn "$tmpdir/node-a" "$tmpdir/node-state" 2>/dev/null || true
+
+# R4: production STOP + cleanup evidence while agent still up
+s6_finish_running_vm "$create_out"
+
+"$tmpdir/check_fractal" "$tmpdir/ctl-state/membership.journal"
+
 kill -TERM "$agent_pid" "$gw_pid" "$ctl_pid" 2>/dev/null || true
 wait "$agent_pid" 2>/dev/null || true
 wait "$gw_pid" 2>/dev/null || true
 wait "$ctl_pid" 2>/dev/null || true
 agent_pid=; gw_pid=; ctl_pid=
 
-"$tmpdir/check_fractal" "$tmpdir/ctl-state/membership.journal"
-echo "FRACTAL CREATE_VM prepare→activate→commit→RUNNING: PASS ($create_out)"
+echo "FRACTAL CREATE_VM prepare→activate→commit→RUNNING: PASS backend=$s6_backend ($create_out)"

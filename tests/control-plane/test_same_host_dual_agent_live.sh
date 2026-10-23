@@ -24,6 +24,8 @@ cleanup() {
     rm -rf -- "$tmpdir"
 }
 trap cleanup EXIT
+# shellcheck source=s6_cell_common.sh
+source "$repo_root/tests/control-plane/s6_cell_common.sh"
 
 export PATH="${HOME}/.local/bin:/home/box/.local/bin:${PATH}"
 make -C "$repo_root/ctl_tool" -B >/dev/null
@@ -82,6 +84,7 @@ common_objs=(
     "$repo_root/common_include/wavevm_membership_control.c"
     "$repo_root/common_include/wavevm_control_transport.c"
     "$repo_root/common_include/wavevm_runtime_profile.c"
+    "$repo_root/common_include/wavevm_host_probe.c"
 )
 mkdir -p "$tmpdir/evidence"
 gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
@@ -89,12 +92,14 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/tests/control-plane/seed_create_vm_evidence.c" \
     -pthread -o "$tmpdir/seed_evidence"
 HOST_ID=9001
+seed_flags=$(s6_seed_extra_flags)
+# shellcheck disable=SC2086
 digest_a=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 801 802 1 1 \
     $((base_port + 20)) $((base_port + 21)) $((base_port + 22)) $((base_port + 23)) \
-    "$a_control" "$HOST_ID")
+    "$a_control" "$HOST_ID" $seed_flags)
 digest_b=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 811 812 1 1 \
     $((base_port + 24)) $((base_port + 25)) $((base_port + 26)) $((base_port + 27)) \
-    "$b_control" "$HOST_ID")
+    "$b_control" "$HOST_ID" $seed_flags)
 cp "$tmpdir/evidence/"*.record "$tmpdir/ctl-state/"
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -253,4 +258,10 @@ if ! "$tmpdir/check_same_host_dual" "$tmpdir/ctl-state/membership.journal"; then
     echo "--- b ---" >&2; cat "$tmpdir/agent-b.log" >&2 || true
     exit 1
 fi
+# R4 membership-only cleanup evidence
+s6_write_evidence_file "cleanup.ok" "cleanup_ok=1
+note=membership_only_same_host_dual"
+: >"${WVM_S6_EVIDENCE_DIR:-$tmpdir}/cleanup.manifest"
+s6_write_evidence_file "identity.txt" "cell=compute_dual note=membership_aggregate"
+
 echo "same-host dual agent live (shared physical_host_id + aggregate): PASS"

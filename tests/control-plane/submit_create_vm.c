@@ -106,12 +106,15 @@ int main(int argc, char **argv)
     uint16_t placement_policy = WVM_MANIFEST_PLACEMENT_COMPACT;
     unsigned id_byte = 0x71;
     int require_kernel = 0;
+    enum wvm_manifest_backend_policy backend_policy =
+        WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG;
     char *end = NULL;
 
-    if (argc < 2 || argc > 7) {
+    if (argc < 2 || argc > 8) {
         fprintf(stderr,
                 "usage: %s SOCKET [display_name] [vcpus] [compact|spread] "
-                "[id_byte_hex] [disabled|require-kernel]\n",
+                "[id_byte_hex] [disabled|require-kernel] "
+                "[require-tcg|require-kvm|auto]\n",
                 argv[0]);
         return 2;
     }
@@ -149,6 +152,20 @@ int main(int argc, char **argv)
             return 2;
         }
     }
+    if (argc >= 8) {
+        if (strcmp(argv[7], "require-tcg") == 0) {
+            backend_policy = WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG;
+        } else if (strcmp(argv[7], "require-kvm") == 0) {
+            backend_policy = WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM;
+        } else if (strcmp(argv[7], "auto") == 0) {
+            backend_policy = WVM_MANIFEST_BACKEND_POLICY_AUTO;
+        } else {
+            fprintf(stderr,
+                    "submit CREATE_VM: backend must be "
+                    "require-tcg|require-kvm|auto\n");
+            return 2;
+        }
+    }
 
     request_id[WVM_IDENTITY_ID_BYTES - 1] = (uint8_t)id_byte;
     operation_id[WVM_IDENTITY_ID_BYTES - 1] = (uint8_t)(id_byte + 1U);
@@ -160,7 +177,7 @@ int main(int argc, char **argv)
              display_name);
     request.requested_vcpus = requested_vcpus;
     request.requested_memory_bytes = 16ULL * 1024ULL * 1024ULL;
-    request.execution_backend_policy = WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG;
+    request.execution_backend_policy = backend_policy;
     request.accelerator_policy =
         require_kernel ? WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL
                        : WVM_MANIFEST_ACCELERATOR_DISABLED;
