@@ -52,6 +52,16 @@ int wvm_executor_bridge_dispatch_init(
 void wvm_executor_bridge_dispatch_destroy(void *dispatch_opaque);
 
 /*
+ * Wait until the ordered typed task queue and its sole worker are idle.
+ * Call after the ingress/executor producers stop and before destroying any
+ * service the worker may still call. Returns -ETIMEDOUT without discarding
+ * queued work; the caller must treat STOP as incomplete and fail closed.
+ */
+int wvm_executor_bridge_dispatch_drain(void *dispatch_opaque,
+                                       uint32_t timeout_ms, char *error,
+                                       size_t error_len);
+
+/*
  * Typed vCPU ingress reaches the executor only through this adapter. It
  * independently rechecks the manifest-bound executor identity and local
  * RouteKey before producing a typed VCPU_EXIT through the local sidecar.

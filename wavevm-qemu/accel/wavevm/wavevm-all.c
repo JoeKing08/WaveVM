@@ -45,6 +45,8 @@
 // 引用相关模块
 extern void wavevm_user_mem_init(void *ram_ptr, size_t ram_size);
 extern void wavevm_setup_memory_region(MemoryRegion *mr, uint64_t size, int fd);
+extern void wavevm_setup_shared_ram(MemoryRegion *mr, uint64_t size, int fd);
+extern void wavevm_attach_shared_ram_ptr(void *ram, uint64_t size, int fd);
 extern void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx);
 extern void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx);
 extern void wvm_set_ttl_interval(int ms);
@@ -77,6 +79,8 @@ static void *g_primary_ram_hva = NULL;
 static uint64_t g_primary_ram_size = 0;
 static bool g_user_mem_inited = false;
 static uint64_t g_user_ram_size_hint = 0;
+static int g_user_shm_fd = -1;
+static uint64_t g_user_shm_size = 0;
 
 /* VM runtime identity for typed protocol */
 static struct {
@@ -1172,7 +1176,6 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
                 int lock_ret = cpu_memory_rw_debug(cpu, entry_rdi,
                                                    (uint8_t *)&lock_word,
                                                    sizeof(lock_word), 0);
-
                 fprintf(stderr,
                         "[WaveVM-Slave] TCG ip cpu=%d seq=%u rip=%#lx "
                         "rsp=%#lx rdi=%#lx rax=%#lx lock=%#x/lr=%d "
@@ -1959,7 +1962,11 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
             exit(1);
         }
 
-        wavevm_setup_memory_region(ms->ram, ms->ram_size, shm_fd);
+        /* The RAMBlock is usually not realized yet.  Keep a duplicate of
+         * the SHM descriptor and attach at the first region_add callback,
+         * where the actual host pointer is known. */
+        g_user_shm_fd = dup(shm_fd);
+        g_user_shm_size = ms->ram_size;
         close(shm_fd);
         
         // [FIX-G4] IPC 监听线程必须无条件启动 (KVM + TCG 都需要接收 Invalidate)
@@ -2087,6 +2094,12 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
         if (start_gpa == 0 && !g_primary_ram_hva) {
             g_primary_ram_hva = hva;
             g_primary_ram_size = size;
+        }
+        if (wavevm_user_mode_enabled() && start_gpa == 0 &&
+            g_user_shm_fd >= 0) {
+            wavevm_attach_shared_ram_ptr(hva, g_user_shm_size, g_user_shm_fd);
+            close(g_user_shm_fd);
+            g_user_shm_fd = -1;
         }
         if (wavevm_user_mode_enabled() && start_gpa == 0 && !g_user_mem_inited) {
             wavevm_user_mem_init(hva, g_user_ram_size_hint ? g_user_ram_size_hint : size);

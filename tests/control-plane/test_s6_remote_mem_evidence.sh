@@ -9,8 +9,8 @@ cd "$repo_root/tests/control-plane"
 {
   echo "=== remote_mem evidence $(date -Iseconds) Asia/Shanghai ==="
   echo "components: directory_store version/dirty + memory_service dirty commit"
-  echo "            + fence_reject unit + goal4 A14 remote version/fence path"
-  echo "            + A14 KVM real coordinator/remote HLT/dirty-commit ACK path"
+  echo "            + fence_reject unit + goal4 A14 real no-root TCG remote version/fence path"
+  echo "            + A14 KVM real coordinator via vcpu_service/remote HLT/dirty-commit ACK path"
 } | tee "$evid/remote_mem_HEADER.txt"
 
 set +e
@@ -74,8 +74,8 @@ if [[ $rc_dir -eq 0 && $rc_mem -eq 0 && $rc_fence -eq 0 && $rc_g4 -eq 0 && $rc_g
     echo "  directory_store: materialize version + commit advances version + ESTALE stale base"
     echo "  memory_service: remote V1 dirty commit base_version->result_version + STALE_BASE_VERSION ACK"
     echo "  fence_reject: memory_fence_result!=SUCCEEDED cannot encode typed VCPU_RUN"
-    echo "  goal4 A14: production execute_handoff + directory_store-backed remote fault ACK version"
-    echo "  goal4 A14 KVM: real coordinator -> real KVM remote-page HLT + real dirty-commit ACK version/fence; same-physical two-instance path (A3 closed)"
+    echo "  goal4 A14 TCG: DEFAULT real no-root QEMU -> production execute_handoff; remote fault ACK + real guest store + remote dirty commit/version"
+    echo "  goal4 A14 KVM: vcpu_service -> real coordinator -> real KVM remote-page HLT + real dirty-commit ACK version/fence; same-physical two-instance path (A3 closed)"
     echo "not=source_grep_only"
     date -Iseconds
   } | tee "$evid/REMOTE_MEM_FENCE_VERSION_DIRTY.txt"

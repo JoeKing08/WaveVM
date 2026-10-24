@@ -2601,15 +2601,31 @@ int wvm_control_plane_transition(
         return -1;
     }
     if (lifecycle_route_gate_state(expected, next, &required_route_state)) {
-        if (!entry->transaction.has_prepared_route_snapshot_key) {
-            set_error(error, error_len,
-                      "lifecycle transition lacks durable route snapshot");
-            return -1;
-        }
-        if (durable_route_snapshot_has_state(
-                plane, &entry->transaction.prepared_route_snapshot_key,
-                required_route_state, error, error_len) != 0) {
-            return -1;
+        /*
+         * R2: a rejection before candidate durability has no route or
+         * reservation to compensate.  It still needs a durable terminal
+         * state, so allow only that exact IDENTITY_ALLOCATED -> ABORTING ->
+         * ABORTED path without a route snapshot.  Any transaction that has
+         * a candidate or a prepared route continues through the normal
+         * route-state gate below.
+         */
+        int early_no_route_abort =
+            expected == WVM_LIFECYCLE_ABORTING &&
+            next == WVM_LIFECYCLE_ABORTED &&
+            !entry->transaction.has_prepared_route_snapshot_key &&
+            !entry->transaction.has_candidate_manifest_digest;
+
+        if (!early_no_route_abort) {
+            if (!entry->transaction.has_prepared_route_snapshot_key) {
+                set_error(error, error_len,
+                          "lifecycle transition lacks durable route snapshot");
+                return -1;
+            }
+            if (durable_route_snapshot_has_state(
+                    plane, &entry->transaction.prepared_route_snapshot_key,
+                    required_route_state, error, error_len) != 0) {
+                return -1;
+            }
         }
     }
     if (expected == WVM_LIFECYCLE_ACTIVATION_DECIDED &&

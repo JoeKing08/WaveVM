@@ -417,6 +417,7 @@ s6_finish_reject() {
     local reject_state=""
     local reject_status=""
     local early_abort=0
+    local abort_error=0
     local reason_ok=1
     s6_write_evidence_file "reject.txt" "$reason"
     {
@@ -442,6 +443,7 @@ s6_finish_reject() {
         reject_status=$(sed -n 's/.*status=\([0-9][0-9]*\).*/\1/p' "$tmpdir/ctl.log" | tail -1)
         if grep -aq 'abort cleanup: lifecycle transition lacks durable route snapshot' "$tmpdir/ctl.log"; then
             early_abort=1
+            abort_error=1
         fi
         if [[ -n "${WVM_S6_EXPECT_REJECT_REASON:-}" ]] && \
            ! grep -aEqi -- "${WVM_S6_EXPECT_REJECT_REASON}" "$tmpdir/ctl.log"; then
@@ -460,18 +462,23 @@ s6_finish_reject() {
         echo "reject_state=${reject_state:-unknown}"
         echo "reject_status=${reject_status:-unknown}"
         echo "early_abort_no_durable_route=$early_abort"
+        echo "abort_cleanup_error=$abort_error"
         echo "expected_reason_verified=$reason_ok"
         echo "admission_journal_bytes=$(stat -c %s "$tmpdir/ctl-state/admission.journal" 2>/dev/null || echo 0)"
     } >>"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
     if [[ "$reason_ok" -ne 1 ]]; then
         cleanup_fail=1
     fi
-    if [[ "$early_abort" -ne 1 ]]; then
-        echo "s6_finish_reject: no durable-route early abort evidence" >&2
+    # The early no-route transaction must reach the real terminal ABORTED
+    # state (19), not be mislabeled from ABORTING (18).  A cleanup error is
+    # now a failure: no-route rejection has nothing to compensate and must
+    # not depend on the old route-gate error as its oracle.
+    if [[ "$reject_state" != "19" ]]; then
+        echo "s6_finish_reject: reject did not persist ABORTED state=19 (got=${reject_state:-unknown})" >&2
         cleanup_fail=1
     fi
-    if [[ "$reject_state" != "18" ]]; then
-        echo "s6_finish_reject: reject did not persist ABORTED state=18 (got=${reject_state:-unknown})" >&2
+    if [[ "$abort_error" -ne 0 ]]; then
+        echo "s6_finish_reject: early abort still reports incomplete cleanup" >&2
         cleanup_fail=1
     fi
     if [[ "$reject_state" == "11" || "$reject_state" == "12" ||
@@ -524,15 +531,17 @@ note=reject_path_compensation_failed
 reason=$reason
 reject_state=${reject_state:-unknown}
 early_abort_no_durable_route=$early_abort
+abort_cleanup_error=$abort_error
 expected_reason_verified=$reason_ok"
         return 1
     fi
     s6_write_evidence_file "cleanup.ok" "cleanup_ok=1
-note=reject_path_early_abort
+note=reject_path_terminal_aborted
 reason=$reason
 reject_state=${reject_state:-unknown}
 durable_route_snapshot_absent=1
-compensation=no_residual_shm
+compensation=no_route_no_reservation_required
+no_residual_shm=1
 expected_reason_verified=$reason_ok"
     return 0
 }

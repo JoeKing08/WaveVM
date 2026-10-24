@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "../common_include/wavevm_executor_abi.h"
 #include "kvm_page_cache.h"
@@ -20,11 +21,13 @@ struct bridge_state {
     struct wvm_vcpu_handoff_cache handoff_cache;
     pthread_mutex_t task_lock;
     pthread_cond_t task_available;
+    pthread_cond_t task_idle;
     pthread_t task_worker;
     struct bridge_task *tasks;
     size_t task_capacity;
     size_t task_head;
     size_t task_count;
+    int task_busy;
     int stopping;
     int task_worker_started;
 };
@@ -323,10 +326,16 @@ static void *typed_task_worker(void *opaque)
                sizeof(state->tasks[state->task_head]));
         state->task_head = (state->task_head + 1U) % state->task_capacity;
         state->task_count--;
+        state->task_busy = 1;
         pthread_mutex_unlock(&state->task_lock);
 
         (void)execute_typed_task(state, &task, error, sizeof(error));
         task_release(&task);
+
+        pthread_mutex_lock(&state->task_lock);
+        state->task_busy = 0;
+        pthread_cond_broadcast(&state->task_idle);
+        pthread_mutex_unlock(&state->task_lock);
     }
     return NULL;
 }
@@ -525,6 +534,7 @@ int wvm_executor_bridge_dispatch_init(
     int initialization_result;
     int mutex_initialized = 0;
     int condition_initialized = 0;
+    int idle_initialized = 0;
     int cache_initialized = 0;
     int worker_result;
 
@@ -573,6 +583,19 @@ int wvm_executor_bridge_dispatch_init(
         goto fail;
     }
     cache_initialized = 1;
+    initialization_result = pthread_cond_init(&state->task_idle, NULL);
+    if (initialization_result == 0) {
+        idle_initialized = 1;
+    }
+    if (initialization_result != 0) {
+        set_error(error, error_len, "cannot initialize executor idle condition");
+        pthread_cond_destroy(&state->task_available);
+        pthread_mutex_destroy(&state->task_lock);
+        wvm_vcpu_handoff_cache_destroy(&state->handoff_cache);
+        free(state);
+        return -initialization_result;
+    }
+
     worker_result = pthread_create(&state->task_worker, NULL,
                                    typed_task_worker, state);
     if (worker_result != 0) {
@@ -587,6 +610,9 @@ int wvm_executor_bridge_dispatch_init(
 fail:
     if (cache_initialized) {
         wvm_vcpu_handoff_cache_destroy(&state->handoff_cache);
+    }
+    if (idle_initialized) {
+        pthread_cond_destroy(&state->task_idle);
     }
     if (condition_initialized) {
         pthread_cond_destroy(&state->task_available);
@@ -618,10 +644,41 @@ void wvm_executor_bridge_dispatch_destroy(void *dispatch_opaque)
         task_release(&state->tasks[i]);
     }
     wvm_vcpu_handoff_cache_destroy(&state->handoff_cache);
+    pthread_cond_destroy(&state->task_idle);
     pthread_cond_destroy(&state->task_available);
     pthread_mutex_destroy(&state->task_lock);
     free(state->tasks);
     free(state);
+}
+
+int wvm_executor_bridge_dispatch_drain(void *dispatch_opaque,
+                                       uint32_t timeout_ms, char *error,
+                                       size_t error_len)
+{
+    struct bridge_state *state = dispatch_opaque;
+    uint64_t start = monotonic_milliseconds();
+
+    if (!state) {
+        set_error(error, error_len, "executor bridge is not initialized");
+        return -EINVAL;
+    }
+    for (;;) {
+        int idle;
+
+        pthread_mutex_lock(&state->task_lock);
+        idle = state->task_count == 0 && !state->task_busy;
+        if (idle) {
+            pthread_mutex_unlock(&state->task_lock);
+            return 0;
+        }
+        pthread_mutex_unlock(&state->task_lock);
+        if (monotonic_milliseconds() - start >= timeout_ms) {
+            set_error(error, error_len,
+                      "executor bridge did not drain in %u ms", timeout_ms);
+            return -ETIMEDOUT;
+        }
+        usleep(10000);
+    }
 }
 
 static int authorize_cpu_run(const struct bridge_state *state,

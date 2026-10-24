@@ -50,6 +50,28 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
   - 也可以把每一页 dump 存进一个目录，用脚本的 --from-pages 自动拼成 oldest-first。
 
 
+二½、分页 dump 规则（--from-pages）
+--------------------------------
+拉全量 transcript 时请连续翻页，避免 dump 自身留下空洞：
+
+  1. 用 ReadTranscript + before=<本页 firstIndex> 一直翻到出现
+     “This is the start of the transcript.”（覆盖到最旧）。
+  2. 翻页结束后，**再拉一次最新 tip**（不带 before，或等价拿到当前最新一页）。
+  3. 不要在「最后一页 mid-page 的 end」和「tip 页的 start」之间留洞；
+     若 tip 从 S 起而上一页只到 E 且 E+1 < S，assembler 会报 uncovered，
+     并提示：dump incomplete: re-fetch ReadTranscript with before=<tip_start>。
+
+关于 header 与缺位语义：
+
+  - 页头 `positions A–B of N` 可能比正文 JSONL 行数多报（常见 ok = claimed−1..−17）。
+    转换器把 A+ok..B 当作 **phantom tail**，不计入 missing/uncovered。
+  - 重叠页（重复 dump）：优先采用 header `of N` 更大的页（更新快照），已填槽不覆盖。
+  - dump 覆盖完整时，assemble 应报 uncovered 0
+    （stderr：assembled N messages, positions contiguous 0..max）。
+  - 若仍有 uncovered，那是 dump 真缺页（本脚本不会凭空发明消息），请补拉后再拼。
+
+
+
 三、怎么跑转换脚本
 ----------------
 1) 已有完整 oldest-first JSONL：

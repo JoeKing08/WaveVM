@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # goal section 4 / A14: production execute_handoff + remote memory via executor_bridge.
+# Default A14 = real no-root TCG (real qemu-system-x86_64).
+# WVM_GOAL4_COMPONENT_ONLY=1 selects the narrow ABI session stub; never real TCG.
+# WVM_GOAL4_KVM=1 selects the real KVM coordinator/vcpu_service path.
 set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root/tests/control-plane"
@@ -44,6 +47,7 @@ gcc -Wall -Wextra -Werror -std=gnu11 -D_DEFAULT_SOURCE \
     "$nr/memory_service.c" \
     "$nr/executor_bridge.c" \
     "$nr/vcpu_coordinator.c" \
+    "$nr/vcpu_service.c" \
     "$nr/kvm_page_cache.c" \
     "$nr/kvm_execution_fetch.c" \
     "$nr/slave_hybrid.o" \

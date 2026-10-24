@@ -387,10 +387,55 @@ def load_transcript_jsonl(path: Path) -> list[dict[str, Any]]:
     return msgs
 
 
+def _cluster_pos_ranges(positions: list[int]) -> list[tuple[int, int]]:
+    """Collapse sorted positions into inclusive (start, end) runs."""
+    if not positions:
+        return []
+    ranges: list[tuple[int, int]] = []
+    a = b = positions[0]
+    for p in positions[1:]:
+        if p == b + 1:
+            b = p
+        else:
+            ranges.append((a, b))
+            a = b = p
+    ranges.append((a, b))
+    return ranges
+
+
+def _format_pos_clusters(ranges: list[tuple[int, int]], limit: int = 8) -> str:
+    parts: list[str] = []
+    for a, b in ranges[:limit]:
+        parts.append(str(a) if a == b else f"{a}–{b}")
+    extra = len(ranges) - limit
+    s = ", ".join(parts)
+    if extra > 0:
+        s += f", …(+{extra} more clusters)"
+    return s
+
+
+# Outer-page footer only: match at line start. Nested tool_result text may contain
+# the string "Older messages remain:" / "This is the start…"; JSONL normally keeps
+# those escaped inside a single line, so a line-start anchor is enough.
+PAGE_FOOTER_RE = re.compile(
+    r"^(?:Older messages remain:|This is the start of the transcript\.)",
+    re.MULTILINE,
+)
+
+
 def assemble_from_pages(pages_dir: Path) -> list[dict[str, Any]]:
-    """Merge ReadTranscript page dump files (newest-first pages) into oldest-first messages."""
-    slots: dict[int, dict[str, Any]] = {}
-    total_hint = 0
+    """Merge ReadTranscript page dump files into oldest-first messages.
+
+    Overlap rule: parse pages with higher header ``of N`` total first (fresher
+    snapshot), then first fill wins — never overwrite an already-filled slot.
+
+    Header ``positions A–B`` may over-claim vs actual JSONL lines in the body
+    (ok often = claimed−1..−17). Trailing claimed-but-absent positions are
+    *phantom tails* and are not reported as missing. True holes (no page covers
+    them) are *uncovered* dump gaps and get the warning.
+    """
+    # (total, start, end, body_after_header, path) — sort key applied below
+    page_metas: list[tuple[int, int, int, str, Path]] = []
     for path in sorted(pages_dir.iterdir()):
         if not path.is_file():
             continue
@@ -410,11 +455,28 @@ def assemble_from_pages(pages_dir: Path) -> list[dict[str, Any]]:
         if not m:
             continue
         start, end, total = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        total_hint = max(total_hint, total)
         body = text[m.end() :]
-        # paging footer
-        body = re.split(r"\n(?:Older messages remain:|This is the start of the transcript\.)", body)[0]
+        # Line-start footer of the outer page (see PAGE_FOOTER_RE).
+        body = PAGE_FOOTER_RE.split(body, maxsplit=1)[0]
+        page_metas.append((total, start, end, body, path))
+
+    # Fresher snapshot first (higher total), then wider claimed span, then name.
+    page_metas.sort(key=lambda t: (-t[0], -(t[2] - t[1]), str(t[4])))
+
+    slots: dict[int, dict[str, Any]] = {}
+    phantom_tails: set[int] = set()
+    total_hint = 0
+    tip_start: int | None = None
+    tip_end: int | None = None
+
+    for total, start, end, body, _path in page_metas:
+        total_hint = max(total_hint, total)
+        if tip_end is None or end > tip_end:
+            tip_end = end
+            tip_start = start
+
         pos = start
+        ok = 0
         for line in body.splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -424,18 +486,51 @@ def assemble_from_pages(pages_dir: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             if "role" in obj:
-                slots[pos] = obj
+                # First fill wins (fresher pages already processed above).
+                if pos not in slots:
+                    slots[pos] = obj
                 pos += 1
+                ok += 1
+
+        # Phantom tail: header claimed [start, end] but body only yielded `ok` lines.
+        claimed = end - start + 1
+        if ok < claimed:
+            for p in range(start + ok, end + 1):
+                phantom_tails.add(p)
+
     if not slots:
         raise SystemExit(f"No transcript pages found in {pages_dir}")
+
+    # A later/overlapping page may have filled a position another page phantoms.
+    phantom_tails -= slots.keys()
+
+    filled = len(slots)
     max_pos = max(slots)
-    missing = [i for i in range(0, max_pos + 1) if i not in slots]
-    if missing:
+    uncovered = [
+        i for i in range(0, max_pos + 1)
+        if i not in slots and i not in phantom_tails
+    ]
+
+    if uncovered:
+        clusters = _cluster_pos_ranges(uncovered)
         print(
-            f"warning: missing {len(missing)} positions (e.g. {missing[:10]}…); "
-            f"covered {len(slots)}/{max_pos + 1} (total hint {total_hint})",
+            f"warning: uncovered {len(uncovered)} positions "
+            f"({_format_pos_clusters(clusters)}); "
+            f"filled {filled}, max_pos {max_pos} (total hint {total_hint})",
             file=sys.stderr,
         )
+        # Gap immediately before tip page → dump skipped a mid→tip range.
+        if tip_start is not None and (tip_start - 1) in uncovered:
+            print(
+                f"dump incomplete: re-fetch ReadTranscript with before={tip_start}",
+                file=sys.stderr,
+            )
+    else:
+        print(
+            f"assembled {filled} messages, positions contiguous 0..{max_pos}",
+            file=sys.stderr,
+        )
+
     return [slots[i] for i in sorted(slots)]
 
 

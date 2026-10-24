@@ -81,8 +81,8 @@ s6_write_source_identity() {
             echo "  $(sha256sum "$repo/$f" | awk '{print $1}')  $f"
         done
         echo "devices:"
-        echo -n "  /dev/kvm="; ls -la /dev/kvm 2>&1 | tr '\n' ' '; echo
-        echo -n "  /dev/wavevm="; ls -la /dev/wavevm 2>&1 | tr '\n' ' '; echo
+        echo -n "  /dev/kvm="; { ls -la /dev/kvm 2>&1 || true; } | tr '\n' ' '; echo
+        echo -n "  /dev/wavevm="; { ls -la /dev/wavevm 2>&1 || true; } | tr '\n' ' '; echo
         echo -n "  wavevm_ko="
         if lsmod | grep -q '^wavevm'; then
             modinfo "$repo/master_core/wavevm.ko" 2>/dev/null | awk -F: '/srcversion/{gsub(/ /,"",$2); print $2; exit}'

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 enum pending_entry_state {
     WVM_MEMORY_PENDING_EMPTY = 0,
@@ -1157,6 +1158,61 @@ int wvm_memory_service_init(
     }
     service->initialized = 1;
     return 0;
+}
+
+int wvm_memory_service_drain(struct wvm_memory_service *service,
+                             uint32_t timeout_ms, char *error,
+                             size_t error_len)
+{
+    uint64_t start = monotonic_milliseconds();
+    struct timespec delay = {0, 10000000L};
+    size_t i;
+
+    if (!service || !service->initialized) {
+        set_error(error, error_len, "memory service is not initialized");
+        return -EINVAL;
+    }
+    for (;;) {
+        int active = 0;
+
+        pthread_mutex_lock(&service->pending_lock);
+        for (i = 0; i < WVM_MEMORY_SERVICE_MAX_PENDING; i++) {
+            if (service->pending[i].state == WVM_MEMORY_PENDING_WAITING) {
+                active++;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&service->pending_lock);
+
+        pthread_mutex_lock(&service->commit_lock);
+        for (i = 0; i < WVM_MEMORY_SERVICE_MAX_PENDING && !active; i++) {
+            if (service->commits[i].state == WVM_MEMORY_COMMIT_IN_FLIGHT) {
+                active++;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&service->commit_lock);
+
+        pthread_mutex_lock(&service->outgoing_commit_lock);
+        for (i = 0; i < WVM_MEMORY_SERVICE_MAX_PENDING && !active; i++) {
+            if (service->outgoing_commits[i].state ==
+                WVM_MEMORY_COMMIT_IN_FLIGHT) {
+                active++;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&service->outgoing_commit_lock);
+
+        if (!active) {
+            return 0;
+        }
+        if (monotonic_milliseconds() - start >= timeout_ms) {
+            set_error(error, error_len,
+                      "memory service did not drain in %u ms", timeout_ms);
+            return -ETIMEDOUT;
+        }
+        nanosleep(&delay, NULL);
+    }
 }
 
 void wvm_memory_service_destroy(struct wvm_memory_service *service)

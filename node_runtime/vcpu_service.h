@@ -25,6 +25,7 @@ struct wvm_vcpu_service {
     size_t capacity;
     uint64_t operation_epoch;
     uint64_t next_operation_sequence;
+    uint64_t last_memory_fence_id;
     pthread_t reply_thread;
     int stopping;
     int initialized;

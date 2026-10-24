@@ -80,6 +80,11 @@ int wvm_vcpu_handoff_coordinator_init(
 void wvm_vcpu_handoff_coordinator_destroy(
     struct wvm_vcpu_handoff_coordinator *coordinator);
 
+/* Wait for remote in-flight handoffs to produce a terminal result. */
+int wvm_vcpu_handoff_coordinator_drain(
+    struct wvm_vcpu_handoff_coordinator *coordinator, uint32_t timeout_ms,
+    char *error, size_t error_len);
+
 /*
  * Compile and submit one admitted VCPU_RUN. Repeating the same operation ID
  * with identical semantic input only re-emits the retained request; it never

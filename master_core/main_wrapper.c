@@ -652,6 +652,98 @@ static ssize_t write_exact(int fd, const void *buf, size_t len) {
 static int g_qemu_clients[8];
 static int g_client_count = 0;
 static pthread_mutex_t g_client_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+ * R1: every IPC handler is tracked, not only async-push clients.  STOP
+ * revokes/stop-wakes all sockets, waits for handlers to drain their local
+ * commit queues, and folds a failed drain into the child's exit status.
+ */
+#define MAX_IPC_CLIENT_HANDLERS 16
+static int g_all_client_fds[MAX_IPC_CLIENT_HANDLERS];
+static int g_all_client_count = 0;
+static int g_active_client_handlers = 0;
+static int g_client_stop_failure = 0;
+
+static int track_client_fd(int fd)
+{
+    int result = -1;
+
+    pthread_mutex_lock(&g_client_lock);
+    if (g_all_client_count < MAX_IPC_CLIENT_HANDLERS) {
+        g_all_client_fds[g_all_client_count++] = fd;
+        g_active_client_handlers++;
+        result = 0;
+    }
+    pthread_mutex_unlock(&g_client_lock);
+    return result;
+}
+
+static void release_client_fd(int fd, int failed)
+{
+    int i;
+
+    pthread_mutex_lock(&g_client_lock);
+    for (i = 0; i < g_all_client_count; i++) {
+        if (g_all_client_fds[i] == fd) {
+            g_all_client_fds[i] =
+                g_all_client_fds[g_all_client_count - 1];
+            g_all_client_count--;
+            if (g_active_client_handlers > 0) {
+                g_active_client_handlers--;
+            }
+            break;
+        }
+    }
+    if (failed) {
+        g_client_stop_failure = 1;
+    }
+    pthread_mutex_unlock(&g_client_lock);
+}
+
+/*
+ * Stop all accepted IPC handlers and wait for their own cleanup.  shutdown()
+ * is used instead of close(): the handler remains the owner of the fd and can
+ * still drain its pending commit queue before closing it.  A handler stuck in
+ * an uninterruptible executor call is not claimed as normally stopped.
+ */
+static int stop_and_wait_clients(void)
+{
+    int i;
+    int waited;
+    int remaining = 0;
+    int failed = 0;
+
+    pthread_mutex_lock(&g_client_lock);
+    for (i = 0; i < g_all_client_count; i++) {
+        (void)shutdown(g_all_client_fds[i], SHUT_RDWR);
+    }
+    pthread_mutex_unlock(&g_client_lock);
+
+    for (waited = 0; waited < 3500; waited++) {
+        pthread_mutex_lock(&g_client_lock);
+        remaining = g_active_client_handlers;
+        pthread_mutex_unlock(&g_client_lock);
+        if (remaining == 0) {
+            break;
+        }
+        usleep(10000);
+    }
+
+    pthread_mutex_lock(&g_client_lock);
+    remaining = g_active_client_handlers;
+    failed = g_client_stop_failure || remaining != 0;
+    pthread_mutex_unlock(&g_client_lock);
+    if (remaining != 0) {
+        fprintf(stderr,
+                "[IPC] STOP incomplete: %d client handler(s) did not drain\n",
+                remaining);
+    }
+    if (failed) {
+        fprintf(stderr,
+                "[IPC] STOP incomplete: a client commit drain failed\n");
+    }
+    return failed ? -1 : 0;
+}
 static pthread_mutex_t g_push_barrier_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_push_barrier_cond = PTHREAD_COND_INITIALIZER;
 static uint64_t g_push_barrier_next = 1;
@@ -1619,46 +1711,56 @@ void* client_handler(void *socket_desc) {
                 break;
         }
     }
-    if (drain_pending_commits(&commit_queue, NULL) < 0) {
-        cancel_pending_commits(&commit_queue);
-    }
-    fprintf(stderr, "[IPC] client disconnected fd=%d\n", qemu_fd);
-    close(qemu_fd);
+    {
+        int drain_failed = drain_pending_commits(&commit_queue, NULL) < 0;
 
-    if (g_runtime_gate_active && runtime_connection_id != 0) {
-        char error[256] = {0};
-
-        pthread_mutex_lock(&g_runtime_gate_lock);
-        if (wvm_runtime_gate_revoke(&g_runtime_gate, runtime_connection_id,
-                                    error, sizeof(error)) != 0) {
-            fprintf(stderr, "[RuntimeGate] revoke failed fd=%d: %s\n", qemu_fd,
-                    error[0] ? error : "unknown error");
+        if (drain_failed) {
+            cancel_pending_commits(&commit_queue);
         }
-        pthread_mutex_unlock(&g_runtime_gate_lock);
-    }
-    
-    // 移除客户端并压缩数组，防止 Slot 耗尽
-    if (is_push_client) {
-        pthread_mutex_lock(&g_client_lock);
-        for (int i = 0; i < g_client_count; i++) {
-            if (g_qemu_clients[i] == qemu_fd) {
-                // 将最后一个元素移到当前空位（无序数组删除法，效率 O(1)）
-                if (i != g_client_count - 1) {
-                    g_qemu_clients[i] = g_qemu_clients[g_client_count - 1];
-                }
-                g_client_count--;
-                break;
+        fprintf(stderr, "[IPC] client disconnected fd=%d\n", qemu_fd);
+
+        if (g_runtime_gate_active && runtime_connection_id != 0) {
+            char error[256] = {0};
+
+            pthread_mutex_lock(&g_runtime_gate_lock);
+            if (wvm_runtime_gate_revoke(&g_runtime_gate,
+                                        runtime_connection_id, error,
+                                        sizeof(error)) != 0) {
+                fprintf(stderr,
+                        "[RuntimeGate] revoke failed fd=%d: %s\n", qemu_fd,
+                        error[0] ? error : "unknown error");
             }
+            pthread_mutex_unlock(&g_runtime_gate_lock);
         }
-        pthread_mutex_unlock(&g_client_lock);
+
+        // 移除客户端并压缩数组，防止 Slot 耗尽
+        if (is_push_client) {
+            pthread_mutex_lock(&g_client_lock);
+            for (int i = 0; i < g_client_count; i++) {
+                if (g_qemu_clients[i] == qemu_fd) {
+                    // 将最后一个元素移到当前空位（无序数组删除法，效率 O(1)）
+                    if (i != g_client_count - 1) {
+                        g_qemu_clients[i] = g_qemu_clients[g_client_count - 1];
+                    }
+                    g_client_count--;
+                    break;
+                }
+            }
+            pthread_mutex_unlock(&g_client_lock);
+        }
+
+        release_client_fd(qemu_fd, drain_failed);
+        close(qemu_fd);
     }
-    
+
     return NULL;
 }
 
 // --- Main Entry ---
 int wavevm_master_runtime_main(
     const struct wvm_node_runtime_context *runtime) {
+    int stop_result = 0;
+
     // Prevent process-wide termination on EPIPE when a peer disconnects.
     signal(SIGPIPE, SIG_IGN);
     if (install_shutdown_handlers() != 0) {
@@ -1998,11 +2100,20 @@ int wavevm_master_runtime_main(
 
         // 为每个 QEMU 连接创建一个处理线程
         pthread_t thread_id;
-        int *new_sock = malloc(sizeof(int));
+        int *new_sock;
+        if (track_client_fd(client_fd) != 0) {
+            fprintf(stderr,
+                    "[IPC] WARN: client handler registry full, rejecting fd=%d\n",
+                    client_fd);
+            close(client_fd);
+            continue;
+        }
+        new_sock = malloc(sizeof(int));
         if (new_sock) {
             *new_sock = client_fd;
             if (pthread_create(&thread_id, NULL, client_handler, (void*)new_sock) != 0) {
                 perror("pthread_create failed");
+                release_client_fd(client_fd, 0);
                 close(client_fd);
                 free(new_sock);
             } else {
@@ -2010,6 +2121,7 @@ int wavevm_master_runtime_main(
             }
         } else {
             perror("malloc failed");
+            release_client_fd(client_fd, 0);
             close(client_fd);
         }
     }
@@ -2017,6 +2129,15 @@ int wavevm_master_runtime_main(
     fprintf(stderr,
             "[System] control accept loop ended (shutdown=%d)\n",
             (int)g_shutdown_requested);
+
+    /*
+     * R1: stopping the accept loop is not STOP completion.  Wake every
+     * accepted IPC handler, let it drain its own pending commit queue, and
+     * wait for the coordinated cleanup boundary before tearing down memory.
+     */
+    if (stop_and_wait_clients() != 0) {
+        stop_result = 1;
+    }
 
     /* Only the main thread performs teardown.  The signal handler above only
      * changes the stop flag, so these calls remain outside signal context. */
@@ -2059,5 +2180,10 @@ int wavevm_master_runtime_main(
     g_runtime_dispatch_storage_ptr = NULL;
     g_runtime_gate_ptr = NULL;
 
+    if (stop_result != 0) {
+        fprintf(stderr,
+                "[Lifecycle] normal STOP incomplete; returning non-success\n");
+        return 1;
+    }
     return 0;
 }

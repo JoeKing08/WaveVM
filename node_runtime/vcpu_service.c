@@ -423,6 +423,7 @@ int wvm_vcpu_service_submit(struct wvm_vcpu_service *service, int qemu_fd,
     entry->qemu_fd = duplicated_fd;
     entry->legacy_request = *request;
     make_operation_identity(service, entry->operation_id, &memory_fence_id);
+    service->last_memory_fence_id = memory_fence_id;
     entry->state = VCPU_SERVICE_ENTRY_PENDING;
     memset(&submit, 0, sizeof(submit));
     submit.backend = backend;

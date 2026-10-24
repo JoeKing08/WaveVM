@@ -131,6 +131,16 @@ int wvm_memory_service_init(
 void wvm_memory_service_destroy(struct wvm_memory_service *service);
 
 /*
+ * Wait for inbound fault table entries and outgoing/inbound commit records
+ * that are still in flight to reach a terminal result. Call only after the
+ * ingress and executor producers stop; a timeout is STOP-incomplete and the
+ * caller must not report normal completion.
+ */
+int wvm_memory_service_drain(struct wvm_memory_service *service,
+                             uint32_t timeout_ms, char *error,
+                             size_t error_len);
+
+/*
  * Start one local QEMU/executor page-fault operation. OPERATION_ID remains
  * stable across retry; DELIVERY_ATTEMPT_ID is mutable forwarding metadata.
  */

@@ -71,6 +71,7 @@ common_objs=(
     "$repo_root/common_include/wavevm_membership_control.c"
     "$repo_root/common_include/wavevm_control_transport.c"
     "$repo_root/common_include/wavevm_runtime_profile.c"
+    "$repo_root/common_include/wavevm_host_probe.c"
 )
 
 compile_helper() {

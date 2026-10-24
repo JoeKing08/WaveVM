@@ -36,6 +36,7 @@ common_objs=(
     "$repo_root/common_include/wavevm_manifest.c"
     "$repo_root/common_include/wavevm_control.c"
     "$repo_root/common_include/wavevm_capability.c"
+    "$repo_root/common_include/wavevm_host_probe.c"
     "$repo_root/common_include/wavevm_lifecycle.c"
     "$repo_root/common_include/wavevm_admission.c"
     "$repo_root/common_include/wavevm_cluster.c"

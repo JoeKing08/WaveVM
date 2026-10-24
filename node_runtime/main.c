@@ -1343,6 +1343,49 @@ static int run_runtime_main(int argc, char **argv)
     pthread_join(master_thread, &master_result);
     g_shutdown_requested = 1;
     pthread_join(executor_thread, &executor_result);
+
+    /*
+     * R1: STOP must converge, not merely stop accepting work.  Drain the
+     * ordered executor queue first, then semantic handoffs, then memory
+     * commits/faults.  Destroy services only after every producer that can
+     * still reference them is idle.  A timeout is a failed STOP and must be
+     * visible in the child exit status.
+     */
+    {
+        int stop_ok = 1;
+        char drain_error[256] = {0};
+
+        if (wvm_executor_bridge_dispatch_drain(
+                executor_dispatch_opaque, 30000, drain_error,
+                sizeof(drain_error)) != 0) {
+            fprintf(stderr, "[STOP] executor drain failed: %s\n",
+                    drain_error[0] ? drain_error : "unknown error");
+            stop_ok = 0;
+        }
+        drain_error[0] = '\0';
+        if (wvm_vcpu_handoff_coordinator_drain(
+                &vcpu_coordinator, 30000, drain_error,
+                sizeof(drain_error)) != 0) {
+            fprintf(stderr, "[STOP] vCPU handoff drain failed: %s\n",
+                    drain_error[0] ? drain_error : "unknown error");
+            stop_ok = 0;
+        }
+        drain_error[0] = '\0';
+        if (wvm_memory_service_drain(&memory_service, 30000, drain_error,
+                                     sizeof(drain_error)) != 0) {
+            fprintf(stderr, "[STOP] memory service drain failed: %s\n",
+                    drain_error[0] ? drain_error : "unknown error");
+            stop_ok = 0;
+        }
+        if (!stop_ok) {
+            g_shutdown_requested = 1;
+        }
+        if (!stop_ok) {
+            master_result = (void *)(intptr_t)1;
+            executor_result = (void *)(intptr_t)1;
+        }
+    }
+
     wvm_block_client_global_uninstall();
     wvm_block_client_destroy(&block_client);
     wvm_block_service_destroy(&block_service);
@@ -1356,6 +1399,10 @@ static int run_runtime_main(int argc, char **argv)
     wvm_runtime_manifest_storage_free(&storage);
     wvm_runtime_dispatch_storage_free(&dispatch_storage);
     wvm_route_runtime_destroy(&route_runtime);
+    if (executor_result != NULL && (int)(intptr_t)executor_result != 0) {
+        fprintf(stderr, "[STOP] executor role failed during shutdown\n");
+        return 1;
+    }
     return (int)(intptr_t)master_result;
 }
 

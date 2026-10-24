@@ -481,6 +481,10 @@ static volatile uint32_t g_mpsc_tail = 0;
 // 用于保护队列的互斥锁（生产者侧使用）和用于唤醒消费者的条件变量
 static pthread_mutex_t g_mpsc_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_mpsc_cond = PTHREAD_COND_INITIALIZER;
+static pthread_t g_dirty_sender_thread;
+static int g_dirty_sender_started = 0;
+static int g_dirty_sender_stopping = 0;
+static int g_dirty_sender_failure = 0;
 
 #define BATCH_SIZE 32
 static int g_kvm_available = 0;
@@ -839,16 +843,70 @@ static int wvm_kvm_add_memslot(int vm_fd, int slot_id,
  * [关键逻辑] 创建 KVM 虚拟机实例，利用 mmap 映射大页内存，并根据是否有内核模块（Mode A）选择最优路径。
  * [后果] 确立了远程执行的基石。若初始化失败，Slave 将无法使用硬件加速，只能回退到慢速的 TCG 模拟模式。
  */
+/*
+ * A no-root TCG executor still needs the guest RAM page that QEMU maps via
+ * memory-backend-file.  Previously an absent /dev/kvm returned before this
+ * mapping, so the executor could not install the remote page it fetched.
+ */
+static int map_tcg_guest_ram_from_shm(void)
+{
+    const char *shm_path = getenv("WVM_SHM_FILE");
+    struct stat st;
+    int fd;
+
+    if (!shm_path || !shm_path[0] || g_slave_ram_size == 0) {
+        return -1;
+    }
+    fd = shm_open(shm_path, O_RDWR, 0);
+    if (fd < 0) {
+        fprintf(stderr, "[Hybrid] TCG guest RAM shm_open %s: %s\n",
+                shm_path, strerror(errno));
+        return -1;
+    }
+    if (fstat(fd, &st) != 0 ||
+        (uint64_t)st.st_size < g_slave_ram_size) {
+        if (ftruncate(fd, (off_t)g_slave_ram_size) != 0) {
+            fprintf(stderr, "[Hybrid] TCG guest RAM ftruncate: %s\n",
+                    strerror(errno));
+            close(fd);
+            return -1;
+        }
+    }
+    g_phy_ram = mmap(NULL, g_slave_ram_size, PROT_READ | PROT_WRITE,
+                     MAP_SHARED, fd, 0);
+    close(fd);
+    if (g_phy_ram == MAP_FAILED) {
+        g_phy_ram = NULL;
+        fprintf(stderr, "[Hybrid] TCG guest RAM mmap: %s\n",
+                strerror(errno));
+        return -1;
+    }
+    fprintf(stderr,
+            "[Hybrid] TCG guest RAM mapped path=/dev/shm/%s bytes=%llu\n",
+            shm_path, (unsigned long long)g_slave_ram_size);
+    return 0;
+}
+
+uint8_t *wvm_executor_guest_ram_base(void)
+{
+    return (g_phy_ram && g_phy_ram != MAP_FAILED) ? g_phy_ram : NULL;
+}
+
 void init_kvm_global() {
     const char *force_tcg = getenv("WVM_FORCE_TCG");
     if (force_tcg && atoi(force_tcg) == 1) {
         fprintf(stderr, "[Hybrid] WVM_FORCE_TCG=1, skip KVM init.\n");
         g_kvm_available = 0;
+        (void)map_tcg_guest_ram_from_shm();
         return;
     }
 
     g_kvm_fd = open("/dev/kvm", O_RDWR);
-    if (g_kvm_fd < 0) return; 
+    if (g_kvm_fd < 0) {
+        g_kvm_available = 0;
+        (void)map_tcg_guest_ram_from_shm();
+        return;
+    }
 
     {
         /*
@@ -1276,7 +1334,7 @@ static void emergency_send_dirty_page(uint64_t gpa, const uint8_t *hva) {
     robust_sendto(t_emergency_sock, tx_buf, total_len, &master_snap);
 }
 
-static void submit_typed_dirty_page(dirty_page_task_t *task)
+static int submit_typed_dirty_page(dirty_page_task_t *task)
 {
     struct wvm_mem_commit_ack ack;
     char error[256] = {0};
@@ -1285,7 +1343,7 @@ static void submit_typed_dirty_page(dirty_page_task_t *task)
     int request_result;
 
     if (!task || !task->slice) {
-        return;
+        return -EINVAL;
     }
     memset(&ack, 0, sizeof(ack));
     request_result = wvm_memory_service_global_request_commit(
@@ -1305,7 +1363,10 @@ static void submit_typed_dirty_page(dirty_page_task_t *task)
                 " base=%#" PRIx64 " status=%u result=%d reason=%s\n",
                 task->dirty.gpa, task->dirty.base_version, (unsigned)status,
                 request_result, error[0] ? error : "commit rejected");
+        g_dirty_sender_failure = 1;
+        return -1;
     }
+    return 0;
 }
 
 /* 
@@ -1326,9 +1387,13 @@ void* dirty_sync_sender_thread(void* arg) {
     while (1) {
         pthread_mutex_lock(&g_mpsc_lock);
 
-        // 如果队列为空，则阻塞等待
-        while (g_mpsc_head == g_mpsc_tail) {
+        // 如果队列为空，则阻塞等待；STOP 时排空后退出。
+        while (g_mpsc_head == g_mpsc_tail && !g_dirty_sender_stopping) {
             pthread_cond_wait(&g_mpsc_cond, &g_mpsc_lock);
+        }
+        if (g_dirty_sender_stopping && g_mpsc_head == g_mpsc_tail) {
+            pthread_mutex_unlock(&g_mpsc_lock);
+            break;
         }
 
         // 从队列头部取出一个任务
@@ -1339,7 +1404,7 @@ void* dirty_sync_sender_thread(void* arg) {
         pthread_mutex_unlock(&g_mpsc_lock);
         
         if (task && task->slice) {
-            submit_typed_dirty_page(task);
+            (void)submit_typed_dirty_page(task);
             free(task);
             continue;
         }
@@ -1379,6 +1444,30 @@ void* dirty_sync_sender_thread(void* arg) {
     
     close(sockfd);
     return NULL;
+}
+
+/*
+ * R1: the KVM dirty sender is the last producer that can still reference the
+ * page cache/memory service.  STOP must stop and join it after the KVM worker
+ * quiesces, and must fail the executor if any queued dirty commit failed.
+ */
+static int stop_dirty_sender_thread(void)
+{
+    if (!g_dirty_sender_started) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_mpsc_lock);
+    g_dirty_sender_stopping = 1;
+    pthread_cond_broadcast(&g_mpsc_cond);
+    pthread_mutex_unlock(&g_mpsc_lock);
+    pthread_join(g_dirty_sender_thread, NULL);
+    g_dirty_sender_started = 0;
+    if (g_dirty_sender_failure) {
+        fprintf(stderr,
+                "[SenderThread] STOP incomplete: dirty commit failure\n");
+        return -1;
+    }
+    return 0;
 }
 
 static void typed_handoff_result_from_request(
@@ -1680,10 +1769,11 @@ static int ensure_remote_memory_side_effect(
             __sync_synchronize();
             fprintf(stderr,
                     "[Executor] installed remote page gpa=%#llx version=%#llx "
-                    "bytes=%zu\n",
+                    "bytes=%zu hva=%p first=%02x%02x%02x%02x\n",
                     (unsigned long long)entry->gpa_start,
                     (unsigned long long)ack.version,
-                    (size_t)ack.data_bytes);
+                    (size_t)ack.data_bytes, (void *)guest_page,
+                    page[0], page[1], page[2], page[3]);
         } else {
             fprintf(stderr,
                     "[Executor] remote page gpa=%#llx has no local guest RAM "
@@ -1862,6 +1952,7 @@ int wvm_executor_runtime_execute_handoff(
     }
 
     memset(&local_request, 0, sizeof(local_request));
+    memset(&local_ack, 0, sizeof(local_ack));
     local_request.mode_tcg = request->backend == WVM_VCPU_BACKEND_TCG;
     local_request.slave_id = WVM_NODE_AUTO_ROUTE;
     local_request.vcpu_index = request->vcpu_index;
@@ -2064,7 +2155,13 @@ typed_ack_ready:
  */
 void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm_header *hdr, void *payload, int vcpu_id) {
     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
+    struct wvm_ipc_cpu_run_req req_copy;
     if (!req) return;
+    /* The reply is written back into the request payload.  Keep the request
+     * in a separate object: otherwise ack->status overwrites req->mode_tcg
+     * and the context export reads an ACK that aliases its own input. */
+    req_copy = *req;
+    req = &req_copy;
     /*
      * The receive worker is only a transport thread.  The guest execution
      * identity is carried by the request envelope and must not be inferred
@@ -4761,13 +4858,13 @@ int wavevm_executor_runtime_main(
         printf("[Hybrid] Mode: KVM FAST PATH. Listening on %s:%d\n",
                g_executor_local_only ? "127.0.0.1" : "0.0.0.0",
                g_service_port);
-        pthread_t sender_thread_id;
-        if (pthread_create(&sender_thread_id, NULL, dirty_sync_sender_thread, NULL) != 0) {
+        if (pthread_create(&g_dirty_sender_thread, NULL,
+                           dirty_sync_sender_thread, NULL) != 0) {
             perror("Failed to create dirty page sender thread");
             executor_publish_startup_state(EXECUTOR_FAILED);
             return 1;
         }
-        pthread_detach(sender_thread_id); // 设为分离模式，不需 join
+        g_dirty_sender_started = 1;
         // 启动 VFIO IRQ 转发线程
         if (g_vfio_config_path) {
             pthread_t irq_th;
@@ -4803,6 +4900,9 @@ int wavevm_executor_runtime_main(
         for(long i=0; i<total_threads; i++) pthread_join(threads[i], NULL);
         free(threads);
         __atomic_store_n(&g_kvm_worker_sock, -1, __ATOMIC_RELEASE);
+        if (stop_dirty_sender_thread() != 0) {
+            return 1;
+        }
     } else {
         printf("[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on %s:%d\n",
                g_executor_local_only ? "127.0.0.1" : "0.0.0.0",

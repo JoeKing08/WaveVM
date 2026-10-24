@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "../common_include/wavevm_x86_context.h"
 
@@ -438,6 +439,45 @@ int wvm_vcpu_handoff_coordinator_init(
     coordinator->capacity = capacity;
     coordinator->initialized = 1;
     return 0;
+}
+
+int wvm_vcpu_handoff_coordinator_drain(
+    struct wvm_vcpu_handoff_coordinator *coordinator, uint32_t timeout_ms,
+    char *error, size_t error_len)
+{
+    struct coordinator_entry *entry_array;
+    uint64_t start = monotonic_milliseconds();
+    struct timespec delay = {0, 10000000L};
+
+    if (!coordinator || !coordinator->initialized) {
+        set_error(error, error_len, "vCPU handoff coordinator is not active");
+        return -EINVAL;
+    }
+    entry_array = entries(coordinator);
+    for (;;) {
+        size_t i;
+        int active = 0;
+
+        pthread_mutex_lock(&coordinator->lock);
+        for (i = 0; i < coordinator->capacity; i++) {
+            if (entry_array[i].state ==
+                COORDINATOR_ENTRY_REMOTE_IN_FLIGHT) {
+                active++;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&coordinator->lock);
+        if (!active) {
+            return 0;
+        }
+        if (monotonic_milliseconds() - start >= timeout_ms) {
+            set_error(error, error_len,
+                      "vCPU handoff coordinator did not drain in %u ms",
+                      timeout_ms);
+            return -ETIMEDOUT;
+        }
+        nanosleep(&delay, NULL);
+    }
 }
 
 void wvm_vcpu_handoff_coordinator_destroy(

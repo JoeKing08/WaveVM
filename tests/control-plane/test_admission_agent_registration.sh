@@ -65,6 +65,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_membership_control.c" \
     "$repo_root/common_include/wavevm_control_transport.c" \
     "$repo_root/common_include/wavevm_runtime_profile.c" \
+    "$repo_root/common_include/wavevm_host_probe.c" \
     "$repo_root/tests/control-plane/seed_create_vm_evidence.c" \
     -pthread -o "$tmpdir/seed_evidence"
 digest=$("$tmpdir/seed_evidence" "$tmpdir/evidence" 801 802 1 1 \

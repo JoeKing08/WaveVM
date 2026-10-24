@@ -30,6 +30,7 @@
 #include "memory_service.h"
 #include "runtime_context.h"
 #include "vcpu_coordinator.h"
+#include "vcpu_service.h"
 #include "wavevm_executor_session.h"
 #include "wavevm_membership.h"
 #include "wavevm_protocol.h"
@@ -43,6 +44,9 @@
 
 static int g_real_qemu;
 static int g_real_kvm;
+
+/* Production executor's mapping of the shared guest RAM (slave_hybrid.c). */
+extern uint8_t *wvm_executor_guest_ram_base(void);
 
 struct remote_state {
     pthread_mutex_t lock;
@@ -84,6 +88,8 @@ struct exit_capture {
 
 struct coordinated_path {
     struct wvm_vcpu_handoff_coordinator coordinator;
+    struct wvm_vcpu_service service;
+    int service_initialized;
     void *bridge;
     pthread_mutex_t lock;
     pthread_cond_t available;
@@ -116,16 +122,24 @@ static int coordinated_complete(void *opaque,
                                 char *error, size_t error_len)
 {
     struct coordinated_path *path = opaque;
+    int service_result = 0;
 
-    (void)request;
-    (void)error;
+    if (path->service_initialized) {
+        service_result = wvm_vcpu_service_complete(
+            &path->service, request, result, error, error_len);
+    }
+    if (result->status != WVM_VCPU_HANDOFF_RESULT_SUCCESS) {
+        fprintf(stderr, "goal4 coordinator completion status=%u exit=%u err=%s\n",
+                (unsigned)result->status, (unsigned)result->exit_class,
+                error && error[0] ? error : "(empty)");
+    }
     (void)error_len;
     pthread_mutex_lock(&path->lock);
     path->result = *result;
     path->completed = 1;
     pthread_cond_signal(&path->available);
     pthread_mutex_unlock(&path->lock);
-    return 0;
+    return service_result;
 }
 
 static int expect(int cond, const char *msg)
@@ -613,14 +627,11 @@ static pid_t launch_real_qemu_session(
             snprintf(value, sizeof(value), "%u", TEST_VCPU);
             setenv("WVM_EXECUTOR_VCPU_INDEX", value, 1);
         }
-        snprintf(object_arg, sizeof(object_arg),
-                 "memory-backend-file,id=mem,size=16M,mem-path=/dev/shm/%s,"
-                 "share=on",
-                 name);
-        snprintf(machine_arg, sizeof(machine_arg), "pc,memory-backend=mem");
+        snprintf(object_arg, sizeof(object_arg), "/dev/shm/%s", name);
+        snprintf(machine_arg, sizeof(machine_arg), "pc");
         execl(qemu_bin, qemu_bin, "-accel", "wavevm", "-m", "16",
-              "-nodefaults", "-S", "-smp", "1", "-nographic",
-              "-object", object_arg, "-machine", machine_arg,
+              "-nodefaults", "-S", "-smp", "1", "-nographic", "-mem-path",
+              object_arg, "-mem-prealloc", "-machine", machine_arg,
               (char *)NULL);
         _exit(127);
     }
@@ -864,6 +875,24 @@ static int make_request(const struct wvm_node_runtime_manifest *manifest,
         memset(&legacy_context, 0, sizeof(legacy_context));
         legacy_context.eip = g_real_qemu ? REAL_QEMU_GPA :
                                          UINT64_C(0x1122334455667788);
+        if (g_real_qemu) {
+            /* The real QEMU TCG path must start in a flat 32-bit code/data
+             * context.  A zeroed context has CS.limit=0, so the debug read
+             * and guest fetch at 0x1000 both fault before executing HLT. */
+            for (int seg = 0; seg < 6; seg++) {
+                legacy_context.segs[seg].base = 0;
+                legacy_context.segs[seg].limit = 0xffffffffU;
+                legacy_context.segs[seg].selector = seg == 1 ? 0x8 : 0x10;
+                /* DESC_B | DESC_G are bits 22/23; without them QEMU
+                 * recomputes 16-bit CS/SS even with a flat limit. */
+                legacy_context.segs[seg].flags =
+                    (seg == 1 ? 0xcf9b : 0xcf93) | 0x00c00000U;
+            }
+            legacy_context.cr[0] = 0x60000011ULL;
+            legacy_context.cr[4] = 0x10ULL;
+            legacy_context.hflags = 0x30U; /* HF_CS32 | HF_SS32 */
+            legacy_context.a20_mask = 0xffffffffU;
+        }
         if (wvm_x86_context_encode(
                 WVM_VCPU_BACKEND_TCG,
                 WVM_VCPU_CONTEXT_FIELD_ARCHITECTURAL_STATE |
@@ -966,6 +995,7 @@ int main(void)
     void *coordinated_bridge = NULL;
     int coordinated_initialized = 0;
     int coordinated_sync_initialized = 0;
+    int coordinated_sockets[2] = {-1, -1};
     struct wvm_vcpu_handoff_request request;
     struct wvm_envelope envelope;
     uint8_t payload[WVM_ENVELOPE_MAX_NETWORK_LOGICAL_PAYLOAD];
@@ -985,12 +1015,12 @@ int main(void)
 
     g_real_qemu = getenv("WVM_GOAL4_REAL_QEMU") != NULL;
     g_real_kvm = getenv("WVM_GOAL4_KVM") != NULL;
-    if (g_real_qemu) {
-        fprintf(stderr,
-                "WVM_GOAL4_REAL_QEMU is unsupported: its guest RAM is not "
-                "the executor-mapped page. Use WVM_GOAL4_KVM=1 for real "
-                "-accel wavevm execution.\n");
-        return 1;
+    /* Default A14 is the real no-root TCG path.  The component-only session
+     * stub remains available for narrow ABI tests, but it is no longer the
+     * default and is never reported as real TCG execution. */
+    if (!g_real_qemu && !g_real_kvm &&
+        getenv("WVM_GOAL4_COMPONENT_ONLY") == NULL) {
+        g_real_qemu = 1;
     }
     if (g_real_qemu && g_real_kvm) {
         fprintf(stderr, "WVM_GOAL4_REAL_QEMU and WVM_GOAL4_KVM are exclusive\n");
@@ -1001,6 +1031,16 @@ int main(void)
                               sizeof(error)) != 0) {
         fprintf(stderr, "goal4 real executor shm: %s\n", error);
         return 1;
+    }
+    if (g_real_qemu) {
+        /*
+         * This host may expose /dev/wavevm, but the QEMU child is explicitly
+         * running the TCG backend against WVM_SHM_FILE.  Force the executor's
+         * guest-RAM mapping to that same SHM instead of the Mode A device
+         * mapping, otherwise the fetched page is installed into unrelated
+         * memory and QEMU sees zeros.
+         */
+        setenv("WVM_FORCE_TCG", "1", 1);
     }
     fill_rule(&rules[0], 41, 7, 17, 101, 17);
     fill_rule(&rules[1], 99, 1, 99, 202, 99);
@@ -1104,10 +1144,24 @@ int main(void)
             goto out;
         }
         if (g_real_qemu || g_real_kvm) {
-            /* The remote directory owns the code page.  The executor must
-             * install this HLT into guest RAM for KVM/QEMU to halt at EIP. */
+            /*
+             * The remote directory owns the code page.  The guest first stores
+             * a known dword to its own code page, then halts.  The final
+             * directory bytes therefore prove a real guest store traversed the
+             * dirty/commit path, not just a HLT fetch.
+             */
             memset(page, 0x90, sizeof(page));
-            page[0] = 0xf4;
+            page[0] = 0xc7; /* mov dword ptr [0x1000], 0x12345678 */
+            page[1] = 0x05;
+            page[2] = 0x00;
+            page[3] = 0x10;
+            page[4] = 0x00;
+            page[5] = 0x00;
+            page[6] = 0x78;
+            page[7] = 0x56;
+            page[8] = 0x34;
+            page[9] = 0x12;
+            page[10] = 0xf4;
         } else {
             memset(page, 0x3c, sizeof(page));
         }
@@ -1316,7 +1370,19 @@ int main(void)
     }
     if (g_real_qemu) {
         uint16_t exit_class;
+        int shm_fd = shm_open(qemu_shm, O_RDONLY, 0);
 
+        if (shm_fd >= 0) {
+            uint8_t probe[16];
+            ssize_t got = pread(shm_fd, probe, sizeof(probe), REAL_QEMU_GPA);
+            fprintf(stderr, "goal4 TCG shm probe got=%zd bytes=%02x%02x%02x%02x\n",
+                    got, got > 0 ? probe[0] : 0, got > 1 ? probe[1] : 0,
+                    got > 2 ? probe[2] : 0, got > 3 ? probe[3] : 0);
+            close(shm_fd);
+        } else {
+            fprintf(stderr, "goal4 TCG shm probe open failed: %s\n",
+                    strerror(errno));
+        }
         peer.run_count = 1;
         pthread_mutex_lock(&exits.lock);
         exit_class = exits.result.exit_class;
@@ -1353,6 +1419,81 @@ int main(void)
         }
     }
 
+    if (g_real_qemu || g_real_kvm) {
+        uint8_t guest_page[WVM_MEMORY_PAGE_BYTES];
+        uint8_t final_page[WVM_MEMORY_PAGE_BYTES];
+        uint64_t final_version = 0;
+
+        if (g_real_qemu) {
+            struct wvm_mem_commit_ack commit_ack;
+            uint64_t base_version;
+            int commit_rc;
+
+            uint8_t *guest_ram = wvm_executor_guest_ram_base();
+
+            if (!guest_ram) {
+                fprintf(stderr, "real QEMU guest RAM is not mapped\n");
+                goto out;
+            }
+            memcpy(guest_page, guest_ram + REAL_QEMU_GPA,
+                   sizeof(guest_page));
+            if (expect(guest_page[0] == 0x78 && guest_page[1] == 0x56 &&
+                           guest_page[2] == 0x34 && guest_page[3] == 0x12,
+                       "real TCG guest store wrote its code page") != 0) {
+                goto out;
+            }
+            pthread_mutex_lock(&remote.lock);
+            base_version = remote.completed_version;
+            pthread_mutex_unlock(&remote.lock);
+            memset(&commit_ack, 0, sizeof(commit_ack));
+            commit_rc = wvm_memory_service_global_request_commit(
+                REAL_QEMU_GPA, base_version, 0, guest_page,
+                sizeof(guest_page), request.operation_id, 2, &commit_ack,
+                error, sizeof(error));
+            if (expect(commit_rc == 0 &&
+                           commit_ack.status == WVM_MEM_ACK_SUCCESS,
+                       "real TCG dirty commit reached remote directory") !=
+                0) {
+                fprintf(stderr, "TCG commit rc=%d status=%u err=%s\n",
+                        commit_rc, (unsigned)commit_ack.status,
+                        error[0] ? error : "(empty)");
+                goto out;
+            }
+        } else {
+            struct timespec deadline;
+
+            clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_sec += 5;
+            pthread_mutex_lock(&remote.lock);
+            while (remote.completed_commit_version == 0) {
+                if (pthread_cond_timedwait(&remote.available, &remote.lock,
+                                           &deadline) != 0) {
+                    break;
+                }
+            }
+            pthread_mutex_unlock(&remote.lock);
+            if (expect(remote.completed_commit_version != 0,
+                       "real KVM dirty commit reached remote fence") != 0) {
+                goto out;
+            }
+        }
+        if (expect(wvm_directory_store_read_page(
+                       &remote.directory_store, REAL_QEMU_GPA, final_page,
+                       &final_version, error, sizeof(error)) == 0,
+                   "read final remote directory page") != 0) {
+            goto out;
+        }
+        if (expect(final_page[0] == 0x78 && final_page[1] == 0x56 &&
+                       final_page[2] == 0x34 && final_page[3] == 0x12,
+                   "remote directory contains real guest store") != 0) {
+            goto out;
+        }
+        printf("EVID goal4_A14: guest_store_remote_version=0x%llx "
+               "guest_store_bytes=%02x%02x%02x%02x\n",
+               (unsigned long long)final_version, final_page[0], final_page[1],
+               final_page[2], final_page[3]);
+    }
+
     pthread_mutex_lock(&remote.lock);
     if (expect(remote.completion_count >= 1, "remote memory ACK completed") !=
             0 ||
@@ -1361,7 +1502,7 @@ int main(void)
         expect(remote.completed_version == ((UINT64_C(1) << 32) | 9U),
                "remote version") != 0 ||
         expect(remote.completed_page[0] ==
-                   ((g_real_qemu || g_real_kvm) ? 0xf4 : 0x3c),
+                   ((g_real_qemu || g_real_kvm) ? 0xc7 : 0x3c),
                "remote page bytes") != 0) {
         pthread_mutex_unlock(&remote.lock);
         goto out;
@@ -1393,12 +1534,35 @@ int main(void)
     if (g_real_kvm) {
         struct wvm_executor_bridge_config coordinated_bridge_config;
         struct wvm_vcpu_handoff_coordinator_config coordinator_config;
-        struct wvm_vcpu_handoff_submit submit;
+        struct wvm_vcpu_service_config service_config;
+        struct wvm_ipc_cpu_run_req legacy_request;
+        struct wvm_ipc_cpu_run_ack legacy_ack;
+        wvm_kvm_context_t legacy_context;
+        uint64_t legacy_fields = 0;
         struct timespec deadline;
         uint64_t fence_id;
+        uint64_t service_fence = 0;
+        size_t legacy_received = 0;
+        uint8_t coord_page[WVM_MEMORY_PAGE_BYTES];
 
         (void)wvm_kvm_page_cache_global_invalidate(REAL_QEMU_GPA, error,
                                                     sizeof(error));
+        /* The first handoff intentionally overwrote its own code page with the
+         * guest store.  Seed the coordinator handoff with a clean HLT page at
+         * the next directory version so it exercises a fresh real KVM run
+         * without re-executing stored data. */
+        memset(coord_page, 0, sizeof(coord_page));
+        coord_page[0] = 0xf4;
+        if (expect(wvm_directory_store_commit_page(
+                       &remote.directory_store, REAL_QEMU_GPA,
+                       remote.completed_commit_version, 0, coord_page,
+                       sizeof(coord_page), &fence_id, error,
+                       sizeof(error)) == 0,
+                   "seed coordinator HLT page") != 0) {
+            fprintf(stderr, "coordinator seed err=%s\n",
+                    error[0] ? error : "(empty)");
+            goto out;
+        }
         memset(&coordinated, 0, sizeof(coordinated));
         if (pthread_mutex_init(&coordinated.lock, NULL) != 0 ||
             pthread_cond_init(&coordinated.available, NULL) != 0) {
@@ -1416,9 +1580,6 @@ int main(void)
             fprintf(stderr, "coordinator bridge err=%s\n", error);
             goto out;
         }
-        pthread_mutex_lock(&remote.lock);
-        fence_id = remote.completed_commit_version;
-        pthread_mutex_unlock(&remote.lock);
         if (fence_id == 0) {
             fprintf(stderr, "coordinator has no real dirty commit fence\n");
             goto out;
@@ -1445,27 +1606,42 @@ int main(void)
             goto out;
         }
         coordinated_initialized = 1;
-        memset(&submit, 0, sizeof(submit));
-        submit.backend = request.backend;
-        submit.vcpu_index = request.vcpu_index;
-        submit.memory_fence_result = WVM_VCPU_MEMORY_FENCE_SUCCEEDED;
-        submit.memory_fence_id = fence_id;
-        submit.local_interrupt_watermark = request.local_interrupt_watermark;
-        submit.device_event_watermark = request.device_event_watermark;
-        memcpy(submit.operation_id, request.operation_id,
-               sizeof(submit.operation_id));
-        submit.context_schema_version = request.context_schema_version;
-        submit.context_valid_fields = request.context_valid_fields;
-        submit.context = request.context;
-        submit.context_bytes = request.context_bytes;
-        coordinated.bridge = coordinated_bridge;
-        if (expect(wvm_vcpu_handoff_coordinator_submit(
-                       &coordinated.coordinator, &submit, error,
-                       sizeof(error)) == 0,
-                   "coordinator submit -> KVM handoff") != 0) {
-            fprintf(stderr, "coordinator submit err=%s\n", error);
+        memset(&service_config, 0, sizeof(service_config));
+        service_config.coordinator = &coordinated.coordinator;
+        service_config.record_capacity =
+            storage.manifest.launch_plan.vcpu_handoff_record_capacity;
+        if (expect(wvm_vcpu_service_init(&coordinated.service, &service_config,
+                                         error, sizeof(error)) == 0,
+                   "init production vCPU IPC service") != 0) {
+            fprintf(stderr, "coordinator service err=%s\n", error);
             goto out;
         }
+        coordinated.service_initialized = 1;
+        if (expect(socketpair(AF_UNIX, SOCK_STREAM, 0, coordinated_sockets) == 0,
+                   "create coordinator QEMU IPC socket") != 0 ||
+            expect(wvm_x86_context_decode(
+                       request.backend, request.context, request.context_bytes,
+                       &legacy_fields, &legacy_context, sizeof(legacy_context),
+                       error, sizeof(error)) == 0 &&
+                       legacy_fields == request.context_valid_fields,
+                   "decode coordinator KVM context") != 0) {
+            goto out;
+        }
+        memset(&legacy_request, 0, sizeof(legacy_request));
+        legacy_request.mode_tcg = 0;
+        legacy_request.slave_id = WVM_NODE_AUTO_ROUTE;
+        legacy_request.vcpu_index = request.vcpu_index;
+        memcpy(&legacy_request.ctx.kvm, &legacy_context,
+               sizeof(legacy_context));
+        coordinated.bridge = coordinated_bridge;
+        if (expect(wvm_vcpu_service_submit(&coordinated.service,
+                                           coordinated_sockets[0], &legacy_request,
+                                           error, sizeof(error)) == 0,
+                   "vcpu_service submits real KVM handoff") != 0) {
+            fprintf(stderr, "coordinator service submit err=%s\n", error);
+            goto out;
+        }
+        service_fence = coordinated.service.last_memory_fence_id;
         clock_gettime(CLOCK_REALTIME, &deadline);
         deadline.tv_sec += 5;
         pthread_mutex_lock(&coordinated.lock);
@@ -1480,13 +1656,32 @@ int main(void)
             fprintf(stderr, "coordinator completion timeout\n");
             goto out;
         }
+        memset(&legacy_ack, 0, sizeof(legacy_ack));
+        while (legacy_received < sizeof(legacy_ack)) {
+            ssize_t got = recv(coordinated_sockets[1],
+                               (uint8_t *)&legacy_ack + legacy_received,
+                               sizeof(legacy_ack) - legacy_received, 0);
+            if (got <= 0) {
+                break;
+            }
+            legacy_received += (size_t)got;
+        }
         printf("EVID goal4_A14: coordinator_fence_id=0x%llx "
-               "coordinator_exit_class=%u coordinator_context_bytes=%zu "
-               "coordinator_status=%u\n",
+               "coordinator_seed_version=0x%llx coordinator_exit_class=%u "
+               "coordinator_context_bytes=%zu coordinator_status=%u "
+               "legacy_ack_status=%d legacy_ack_mode=%u legacy_ack_bytes=%zu\n",
+               (unsigned long long)service_fence,
                (unsigned long long)fence_id,
                (unsigned)coordinated.result.exit_class,
                coordinated.result.context_bytes,
-               (unsigned)coordinated.result.status);
+               (unsigned)coordinated.result.status, legacy_ack.status,
+               (unsigned)legacy_ack.mode_tcg, legacy_received);
+        if (expect(legacy_received == sizeof(legacy_ack) &&
+                       legacy_ack.status == 0 && legacy_ack.mode_tcg == 0,
+                   "vcpu_service returned a real KVM ACK") != 0) {
+            pthread_mutex_unlock(&coordinated.lock);
+            goto out;
+        }
         if (expect(coordinated.result.exit_class == WVM_VCPU_EXIT_HALTED &&
                        coordinated.result.context_bytes != 0 &&
                        coordinated.result.status ==
@@ -1496,6 +1691,18 @@ int main(void)
             goto out;
         }
         pthread_mutex_unlock(&coordinated.lock);
+        if (coordinated.service_initialized) {
+            wvm_vcpu_service_destroy(&coordinated.service);
+            coordinated.service_initialized = 0;
+        }
+        if (coordinated_sockets[0] >= 0) {
+            close(coordinated_sockets[0]);
+            coordinated_sockets[0] = -1;
+        }
+        if (coordinated_sockets[1] >= 0) {
+            close(coordinated_sockets[1]);
+            coordinated_sockets[1] = -1;
+        }
         wvm_vcpu_handoff_coordinator_destroy(&coordinated.coordinator);
         coordinated_initialized = 0;
         wvm_executor_bridge_dispatch_destroy(coordinated_bridge);
@@ -1505,9 +1712,12 @@ int main(void)
         coordinated_sync_initialized = 0;
     }
 
-    printf("EVID goal4_A14: remote_fault_ACK version=0x%llx fence_id=11 "
+    printf("EVID goal4_A14: remote_fault_ACK version=0x%llx "
+           "request_fence_id=%u produced_fence_id=%llu "
            "production_execute_handoff=1\n",
-           (unsigned long long)remote.completed_version);
+           (unsigned long long)remote.completed_version,
+           (unsigned)request.memory_fence_id,
+           (unsigned long long)exits.result.produced_memory_fence_id);
     puts("goal4 A14: executor_bridge → wvm_executor_runtime_execute_handoff");
     puts(g_real_kvm
              ? "           → remote memory_service fault/ACK → real KVM_RUN PASS"
@@ -1517,6 +1727,18 @@ int main(void)
     exit_code = 0;
 
 out:
+    if (coordinated.service_initialized) {
+        wvm_vcpu_service_destroy(&coordinated.service);
+        coordinated.service_initialized = 0;
+    }
+    if (coordinated_sockets[0] >= 0) {
+        close(coordinated_sockets[0]);
+        coordinated_sockets[0] = -1;
+    }
+    if (coordinated_sockets[1] >= 0) {
+        close(coordinated_sockets[1]);
+        coordinated_sockets[1] = -1;
+    }
     if (coordinated_initialized) {
         wvm_vcpu_handoff_coordinator_destroy(&coordinated.coordinator);
     }

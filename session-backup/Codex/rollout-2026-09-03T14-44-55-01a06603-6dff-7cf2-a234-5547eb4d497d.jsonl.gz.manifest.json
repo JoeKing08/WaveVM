@@ -1,11 +1,11 @@
 {
   "archive": "rollout-2026-09-03T14-44-55-01a06603-6dff-7cf2-a234-5547eb4d497d.jsonl.gz",
-  "compressed_size_bytes": 168641508,
+  "compressed_size_bytes": 168958007,
   "compression": "gzip",
   "format": "wavevm-session-archive-shards",
   "part_count": 4,
   "part_prefix": "rollout-2026-09-03T14-44-55-01a06603-6dff-7cf2-a234-5547eb4d497d.jsonl.gz.",
   "part_size_bytes": 47185920,
   "restore": "cat rollout-2026-09-03T14-44-55-01a06603-6dff-7cf2-a234-5547eb4d497d.jsonl.gz.[0-9][0-9][0-9] > rollout-2026-09-03T14-44-55-01a06603-6dff-7cf2-a234-5547eb4d497d.jsonl.gz",
-  "sha256": "2d8c080e9c1febeee0f5358e8b6235595d1b49bc5cba83fbec3ff6ee383d2936"
+  "sha256": "d112e0ec3dda5abd1645052513f91a40bf636b7ae2faad82e589fff82a732626"
 }

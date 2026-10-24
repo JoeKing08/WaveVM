@@ -210,8 +210,13 @@ struct send_state {
 
 struct executor_stub {
     pthread_mutex_t lock;
+    pthread_cond_t entered;
+    pthread_cond_t release;
     unsigned int received;
+    unsigned int entered_count;
     int valid;
+    int block;
+    int released;
 };
 
 static int capture_response(void *opaque, const struct wvm_envelope *envelope,
@@ -294,6 +299,15 @@ static int executor_stub_execute(
         }
         return -EPROTO;
     }
+    pthread_mutex_lock(&stub->lock);
+    if (stub->block) {
+        stub->entered_count++;
+        pthread_cond_broadcast(&stub->entered);
+        while (!stub->released) {
+            pthread_cond_wait(&stub->release, &stub->lock);
+        }
+    }
+    pthread_mutex_unlock(&stub->lock);
     context.eip += 4;
     if (wvm_x86_context_encode(
             request->backend, request->context_valid_fields, &context,
@@ -526,7 +540,12 @@ int main(void)
     memset(&stub, 0, sizeof(stub));
     stub.valid = 1;
     if (expect(pthread_mutex_init(&stub.lock, NULL) == 0,
-               "initialize typed executor stub")) {
+               "initialize typed executor stub") ||
+        expect(pthread_cond_init(&stub.entered, NULL) == 0,
+               "initialize stub entered condition") ||
+        expect(pthread_cond_init(&stub.release, NULL) == 0,
+               "initialize stub release condition")) {
+        pthread_mutex_destroy(&stub.lock);
         pthread_cond_destroy(&sent.available);
         pthread_mutex_destroy(&sent.lock);
         wvm_route_runtime_destroy(&routes);
@@ -656,10 +675,74 @@ int main(void)
         goto out;
     }
 
+    {
+        struct wvm_executor_bridge_config drain_config = config;
+        void *drain_bridge = NULL;
+        struct timespec deadline;
+        int entered = 0;
+
+        stub.block = 1;
+        stub.released = 0;
+        stub.entered_count = 0;
+        if (expect(wvm_executor_bridge_dispatch_init(
+                       &drain_config, &drain_bridge, error,
+                       sizeof(error)) == 0,
+                   "initialize in-flight drain bridge") ||
+            expect(make_request(&manifest, &projection, 3, 3, &request,
+                                &envelope, payload, sizeof(payload),
+                                &payload_bytes, error, sizeof(error)) == 0,
+                   "build in-flight drain handoff") ||
+            expect(wvm_executor_bridge_dispatch(drain_bridge, &envelope, error,
+                                                sizeof(error)) == 0,
+                   "enqueue in-flight drain handoff")) {
+            wvm_executor_bridge_dispatch_destroy(drain_bridge);
+            goto out;
+        }
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 5;
+        pthread_mutex_lock(&stub.lock);
+        while (stub.entered_count == 0) {
+            if (pthread_cond_timedwait(&stub.entered, &stub.lock,
+                                       &deadline) != 0) {
+                break;
+            }
+        }
+        entered = stub.entered_count != 0;
+        pthread_mutex_unlock(&stub.lock);
+        if (expect(entered, "executor entered the in-flight handoff") ||
+            expect(wvm_executor_bridge_dispatch_drain(
+                       drain_bridge, 100, error, sizeof(error)) == -ETIMEDOUT,
+                   "drain reports timeout while executor is in flight")) {
+            pthread_mutex_lock(&stub.lock);
+            stub.released = 1;
+            pthread_cond_broadcast(&stub.release);
+            pthread_mutex_unlock(&stub.lock);
+            wvm_executor_bridge_dispatch_destroy(drain_bridge);
+            goto out;
+        }
+        pthread_mutex_lock(&stub.lock);
+        stub.released = 1;
+        pthread_cond_broadcast(&stub.release);
+        pthread_mutex_unlock(&stub.lock);
+        if (expect(wvm_executor_bridge_dispatch_drain(
+                       drain_bridge, 5000, error, sizeof(error)) == 0,
+                   "drain waits for the in-flight executor to finish") ||
+            expect(wait_for_response(&sent, 4) == 0,
+                   "in-flight drain handoff completed")) {
+            wvm_executor_bridge_dispatch_destroy(drain_bridge);
+            goto out;
+        }
+        wvm_executor_bridge_dispatch_destroy(drain_bridge);
+        stub.block = 0;
+        puts("EVID executor_bridge_drain: in_flight_timeout=1 drained=1");
+    }
+
     exit_code = 0;
 out:
     wvm_executor_bridge_dispatch_destroy(bridge);
     if (stub_initialized) {
+        pthread_cond_destroy(&stub.release);
+        pthread_cond_destroy(&stub.entered);
         pthread_mutex_destroy(&stub.lock);
     }
     if (sent_initialized) {

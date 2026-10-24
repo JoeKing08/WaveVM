@@ -1477,3 +1477,123 @@ Final matrix after A3 closure + kvzalloc hardening (four runs, all disclosed):
 
 No commit/push; HEAD unchanged; guest SSH not used; wavevm.ko rebuilt and reloaded with
 user approval; old module backup retained.
+
+===== §6 post-Codex-reaudit R1/R2/R3 correction — 2026-10-24 20:57 CST Asia/Shanghai =====
+trigger: grok-dsh-minimum-reaudit-codex-agent-2026-10-24.txt (R1 P1, R2 P2, R3 P2).
+RETRACTION: the earlier sentence that "Goal §6 Phase 10 Minimum is COMPLETE" is
+withdrawn.  After the re-audit this plan records R1/R2/R3 as code+evidence corrected,
+but does NOT sign "Minimum except goal §7 COMPLETE"; Codex must re-audit the current
+tree/evidence first.  No commit/push.
+
+R1 STOP quiesce/drain/fence/flush (corrected):
+- master_core/main_wrapper.c now tracks every accepted IPC client fd, calls
+  shutdown(SHUT_RDWR), and waits up to 35s for handlers to finish; a handler drains
+  pending commits before dropping its registration, and a drain failure is sticky.
+  STOP returns nonzero if handlers remain or commit drain failed.
+- node_runtime/main.c drains executor_bridge, vcpu_coordinator and memory_service
+  (30s each) after joining master/executor; any timeout/error forces nonzero exit.
+- Tests: tests/control-plane/test_executor_bridge.c now blocks a real executor in
+  flight, asserts drain(100ms) == -ETIMEDOUT, releases it, then asserts drain(5000ms)
+  == 0 and the typed VCPU_EXIT completes.  Evidence:
+  /tmp/wavevm-r1-bridge-final2.out (PASS; EVID executor_bridge_drain).
+  tests/control-plane/test_stop_vm.sh idle production STOP PASS:
+  /tmp/wavevm-r1-stop-final1.out.  Full matrix rerun with WVM_S6_REQUIRE_STOP=1.
+- Honest limit: the in-flight drain proof is the production drain API; the
+  production STOP test itself is an idle STOP.  A STOP issued while a guest is
+  actively executing is not claimed here.
+
+R2 early no-route abort terminal state (corrected):
+- common_include/wavevm_control_plane.c allows ABORTING(18)->ABORTED(19) only when
+  no prepared route snapshot key and no candidate manifest digest exist; normal
+  route-gated abort still cannot bypass validation.
+- s6_cell_common.sh tracks abort_error and requires final reject_state=19 plus clean
+  abort cleanup; compensation=no_route_no_reservation_required.
+- Rerun: neg_require_kvm rc=0 and neg_require_kernel rc=0, evidence dirs
+  /tmp/wavevm-r2-neg-kvm-final1 and /tmp/wavevm-r2-neg-kernel-final1
+  (cleanup.ok reject_state=19 abort_cleanup_error=0).
+
+R3 real no-root TCG + KVM remote/fence/service wiring (corrected):
+- A14 default is now real no-root qemu-system-x86_64 TCG (WVM_GOAL4_COMPONENT_ONLY=1
+  retains only the narrow ABI session stub and is never labeled real TCG).
+  Real TCG evidence /tmp/wavevm-s6-remote-service2.out (also
+  /tmp/wavevm-s6-r1-rmem-20261024-service/goal4_a14.log):
+  real_qemu_exit_class=2 context_bytes=4408 status=0;
+  guest_store_remote_version=0x10000000a bytes=78563412.
+- Real KVM coordinator now goes through production wvm_vcpu_service_submit
+  (legacy QEMU IPC -> vcpu_service -> coordinator -> executor_bridge -> real KVM),
+  not a test-constructed coordinator submit.  The service emits a real pre-handoff
+  fence (service_fence=0x1); test seeds a clean HLT page at directory version
+  0x10000000b so the second real KVM run does not re-execute stored data.
+  Evidence /tmp/wavevm-s6-remote-service2.out (also
+  /tmp/wavevm-s6-r1-rmem-20261024-service/goal4_a14_kvm.log):
+  coordinator_fence_id=0x1 coordinator_seed_version=0x10000000b
+  coordinator_exit_class=2 context_bytes=2696 status=0; legacy_ack_status=0 mode=0;
+  guest_store_remote_version=0x10000000a bytes=78563412.
+- handle_kvm_run_stateless copies the request before writing the in-place ACK, so
+  the ACK no longer corrupts req->mode_tcg; local_ack is memset.  These were real
+  aliasing bugs, not test-only workarounds.
+- Honest residual: TCG production handoff does not itself emit a typed dirty
+  commit.  A14's remote dirty commit and final directory content for TCG are driven
+  by the test calling the production memory_service after the real guest store.
+  Do not claim a fully production TCG dirty-flush E2E from this evidence.
+
+Matrix/evidence:
+- Full matrix PASS 11/11 (pre self-audit test-harness fixes):
+  /tmp/wavevm-s6-matrix-20261024-service-final4, run_id=s6-20261024-service-final4;
+  totals pass=11 fail=0 skip=0 blocked=0; every cell cleanup_ok=1;
+  R1_LIVE_CREATE_SHORT_EXEC=PASS_PRODUCTION_TYPED; R1_PRODUCTION_DISPATCH=PASS;
+  REMOTE_MEM_FENCE_VERSION_DIRTY=PASS; MATRIX_RESULT=PASS.
+  Final aligned rerun after fixes: final5 (see self-audit section below).
+- Component evidence: /tmp/wavevm-s6-r1-rmem-20261024-service/
+  R1_PRODUCTION_DISPATCH.txt (FIXED, gateway-forward path),
+  REMOTE_MEM_FENCE_VERSION_DIRTY.txt (FIXED),
+  R1_STOP_SEMANTICS.txt (idle STOP + in-flight bridge drain; explicit limits).
+- A14 final EVID now reports actual request/produced fence IDs rather than a
+  hardcoded 11: real TCG produced_fence_id=1; KVM coordinator service fence 0x1,
+  seed directory version 0x10000000b, legacy_ack_status=0/mode=0.
+- Module was reloaded for Mode A (insmod master_core/wavevm.ko; srcversion
+  96BE748C902FFF3F9E50F69; /dev/wavevm created); no reboot.
+- A14 default TCG no longer requires WVM_GOAL4_REAL_QEMU; KVM env remains explicit.
+- No commit/push; guest SSH not used.
+
+Conclusion: R1/R2/R3 are corrected in code and targeted evidence, but this plan
+still does not sign "除 goal §7 外 Minimum COMPLETE".  Hand to Codex for independent
+re-audit of the current dirty tree + evidence.
+
+===== Self-audit against the written Minimum criteria — 2026-10-24 21:10 CST =====
+Findings from re-reading goal.txt + roadmap §1.1/§14 + baseline §1/§14:
+- Fixed a real test-harness regression found during this self-audit: eight
+  control-plane tests compiled seed_create_vm_evidence.c without
+  common_include/wavevm_host_probe.c, so they failed at link time.  Added the
+  source to test_admission_agent_registration.sh, test_cordon_drain_compute.sh,
+  test_create_vm_multi_node.sh, test_create_vm_multi_node_spread.sh,
+  test_create_vm_recover.sh, test_gateway_drain_prepare_commit.sh,
+  test_gateway_drain.sh, test_multi_active_cluster.sh.
+  Re-run PASS: cordon/drain-compute, gateway DRAIN PREPARE+ACK+COMMIT, gateway
+  cordon/drain fail-closed, membership transport, gateway successor,
+  CREATE_VM partial-start/restart recovery, node-runtime admission registration.
+  Logs: /tmp/wavevm-audit2-*.out.
+- Mode A isolation: test_targeted_isolation initially hung after many prior
+  module uses; rmmod+insmod of the same built wavevm.ko cleared the stale state.
+  Then test_targeted_isolation ALL PASS (same-GPA / multi-FD / async teardown)
+  and test_two_vm_context_bind PASS (dual bind, sibling teardown).
+  Logs: /tmp/wavevm-audit-targeted-isolation3.out,
+  /tmp/wavevm-audit-two-vm-bind2.out.  This is a module-state caveat, not a
+  source change; final matrix rerun after reload.
+- Strict Minimum gap still open: roadmap §14 / baseline §14 say Minimum success
+  requires guest login or SSH plus remote vCPU/memory evidence.  goal.txt defers
+  full guest login/SSH to §7, but the matrix currently has only runtime readiness
+  plus a production typed short-exec/remote-memory probe, not a booted guest OS
+  login/SSH.  Therefore this plan can record the §0-§6 functional evidence set
+  (R1/R2/R3 + membership + matrix) with the evidence above, but cannot sign
+  "Minimum except §7 COMPLETE" while read literally: the omitted §7 contains the
+  remaining Minimum guest-readiness/login/SSH acceptance.
+- TCG dirty-commit residual remains as stated above (test-driven, not executor
+  emitted).  Membership operations now have fresh targeted PASS evidence; Mode A
+  isolation now has fresh PASS evidence after module reload.
+- Matrix final5 after these test-harness fixes + module reload: PASS 11/11,
+  /tmp/wavevm-s6-matrix-20261024-service-final5, run_id=s6-20261024-service-final5,
+  all cleanup_ok=1; R1_PRODUCTION_DISPATCH=PASS;
+  R1_LIVE_CREATE_SHORT_EXEC=PASS_PRODUCTION_TYPED;
+  REMOTE_MEM_FENCE_VERSION_DIRTY=PASS; MATRIX_RESULT=PASS;
+  MINIMUM_COMPLETE=NOT_CLAIMED_BY_MATRIX.

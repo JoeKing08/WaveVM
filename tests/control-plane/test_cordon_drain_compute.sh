@@ -49,6 +49,7 @@ common_objs=(
     "$repo_root/common_include/wavevm_membership_control.c"
     "$repo_root/common_include/wavevm_control_transport.c"
     "$repo_root/common_include/wavevm_runtime_profile.c"
+    "$repo_root/common_include/wavevm_host_probe.c"
 )
 
 gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
