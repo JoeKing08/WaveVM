@@ -76,7 +76,9 @@ s6_copy_evidence() {
                 tail -c $((cap / 2)) "$src"
             } >"$s6_evidence_dir/$name"
         else
-            cp -a "$src" "$s6_evidence_dir/$name"
+            # Dereference logs/evidence: a copied symlink can point at a
+            # deleted cell tempdir and make the archive unreadable.
+            cp -L "$src" "$s6_evidence_dir/$name"
         fi
     fi
 }
@@ -110,6 +112,48 @@ tcg_helper=${WVM_TCG_QEMU_BIN:-}
 run_id=${WVM_S6_RUN_ID:-}
 cell=${WVM_S6_CELL:-}"
 
+    local agent_log="$tmpdir/agent.log"
+    [[ -f "$agent_log" ]] || agent_log="$tmpdir/agent-a.log"
+    local runtime_manifest=""
+
+    # Actual admitted manifest/dispatch/route artifacts, not just grep snippets.
+    runtime_manifest=$(grep -oE -- '--manifest[[:space:]]+/[^[:space:]]+\.manifest' \
+        "$agent_log" 2>/dev/null | awk '{print $2}' | head -1 || true)
+    if [[ -z "$runtime_manifest" && -n "$vm_id" && -n "$vm_inc" && -n "$manifest_gen" ]]; then
+        runtime_manifest="$tmpdir/runtime/vm-${vm_id}-${vm_inc}-${manifest_gen}.manifest"
+        if [[ ! -f "$runtime_manifest" ]]; then
+            runtime_manifest=$(ls -1t "$tmpdir/runtime"/vm-${vm_id}-*.manifest 2>/dev/null | head -1 || true)
+        fi
+    fi
+    if [[ -n "$runtime_manifest" && -f "$runtime_manifest" ]]; then
+        s6_copy_evidence "$runtime_manifest" "runtime_manifest"
+        s6_copy_evidence "$runtime_manifest.dispatch" "runtime_manifest.dispatch"
+        s6_copy_evidence "$runtime_manifest.route" "runtime_manifest.route"
+        {
+            echo "manifest_path=$runtime_manifest"
+            sha256sum "$runtime_manifest" 2>/dev/null || true
+            [[ -f "$runtime_manifest.dispatch" ]] && sha256sum "$runtime_manifest.dispatch" 2>/dev/null || true
+            [[ -f "$runtime_manifest.route" ]] && sha256sum "$runtime_manifest.route" 2>/dev/null || true
+        } >"${s6_evidence_dir:-$tmpdir}/manifest_identity.txt" 2>/dev/null || true
+    else
+        s6_write_evidence_file "manifest_identity.txt" "manifest_path=MISSING"
+    fi
+    {
+        if [[ -n "${agent_pid:-}" && -r "/proc/$agent_pid/cmdline" ]]; then
+            printf 'agent_pid=%s argv=' "$agent_pid"
+            tr '\0' ' ' <"/proc/$agent_pid/cmdline" 2>/dev/null || true
+            echo
+            for child in $(pgrep -P "$agent_pid" 2>/dev/null || true); do
+                [[ -r "/proc/$child/cmdline" ]] || continue
+                printf 'child_pid=%s argv=' "$child"
+                tr '\0' ' ' <"/proc/$child/cmdline" 2>/dev/null || true
+                echo
+            done
+        else
+            echo "agent_pid=${agent_pid:-none} argv=unavailable"
+        fi
+    } >"${s6_evidence_dir:-$tmpdir}/launch_argv.txt" 2>/dev/null || true
+
     # Capability / probe evidence
     s6_copy_evidence "$tmpdir/evidence/seed-meta.txt" "seed-meta.txt"
     s6_copy_evidence "$tmpdir/evidence/capability-profile.digest" "capability-profile.digest"
@@ -123,20 +167,20 @@ ctl_capabilities_record=present
 cap_source=$s6_cap_source
 note=admission used ctl capabilities-*.record; agent also published host_capabilities.report"
     fi
-    s6_copy_evidence "$tmpdir/agent.log" "agent.log"
+    s6_copy_evidence "$agent_log" "agent.log"
     s6_copy_evidence "$tmpdir/ctl.log" "ctl.log"
     if [[ -d "$tmpdir/gw-state" ]]; then
         s6_copy_evidence "$tmpdir/gw-state/route.journal" "gateway_route.journal"
     fi
     # Manifest digest / QEMU args from agent/runtime logs (bounded redacted).
-    if [[ -f "$tmpdir/agent.log" ]]; then
+    if [[ -f "$agent_log" ]]; then
         {
             echo "=== backend/topology snippets ==="
             grep -E 'KVM FAST PATH|TCG PROXY|Spawning|execlp qemu|Mode:|backend|negotiated|wavevm_ram|READY|manifest|route_scope|dispatch' \
-                "$tmpdir/agent.log" 2>/dev/null | head -n 80 || true
+                "$agent_log" 2>/dev/null | head -n 80 || true
             echo "=== child runtime logs (names) ==="
             find "$tmpdir/runtime" -type f 2>/dev/null | head -n 40 || true
-        } >"${s6_evidence_dir:-/dev/null}/runtime_snippets.txt" 2>/dev/null || true
+        } >"${s6_evidence_dir:-$tmpdir}/runtime_snippets.txt" 2>/dev/null || true
         # Copy first child log if any
         local child_log
         child_log=$(find "$tmpdir/runtime" -type f \( -name '*.log' -o -name 'stderr*' -o -name 'stdout*' \) 2>/dev/null | head -1 || true)
@@ -146,33 +190,57 @@ note=admission used ctl capabilities-*.record; agent also published host_capabil
                 echo "=== qemu/executor argv / mode ==="
                 grep -E 'qemu|KVM FAST|TCG PROXY|WVM_TCG|accel|argv|-m |-smp|wavevm' \
                     "$child_log" 2>/dev/null | head -n 60 || true
-            } >>"${s6_evidence_dir:-/dev/null}/runtime_snippets.txt" 2>/dev/null || true
+            } >>"${s6_evidence_dir:-$tmpdir}/runtime_snippets.txt" 2>/dev/null || true
         fi
     fi
 
     # Optional dataplane short-exec probe (R1). Best-effort marker file.
-    if [[ "$s6_dataplane" == "1" ]]; then
+    # An intentionally killed VM has no live executor/SHM contract to probe;
+    # skip only that VM's dataplane check while preserving STOP evidence.
+    if [[ "$s6_dataplane" == "1" && "${WVM_S6_SKIP_DATAPLANE:-0}" == "1" ]]; then
+        s6_write_evidence_file "dataplane.txt" "dataplane_probe=SKIP_intentional_kill
+production_typed_dispatch=NOT_APPLICABLE
+note=VM was intentionally killed before STOP; dataplane probe skipped by design"
+    fi
+    if [[ "$s6_dataplane" == "1" && "${WVM_S6_SKIP_DATAPLANE:-0}" != "1" ]]; then
         if [[ -x "$repo_root/tests/control-plane/s6_dataplane_probe.sh" ]]; then
             if WVM_S6_EVIDENCE_DIR="$s6_evidence_dir" \
                WVM_S6_TMPDIR="$tmpdir" \
                WVM_S6_CREATE_OUT="$create_out" \
                WVM_S6_AGENT_PID="${agent_pid:-}" \
+               WVM_S6_CELL="${WVM_S6_CELL:-}" \
+               WVM_S6_BACKEND="${WVM_S6_BACKEND:-}" \
                bash "$repo_root/tests/control-plane/s6_dataplane_probe.sh"; then
-                s6_write_evidence_file "dataplane.txt" "dataplane_probe=PASS"
+                # Prefer probe's own report honesty labels
+                if [[ -f "$s6_evidence_dir/dataplane_detail.txt" ]] && \
+                   grep -q 'dataplane_probe=PASS_PRODUCTION_TYPED' \
+                     "$s6_evidence_dir/dataplane_detail.txt" 2>/dev/null; then
+                    s6_write_evidence_file "dataplane.txt" "dataplane_probe=PASS_PRODUCTION_TYPED
+dispatch_path=typed_WVM1_ingress_or_gateway
+production_typed_dispatch=FIXED
+note=live CREATE short-exec via production typed handoff; guest SSH remains §7"
+                else
+                    s6_write_evidence_file "dataplane.txt" "dataplane_probe=PASS
+note=probe exited 0; see dataplane_detail.txt for path honesty"
+                fi
             else
-                s6_write_evidence_file "dataplane.txt" "dataplane_probe=FAIL"
+                s6_write_evidence_file "dataplane.txt" "dataplane_probe=FAIL
+production_typed_dispatch=FAIL
+note=see dataplane_detail.txt"
                 echo "s6: dataplane probe FAILED" >&2
                 return 1
             fi
         else
-            s6_write_evidence_file "dataplane.txt" "dataplane_probe=SKIP_no_helper"
+            s6_write_evidence_file "dataplane.txt" "dataplane_probe=SKIP_no_helper
+note=N4/R3: SKIP is not full dataplane PASS"
         fi
     fi
 
     if [[ "$s6_require_stop" != "1" ]]; then
         s6_write_evidence_file "cleanup.ok" "cleanup_ok=1
-note=stop_not_required"
-        : >"${s6_evidence_dir:-/dev/null}/cleanup.manifest"
+note=stop_not_required
+honesty=REQUIRE_STOP=0_not_full_STOP_acceptance"
+        : >"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
         s6_finish_rc=0
         return 0
     fi
@@ -209,7 +277,31 @@ note=stop_not_required"
     fi
 
     mapfile -t pre_shm < <(grep -oE '/wavevm_ram_wvm-v'"$vm_id"'[^[:space:]]*' "$tmpdir/agent.log" 2>/dev/null | sort -u || true)
-    mapfile -t pre_children < <(pgrep -P "${agent_pid:-0}" 2>/dev/null | sort -u || true)
+    # N6: only children owned by THIS vm_id (cmdline/environ mentions wvm-v$vm_id
+    # or matching SHM ns). Do not treat sibling VM children as leftovers.
+    pre_children=()
+    if [[ -n "${agent_pid:-}" ]]; then
+        local _c _ns _hit
+        _ns="wvm-v${vm_id}"
+        for _c in $(pgrep -P "${agent_pid}" 2>/dev/null | sort -u || true); do
+            _hit=0
+            if [[ -r "/proc/$_c/cmdline" ]] && tr '\0' ' ' <"/proc/$_c/cmdline" 2>/dev/null | grep -q "$_ns"; then
+                _hit=1
+            elif [[ -r "/proc/$_c/environ" ]] && tr '\0' '\n' <"/proc/$_c/environ" 2>/dev/null | grep -q "$_ns"; then
+                _hit=1
+            else
+                for name in "${pre_shm[@]}"; do
+                    if ls -l "/proc/$_c/fd" 2>/dev/null | grep -q "${name#/}"; then
+                        _hit=1
+                        break
+                    fi
+                done
+            fi
+            if [[ $_hit -eq 1 ]]; then
+                pre_children+=("$_c")
+            fi
+        done
+    fi
     pre_paths=()
     local name ns
     for name in "${pre_shm[@]}"; do
@@ -285,27 +377,113 @@ note=stop_not_required"
 
     if [[ $cleanup_fail -ne 0 ]]; then
         s6_write_evidence_file "cleanup.ok" "cleanup_ok=0
-stop=$stop_out"
+stop=$stop_out
+vm_id=$vm_id"
+        if [[ -n "${WVM_S6_STOP_TAG:-}" && -n "${s6_evidence_dir:-}" ]]; then
+            s6_write_evidence_file "cleanup.ok.${WVM_S6_STOP_TAG}" "cleanup_ok=0
+stop=$stop_out
+vm_id=$vm_id"
+            cp -a "$s6_evidence_dir/stop_result.txt" \
+               "$s6_evidence_dir/stop_result.${WVM_S6_STOP_TAG}.txt" 2>/dev/null || true
+            cp -a "$s6_evidence_dir/cleanup.manifest" \
+               "$s6_evidence_dir/cleanup.manifest.${WVM_S6_STOP_TAG}" 2>/dev/null || true
+        fi
         return 1
     fi
     s6_write_evidence_file "cleanup.ok" "cleanup_ok=1
 stop=$stop_out
-retired_shm=${pre_shm[*]}"
+retired_shm=${pre_shm[*]}
+vm_id=$vm_id"
+    if [[ -n "${WVM_S6_STOP_TAG:-}" && -n "${s6_evidence_dir:-}" ]]; then
+        s6_write_evidence_file "cleanup.ok.${WVM_S6_STOP_TAG}" "cleanup_ok=1
+stop=$stop_out
+retired_shm=${pre_shm[*]}
+vm_id=$vm_id"
+        cp -a "$s6_evidence_dir/stop_result.txt" \
+           "$s6_evidence_dir/stop_result.${WVM_S6_STOP_TAG}.txt" 2>/dev/null || true
+        cp -a "$s6_evidence_dir/cleanup.manifest" \
+           "$s6_evidence_dir/cleanup.manifest.${WVM_S6_STOP_TAG}" 2>/dev/null || true
+    fi
     s6_finish_rc=0
     return 0
 }
 
-# For reject/negative cells: still require process teardown of THIS cell's pids.
+# For reject/negative cells (N5): tear down THIS cell's pids AND prove no
+# partial activation (no wavevm_ram SHM left from this attempt). Empty/odd
 s6_finish_reject() {
     local reason=$1
+    local cleanup_fail=0
+    local leftover
+    local reject_state=""
+    local reject_status=""
+    local early_abort=0
+    local reason_ok=1
     s6_write_evidence_file "reject.txt" "$reason"
     {
-        echo "# reject path — track agent/ctl only"
+        echo "# reject path — track agent/ctl + no-partial-activation"
         [[ -n "${agent_pid:-}" ]] && echo "pid=$agent_pid"
         [[ -n "${ctl_pid:-}" ]] && echo "pid=$ctl_pid"
         [[ -n "${gw_pid:-}" ]] && echo "pid=$gw_pid"
     } >"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
-    # Kill our processes then verify gone.
+    # Preserve the durable controller state before teardown; process cleanup
+    # alone cannot prove that no activation/reservation survived.
+    for leftover in admission.journal membership.journal membership-control.journal; do
+        if [[ -f "$tmpdir/ctl-state/$leftover" ]]; then
+            cp -L "$tmpdir/ctl-state/$leftover"                 "${s6_evidence_dir:-$tmpdir}/$leftover" 2>/dev/null || true
+            echo "ctl_state_file=$leftover" >>"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
+        fi
+    done
+    if [[ ! -s "$tmpdir/ctl-state/admission.journal" ]]; then
+        echo "s6_finish_reject: missing durable admission journal" >&2
+        cleanup_fail=1
+    fi
+    if [[ -f "$tmpdir/ctl.log" ]]; then
+        reject_state=$(sed -n 's/.*state=\([0-9][0-9]*\).*/\1/p' "$tmpdir/ctl.log" | tail -1)
+        reject_status=$(sed -n 's/.*status=\([0-9][0-9]*\).*/\1/p' "$tmpdir/ctl.log" | tail -1)
+        if grep -aq 'abort cleanup: lifecycle transition lacks durable route snapshot' "$tmpdir/ctl.log"; then
+            early_abort=1
+        fi
+        if [[ -n "${WVM_S6_EXPECT_REJECT_REASON:-}" ]] && \
+           ! grep -aEqi -- "${WVM_S6_EXPECT_REJECT_REASON}" "$tmpdir/ctl.log"; then
+            reason_ok=0
+            echo "s6_finish_reject: expected reason /$WVM_S6_EXPECT_REJECT_REASON/ missing" >&2
+        fi
+        if grep -aEq 'CREATE_VM.*status=0' "$tmpdir/ctl.log"; then
+            echo "s6_finish_reject: rejected cell still logged CREATE_VM status=0" >&2
+            cleanup_fail=1
+        fi
+    else
+        echo "s6_finish_reject: missing ctl.log; cannot verify reject compensation" >&2
+        cleanup_fail=1
+    fi
+    {
+        echo "reject_state=${reject_state:-unknown}"
+        echo "reject_status=${reject_status:-unknown}"
+        echo "early_abort_no_durable_route=$early_abort"
+        echo "expected_reason_verified=$reason_ok"
+        echo "admission_journal_bytes=$(stat -c %s "$tmpdir/ctl-state/admission.journal" 2>/dev/null || echo 0)"
+    } >>"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
+    if [[ "$reason_ok" -ne 1 ]]; then
+        cleanup_fail=1
+    fi
+    if [[ "$early_abort" -ne 1 ]]; then
+        echo "s6_finish_reject: no durable-route early abort evidence" >&2
+        cleanup_fail=1
+    fi
+    if [[ "$reject_state" != "18" ]]; then
+        echo "s6_finish_reject: reject did not persist ABORTED state=18 (got=${reject_state:-unknown})" >&2
+        cleanup_fail=1
+    fi
+    if [[ "$reject_state" == "11" || "$reject_state" == "12" ||
+          "$reject_state" == "17" ]]; then
+        echo "s6_finish_reject: reject left active state=$reject_state" >&2
+        cleanup_fail=1
+    fi
+    # Snapshot any SHM names that appeared during this cell before teardown.
+    mapfile -t _rej_shm < <(grep -oE '/wavevm_ram_[^[:space:]]+' "$tmpdir/agent.log" 2>/dev/null | sort -u || true)
+    for leftover in "${_rej_shm[@]}"; do
+        echo "shm_before_teardown=$leftover" >>"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
+    done
     if [[ -n "${agent_pid:-}" ]]; then
         kill -TERM "$agent_pid" 2>/dev/null || true
         wait "$agent_pid" 2>/dev/null || true
@@ -321,8 +499,40 @@ s6_finish_reject() {
         wait "$ctl_pid" 2>/dev/null || true
         ctl_pid=
     fi
-    sleep 0.2
+    sleep 0.3
+    # Compensation: no SHM from this attempt may remain; tracked pids must be gone.
+    for leftover in "${_rej_shm[@]}"; do
+        if [[ -e "/dev/shm/${leftover#/}" ]]; then
+            echo "s6_finish_reject: leftover SHM after reject $leftover" >&2
+            cleanup_fail=1
+        fi
+    done
+    # Also scan for any wavevm_ram still present that our agent log mentioned.
+    if compgen -G '/dev/shm/wavevm_ram_*' >/dev/null 2>&1; then
+        # Only fail if names intersect this cell's log (avoid cross-test noise).
+        for leftover in /dev/shm/wavevm_ram_*; do
+            base=${leftover#/dev/shm/}
+            if grep -q "/$base" "$tmpdir/agent.log" 2>/dev/null; then
+                echo "s6_finish_reject: residual SHM $leftover" >&2
+                cleanup_fail=1
+            fi
+        done
+    fi
+    if [[ $cleanup_fail -ne 0 ]]; then
+        s6_write_evidence_file "cleanup.ok" "cleanup_ok=0
+note=reject_path_compensation_failed
+reason=$reason
+reject_state=${reject_state:-unknown}
+early_abort_no_durable_route=$early_abort
+expected_reason_verified=$reason_ok"
+        return 1
+    fi
     s6_write_evidence_file "cleanup.ok" "cleanup_ok=1
-note=reject_path
-reason=$reason"
+note=reject_path_early_abort
+reason=$reason
+reject_state=${reject_state:-unknown}
+durable_route_snapshot_absent=1
+compensation=no_residual_shm
+expected_reason_verified=$reason_ok"
+    return 0
 }

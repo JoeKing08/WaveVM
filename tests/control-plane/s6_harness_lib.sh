@@ -91,6 +91,16 @@ s6_write_source_identity() {
             echo "not_loaded"
         fi
     } >"$out"
+    # Preserve the actual dirty patch and untracked source list, not only
+    # hashes: an auditor must be able to reconstruct what ran.
+    git -C "$repo" diff --binary HEAD >"${out%.txt}.patch" 2>/dev/null || true
+    git -C "$repo" ls-files --others --exclude-standard 2>/dev/null \
+        >"${out%.txt}.untracked" 2>/dev/null || true
+    {
+        echo "dirty_patch=${out%.txt}.patch"
+        echo "untracked_list=${out%.txt}.untracked"
+        echo "dirty_patch_bytes=$(stat -c %s "${out%.txt}.patch" 2>/dev/null || echo 0)"
+    } >>"$out"
 }
 
 # Bound a log file to max bytes (keep head+tail).
@@ -124,11 +134,18 @@ s6_run_with_deadline() {
     local log=$1
     shift
     local start end pgid
+    local cap=${WVM_S6_LOG_CAP_BYTES:-1048576}
+    local floor=${WVM_S6_FILE_LIMIT_FLOOR_BYTES:-67108864}
+    local limit_bytes=${WVM_S6_FILE_LIMIT_BYTES:-$(( cap * 2 > floor ? cap * 2 : floor ))}
+    local file_limit=$(( (limit_bytes + 511) / 512 ))
     s6_run_timed_out=0
     start=$(date +%s)
     set +e
-    # Separate process group so we can kill descendants.
-    setsid bash -c "$*" >"$log" 2>&1 &
+    # Separate process group so we can kill descendants. The file-size limit
+    # caps every log written by the cell/agent/children during the run, not
+    # just after the process exits; a reached limit fails the cell instead of
+    # filling the host disk.
+    setsid bash -c "ulimit -f $file_limit 2>/dev/null || true; ulimit -Hf $file_limit 2>/dev/null || true; $*" >"$log" 2>&1 &
     local pid=$!
     pgid=$pid
     local waited=0
@@ -152,7 +169,7 @@ s6_run_with_deadline() {
     fi
     end=$(date +%s)
     s6_run_elapsed=$((end - start))
-    s6_bound_log "$log" "${WVM_S6_LOG_CAP_BYTES:-1048576}"
+    s6_bound_log "$log" "$cap"
 }
 
 # Per-VM/instance leftover check. Args: evidence dir with cleanup.manifest

@@ -427,6 +427,7 @@ int wvm_vcpu_service_submit(struct wvm_vcpu_service *service, int qemu_fd,
     memset(&submit, 0, sizeof(submit));
     submit.backend = backend;
     submit.vcpu_index = request->vcpu_index;
+    submit.memory_fence_result = WVM_VCPU_MEMORY_FENCE_SUCCEEDED;
     submit.memory_fence_id = memory_fence_id;
     submit.context_schema_version = WVM_VCPU_CONTEXT_SCHEMA_X86;
     submit.context_valid_fields = context_fields_for_legacy_request(request);

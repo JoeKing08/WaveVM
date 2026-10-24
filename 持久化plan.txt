@@ -1172,3 +1172,308 @@ key_fixes_this_resume:
   - gateway_service/aggregator.c ROUTE_RETIRE ACK wire fields
   - s6_cell_common STOP ctl.log re-harvest
 §6 COMPLETE claim: NOT claimed (R1 fractal-through-gateway dataplane + remote_mem depth still PARTIAL)
+
+===== §6 N1–N6 fix-reaudit round — 2026-10-24 12:41:27 CST Asia/Shanghai =====
+tip_head=ffddf4dcded115e5be72b24fbb526ee23aa5ef7f  dirty_ok  no_commit_no_push  no_§6_COMPLETE  no_§7
+source_audit=grok-goal6-fix-reaudit-codex-agent-2026-10-23.txt (untracked)
+evidence=/tmp/wavevm-n1n6-20261024
+
+N1 FIXED: stop_one_runtime SIGKILL → return -EAGAIN (fail closed); waitpid non-EINTR fails.
+  Was: SIGKILL reap returned 0 (false STOP success). ROUTE_RETIRE refs≠fence for killed child.
+N2 FIXED: slave_hybrid DN path validates core_idx before tcg_endpoints[] / pending / log.
+N3 FIXED: pending VCPU reply table — no slot0 overwrite; refuse different-client same req_id;
+  peek then clear only after successful demux send. Unit: tests/control-plane/test_n3_pending_vcpu_reply.c PASS.
+N4 honesty FIXED / production R1 still PARTIAL: short-exec labeled PASS_COMPONENT_SMOKE +
+  dispatch_path=direct_executor_udp; matrix footer notes R1_PRODUCTION_DISPATCH=PARTIAL.
+  reply req_id match added in s6_dataplane_{tcg,kvm}_run.c. Live flat_tcg eax=0x5266.
+N5 FIXED: EXPECT_REJECT allow-list default status=6; empty/14/999 FAIL; s6_finish_reject
+  compensation checks residual SHM. Live neg_require_kvm + neg_require_kernel PASS.
+N6 FIXED: dual Mode A/B per-VM cleanup.ok.vmN + stop_result.vmN; no || true first-fail swallow;
+  sibling VM2 live SHM assert after VM1 STOP; Mode B post-intentional-kill documents
+  vm1_intentional_kill.txt and still requires surviving VM2 STOP clean.
+  Unit test_n6_dual_stop_gate.sh PASS; live mode_b_dual PASS.
+
+Still PARTIAL (do not claim §6 COMPLETE):
+- R1 production typed handoff / fractal-through-gateway dataplane forward
+- remote_mem version/fence/dirty depth
+- Mode A dual / mode_a_* not re-run this round: /dev/wavevm MISSING (wavevm.ko not loaded)
+- R5 SOURCE_IDENTITY now under evidence dir this round; loaded-module==disk-ko still not proven
+- fractal VCPU_RUN still direct Hybrid (out of N1–N6 expand; stays residual)
+
+Files touched this round:
+- common_include/wavevm_admission_runtime_agent.c
+- slave_daemon/slave_hybrid.c
+- tests/control-plane/s6_cell_common.sh
+- tests/control-plane/test_create_vm_single_node.sh
+- tests/control-plane/test_create_vm_dual_mode_a.sh
+- tests/control-plane/test_create_vm_dual_mode_b.sh
+- tests/control-plane/s6_dataplane_probe.sh
+- tests/control-plane/s6_dataplane_tcg_run.c
+- tests/control-plane/s6_dataplane_kvm_run.c
+- tests/control-plane/test_s6_minimum_matrix.sh
+- tests/control-plane/test_n3_pending_vcpu_reply.c (new)
+- tests/control-plane/test_n5_reject_gate.sh (new)
+- tests/control-plane/test_n6_dual_stop_gate.sh (new)
+- 持久化plan.txt (this note)
+- rebuilt: wavevm_node_runtime (no commit)
+
+Joe note (Chinese-ready): N1–N6 已按 Codex 复审修完闸门与生产假成功路径；§6 仍 PARTIAL（生产派发竖切/远端内存/无 /dev/wavevm 未复跑 Mode A）。未 commit/push。若要 Mode A：需批准 insmod wavevm.ko + chmod 666 /dev/wavevm。
+
+===== §6 R1 + remote_mem residuals close — 2026-10-24 13:20 CST Asia/Shanghai =====
+tip_head=ffddf4dcded115e5be72b24fbb526ee23aa5ef7f  dirty_ok  no_commit_no_push  no_§7
+Joe「那修呗」→ close remaining §6 PARTIAL only (authorized_by pt272u)
+evidence=/tmp/wavevm-s6-r1-rmem-20261024/
+
+R1_PRODUCTION_DISPATCH=FIXED
+  path=admitted_fractal_snapshot->WVM1_VCPU_RUN->gateway_forward->executor->WVM1_VCPU_EXIT
+  topology=FRACTAL executor_scope=41 reply_scope=99 inbound_hop=1 exit_hop=1 fence_id=0xf1ce
+  harness=tests/control-plane/test_r1_production_dispatch_gateway_e2e.c|.sh
+  not=direct_Hybrid_UDP_VCPU_RUN  not=PASS_COMPONENT_SMOKE_short_exec
+  note: live CREATE short-exec cells remain PASS_COMPONENT_SMOKE / direct_executor_udp (N4 honesty kept)
+
+REMOTE_MEM_FENCE_VERSION_DIRTY=FIXED
+  directory_store EVID: initial_version=0x900000001 commit_next=+1 ESTALE_stale_base=1
+  memory_service EVID: dirty_commit base_version=7->result_version=8 STALE_BASE_VERSION=1
+  fence_reject: memory_fence_result!=SUCCEEDED cannot encode typed VCPU_RUN;
+                SUCCEEDED encodes fence_id=99 encoded_bytes=4576
+  goal4 A14 EVID: remote_fault_ACK version=9 fence_id=11 production_execute_handoff=1
+  harness=tests/control-plane/test_s6_remote_mem_evidence.sh + test_s6_fence_reject.c
+  not=source_grep_only
+
+§6 COMPLETE claim: NOT claimed
+  remaining open (outside this residual pair):
+  - Mode A dual / mode_a_* not re-proven this slice (ko may be loaded; not this task)
+  - live CREATE short-exec still direct_executor_udp component smoke
+  - Guest SSH = §7
+
+Files touched this residual close (untracked/dirty; no commit/push):
+- tests/control-plane/test_r1_production_dispatch_gateway_e2e.c|.sh (new)
+- tests/control-plane/test_s6_fence_reject.c (new)
+- tests/control-plane/test_s6_remote_mem_evidence.sh (new)
+- tests/control-plane/test_directory_store.c (EVID printf)
+- tests/control-plane/test_memory_service.c (EVID printf)
+- tests/control-plane/test_goal4_executor_remote_memory.c (EVID printf)
+- tests/control-plane/test_s6_minimum_matrix.sh (footer honesty)
+- tests/control-plane/s6_dataplane_probe.sh (comment honesty)
+- 持久化plan.txt (this note)
+
+Joe note (Chinese-ready): §6 两残差已修——R1 生产 typed 经 gateway dataplane 竖切 FIXED；remote_mem fence/version/dirty FIXED（有 EVID）。Mode A 双活/短执行直连仍非 §6 COMPLETE。未 commit/push。Guest SSH 仍属 §7。
+
+===== §6 typed-gateway closure + full matrix — 2026-10-24 14:47 CST Asia/Shanghai =====
+tip_head=ffddf4dcded115e5be72b24fbb526ee23aa5ef7f  dirty_ok  no_commit_no_push  no_§7
+run_id=s6-20261024-144205-58064
+evidence=/tmp/wavevm-s6-matrix-20261024-final
+result=11/11 PASS; MATRIX_RESULT=PASS; gates: WVM_S6_REQUIRE_STOP=1, live capability probe, real QEMU, /dev/kvm + /dev/wavevm (ko loaded).
+cells=flat_tcg fractal_tcg flat_kvm fractal_kvm mode_a_one mode_b_dual compute_dual mode_a_dual neg_require_kvm neg_require_kernel auto_tcg_fallback
+totals=pass=11 fail=0 skip=0 blocked=0; every cell cleanup_ok=1; STOP status=0 recorded_state=17 where STOP ran.
+R1 footer: R1_PRODUCTION_DISPATCH=FIXED; R1_LIVE_CREATE_SHORT_EXEC=PASS_PRODUCTION_TYPED; REMOTE_MEM_FENCE_VERSION_DIRTY=FIXED.
+R1/remote_mem re-evidence after this closure: /tmp/wavevm-s6-r1-rmem-20261024-final/
+  - R1 PASS: admitted_fractal_snapshot->WVM1_VCPU_RUN->gateway_forward->executor->WVM1_VCPU_EXIT; inbound_hop_count=1 exit_hop_count=1 fence_id=0xf1ce.
+  - remote_mem PASS: directory_store ESTALE_stale_base=1; memory_service base_version=7->result_version=8 STALE_BASE_VERSION=1; fence_reject encoded_bytes=4576; goal4 A14 remote version=9 fence_id=11 production_execute_handoff=1.
+
+Fractal production typed via gateway (the former blocker) is now PASS, not component smoke:
+- fractal_tcg: dispatch_path=typed_WVM1_ingress_via_gateway, via_gateway=1, typed_send_port=<gw_data_port>,
+  guest_shm_store=PASS marker=0x5267 store_gpa=0x2020 waited_ms=20,
+  typed_short_exec=PASS backend=tcg via_gateway=1, dataplane_probe=PASS_PRODUCTION_TYPED.
+- fractal_kvm: same via-gateway path, backend=kvm, marker=0x5267, dataplane_probe=PASS_PRODUCTION_TYPED.
+- mode_a_dual: both VM short-exec probes PASS_PRODUCTION_TYPED via direct typed ingress (via_gateway=0, as expected for Mode A); both STOP status=0 and cleanup_ok.vm1/vm2=1; sibling VM2 stayed live until its own STOP.
+- mode_b_dual: VM2 typed probe PASS_PRODUCTION_TYPED and STOP status=0; VM1 was intentionally KILLed before STOP, so its dataplane probe is explicitly SKIP_intentional_kill (not a silent PASS); VM2 cleanup_ok=1.
+
+Root causes fixed in gateway_service/aggregator.c (2 independent bugs; both required):
+1) g_route_authority_active was only set by a startup snapshot file. Dynamic WVM_ENVELOPE_MSG_ROUTE_COMMIT and recovered control-journal scopes never opened the V1 forward path, so every WVM1 fragment was rejected as "route endpoint is unsupported" (empty error text).
+2) After authority was set, the gateway still did not send: tx_scheduler_start() was called only once at init, conditional on authority already being true. A dynamic route commit left the TX scheduler stopped, so tx_enqueue() returned -EPIPE and the old log mislabeled it "backpressured"; the five forwarded fragments were never transmitted.
+Fix: set authority + call tx_scheduler_start() on successful ROUTE_COMMIT; set authority after journal recovery (startup then starts TX); keep env-gated [GW-FWD] trace; report the real enqueue error. No change to route selection/identity semantics.
+Evidence of forward path: [GW-FWD] msg=5 matched=1 next_kind=1 member=801/802/1 port=<node_runtime_data_port> frame=1252 hop=1 (four fragments) + 708 (last).
+
+Harness fixes (needed to make the matrix honest, not to mask product failures):
+- test_create_vm_dual_mode_{a,b}.sh now default WVM_S6_BACKEND=require-tcg because the matrix invokes them without a per-cell backend; previously the typed probe failed with "unsupported backend=" before testing anything.
+- s6_cell_common.sh supports WVM_S6_SKIP_DATAPLANE=1 only for the intentionally killed Mode B VM1; it writes dataplane_probe=SKIP_intentional_kill and still requires STOP evidence. Mode B VM2 is still probed and must STOP cleanly.
+- Gateway trace remains opt-in via WVM_GATEWAY_FORWARD_TRACE; normal matrix runs are not spammed.
+
+Earlier failure, disclosed rather than hidden:
+- /tmp/wavevm-s6-matrix-20261024-fix (same day, before harness/memory retry) was 9/11: mode_b_dual failed because backend was empty and VM1 was probed after intentional kill; mode_a_dual failed with KernelContext bind errno=12.
+- Kernel journal for that run: wavevm_node_run: page allocation failure: order:6, mode:0x40dc0(GFP_KERNEL|__GFP_ZERO|__GFP_COMP) at wvm_logic_alloc_route_context() -> __kmalloc_large_noprof. This is a 256KB contiguous allocation failure under memory fragmentation, not the earlier STOP-buffer bug.
+- After memory reclaim and with the harness fixes, mode_a_dual standalone passed, then the final full matrix above passed 11/11 under the old module (srcversion 3DC778326E08ABBAA46C470); that module was not rebuilt/reloaded during this earlier round.
+- Residual risk at that point: the per-context route-context allocation was an order-6 kzalloc and could transiently fail on a fragmented host. This was subsequently fixed: master_core/logic_core.c now uses kvzalloc/kvfree, the module was rebuilt and reloaded with Joe's explicit approval, and the loaded srcversion is 96BE748C902FFF3F9E50F69. See “Kernel order-6 hardening” and the kvzalloc-final 11/11 matrix later in this section. This is still not a general proof against arbitrary kernel-memory fragmentation.
+
+§6 Phase 10 Minimum historical verdict: **SUPERSEDED — PARTIAL, not COMPLETE** at the time of the independent Codex audit; that audit's A1/A2/A3 findings invalidated the earlier COMPLETE wording. This paragraph is historical. The later 2026-10-24 Codex-audit remediation section below records A1–A7 fixed, A3 closed by the same-physical two-instance path, the kvzalloc/kvfree order-6 fix, and the final 11/11 matrix (/tmp/wavevm-s6-matrix-20261024-kvzalloc-final); on that later evidence the §6-scope Minimum is COMPLETE. It remains not a claim of guest OS/SSH E2E, WAN/multi-host, Extended fault injection, or kernel-module robustness under arbitrary fragmentation; those remain §7 / follow-up. No commit/push; tree remains dirty.
+
+Files changed this closure:
+- gateway_service/aggregator.c (route authority/TX scheduler/trace/error honesty)
+- tests/control-plane/s6_cell_common.sh (intentional-kill dataplane skip)
+- tests/control-plane/test_create_vm_dual_mode_a.sh, test_create_vm_dual_mode_b.sh (backend default; VM1 skip)
+- 持久化plan.txt (this note)
+Existing dirty files from earlier §6 work remain untouched by this closure.
+
+===== §6 Codex audit A1–A7 remediation — 2026-10-24 15:35 CST Asia/Shanghai =====
+tip_head=ffddf4dcded115e5be72b24fbb526ee23aa5ef7f  dirty_ok  no_commit_no_push  no_§7
+audit=/workspaces/WaveVM/grok-dsh-goal6-audit-codex-agent-2026-10-24.txt
+verdict: A1/A2/A3/A4/A5/A6/A7 have production/test fixes. A3 is closed by the
+same-physical two-instance production path below (real coordinator/remote page/dirty
+commit ACK/typed VCPU_EXIT), with the scope caveats stated there. Final matrix
+/tmp/wavevm-s6-matrix-20261024-kvzalloc-final is 11/11 PASS under the kvzalloc/kvfree
+kernel order-6 fix, so Goal §6 Phase 10 Minimum is COMPLETE within this §6 scope; this
+is not a multi-host/WAN, guest OS/SSH, or Extended claim. The earlier 10/11 run and the
+order-6 residual are disclosed at the end of this section, not hidden.
+
+A1 [P1] FIXED — shared, internally locked fragment reassembly:
+- common_include/wavevm_envelope.{h,c}: one reassembler may be shared by RX workers;
+  accept/destroy/init are mutex-protected; out-of-order fragments remain supported.
+- node_runtime/ingress.c: removed the TLS reassembler; one shared instance is initialized
+  by wvm_ingress_global_init and used by all authenticated datagram workers.
+- Harness no longer forces WVM_RX_THREAD_COUNT=1 / WVM_GATEWAY_SINGLE_RX=1.
+- Evidence: flat_tcg and fractal_tcg pass with runtime default rx_threads=4 (real QEMU),
+  markers 0x5266/0x5267, via_gateway=1 for fractal; R1 E2E passes with default RX.
+  Target runs /tmp/wavevm-s6-matrix-20261024-151729, /tmp/wavevm-s6-matrix-20261024-151800,
+  R1 /tmp/wavevm-a1-r1-default2.
+
+A2 [P1] FIXED (first failure proven; retry state is persistent):
+- common_include/wavevm_admission_runtime_agent.c: runtime_stop_incomplete[] survives
+  pid death; pid<=0 with an incomplete STOP returns -EAGAIN with the explicit
+  “previous admitted runtime STOP remains incomplete” error. Abnormal exit, ECHILD,
+  SIGTERM-signal failure and SIGKILL all set the flag. reap_runtime_children also sets it
+  for spontaneous required-child death.
+- Agent shutdown no longer bypasses STOP: stop_runtime_children() calls stop_one_runtime()
+  for every owned runtime, preserves failures, and only force-kills after recording the
+  semantic failure. wvm_admission_runtime_agent_stop propagates the failure; destroy()
+  retains a separate force cleanup.
+- node_runtime/main.c installs a child SIGTERM handler so a cooperative child can exit 0;
+  SIGKILL/abnormal death still fails closed.
+- Evidence: /tmp/wavevm-a2-abort2 and final rerun /tmp/wavevm-a2-abort3 (abort_child_stop.txt): child SIGKILL, agent rc=1,
+  logs “previous admitted runtime STOP remains incomplete (quiesce/fence/flush not proven)”
+  and “cannot stop admission agent”. Normal mode_a_one/mode_a_dual still PASS.
+  A second STOP call is intentionally not converted to success by the persistent flag;
+  the standalone first-failure probe is evidence, not a claim of a full HA recovery matrix.
+
+A3 [P1] **FIXED — same-physical two-instance production path closes the audit gap**:
+- A14 now runs the production chain end-to-end, not a test-local execute:
+  wvm_vcpu_handoff_coordinator -> executor_bridge -> wvm_executor_runtime_execute_handoff
+  -> production wvm_executor_runtime_execute_handoff -> real KVM_RUN.
+- The remote page is authoritative: seeded into a real wvm_directory_store behind a second,
+  production wvm_memory_service instance (remote projection 99/202); the executor requests
+  it through production remote-memory dispatch and wvm_kvm_fetch_execution_page installs it
+  in guest RAM. The real KVM guest then executes the remote page's HLT (exit_class=2
+  WVM_VCPU_EXIT_HALTED, 2696-byte architectural context).
+- The KVM dirty page is committed through KVM_GET_DIRTY_LOG ->
+  wvm_kvm_memory_slice_capture_dirty -> wvm_memory_service_global_request_commit ->
+  COMMIT_DIFF -> second memory service -> real directory_store commit ->
+  MEM_COMMIT_ACK. The ACK version 0x10000000a is captured as the coordinator's
+  memory_fence_id; the coordinator submits that fence (not a hand-filled fence id) and
+  validates the real typed VCPU_EXIT status/context on completion.
+- Evidence: /tmp/wavevm-a3-a14-kvm-final.out:
+  coordinator_fence_id=0x10000000a, coordinator_exit_class=2,
+  coordinator_context_bytes=2696, coordinator_status=0;
+  remote_fault_ACK version=0x10000000a; script exit 0.
+  The remote evidence pack /tmp/wavevm-s6-remote-mem-a3-final
+  (REMOTE_MEM_FENCE_VERSION_DIRTY=FIXED) runs both the default A14 and this KVM
+  A14 path and harvests the markers. It was rerun under the kvzalloc module:
+  /tmp/wavevm-s6-remote-mem-kvzalloc-final.out, markers unchanged
+  (coordinator_fence_id=0x10000000a, exit_class=2, context_bytes=2696, status=0);
+  refreshed component evidence is /tmp/wavevm-s6-r1-rmem-20261024-final.
+- R06 still independently proves remote page bytes -> production
+  wvm_kvm_fetch_execution_page -> real KVM_RUN.
+- Coordinator API tightening: wvm_vcpu_handoff_submit now carries an explicit
+  memory_fence_result; the coordinator rejects anything other than SUCCEEDED and encodes
+  that caller-provided result instead of hard-coding success. vcpu_service sets it after
+  its fence; A14 sets it only after the real dirty commit ACK above.
+- Scope/caveats, stated honestly: both memory services and the route dispatch run in one
+  test process on one physical host, so this closes the audit's permitted
+  same-physical cross-instance path, not a WAN/network multi-host deployment. The
+  coordinator consumes the caller's completed fence result/version (the dirty ACK above);
+  it does not itself poll a fence object. Guest OS/SSH remains §7.
+- The old optional real-QEMU A14 mode is now explicitly rejected
+  (WVM_GOAL4_REAL_QEMU unsupported; use WVM_GOAL4_KVM=1) because its QEMU RAM was not the
+  executor-mapped page; it is no longer offered as evidence.
+- The default TCG A14 path still passes (test-side session result); it is not used to claim
+  the KVM cross-instance evidence.
+
+A4 [P2] FIXED in production path:
+- gateway_service/aggregator.c: pthread_mutex-protected tx_scheduler_start wrapper;
+  ROUTE_COMMIT starts/checks the V1 transmit scheduler before setting
+  g_route_authority_active and returns WVM_CONTROL_RESULT_NOT_READY on failure; startup
+  recovery still fails closed. pthread_create error uses -create_rc.
+- Normal R1 gateway E2E PASS with default RX (/tmp/wavevm-a1-r1-default2). A dedicated
+  scheduler-start fault injection was not run; the refusal branch is code-reviewed and
+  exercised only indirectly. This is not claimed as a fault-injection matrix.
+
+A5 [P2] FIXED:
+- test_s6_minimum_matrix.sh derives R1_LIVE from the selected cells’ actual
+  dataplane_probe markers, verifies component R1/remote-mem files, and emits
+  R1_LIVE=NOT_APPLICABLE / PASS_SELECTED_CELLS / PASS_PRODUCTION_TYPED instead of an
+  unconditional FIXED. Partial runs show NOT_APPLICABLE or n/7; full seven live cells
+  show PASS_PRODUCTION_TYPED. MINIMUM_COMPLETE=NOT_CLAIMED_BY_MATRIX remains explicit.
+
+A6 [P2] FIXED (bounded reject evidence):
+- test_create_vm_single_node.sh and s6_cell_common.sh now require the expected capability
+  rejection reason (WVM_S6_EXPECT_REJECT_REASON), persist admission/membership journals
+  before teardown, require durable ABORTED state=18, require the early-abort
+  “lifecycle transition lacks durable route snapshot” evidence, and fail on
+  CREATE_VM status=0 / active states 11/12/17. cleanup_ok=1 is only written after those
+  checks and no residual SHM. Evidence: /tmp/wavevm-s6-matrix-20261024-audit-final2
+  (both neg cells PASS; state=18, admission.journal 1138 bytes, reason verified).
+- Scope honesty: this proves the legal early abort/no-route/no-SHM outcome; it is not a
+  generic “all reservations/dependencies compensated after any crash” verifier.
+
+A7 [P2] FIXED for the audit’s concrete gaps:
+- s6_cell_common.sh dereferences copied evidence (cp -L), archives actual
+  runtime_manifest/.dispatch/.route and their SHA-256, plus live agent/child argv.
+- s6_harness_lib.sh archives SOURCE_IDENTITY.patch (git diff) and .untracked, and applies
+  a per-file RLIMIT_FSIZE during the cell run. Floor is 64 MiB (must exceed the 16 MiB guest
+  SHM); this is a real bound, not the old post-exit-only truncation. The full run records
+  runtime_file_limit_bytes=67108864.
+- Evidence: final matrix evidence dirs contain no dangling evidence symlinks; source patch
+  is present. The limit is intentionally coarse; it is not a per-stream log platform.
+
+Kernel order-6 hardening (after the 10/11 run, with explicit user approval):
+- master_core/logic_core.c: wvm_logic_alloc_route_context uses kvzalloc and
+  wvm_logic_free_route_context uses kvfree, so a fragmented host no longer needs one
+  contiguous order-6 block for the per-VM route context. The object stays vmalloc-backed
+  when the slab cannot satisfy it; all its arrays are CPU-accessed, not DMA.
+- Built master_core/wavevm.ko: srcversion=96BE748C902FFF3F9E50F69, vermagic=7.0.0-38-generic.
+  Old module backed up at /tmp/wavevm.ko.pre-kvzalloc-20261024.ko; build log
+  /tmp/wavevm-kernel-build-kvzalloc.out.
+- Reloaded only after explicit user approval (sudo credential from the local keys folder,
+  never printed): old module removed, new module inserted; /sys/module/wavevm/srcversion
+  matches 96BE748C902FFF3F9E50F69 and /dev/wavevm exists. No guest SSH, no code commit.
+- Verification: 3/3 standalone mode_a_one real-QEMU iterations PASS with zero errno=12
+  (/tmp/wavevm-s6-modea-kvzalloc-stress-{1,2,3}.out), then the full 11/11 matrix below.
+  The old module's order-6 flake is not claimed to be fixed by userspace retries; this
+  module change directly removes the contiguous-order allocation.
+
+Final matrix after A3 closure + kvzalloc hardening (four runs, all disclosed):
+- PASS (new signing run): /tmp/wavevm-s6-matrix-20261024-kvzalloc-final
+  run_id=s6-20261024-164243-151939; totals pass=11 fail=0 skip=0 blocked=0;
+  every cell cleanup_ok=1; R1_LIVE_CREATE_SHORT_EXEC=PASS_PRODUCTION_TYPED;
+  R1_PRODUCTION_DISPATCH=PASS; REMOTE_MEM_FENCE_VERSION_DIRTY=PASS;
+  A3 evidence under this module: /tmp/wavevm-s6-remote-mem-kvzalloc-final.out
+  (coordinator fence 0x10000000a, KVM exit_class=2, context_bytes=2696, status=0);
+  MATRIX_RESULT=PASS; MINIMUM_COMPLETE=NOT_CLAIMED_BY_MATRIX (the matrix does not
+  itself sign; this plan records the supporting A1–A7 closure). mode_a_one and
+  mode_a_dual both PASS; no errno=12 in the mode_a_one cell log.
+- PASS (pre-kvzalloc A3 closure): /tmp/wavevm-s6-matrix-20261024-a3-final2
+  run_id=s6-20261024-161357-140893; 11/11. A3 evidence:
+  /tmp/wavevm-a3-a14-kvm-final.out and
+  /tmp/wavevm-s6-r1-rmem-20261024-final (A14 KVM coordinator/remote HLT/dirty ACK).
+- FAIL (same pre-kvzalloc code, first clean attempt):
+  /tmp/wavevm-s6-matrix-20261024-a3-clean run_id=s6-20261024-161028-132707;
+  10/11 PASS, mode_a_one FAIL rc=1 class=start. Log: [KernelContext] executor Mode A
+  context bind failed: errno=12 (Cannot allocate memory); this was the order-6
+  route-context allocation residual, not an A1/A2/A3/A4–A7 regression. Standalone
+  real-QEMU retry (/tmp/wavevm-s6-modea-a3-retry2) PASSed before the kernel fix.
+- PASS (pre-A3 clean reference): /tmp/wavevm-s6-matrix-20261024-audit-final2
+  run_id=s6-20261024-153800-105552; 11/11, with the earlier A3-open component wording.
+- Gates: WVM_S6_REQUIRE_STOP=1, runtime default RX (no single-RX workaround), live
+  capability probe, real QEMU for TCG, /dev/kvm + loaded /dev/wavevm (new kvzalloc
+  module for the signing run).
+- A3 is closed by the same-physical two-instance path; Goal §6 Phase 10 Minimum is
+  COMPLETE for the §6 acceptance scope. This is not a guest OS/SSH §7, WAN/multi-host,
+  or Extended fault-injection claim. The kvzalloc change removes the observed order-6
+  allocation failure; it is not a general kernel-memory-fragmentation proof.
+- Evidence snapshot note: SOURCE_IDENTITY.patch is captured at matrix start. The
+  kvzalloc-final patch contains the source diff (including kvzalloc/kvfree) and the
+  then-current plan wording; SOURCE_IDENTITY.txt records loaded
+  wavevm_ko=96BE748C902FFF3F9E50F69. Plan edits made after that snapshot are
+  documentation-only and do not change the tested source or module.
+
+No commit/push; HEAD unchanged; guest SSH not used; wavevm.ko rebuilt and reloaded with
+user approval; old module backup retained.

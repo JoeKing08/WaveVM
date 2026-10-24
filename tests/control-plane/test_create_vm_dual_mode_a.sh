@@ -11,6 +11,9 @@ ctl_pid=
 agent_pid=
 # shellcheck source=s6_cell_common.sh
 source "$repo_root/tests/control-plane/s6_cell_common.sh"
+# Mode A runs the WaveVM TCG proxy path; the typed probe must use the same
+# backend instead of an empty WVM_S6_BACKEND (matrix passes no per-cell value).
+export WVM_S6_BACKEND="${WVM_S6_BACKEND:-require-tcg}"
 
 cleanup() {
     if [[ -n "${agent_pid:-}" ]]; then
@@ -83,6 +86,11 @@ ctl_port=$base_port
 agent_control_port=$((base_port + 1))
 agent_data_port=$((base_port + 2))
 sidecar_data_port=$((base_port + 3))
+cat >"$tmpdir/s6_ports.env" <<PORTS
+agent_data_port=$agent_data_port
+sidecar_data_port=$sidecar_data_port
+PORTS
+
 sidecar_control_port=$((base_port + 4))
 profile_data0=$((base_port + 5))
 profile_data1=$((base_port + 6))
@@ -273,23 +281,72 @@ if [[ "$vm1_id" == "$vm2_id" ]]; then
     exit 1
 fi
 
-# R4: STOP both VMs while agent still up
-s6_finish_running_vm "$create1_out" "$tmpdir/submit_stop_vm" || true
-# Preserve first cleanup; second STOP merge
+# N6: STOP each VM independently; any STOP/cleanup failure fails the cell.
+# Per-VM evidence via WVM_S6_STOP_TAG; do not swallow first failure with || true.
+# After VM1 STOP, assert VM2 identity still alive (SHM/path still present).
+_dual_stop_fail=0
+WVM_S6_STOP_TAG=vm1 s6_finish_running_vm "$create1_out" "$tmpdir/submit_stop_vm" \
+  || _dual_stop_fail=1
 _evid_save=${WVM_S6_EVIDENCE_DIR:-}
-if [[ -n "$_evid_save" && -f "$_evid_save/cleanup.manifest" ]]; then
-  cp -a "$_evid_save/cleanup.manifest" "$_evid_save/cleanup.manifest.vm1"
-fi
-s6_finish_running_vm "$create2_out" "$tmpdir/submit_stop_vm" || true
-if [[ -n "$_evid_save" && -f "$_evid_save/cleanup.manifest.vm1" ]]; then
-  cat "$_evid_save/cleanup.manifest.vm1" "$_evid_save/cleanup.manifest" 2>/dev/null \
-    | sort -u >"$_evid_save/cleanup.manifest.merged" || true
-  mv "$_evid_save/cleanup.manifest.merged" "$_evid_save/cleanup.manifest"
-  # Re-check leftovers for merged set
-  if grep -q '^cleanup_ok=0' "$_evid_save/cleanup.ok" 2>/dev/null; then
-    echo "dual STOP/cleanup reported fail" >&2
-    exit 1
+# Assert sibling VM2 still usable before its STOP (live SHM, not just log text).
+_sibling_shm=""
+if [[ -n "${dev_shm2:-}" ]]; then
+  _sibling_shm=$dev_shm2
+elif [[ -n "${shm2:-}" ]]; then
+  if [[ "$shm2" == /dev/shm/* ]]; then
+    _sibling_shm=$shm2
+  else
+    _sibling_shm="/dev/shm/${shm2#/}"
   fi
+elif [[ -n "${vm2_id:-}" ]]; then
+  _sibling_shm=$(compgen -G "/dev/shm/wavevm_ram_wvm-v${vm2_id}*" | head -1 || true)
+fi
+if [[ -z "${vm2_id:-}" || "$vm2_id" == "0" ]]; then
+  echo "N6 FAIL: vm2_id lost after VM1 STOP" >&2
+  _dual_stop_fail=1
+elif [[ -z "$_sibling_shm" || ! -e "$_sibling_shm" ]]; then
+  echo "N6 FAIL: VM2 SHM missing after VM1 STOP (looked for $_sibling_shm / vm_id=$vm2_id)" >&2
+  _dual_stop_fail=1
+else
+  echo "N6: sibling VM2 still live at $_sibling_shm after VM1 STOP"
+fi
+WVM_S6_STOP_TAG=vm2 s6_finish_running_vm "$create2_out" "$tmpdir/submit_stop_vm" \
+  || _dual_stop_fail=1
+if [[ -n "$_evid_save" ]]; then
+  {
+    echo "# dual STOP summary"
+    echo "vm1_id=${vm1_id:-}"
+    echo "vm2_id=${vm2_id:-}"
+    for tag in vm1 vm2; do
+      if [[ -f "$_evid_save/cleanup.ok.$tag" ]]; then
+        echo "--- cleanup.ok.$tag ---"
+        cat "$_evid_save/cleanup.ok.$tag"
+      else
+        echo "missing cleanup.ok.$tag"
+        _dual_stop_fail=1
+      fi
+      if [[ -f "$_evid_save/stop_result.$tag.txt" ]]; then
+        echo "--- stop_result.$tag ---"
+        cat "$_evid_save/stop_result.$tag.txt"
+      fi
+    done
+  } >"$_evid_save/dual_stop_summary.txt"
+  # Aggregate: both must be cleanup_ok=1
+  if ! grep -q '^cleanup_ok=1' "$_evid_save/cleanup.ok.vm1" 2>/dev/null; then
+    echo "dual STOP: VM1 cleanup not ok" >&2
+    _dual_stop_fail=1
+  fi
+  if ! grep -q '^cleanup_ok=1' "$_evid_save/cleanup.ok.vm2" 2>/dev/null; then
+    echo "dual STOP: VM2 cleanup not ok" >&2
+    _dual_stop_fail=1
+  fi
+  # Keep combined manifest for forensics (union), but never let it hide a fail.
+  cat "$_evid_save/cleanup.manifest.vm1" "$_evid_save/cleanup.manifest.vm2" 2>/dev/null \
+    | sort -u >"$_evid_save/cleanup.manifest" || true
+fi
+if [[ $_dual_stop_fail -ne 0 ]]; then
+  echo "dual STOP/cleanup FAILED (N6: any VM STOP failure fails the cell)" >&2
+  exit 1
 fi
 
 kill -TERM "$agent_pid"

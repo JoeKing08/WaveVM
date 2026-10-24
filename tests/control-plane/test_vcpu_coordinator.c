@@ -256,6 +256,7 @@ static void fill_submit(struct wvm_vcpu_handoff_submit *submit,
     memset(submit, 0, sizeof(*submit));
     submit->backend = WVM_VCPU_BACKEND_TCG;
     submit->vcpu_index = vcpu_index;
+    submit->memory_fence_result = WVM_VCPU_MEMORY_FENCE_SUCCEEDED;
     submit->memory_fence_id = 10;
     submit->local_interrupt_watermark = 11;
     submit->device_event_watermark = 12;

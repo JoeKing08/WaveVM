@@ -28,6 +28,17 @@ struct wvm_admission_route_compiler {
     size_t snapshot_byte_capacity;
     uint8_t *ack_set_bytes;
     size_t ack_set_byte_capacity;
+    /*
+     * Optional admitted node_runtime UDP ingress overrides. When set, leaf
+     * EXACT_VNODE rules whose next_hop is a NODE_RUNTIME member replace
+     * sidecar_endpoint.data_port with the matching override (the live V30-RX
+     * / node_runtime_data_port from the CREATE listener plan). Membership
+     * sidecar may be unbound; R1/gateway forward must hit real ingress.
+     * count==0 keeps legacy sidecar_endpoint behavior (unit tests).
+     */
+    const uint32_t *ingress_override_node_ids;
+    const uint16_t *ingress_override_data_ports;
+    size_t ingress_override_count;
 };
 
 int wvm_admission_route_compiler_init(

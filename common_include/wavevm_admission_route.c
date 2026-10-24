@@ -213,6 +213,41 @@ static int append_required_ack(
     return 0;
 }
 
+static uint16_t ingress_override_data_port(
+    const struct wvm_admission_route_compiler *compiler, uint32_t physical_node_id)
+{
+    size_t i;
+
+    if (!compiler || !compiler->ingress_override_node_ids ||
+        !compiler->ingress_override_data_ports ||
+        compiler->ingress_override_count == 0) {
+        return 0;
+    }
+    for (i = 0; i < compiler->ingress_override_count; i++) {
+        if (compiler->ingress_override_node_ids[i] == physical_node_id &&
+            compiler->ingress_override_data_ports[i] != 0) {
+            return compiler->ingress_override_data_ports[i];
+        }
+    }
+    return 0;
+}
+
+/* Leaf next-hop: membership sidecar address family, but data_port prefers the
+ * admitted node_runtime ingress when the authority owner supplied overrides. */
+static struct wvm_endpoint leaf_next_hop_endpoint(
+    const struct wvm_admission_route_compiler *compiler,
+    const struct wvm_node_record *node)
+{
+    struct wvm_endpoint endpoint = node->sidecar_endpoint;
+    uint16_t override_port =
+        ingress_override_data_port(compiler, node->physical_node_id);
+
+    if (override_port != 0) {
+        endpoint.data_port = override_port;
+    }
+    return endpoint;
+}
+
 static int append_flat_rules(struct wvm_admission_route_compiler *compiler,
                              const struct wvm_cluster_record_set *records,
                              const struct wvm_gateway_record *gateway,
@@ -312,7 +347,7 @@ static int append_fractal_rules(
             rule.next_hop_member.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
             rule.next_hop_member.role_id = node->physical_node_id;
             rule.next_hop_member.instance_id = node->node_instance_id;
-            rule.next_hop_endpoint = node->sidecar_endpoint;
+            rule.next_hop_endpoint = leaf_next_hop_endpoint(compiler, node);
             rule.hop_limit = 1;
             if (append_route_rule(compiler, &rule, error, error_len) != 0) {
                 return -1;
@@ -382,7 +417,7 @@ static int append_single_node_leaf_rules(
 {
     uint64_t vnode_end;
     uint64_t vnode;
-    const struct wvm_endpoint *next_hop;
+    struct wvm_endpoint leaf;
 
     if (!compiler || !node) {
         set_error(error, error_len, "single-node leaf route input is invalid");
@@ -395,12 +430,12 @@ static int append_single_node_leaf_rules(
         return -1;
     }
     /*
-     * Co-located leaf sidecar: exact vnodes forward to the node's authoritative
-     * sidecar endpoint without a separate GatewayRecord. Cross-node fabrics
-     * still require an ACTIVE gateway.
+     * Co-located leaf: exact vnodes forward to the node's data ingress.
+     * Prefer admitted node_runtime_data_port when overrides are set; else
+     * membership sidecar_endpoint. Cross-node fabrics need an ACTIVE gateway.
      */
-    next_hop = &node->sidecar_endpoint;
-    if (wvm_endpoint_validate(next_hop, error, error_len) != 0) {
+    leaf = leaf_next_hop_endpoint(compiler, node);
+    if (wvm_endpoint_validate(&leaf, error, error_len) != 0) {
         return -1;
     }
     vnode_end = (uint64_t)node->local_vnode_first + node->local_vnode_count;
@@ -418,7 +453,7 @@ static int append_single_node_leaf_rules(
         rule.next_hop_member.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
         rule.next_hop_member.role_id = node->physical_node_id;
         rule.next_hop_member.instance_id = node->node_instance_id;
-        rule.next_hop_endpoint = *next_hop;
+        rule.next_hop_endpoint = leaf;
         rule.hop_limit = 1;
         if (append_route_rule(compiler, &rule, error, error_len) != 0) {
             return -1;

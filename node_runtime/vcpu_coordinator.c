@@ -349,6 +349,7 @@ static int request_matches_submit(
 {
     return request && submit && request->backend == submit->backend &&
            request->vcpu_index == submit->vcpu_index &&
+           request->memory_fence_result == submit->memory_fence_result &&
            request->memory_fence_id == submit->memory_fence_id &&
            request->local_interrupt_watermark ==
                submit->local_interrupt_watermark &&
@@ -485,7 +486,9 @@ int wvm_vcpu_handoff_coordinator_submit(
     int result;
 
     if (!coordinator || !coordinator->initialized || !submit ||
-        submit->backend == 0 || submit->memory_fence_id == 0 ||
+        submit->backend == 0 ||
+        submit->memory_fence_result != WVM_VCPU_MEMORY_FENCE_SUCCEEDED ||
+        submit->memory_fence_id == 0 ||
         bytes_are_zero(submit->operation_id, sizeof(submit->operation_id)) ||
         submit->backend !=
             coordinator->config.manifest->negotiated_profile.backend ||
@@ -606,7 +609,7 @@ int wvm_vcpu_handoff_coordinator_submit(
     request.protocol_version = WVM_VCPU_HANDOFF_REQUEST_VERSION;
     request.backend = submit->backend;
     request.context_schema_version = submit->context_schema_version;
-    request.memory_fence_result = WVM_VCPU_MEMORY_FENCE_SUCCEEDED;
+    request.memory_fence_result = submit->memory_fence_result;
     request.vm_id = coordinator->config.manifest->vm_id;
     request.vm_incarnation = coordinator->config.manifest->vm_incarnation;
     request.manifest_generation =

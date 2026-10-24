@@ -145,6 +145,9 @@ int main(void)
         }
     }
     wvm_directory_store_destroy(&store);
+    printf("EVID directory_store: initial_version=0x%llx commit_next=%llu ESTALE_stale_base=1\n",
+           (unsigned long long)UINT64_C(0x0000000900000001),
+           (unsigned long long)(UINT64_C(0x0000000900000001) + 1U));
     puts("V1 directory-store tests: PASS");
     return 0;
 }

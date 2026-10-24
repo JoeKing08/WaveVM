@@ -40,6 +40,8 @@ struct agent_owned_storage {
     struct wvm_exclusive_lease *reservation_leases;
     struct wvm_route_snapshot_key *reservation_routes;
     pid_t *runtime_pids;
+    /* Semantic STOP outcome is independent of PID liveness/retry state. */
+    uint8_t *runtime_stop_incomplete;
 };
 
 static void set_error(char *error, size_t error_len, const char *message)
@@ -330,7 +332,24 @@ static int start_runtime(
         return -status;
     }
     owned->runtime_pids[index] = pid;
+    owned->runtime_stop_incomplete[index] = 0;
     return 0;
+}
+
+static int runtime_exit_was_clean(int status)
+{
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static int mark_stop_incomplete(struct agent_owned_storage *owned, size_t index,
+                                char *error, size_t error_len,
+                                const char *message)
+{
+    if (owned && owned->runtime_stop_incomplete) {
+        owned->runtime_stop_incomplete[index] = 1;
+    }
+    set_error(error, error_len, message);
+    return -EAGAIN;
 }
 
 static int stop_one_runtime(
@@ -342,7 +361,7 @@ static int stop_one_runtime(
     struct agent_owned_storage *owned;
     size_t index;
     pid_t pid;
-    int status;
+    int status = 0;
 
     (void)runtime_manifest;
     if (!agent || !slot) {
@@ -355,13 +374,25 @@ static int stop_one_runtime(
             break;
         }
     }
-    if (index == agent->slot_capacity || !owned || !owned->runtime_pids) {
+    if (index == agent->slot_capacity || !owned || !owned->runtime_pids ||
+        !owned->runtime_stop_incomplete) {
         set_error(error, error_len, "admitted runtime slot is not owned by agent");
         return -EINVAL;
     }
     pid = owned->runtime_pids[index];
     if (pid <= 0) {
         clear_stale_admitted_endpoints(runtime_manifest);
+        if (owned->runtime_stop_incomplete[index]) {
+            /*
+             * PID death is cleanup evidence, not proof of quiesce/fence/flush.
+             * Keep the failed semantic result across retries so a second STOP
+             * cannot turn a SIGKILL/abnormal exit into normal completion.
+             */
+            set_error(error, error_len,
+                      "previous admitted runtime STOP remains incomplete "
+                      "(quiesce/fence/flush not proven)");
+            return -EAGAIN;
+        }
         return 0;
     }
     /*
@@ -370,6 +401,7 @@ static int stop_one_runtime(
      * normal STOP completion / fence convergence.
      */
     if (kill(pid, SIGTERM) != 0 && errno != ESRCH) {
+        owned->runtime_stop_incomplete[index] = 1;
         set_error(error, error_len, "cannot signal admitted runtime child");
         return -errno;
     }
@@ -380,10 +412,35 @@ static int stop_one_runtime(
         /* Allow graceful child shutdown + TCG helper reap (was 1s; too tight). */
         for (waited = 0; waited < 150; waited++) {
             r = waitpid(pid, &status, WNOHANG);
-            if (r == pid || (r < 0 && errno == ECHILD)) {
+            if (r == pid) {
                 owned->runtime_pids[index] = 0;
                 clear_stale_admitted_endpoints(runtime_manifest);
+                if (!runtime_exit_was_clean(status)) {
+                    owned->runtime_stop_incomplete[index] = 1;
+                    if (error && error_len != 0) {
+                        (void)snprintf(
+                            error, error_len,
+                            "admitted runtime exited abnormally (status=0x%x); "
+                            "STOP completion not proven", status);
+                    }
+                    return -EAGAIN;
+                }
+                owned->runtime_stop_incomplete[index] = 0;
                 return 0;
+            }
+            if (r < 0 && errno == ECHILD) {
+                owned->runtime_pids[index] = 0;
+                clear_stale_admitted_endpoints(runtime_manifest);
+                return mark_stop_incomplete(
+                    owned, index, error, error_len,
+                    "admitted runtime was reaped before STOP could prove "
+                    "quiesce/fence/flush completion");
+            }
+            if (r < 0) {
+                owned->runtime_stop_incomplete[index] = 1;
+                set_error(error, error_len,
+                          "waitpid on admitted runtime failed");
+                return -errno;
             }
             {
                 struct timespec ts = {0, 20 * 1000 * 1000}; /* 20ms */
@@ -391,45 +448,74 @@ static int stop_one_runtime(
             }
         }
         r = waitpid(pid, &status, WNOHANG);
-        if (r == pid || (r < 0 && errno == ECHILD)) {
+        if (r == pid) {
             owned->runtime_pids[index] = 0;
             clear_stale_admitted_endpoints(runtime_manifest);
+            if (!runtime_exit_was_clean(status)) {
+                owned->runtime_stop_incomplete[index] = 1;
+                if (error && error_len != 0) {
+                    (void)snprintf(
+                        error, error_len,
+                        "admitted runtime exited abnormally (status=0x%x); "
+                        "STOP completion not proven", status);
+                }
+                return -EAGAIN;
+            }
+            owned->runtime_stop_incomplete[index] = 0;
             return 0;
         }
+        if (r < 0 && errno == ECHILD) {
+            owned->runtime_pids[index] = 0;
+            clear_stale_admitted_endpoints(runtime_manifest);
+            return mark_stop_incomplete(
+                owned, index, error, error_len,
+                "admitted runtime was reaped before STOP could prove "
+                "quiesce/fence/flush completion");
+        }
         if (r != 0) {
+            owned->runtime_stop_incomplete[index] = 1;
             set_error(error, error_len, "waitpid on admitted runtime failed");
             return -errno;
         }
         /*
-         * Still running after SIGTERM window: hard-kill and reap. Child death
-         * is enough for Minimum STOP participant teardown (goal §2). Graceful
-         * quiesce / fence proof is owned by ROUTE_RETIRE ACK refs+horizon
-         * (A05), not by refusing STOP after a successful SIGKILL reap — else
-         * durable state stays RUNNING with a dead child (false healthy).
+         * Still running after SIGTERM window: bounded hard-kill as *failure*
+         * cleanup (Codex N1). Child death + endpoint clear is not proof of
+         * quiesce/fence/flush/in-flight completion. Fail closed so STOP cannot
+         * report SUCCESS/STOPPED on a SIGKILL path; caller keeps retryable
+         * cleanup / non-success. ROUTE_RETIRE refs=0 cannot substitute for a
+         * killed process's dirty sync.
          */
         if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
+            owned->runtime_stop_incomplete[index] = 1;
             set_error(error, error_len, "cannot SIGKILL admitted runtime child");
             return -errno;
         }
-        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        {
+            pid_t wr;
+            do {
+                wr = waitpid(pid, &status, 0);
+            } while (wr < 0 && errno == EINTR);
+            if (wr != pid && !(wr < 0 && errno == ECHILD)) {
+                owned->runtime_pids[index] = 0;
+                owned->runtime_stop_incomplete[index] = 1;
+                clear_stale_admitted_endpoints(runtime_manifest);
+                set_error(error, error_len,
+                          "waitpid after SIGKILL on admitted runtime failed");
+                return (wr < 0) ? -errno : -EIO;
+            }
         }
         owned->runtime_pids[index] = 0;
+        owned->runtime_stop_incomplete[index] = 1;
         clear_stale_admitted_endpoints(runtime_manifest);
         fprintf(stderr,
                 "[runtime-agent] admitted child pid=%d required SIGKILL after "
-                "SIGTERM window; endpoints cleared — Minimum STOP ok; "
-                "graceful fence/flush still owned by ROUTE_RETIRE (R03)\n",
+                "SIGTERM window; endpoints cleared — STOP NOT successful "
+                "(no fence/flush proof; fail closed per N1)\n",
                 (int)pid);
-        /*
-         * Child reaped + endpoints cleared: Minimum STOP participant teardown
-         * succeeds. Do not return -EAGAIN — that leaves durable RUNNING with a
-         * dead child (false healthy). Graceful fence proof remains A05
-         * ROUTE_RETIRE refs+horizon, not this SIGKILL path.
-         */
-        if (error && error_len) {
-            error[0] = '\0';
-        }
-        return 0;
+        set_error(error, error_len,
+                  "admitted runtime required SIGKILL; STOP incomplete "
+                  "(quiesce/fence/flush not proven)");
+        return -EAGAIN;
     }
 }
 
@@ -463,6 +549,9 @@ static void reap_runtime_children(struct wvm_admission_runtime_agent *agent)
             if (agent->slots && i < agent->slot_capacity &&
                 (agent->slots[i].has_prepared || agent->slots[i].has_activated ||
                  agent->slots[i].has_required_child_failed)) {
+                if (owned->runtime_stop_incomplete) {
+                    owned->runtime_stop_incomplete[i] = 1;
+                }
                 clear_stale_admitted_endpoints(
                     &agent->slots[i].prepared_storage.runtime_manifest);
                 if (agent->slots[i].has_activated ||
@@ -489,7 +578,8 @@ void wvm_admission_runtime_agent_reap(struct wvm_admission_runtime_agent *agent)
     pthread_mutex_unlock(&agent->node_service.receiver.lock);
 }
 
-static void stop_runtime_children(struct wvm_admission_runtime_agent *agent)
+static void force_stop_runtime_children(
+    struct wvm_admission_runtime_agent *agent)
 {
     struct agent_owned_storage *owned = agent ? agent->owned_storage : NULL;
     size_t i;
@@ -512,6 +602,64 @@ static void stop_runtime_children(struct wvm_admission_runtime_agent *agent)
             owned->runtime_pids[i] = 0;
         }
     }
+}
+
+/*
+ * Agent shutdown is a semantic STOP, not a process cleanup shortcut. Every
+ * owned runtime is stopped through stop_one_runtime so a SIGKILL/abnormal exit
+ * cannot be reported as completion; the persistent incomplete flag is also
+ * re-checked on retry. A forced kill is performed only to release host
+ * resources after the semantic failure has been recorded.
+ */
+static int stop_runtime_children(struct wvm_admission_runtime_agent *agent,
+                                 char *error, size_t error_len)
+{
+    struct agent_owned_storage *owned = agent ? agent->owned_storage : NULL;
+    size_t failures = 0;
+    size_t i;
+
+    if (!owned || !owned->runtime_pids || !owned->runtime_stop_incomplete ||
+        !agent->slots) {
+        set_error(error, error_len, "admitted runtime shutdown state is invalid");
+        return -EINVAL;
+    }
+    for (i = 0; i < agent->slot_capacity; i++) {
+        char child_error[256];
+        int stop_result;
+
+        if (owned->runtime_pids[i] <= 0 &&
+            !owned->runtime_stop_incomplete[i]) {
+            continue;
+        }
+        memset(child_error, 0, sizeof(child_error));
+        stop_result = stop_one_runtime(
+            agent, &agent->slots[i],
+            &agent->slots[i].prepared_storage.runtime_manifest, child_error,
+            sizeof(child_error));
+        if (stop_result != 0) {
+            failures++;
+            fprintf(stderr,
+                    "[runtime-agent] admitted runtime slot %zu STOP failed: %s\n",
+                    i, child_error[0] ? child_error : "unknown");
+            owned->runtime_stop_incomplete[i] = 1;
+            if (owned->runtime_pids[i] > 0) {
+                int status;
+
+                (void)kill(owned->runtime_pids[i], SIGKILL);
+                while (waitpid(owned->runtime_pids[i], &status, 0) < 0 &&
+                       errno == EINTR) {
+                }
+                owned->runtime_pids[i] = 0;
+            }
+        }
+    }
+    if (failures != 0) {
+        set_error(error, error_len,
+                  "admitted runtime STOP remains incomplete "
+                  "(quiesce/fence/flush not proven)");
+        return -EAGAIN;
+    }
+    return 0;
 }
 
 static int agent_storage_init(
@@ -566,12 +714,14 @@ static int agent_storage_init(
         config->slot_capacity, sizeof(*owned->reservation_records));
     owned->runtime_pids = calloc(config->slot_capacity,
                                  sizeof(*owned->runtime_pids));
+    owned->runtime_stop_incomplete = calloc(config->slot_capacity, 1U);
     agent->owned_storage = owned;
     agent->slot_capacity = config->slot_capacity;
     if (!owned->slots || !owned->slot_storage || !owned->enrollment_slots ||
         !owned->enrollment_proof_storage || !owned->enrollment_proof_scratch ||
         !owned->enrollment_ack_scratch ||
-        !owned->reservation_records || !owned->runtime_pids) {
+        !owned->reservation_records || !owned->runtime_pids ||
+        !owned->runtime_stop_incomplete) {
         set_error(error, error_len, "cannot allocate admission agent slots");
         return -ENOMEM;
     }
@@ -843,7 +993,9 @@ int wvm_admission_runtime_agent_stop(
                                         error_len) != 0) {
         return -1;
     }
-    stop_runtime_children(agent);
+    if (stop_runtime_children(agent, error, error_len) != 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -859,7 +1011,7 @@ void wvm_admission_runtime_agent_destroy(
     if (agent->node_service_initialized) {
         (void)wvm_admission_node_service_stop(&agent->node_service, NULL, 0);
     }
-    stop_runtime_children(agent);
+    force_stop_runtime_children(agent);
     if (agent->slot_registry_initialized) {
         wvm_admission_slot_registry_destroy(&agent->slot_registry);
     }
@@ -895,6 +1047,7 @@ void wvm_admission_runtime_agent_destroy(
         free(owned->reservation_leases);
         free(owned->reservation_routes);
         free(owned->runtime_pids);
+        free(owned->runtime_stop_incomplete);
         free(owned->enrollment_ack_scratch);
         free(owned->enrollment_proof_scratch);
         free(owned->enrollment_proof_storage);

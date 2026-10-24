@@ -1359,6 +1359,12 @@ static int run_runtime_main(int argc, char **argv)
     return (int)(intptr_t)master_result;
 }
 
+static void child_graceful_stop(int signal_number)
+{
+    (void)signal_number;
+    g_shutdown_requested = 1;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "agent") == 0) {
@@ -1383,6 +1389,15 @@ int main(int argc, char **argv)
             return 2;
         }
         g_agent_parent_pid = parent_pid;
+        {
+            struct sigaction action;
+
+            memset(&action, 0, sizeof(action));
+            action.sa_handler = child_graceful_stop;
+            sigemptyset(&action.sa_mask);
+            (void)sigaction(SIGTERM, &action, NULL);
+            (void)sigaction(SIGINT, &action, NULL);
+        }
         runtime_argv[0] = argv[0];
         runtime_argv[1] = argv[4];
         runtime_argv[2] = argv[5];

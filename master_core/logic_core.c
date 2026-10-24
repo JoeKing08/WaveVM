@@ -418,7 +418,7 @@ void *wvm_logic_alloc_route_context(void)
     struct wvm_logic_route_context *ctx;
     int i;
 
-    ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+    ctx = kvzalloc(sizeof(*ctx), GFP_KERNEL);
     if (!ctx)
         return NULL;
     for (i = 0; i < WVM_CPU_ROUTE_TABLE_SIZE; i++)
@@ -432,7 +432,7 @@ void *wvm_logic_alloc_route_context(void)
 
 void wvm_logic_free_route_context(void *route)
 {
-    kfree(route);
+    kvfree(route);
 }
 
 void *wvm_logic_alloc_dir_table(void)

@@ -43,6 +43,7 @@ gcc -Wall -Wextra -Werror -std=gnu11 -D_DEFAULT_SOURCE \
     "$nr/directory_store.c" \
     "$nr/memory_service.c" \
     "$nr/executor_bridge.c" \
+    "$nr/vcpu_coordinator.c" \
     "$nr/kvm_page_cache.c" \
     "$nr/kvm_execution_fetch.c" \
     "$nr/slave_hybrid.o" \

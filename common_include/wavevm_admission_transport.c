@@ -453,10 +453,13 @@ static int transport_route_retire(
      * (STOP rebuild may only have the prepared key).
      */
     (void)snapshot;
-    if (!transport || !coordinator || !transaction ||
-        wvm_route_transaction_record_validate(transaction, error, error_len) !=
-            0) {
+    if (!transport || !coordinator || !transaction) {
         set_error(error, error_len, "route retire input is invalid");
+        return -1;
+    }
+    /* Keep validator text (e.g. wrong snapshot key after dual-VM load). */
+    if (wvm_route_transaction_record_validate(transaction, error, error_len) !=
+            0) {
         return -1;
     }
     if (coordinator->vm_id !=

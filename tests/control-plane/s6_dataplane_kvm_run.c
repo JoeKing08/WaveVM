@@ -246,6 +246,16 @@ int main(int argc, char **argv)
                 ntohl(rh->magic), ntohs(rh->msg_type));
         return 1;
     }
+    {
+        uint64_t want = WVM_NTOHLL(((struct wvm_header *)tx)->req_id);
+        uint64_t got = WVM_NTOHLL(rh->req_id);
+        if (got != want) {
+            fprintf(stderr, "reply req_id mismatch want=0x%llx got=0x%llx\n",
+                    (unsigned long long)want, (unsigned long long)got);
+            return 1;
+        }
+        printf("reply_req_id_match=1 req_id=0x%llx\n", (unsigned long long)got);
+    }
     ack = (struct wvm_ipc_cpu_run_ack *)(rx + sizeof(*rh));
     got_rax = (uint32_t)ack->ctx.kvm.rax;
     printf("vcpu_exit status=%d mode_tcg=%u rax=0x%x expected=0x%lx\n",

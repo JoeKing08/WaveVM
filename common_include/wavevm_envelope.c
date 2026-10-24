@@ -812,6 +812,12 @@ int wvm_envelope_reassembler_init(
     if (!entries) {
         return -1;
     }
+    if (pthread_mutex_init(&reassembler->lock, NULL) != 0) {
+        free(entries);
+        memset(reassembler, 0, sizeof(*reassembler));
+        return -1;
+    }
+    reassembler->lock_initialized = 1;
     reassembler->entries = entries;
     reassembler->entry_capacity = WVM_ENVELOPE_MAX_REASSEMBLIES;
     return 0;
@@ -826,11 +832,18 @@ void wvm_envelope_reassembler_destroy(
     if (!reassembler) {
         return;
     }
+    if (reassembler->lock_initialized) {
+        pthread_mutex_lock(&reassembler->lock);
+    }
     entries = reassembler->entries;
     for (i = 0; entries && i < reassembler->entry_capacity; i++) {
         reassembly_entry_clear(&entries[i], NULL);
     }
     free(entries);
+    if (reassembler->lock_initialized) {
+        pthread_mutex_unlock(&reassembler->lock);
+        pthread_mutex_destroy(&reassembler->lock);
+    }
     memset(reassembler, 0, sizeof(*reassembler));
 }
 
@@ -962,25 +975,31 @@ int wvm_envelope_reassembler_accept(
     struct reassembly_entry *entry;
     struct fragment_piece *piece;
     uint8_t digest[WVM_SHA256_DIGEST_BYTES];
+    int result = -1;
 
-    if (!reassembler || !reassembler->entries || !fragment || !output ||
+    if (!reassembler || !reassembler->entries ||
+        !reassembler->lock_initialized || !fragment || !output ||
         !(fragment->flags & WVM_ENVELOPE_FLAG_FRAGMENTED) ||
         parse_fragment_prefix(fragment, &prefix, error, error_len) != 0) {
         set_error(error, error_len, "fragment reassembly input is invalid");
         return -1;
     }
     memset(output, 0, sizeof(*output));
+    if (pthread_mutex_lock(&reassembler->lock) != 0) {
+        set_error(error, error_len, "cannot lock fragment reassembly state");
+        return -1;
+    }
     reassembler_expire(reassembler, now_ms);
     entry = reassembly_find(reassembler, fragment);
     if (!entry) {
         entry = reassembly_allocate(reassembler, fragment, &prefix, now_ms,
                                     error, error_len);
         if (!entry) {
-            return -1;
+            goto out;
         }
     } else if (!fragment_metadata_matches(entry, fragment, &prefix)) {
         set_error(error, error_len, "fragment metadata conflicts with retry");
-        return -1;
+        goto out;
     }
 
     piece = &entry->pieces[prefix.fragment_index];
@@ -990,13 +1009,14 @@ int wvm_envelope_reassembler_accept(
             memcmp(entry->payload + piece->offset, prefix.data,
                    prefix.data_bytes) != 0) {
             set_error(error, error_len, "fragment retry conflicts with prior data");
-            return -1;
+            goto out;
         }
-        return 0;
+        result = 0;
+        goto out;
     }
     if (fragment_overlaps_existing(entry, &prefix)) {
         set_error(error, error_len, "fragment overlaps an existing range");
-        return -1;
+        goto out;
     }
     memcpy(entry->payload + prefix.fragment_offset, prefix.data,
            prefix.data_bytes);
@@ -1007,7 +1027,8 @@ int wvm_envelope_reassembler_accept(
     entry->received_bytes += prefix.data_bytes;
     if (entry->received_count != entry->fragment_count ||
         entry->received_bytes != entry->logical_payload_bytes) {
-        return 0;
+        result = 0;
+        goto out;
     }
     wvm_envelope_semantic_digest(entry->payload,
                                     entry->logical_payload_bytes, digest);
@@ -1015,7 +1036,7 @@ int wvm_envelope_reassembler_accept(
                sizeof(digest)) != 0) {
         reassembly_entry_clear(entry, &reassembler->allocated_payload_bytes);
         set_error(error, error_len, "reassembled semantic digest mismatch");
-        return -1;
+        goto out;
     }
     output->envelope = entry->envelope;
     output->envelope.flags &= ~WVM_ENVELOPE_FLAG_FRAGMENTED;
@@ -1025,7 +1046,11 @@ int wvm_envelope_reassembler_accept(
     output->payload_bytes = entry->logical_payload_bytes;
     entry->payload = NULL;
     reassembly_entry_clear(entry, &reassembler->allocated_payload_bytes);
-    return 1;
+    result = 1;
+
+out:
+    pthread_mutex_unlock(&reassembler->lock);
+    return result;
 }
 
 void wvm_envelope_reassembled_release(

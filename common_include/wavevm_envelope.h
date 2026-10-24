@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include "wavevm_sha256.h"
 
@@ -161,13 +162,16 @@ typedef int (*wvm_envelope_emit_frame_fn)(
     size_t error_len);
 
 /*
- * Reassembly state is deliberately caller-owned and not internally locked.
- * One ingress owner should keep a separate instance per source/queue domain.
+ * Reassembly state is internally locked. A single instance may be shared by
+ * all RX workers of one transport/queue domain; fragments may arrive out of
+ * order and from different threads. Callers still own lifecycle init/destroy.
  */
 struct wvm_envelope_reassembler {
     void *entries;
     size_t entry_capacity;
     size_t allocated_payload_bytes;
+    pthread_mutex_t lock;
+    int lock_initialized;
 };
 
 void wvm_envelope_semantic_digest(

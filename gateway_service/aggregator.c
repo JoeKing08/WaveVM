@@ -472,9 +472,12 @@ static void *tx_worker(void *opaque)
     return NULL;
 }
 
-static int tx_scheduler_start(void)
+static pthread_mutex_t g_tx_scheduler_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int tx_scheduler_start_locked(void)
 {
     int flags;
+    int create_rc;
 
     if (g_tx_scheduler.started) {
         return 0;
@@ -489,17 +492,25 @@ static int tx_scheduler_start(void)
     if (flags >= 0) {
         (void)fcntl(g_tx_scheduler.socket_fd, F_SETFL, flags | O_NONBLOCK);
     }
-    if (pthread_create(&g_tx_scheduler.thread, NULL, tx_worker, NULL) !=
-        0) {
-        int result = -errno;
-
+    create_rc = pthread_create(&g_tx_scheduler.thread, NULL, tx_worker, NULL);
+    if (create_rc != 0) {
         close(g_tx_scheduler.socket_fd);
         g_tx_scheduler.socket_fd = -1;
-        return result;
+        return -create_rc;
     }
     pthread_detach(g_tx_scheduler.thread);
     g_tx_scheduler.started = 1;
     return 0;
+}
+
+static int tx_scheduler_start(void)
+{
+    int result;
+
+    pthread_mutex_lock(&g_tx_scheduler_lock);
+    result = tx_scheduler_start_locked();
+    pthread_mutex_unlock(&g_tx_scheduler_lock);
+    return result;
 }
 
 static int parse_u64_env(const char *name, uint64_t *value)
@@ -632,17 +643,37 @@ static int gateway_forward(int local_fd, const uint8_t *packet,
         free(item);
         return -EPROTO;
     }
+    if (getenv("WVM_GATEWAY_FORWARD_TRACE") != NULL) {
+        fprintf(stderr,
+                "[GW-FWD] msg=%u matched=%u next_kind=%u member=%u/%" PRIu64
+                "/%u port=%u frame=%zu hop=%u\n",
+                (unsigned)envelope.message_type,
+                (unsigned)next_hop.matched_destination_kind,
+                (unsigned)next_hop.next_hop_kind,
+                next_hop.next_hop_member.role_id,
+                next_hop.next_hop_member.instance_id,
+                (unsigned)next_hop.next_hop_member.role_type,
+                (unsigned)next_hop.next_hop_endpoint.data_port,
+                forwarded_bytes, (unsigned)envelope.route.hop_count);
+    }
     item->destination = destination;
     item->bytes = forwarded_bytes;
-    if (tx_enqueue(item, message_is_latency_sensitive(
-                                envelope.message_type)) != 0) {
-        static unsigned int backpressured;
+    {
+        int enqueue_result = tx_enqueue(item, message_is_latency_sensitive(
+                                                   envelope.message_type));
 
-        if (backpressured++ < 16U) {
-            fprintf(stderr, "[Gateway] V1 transmit queue is backpressured\n");
+        if (enqueue_result != 0) {
+            static unsigned int backpressured;
+
+            if (backpressured++ < 16U) {
+                fprintf(stderr,
+                        "[Gateway] V1 transmit enqueue failed: %s\n",
+                        strerror(enqueue_result < 0 ? -enqueue_result
+                                                    : enqueue_result));
+            }
+            free(item);
+            return -EAGAIN;
         }
-        free(item);
-        return -EAGAIN;
     }
     return 0;
 }
@@ -1172,6 +1203,34 @@ static int gateway_route_control_apply_inner(
         result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
         return 0;
     }
+    if (request->message_type == WVM_ENVELOPE_MSG_ROUTE_COMMIT) {
+        /*
+         * A committed route is not serviceable until the V1 transmit worker
+         * owns a live socket/thread. Do not ACK success on a half-open route:
+         * keep authority closed (or retry an already-active one) so the
+         * controller can retry COMMIT instead of sending into a dead queue.
+         */
+        if (tx_scheduler_start() != 0) {
+            if (error && error_len != 0) {
+                snprintf(error, error_len,
+                         "V1 transmit scheduler is not ready; route commit "
+                         "is not serviceable");
+            }
+            result->status_code = WVM_CONTROL_RESULT_NOT_READY;
+            fprintf(stderr,
+                    "[Gateway] route commit rejected: V1 transmit scheduler "
+                    "did not start\n");
+            return 0;
+        }
+        if (!g_route_authority_active) {
+            g_route_authority_active = 1;
+            fprintf(stderr,
+                    "[Gateway] active V1 route snapshot via control scope=%" PRIu64
+                    " generation=%" PRIu64 "\n",
+                    route_result.route_snapshot_key.scope_key.route_scope_id,
+                    route_result.route_snapshot_key.route_generation);
+        }
+    }
     result->recorded_state = route_result.recorded_state;
     if (request->message_type == WVM_ENVELOPE_MSG_ROUTE_RETIRE) {
         /*
@@ -1527,6 +1586,14 @@ static int init_route_control_from_environment(void)
         }
     }
     g_route_control_ready = 1;
+    /* A recovered journal is durable route authority.  Lookups still require
+     * the exact active snapshot key; this only opens the V1 forward path. */
+    if (g_route_runtime.scope_count != 0) {
+        g_route_authority_active = 1;
+        fprintf(stderr,
+                "[Gateway] route control journal recovered (%zu scopes)\n",
+                g_route_runtime.scope_count);
+    }
     if (strlen(socket_path) >= sizeof(g_route_control_socket_path) ||
         parse_u64_env("WVM_GATEWAY_ID", &parsed_physical_node_id) != 0 ||
         parsed_physical_node_id > UINT32_MAX ||

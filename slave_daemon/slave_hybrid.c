@@ -100,32 +100,53 @@ typedef struct {
 static tcg_pending_vcpu_reply_t g_tcg_pending_vcpu_reply[TCG_PENDING_VCPU_REPLY_SLOTS];
 static pthread_mutex_t g_tcg_pending_vcpu_reply_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void tcg_pending_vcpu_reply_put(uint64_t req_id,
-                                       const struct sockaddr_in *client)
+/*
+ * N3: capacity + identity contract for VCPU_RUN reply demux.
+ * Returns 0 on success, -1 if table full or req_id already owned by a
+ * different client (no silent overwrite). Same client may refresh.
+ */
+static int tcg_pending_vcpu_reply_put(uint64_t req_id,
+                                      const struct sockaddr_in *client)
 {
     int i;
+    int free_slot = -1;
     if (!client) {
-        return;
+        return -1;
     }
     pthread_mutex_lock(&g_tcg_pending_vcpu_reply_lock);
     for (i = 0; i < TCG_PENDING_VCPU_REPLY_SLOTS; i++) {
-        if (!g_tcg_pending_vcpu_reply[i].valid ||
+        if (g_tcg_pending_vcpu_reply[i].valid &&
             g_tcg_pending_vcpu_reply[i].req_id == req_id) {
-            g_tcg_pending_vcpu_reply[i].req_id = req_id;
-            g_tcg_pending_vcpu_reply[i].client = *client;
-            g_tcg_pending_vcpu_reply[i].valid = 1;
+            /* Same req_id: only same client may refresh; else refuse. */
+            if (g_tcg_pending_vcpu_reply[i].client.sin_addr.s_addr ==
+                    client->sin_addr.s_addr &&
+                g_tcg_pending_vcpu_reply[i].client.sin_port ==
+                    client->sin_port) {
+                g_tcg_pending_vcpu_reply[i].client = *client;
+                pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
+                return 0;
+            }
             pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
-            return;
+            return -1;
+        }
+        if (!g_tcg_pending_vcpu_reply[i].valid && free_slot < 0) {
+            free_slot = i;
         }
     }
-    /* Overwrite slot 0 on overflow — probe traffic is low volume. */
-    g_tcg_pending_vcpu_reply[0].req_id = req_id;
-    g_tcg_pending_vcpu_reply[0].client = *client;
-    g_tcg_pending_vcpu_reply[0].valid = 1;
+    if (free_slot < 0) {
+        /* Full: refuse — never silently drop an in-flight requester. */
+        pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
+        return -1;
+    }
+    g_tcg_pending_vcpu_reply[free_slot].req_id = req_id;
+    g_tcg_pending_vcpu_reply[free_slot].client = *client;
+    g_tcg_pending_vcpu_reply[free_slot].valid = 1;
     pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
+    return 0;
 }
 
-static int tcg_pending_vcpu_reply_take(uint64_t req_id,
+/* Peek without clearing — clear only after reply send succeeds (N3). */
+static int tcg_pending_vcpu_reply_peek(uint64_t req_id,
                                        struct sockaddr_in *out)
 {
     int i;
@@ -138,13 +159,26 @@ static int tcg_pending_vcpu_reply_take(uint64_t req_id,
         if (g_tcg_pending_vcpu_reply[i].valid &&
             g_tcg_pending_vcpu_reply[i].req_id == req_id) {
             *out = g_tcg_pending_vcpu_reply[i].client;
-            g_tcg_pending_vcpu_reply[i].valid = 0;
             found = 1;
             break;
         }
     }
     pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
     return found;
+}
+
+static void tcg_pending_vcpu_reply_clear(uint64_t req_id)
+{
+    int i;
+    pthread_mutex_lock(&g_tcg_pending_vcpu_reply_lock);
+    for (i = 0; i < TCG_PENDING_VCPU_REPLY_SLOTS; i++) {
+        if (g_tcg_pending_vcpu_reply[i].valid &&
+            g_tcg_pending_vcpu_reply[i].req_id == req_id) {
+            g_tcg_pending_vcpu_reply[i].valid = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_tcg_pending_vcpu_reply_lock);
 }
 
 static int g_ram_mb = 1024;
@@ -1267,8 +1301,8 @@ static void submit_typed_dirty_page(dirty_page_task_t *task)
             task->slice, &task->dirty, status, result_version, error,
             sizeof(error)) != 0) {
         fprintf(stderr,
-                "[KVM commit] GPA=%#" PRIx64 " base=%#" PRIx64
-                " failed status=%u result=%d reason=%s\n",
+                "[KVM cache] dirty commit failed GPA=%#" PRIx64
+                " base=%#" PRIx64 " status=%u result=%d reason=%s\n",
                 task->dirty.gpa, task->dirty.base_version, (unsigned)status,
                 request_result, error[0] ? error : "commit rejected");
     }
@@ -1534,9 +1568,38 @@ static int execute_tcg_executor_session(
 }
 
 /*
- * R06: optional prefetch when memory service is installed. This is NOT a
- * substitute for GOAL-4 remote-memory dependence proof (fault/commit path).
- * Returning ENOTCONN must not be treated as SUCCESS.
+ * R06 / A3: Map the executor's guest RAM page, either through the KVM
+ * memslot table or through the TCG g_phy_ram mapping.  QEMU in TCG mode
+ * maps the same WVM_SHM_FILE, so filling this page before the session
+ * VCPU_RUN makes the guest fetch remote bytes rather than zeros.
+ */
+static uint8_t *executor_guest_page_hva(uint64_t gpa)
+{
+    uint8_t *hva;
+
+    if ((gpa & (WVM_PAGE_SIZE - 1U)) != 0) {
+        return NULL;
+    }
+    hva = wvm_gpa_to_hva(gpa);
+    if (hva) {
+        return hva;
+    }
+    if (g_phy_ram && g_phy_ram != MAP_FAILED &&
+        gpa <= g_slave_ram_size - WVM_MEMORY_PAGE_BYTES) {
+        return g_phy_ram + gpa;
+    }
+    return NULL;
+}
+
+/*
+ * A3: Fetch the authoritative remote page and install it into the
+ * executor's guest RAM before the typed executor runs.  The old path only
+ * placed the ACK bytes in a temporary buffer and discarded them, so a TCG
+ * guest could not execute the remote page.  Keeping the ENOTCONN behavior
+ * for an uninstalled memory service preserves the R06 fail-closed rule.
+ *
+ * This is deliberately not a synthetic fence: ack.version is the version
+ * returned by the production memory service/directory store.
  */
 static int ensure_remote_memory_side_effect(
     const struct wvm_node_runtime_context *runtime,
@@ -1560,6 +1623,7 @@ static int ensure_remote_memory_side_effect(
         uint8_t op[WVM_IDENTITY_ID_BYTES];
         struct wvm_mem_ack ack;
         uint8_t page[WVM_MEMORY_PAGE_BYTES];
+        uint8_t *guest_page;
         int result;
         size_t z;
         int all_zero = 1;
@@ -1601,13 +1665,30 @@ static int ensure_remote_memory_side_effect(
         if (result != 0) {
             return result;
         }
-        if (ack.status != WVM_MEM_ACK_SUCCESS) {
+        if (ack.status != WVM_MEM_ACK_SUCCESS ||
+            ack.data_bytes != WVM_MEMORY_PAGE_BYTES) {
             if (error && error_len != 0) {
                 snprintf(error, error_len,
-                         "remote memory side effect status=%u",
-                         (unsigned)ack.status);
+                         "remote memory side effect status=%u bytes=%zu",
+                         (unsigned)ack.status, ack.data_bytes);
             }
             return -EIO;
+        }
+        guest_page = executor_guest_page_hva(entry->gpa_start);
+        if (guest_page) {
+            memcpy(guest_page, page, WVM_MEMORY_PAGE_BYTES);
+            __sync_synchronize();
+            fprintf(stderr,
+                    "[Executor] installed remote page gpa=%#llx version=%#llx "
+                    "bytes=%zu\n",
+                    (unsigned long long)entry->gpa_start,
+                    (unsigned long long)ack.version,
+                    (size_t)ack.data_bytes);
+        } else {
+            fprintf(stderr,
+                    "[Executor] remote page gpa=%#llx has no local guest RAM "
+                    "mapping; fetch not installable\n",
+                    (unsigned long long)entry->gpa_start);
         }
         return 0;
     }
@@ -4423,16 +4504,25 @@ void* tcg_proxy_thread(void *arg) {
                 if (msg_type == MSG_VCPU_EXIT) {
                     struct sockaddr_in reply_client;
                     uint64_t rid = WVM_NTOHLL(hdr->req_id);
-                    if (tcg_pending_vcpu_reply_take(rid, &reply_client)) {
+                    if (tcg_pending_vcpu_reply_peek(rid, &reply_client)) {
+                        ssize_t sent;
                         fprintf(stderr,
                                 "[Proxy] VCPU_EXIT demux req_id=0x%llx -> %s:%u len=%u\n",
                                 (unsigned long long)rid,
                                 inet_ntoa(reply_client.sin_addr),
                                 (unsigned)ntohs(reply_client.sin_port),
                                 (unsigned)msgs[i].msg_len);
-                        sendto(sockfd, pkt, msgs[i].msg_len, 0,
-                               (struct sockaddr *)&reply_client,
-                               sizeof(reply_client));
+                        sent = sendto(sockfd, pkt, msgs[i].msg_len, 0,
+                                      (struct sockaddr *)&reply_client,
+                                      sizeof(reply_client));
+                        if (sent == (ssize_t)msgs[i].msg_len) {
+                            tcg_pending_vcpu_reply_clear(rid);
+                        } else {
+                            fprintf(stderr,
+                                    "[Proxy] VCPU_EXIT demux send failed "
+                                    "req_id=0x%llx sent=%zd — keep pending\n",
+                                    (unsigned long long)rid, sent);
+                        }
                         continue;
                     }
                     fprintf(stderr,
@@ -4462,14 +4552,36 @@ void* tcg_proxy_thread(void *arg) {
                     ? (int)(WVM_GET_NODEID(target_raw) - g_base_id)
                     : 0;
 
+                /* N2: validate target/index BEFORE any tcg_endpoints[] access. */
+                if (core_idx < 0 || core_idx >= g_num_cores) {
+                    static int __oob;
+                    if (__oob < 8) {
+                        fprintf(stderr,
+                                "[Proxy] drop DN type=%u target=0x%x core_idx=%d "
+                                "(out of range num_cores=%ld)\n",
+                                (unsigned)msg_type, target_raw, core_idx,
+                                (long)g_num_cores);
+                        __oob++;
+                    }
+                    continue;
+                }
+
                 /* VCPU_RUN is request/reply: remember client, do not steal gateway. */
                 if (msg_type == MSG_VCPU_RUN) {
-                    tcg_pending_vcpu_reply_put(WVM_NTOHLL(hdr->req_id),
-                                               &src_addrs[i]);
+                    uint64_t rid = WVM_NTOHLL(hdr->req_id);
+                    if (tcg_pending_vcpu_reply_put(rid, &src_addrs[i]) != 0) {
+                        fprintf(stderr,
+                                "[Proxy] VCPU_RUN pending REJECT req_id=0x%llx "
+                                "from %s:%u (table full or req_id client conflict)\n",
+                                (unsigned long long)rid,
+                                inet_ntoa(src_addrs[i].sin_addr),
+                                (unsigned)ntohs(src_addrs[i].sin_port));
+                        continue; /* do not forward without reply association */
+                    }
                     fprintf(stderr,
                             "[Proxy] VCPU_RUN pending req_id=0x%llx from %s:%u "
                             "-> core=%d cmd_port=%u len=%u\n",
-                            (unsigned long long)WVM_NTOHLL(hdr->req_id),
+                            (unsigned long long)rid,
                             inet_ntoa(src_addrs[i].sin_addr),
                             (unsigned)ntohs(src_addrs[i].sin_port),
                             core_idx,
@@ -4482,8 +4594,6 @@ void* tcg_proxy_thread(void *arg) {
                         printf("[Proxy] Gateway Locked: %s:%d\n", inet_ntoa(src_addrs[i].sin_addr), ntohs(src_addrs[i].sin_port));
                     }
                 }
-
-                if (core_idx < 0 || core_idx >= g_num_cores) continue;
 
                 // [V28 分流逻辑升级]
                 if (msg_type == MSG_MEM_WRITE || msg_type == MSG_MEM_READ ||

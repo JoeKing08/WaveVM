@@ -12,13 +12,10 @@
 #include "../common_include/wavevm_memory.h"
 #include "../common_include/wavevm_vcpu_handoff.h"
 
-struct ingress_thread_state {
-    int initialized;
-    struct wvm_envelope_reassembler reassembler;
-};
-
 static struct wvm_ingress g_ingress;
-static _Thread_local struct ingress_thread_state g_thread_ingress;
+/* Shared by all RX workers; the reassembler serializes fragment state. */
+static struct wvm_envelope_reassembler g_ingress_reassembler;
+static int g_ingress_reassembler_initialized;
 
 static int control_message(uint16_t message_type)
 {
@@ -388,7 +385,17 @@ int wvm_ingress_global_init(const struct wvm_ingress_config *config,
         set_error(error, error_len, "ingress is already initialized");
         return -1;
     }
-    return wvm_ingress_init(&g_ingress, config, error, error_len);
+    if (wvm_ingress_init(&g_ingress, config, error, error_len) != 0) {
+        return -1;
+    }
+    if (wvm_envelope_reassembler_init(&g_ingress_reassembler) != 0) {
+        memset(&g_ingress, 0, sizeof(g_ingress));
+        set_error(error, error_len,
+                  "cannot initialize shared ingress reassembler");
+        return -1;
+    }
+    g_ingress_reassembler_initialized = 1;
+    return 0;
 }
 
 int wvm_ingress_handle_datagram_ex(const uint8_t *frame, size_t frame_bytes,
@@ -403,21 +410,12 @@ int wvm_ingress_handle_authenticated_datagram_ex(
     const struct wvm_member_key *authenticated_actor, char *error,
     size_t error_len)
 {
-    if (!g_ingress.initialized) {
+    if (!g_ingress.initialized || !g_ingress_reassembler_initialized) {
         set_error(error, error_len, "ingress is not initialized");
         return WVM_INGRESS_REJECTED;
     }
-    if (!g_thread_ingress.initialized) {
-        if (wvm_envelope_reassembler_init(&g_thread_ingress.reassembler) !=
-            0) {
-            set_error(error, error_len,
-                      "cannot initialize thread-local reassembler");
-            return WVM_INGRESS_BACKPRESSURE;
-        }
-        g_thread_ingress.initialized = 1;
-    }
     return wvm_ingress_accept_authenticated(
-        &g_ingress, &g_thread_ingress.reassembler, frame, frame_bytes,
+        &g_ingress, &g_ingress_reassembler, frame, frame_bytes,
         monotonic_milliseconds(), authenticated_actor, error, error_len);
 }
 

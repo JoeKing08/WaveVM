@@ -55,7 +55,8 @@ s6_write_source_identity "$out_dir/SOURCE_IDENTITY.txt" "$repo_root"
 
 echo "s6 matrix run_id=$run_id out_dir=$out_dir have_kvm=$have_kvm have_wavevm=$have_wavevm" | tee -a "$summary"
 echo "cells_selected=${selected_cells[*]}" | tee -a "$summary"
-echo "cell_deadline_s=$cell_deadline log_cap_bytes=$log_cap" | tee -a "$summary"
+runtime_file_limit_bytes=${WVM_S6_FILE_LIMIT_BYTES:-$(( log_cap * 2 > ${WVM_S6_FILE_LIMIT_FLOOR_BYTES:-67108864} ? log_cap * 2 : ${WVM_S6_FILE_LIMIT_FLOOR_BYTES:-67108864} ))}
+echo "cell_deadline_s=$cell_deadline log_cap_bytes=$log_cap runtime_file_limit_bytes=$runtime_file_limit_bytes" | tee -a "$summary"
 echo "tip=$(cd "$repo_root" && git rev-parse --short HEAD 2>/dev/null || echo unknown)" | tee -a "$summary"
 TZ=Asia/Shanghai date | tee -a "$summary"
 
@@ -64,6 +65,8 @@ export WVM_S6_CAP_SOURCE=${WVM_S6_CAP_SOURCE:-live}
 export WVM_S6_REQUIRE_STOP=${WVM_S6_REQUIRE_STOP:-1}
 export WVM_S6_REAL_QEMU=${WVM_S6_REAL_QEMU:-1}
 export WVM_S6_DATAPLANE=${WVM_S6_DATAPLANE:-1}
+# RX threading and gateway workers stay at production defaults; fragmented
+# typed ingress must reassemble across workers (Codex A1).
 export WVM_S6_RUN_ID="$run_id"
 
 qemu_bin=${WVM_S6_QEMU_BIN:-"$repo_root/wavevm-qemu/build/qemu-system-x86_64"}
@@ -335,5 +338,61 @@ if [[ "$invoked_n" -ne "$selected_n" ]]; then
     echo "MATRIX_RESULT=FAIL invoked!=selected" | tee -a "$summary"
     exit 1
 fi
+# R1 honesty: only claim live typed execution for cells that produced it this
+# run. A partial selection is not a full-matrix live proof.
+required_live_cells=(flat_tcg fractal_tcg flat_kvm fractal_kvm mode_a_one mode_b_dual mode_a_dual)
+live_pass=0
+live_fail=0
+live_skip=0
+live_missing=0
+live_required_selected=0
+live_detail=""
+for cell in "${required_live_cells[@]}"; do
+    selected_this=0
+    for chosen in "${selected_cells[@]}"; do
+        [[ "$chosen" == "$cell" ]] && selected_this=1
+    done
+    [[ "$selected_this" -eq 1 ]] || continue
+    live_required_selected=$((live_required_selected + 1))
+    if grep -Rqs 'dataplane_probe=PASS_PRODUCTION_TYPED' "$out_dir/evidence/$cell" 2>/dev/null; then
+        live_pass=$((live_pass + 1))
+    elif grep -Rqs 'dataplane_probe=FAIL' "$out_dir/evidence/$cell" 2>/dev/null; then
+        live_fail=$((live_fail + 1))
+        live_detail+="$cell:FAIL "
+    elif grep -Rqs 'dataplane_probe=SKIP_intentional_kill' "$out_dir/evidence/$cell" 2>/dev/null; then
+        live_skip=$((live_skip + 1))
+        live_detail+="$cell:SKIP "
+    else
+        live_missing=$((live_missing + 1))
+        live_detail+="$cell:MISSING "
+    fi
+done
+if [[ "$live_fail" -gt 0 ]]; then
+    r1_live="FAIL"
+elif [[ "$live_required_selected" -eq 0 ]]; then
+    r1_live="NOT_APPLICABLE (no live cells selected)"
+elif [[ "$live_pass" -eq "${#required_live_cells[@]}" ]]; then
+    r1_live="PASS_PRODUCTION_TYPED"
+elif [[ "$live_pass" -gt 0 && "$live_missing" -eq 0 && "$live_skip" -eq 0 ]]; then
+    r1_live="PASS_SELECTED_CELLS ($live_pass/${#required_live_cells[@]})"
+else
+    r1_live="PARTIAL_SELECTED (pass=$live_pass skip=$live_skip missing=$live_missing $live_detail)"
+fi
+
+component_evidence="${WVM_S6_COMPONENT_EVIDENCE:-/tmp/wavevm-s6-r1-rmem-20261024-final}"
+r1_dispatch="UNVERIFIED (no R1 evidence at $component_evidence)"
+if grep -qs '^R1_PRODUCTION_DISPATCH=FIXED' "$component_evidence/R1_PRODUCTION_DISPATCH.txt" 2>/dev/null; then
+    r1_dispatch="PASS (evidence=$component_evidence/R1_PRODUCTION_DISPATCH.txt)"
+fi
+remote_mem="UNVERIFIED (no remote_mem evidence at $component_evidence)"
+if grep -qs '^REMOTE_MEM_FENCE_VERSION_DIRTY=FIXED' "$component_evidence/REMOTE_MEM_FENCE_VERSION_DIRTY.txt" 2>/dev/null; then
+    remote_mem="PASS (evidence=$component_evidence/REMOTE_MEM_FENCE_VERSION_DIRTY.txt)"
+fi
+echo "R1_PRODUCTION_DISPATCH=$r1_dispatch" | tee -a "$summary"
+echo "R1_LIVE_CREATE_SHORT_EXEC=$r1_live" | tee -a "$summary"
+echo "REMOTE_MEM_FENCE_VERSION_DIRTY=$remote_mem" | tee -a "$summary"
+echo "COMPONENT_EVIDENCE=$component_evidence" | tee -a "$summary"
 echo "MATRIX_RESULT=PASS" | tee -a "$summary"
+echo "MINIMUM_COMPLETE=NOT_CLAIMED_BY_MATRIX (requires all Minimum bars + honest R1_LIVE + Mode A dual)" | tee -a "$summary"
+echo "NOTE: MATRIX_RESULT=PASS means selected cells exited 0 under current gates; every live claim above is derived from this run's cell evidence." | tee -a "$summary"
 exit 0

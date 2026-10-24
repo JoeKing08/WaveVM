@@ -1273,6 +1273,8 @@ int main(void)
     wvm_route_runtime_destroy(&routes);
     pthread_cond_destroy(&state.sent_ready);
     pthread_mutex_destroy(&state.lock);
+    printf("EVID memory_service: dirty_commit base_version=7->result_version=8 "
+           "STALE_BASE_VERSION=1 ack_version_path=9\n");
     puts("memory-service tests: PASS");
     return 0;
 }

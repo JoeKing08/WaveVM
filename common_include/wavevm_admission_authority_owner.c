@@ -120,20 +120,59 @@ static int owner_route_plan(
     size_t error_len)
 {
     struct wvm_admission_authority_owner *owner = context;
+    uint32_t override_node_ids[64];
+    uint16_t override_data_ports[64];
+    size_t override_count = 0;
+    size_t i;
 
-    if (!owner || !owner->initialized ||
-        wvm_admission_plan_provider_validate(owner->config.plan_provider,
+    if (!owner || !owner->initialized) {
+        set_error(error, error_len,
+                  "admission authority owner cannot compile route plan");
+        return -1;
+    }
+    /* Map admitted listener plans → leaf next_hop data_port (live ingress). */
+    if (owner->config.plan_provider &&
+        owner->config.plan_provider->node_listener_plans &&
+        owner->config.plan_provider->node_listener_plan_count > 0) {
+        size_t n = owner->config.plan_provider->node_listener_plan_count;
+        if (n > sizeof(override_node_ids) / sizeof(override_node_ids[0])) {
+            n = sizeof(override_node_ids) / sizeof(override_node_ids[0]);
+        }
+        for (i = 0; i < n; i++) {
+            const struct wvm_admission_node_listener_plan *lp =
+                &owner->config.plan_provider->node_listener_plans[i];
+            if (lp->physical_node_id == 0 || lp->node_runtime_data_port == 0) {
+                continue;
+            }
+            override_node_ids[override_count] = lp->physical_node_id;
+            override_data_ports[override_count] = lp->node_runtime_data_port;
+            override_count++;
+        }
+    }
+    owner->config.route_compiler->ingress_override_node_ids =
+        override_count ? override_node_ids : NULL;
+    owner->config.route_compiler->ingress_override_data_ports =
+        override_count ? override_data_ports : NULL;
+    owner->config.route_compiler->ingress_override_count = override_count;
+
+    if (wvm_admission_plan_provider_validate(owner->config.plan_provider,
                                              records, error, error_len) != 0 ||
         wvm_admission_route_compile(owner->config.route_compiler, transaction,
                                     records, prepared_route,
                                     route_transaction, route_snapshot, error,
                                     error_len) != 0) {
+        owner->config.route_compiler->ingress_override_node_ids = NULL;
+        owner->config.route_compiler->ingress_override_data_ports = NULL;
+        owner->config.route_compiler->ingress_override_count = 0;
         if (error && error[0] == '\0') {
             set_error(error, error_len,
                       "admission authority owner cannot compile route plan");
         }
         return -1;
     }
+    owner->config.route_compiler->ingress_override_node_ids = NULL;
+    owner->config.route_compiler->ingress_override_data_ports = NULL;
+    owner->config.route_compiler->ingress_override_count = 0;
     owner->captured_records = *records;
     owner->config.transport->delivery_records = &owner->captured_records;
     owner->config.transport->delivery_route_snapshot = owner->config.route_snapshot;

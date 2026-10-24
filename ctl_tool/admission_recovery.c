@@ -1036,6 +1036,9 @@ static int load_route_transaction_for_snapshot(
 {
     size_t i;
     int found = 0;
+    int status = -1;
+    struct wvm_required_ack_entry *scratch_acks = NULL;
+    struct wvm_required_ack_entry *scratch_drain = NULL;
 
     if (!plane || !snapshot_key || !route_out || !acks || ack_capacity == 0) {
         if (error && error_len) {
@@ -1043,19 +1046,41 @@ static int load_route_transaction_for_snapshot(
         }
         return -1;
     }
+    /*
+     * Dual-VM STOP: plane holds multiple durable route transactions. Decode
+     * scratch must not reuse the caller ack/drain buffers after a match is
+     * copied into *route_out — otherwise a later sibling decode overwrites
+     * those arrays and wvm_route_transaction_record_validate fails with the
+     * wrong snapshot key (mode_a_dual first-of-two STOP: route retire input
+     * is invalid / status=6). Probe remaining entries for ambiguity only.
+     */
+    scratch_acks = calloc(ack_capacity, sizeof(*scratch_acks));
+    scratch_drain =
+        drain_capacity ? calloc(drain_capacity, sizeof(*scratch_drain)) : NULL;
+    if (!scratch_acks || (drain_capacity && !scratch_drain)) {
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "cannot allocate STOP route load scratch");
+        }
+        goto out;
+    }
     for (i = 0; i < plane->route_entry_count; i++) {
         struct wvm_route_transaction_record decoded;
         const struct wvm_control_plane_route_entry *entry =
             &plane->route_entries[i];
+        struct wvm_required_ack_entry *decode_acks =
+            found ? scratch_acks : acks;
+        struct wvm_required_ack_entry *decode_drain =
+            found ? scratch_drain : drain;
         char decode_error[256];
 
         if (!entry->record_bytes || entry->record_byte_count == 0) {
             continue;
         }
         memset(&decoded, 0, sizeof(decoded));
-        decoded.required_ack_set.entries.entries = acks;
+        decoded.required_ack_set.entries.entries = decode_acks;
         decoded.required_ack_set.entries.capacity = ack_capacity;
-        decoded.optional_departure_drain_set.entries = drain;
+        decoded.optional_departure_drain_set.entries = decode_drain;
         decoded.optional_departure_drain_set.capacity = drain_capacity;
         decode_error[0] = '\0';
         if (wvm_route_transaction_record_decode(
@@ -1081,7 +1106,7 @@ static int load_route_transaction_for_snapshot(
                     snprintf(error, error_len,
                              "STOP route snapshot is ambiguous");
                 }
-                return -1;
+                goto out;
             }
             *route_out = decoded;
             /* Prefer durable entry state if present. */
@@ -1093,9 +1118,13 @@ static int load_route_transaction_for_snapshot(
         if (error && error_len) {
             snprintf(error, error_len, "STOP route transaction was not found");
         }
-        return -1;
+        goto out;
     }
-    return 0;
+    status = 0;
+out:
+    free(scratch_acks);
+    free(scratch_drain);
+    return status;
 }
 
 int wvm_ctl_stop_vm(

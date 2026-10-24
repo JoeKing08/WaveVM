@@ -103,6 +103,13 @@ ctl_port=$base_port
 agent_control_port=$((base_port + 1))
 agent_data_port=$((base_port + 2))
 sidecar_data_port=$((base_port + 3))
+# §6 production typed probe: node_runtime_data_port == agent --data-port
+cat >"$tmpdir/s6_ports.env" <<PORTS
+# agent --data-port is NOT node_runtime_data_port; probe dumps the latter from manifest.
+agent_data_port=$agent_data_port
+sidecar_data_port=$sidecar_data_port
+PORTS
+
 sidecar_control_port=$((base_port + 4))
 profile_data0=$((base_port + 5))
 profile_data1=$((base_port + 6))
@@ -274,10 +281,48 @@ for ((attempt = 0; attempt < 80; attempt++)); do
 done
 echo "$create_out"
 # Honest RUNNING: SUCCESS(0). IN_PROGRESS(14) means COMMITTED without live ready.
-# WVM_S6_EXPECT_REJECT=1: negative cells — non-SUCCESS is the PASS path.
+# WVM_S6_EXPECT_REJECT=1 (N5): only an explicit reject status is PASS.
+# Empty output, IN_PROGRESS(14), SUCCESS(0), or unrelated codes are FAIL.
+# Default expected reject = PRECONDITION_FAILED(6); override via
+# WVM_S6_EXPECT_REJECT_STATUS (comma-separated allow-list).
 if [[ "$create_out" != status=0* ]]; then
     if [[ "${WVM_S6_EXPECT_REJECT:-0}" == "1" ]]; then
-        echo "CREATE_VM rejected as expected (got: $create_out)"
+        expect_list=${WVM_S6_EXPECT_REJECT_STATUS:-6}
+        got_status=""
+        if [[ "$create_out" =~ status=([0-9]+) ]]; then
+            got_status="${BASH_REMATCH[1]}"
+        fi
+        ok_reject=0
+        if [[ -n "$got_status" ]]; then
+            IFS=',' read -ra _exp <<< "$expect_list"
+            for _e in "${_exp[@]}"; do
+                if [[ "$got_status" == "$_e" ]]; then
+                    ok_reject=1
+                    break
+                fi
+            done
+        fi
+        # Hard rejects: empty, IN_PROGRESS, communication-looking blanks
+        if [[ -z "$create_out" || -z "$got_status" || "$got_status" == "14" ]]; then
+            ok_reject=0
+        fi
+        if [[ $ok_reject -ne 1 ]]; then
+            echo "CREATE_VM EXPECT_REJECT failed: want status in {$expect_list}, got: ${create_out:-<empty>}" >&2
+            s6_write_evidence_file "create_result.txt" "${create_out:-}"
+            s6_finish_reject "unexpected_reject_shape:$create_out"
+            exit 1
+        fi
+        if [[ -n "${WVM_S6_EXPECT_REJECT_REASON:-}" ]]; then
+            if ! grep -aEqi -- "${WVM_S6_EXPECT_REJECT_REASON}" "$tmpdir/ctl.log"; then
+                echo "CREATE_VM rejection reason missing: expected /${WVM_S6_EXPECT_REJECT_REASON}/ in ctl.log" >&2
+                s6_write_evidence_file "create_result.txt" "${create_out:-}"
+                s6_copy_evidence "$tmpdir/ctl.log" "ctl.log"
+                s6_finish_reject "missing_expected_reason:${create_out}"
+                exit 1
+            fi
+            echo "CREATE_VM rejection reason confirmed: /${WVM_S6_EXPECT_REJECT_REASON}/"
+        fi
+        echo "CREATE_VM rejected as expected (got: $create_out; expect_status=$expect_list)"
         s6_write_evidence_file "create_result.txt" "$create_out"
         s6_copy_evidence "$tmpdir/evidence/seed-meta.txt" "seed-meta.txt"
         s6_copy_evidence "$tmpdir/agent.log" "agent.log"
@@ -311,6 +356,40 @@ if [[ "${WVM_S6_EXPECT_REJECT:-0}" == "1" ]]; then
     echo "CREATE_VM unexpectedly SUCCEEDED under EXPECT_REJECT (got: $create_out)" >&2
     s6_finish_reject "unexpected_success:$create_out"
     exit 1
+fi
+
+# A2 retry-semantics probe: kill the admitted child abnormally, then terminate
+# the agent. A failed/incomplete STOP must never be converted into success.
+if [[ "${WVM_S6_ABORT_CHILD:-0}" == "1" ]]; then
+    child_pid=$(pgrep -P "$agent_pid" -f 'wavevm_node_runtime child' | head -1 || true)
+    if [[ -z "$child_pid" ]]; then
+        child_pid=$(pgrep -P "$agent_pid" | head -1 || true)
+    fi
+    if [[ -z "$child_pid" ]]; then
+        echo "A2 abort-child probe: no admitted child found" >&2
+        exit 1
+    fi
+    kill -KILL "$child_pid" 2>/dev/null || true
+    sleep 0.5
+    set +e
+    kill -TERM "$agent_pid" 2>/dev/null || true
+    wait "$agent_pid"
+    abort_agent_rc=$?
+    set -e
+    agent_pid=
+    {
+        echo "abort_child_pid=$child_pid"
+        echo "agent_exit_rc=$abort_agent_rc"
+        grep -E 'STOP remains incomplete|STOP completion not proven|abnormal' "$tmpdir/agent.log" 2>/dev/null | tail -5 || true
+    } >"${s6_evidence_dir:-$tmpdir}/abort_child_stop.txt"
+    if [[ $abort_agent_rc -eq 0 ]] || \
+       ! grep -qE 'STOP remains incomplete|STOP completion not proven' "$tmpdir/agent.log"; then
+        echo "A2 abort-child probe FAIL: agent rc=$abort_agent_rc did not report incomplete STOP" >&2
+        tail -40 "$tmpdir/agent.log" >&2 || true
+        exit 1
+    fi
+    echo "A2 abort-child probe PASS: agent rc=$abort_agent_rc (incomplete STOP not hidden)"
+    exit 0
 fi
 
 # R4: production STOP + per-resource cleanup evidence BEFORE tearing down agent

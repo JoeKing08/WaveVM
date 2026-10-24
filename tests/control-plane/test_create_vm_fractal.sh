@@ -148,6 +148,15 @@ a_profile_data0=$((base_port + 8))
 a_profile_data1=$((base_port + 9))
 a_profile_svc0=$((base_port + 10))
 a_profile_svc1=$((base_port + 11))
+# §6 production typed probe: fractal sends via gateway data port
+cat >"$tmpdir/s6_ports.env" <<PORTS
+# fractal: typed short-exec goes to gateway data port; node port from manifest.
+agent_data_port=$a_data
+a_data=$a_data
+gw_data_port=$gw_data_port
+WVM_S6_GW_DATA_PORT=$gw_data_port
+PORTS
+
 
 mkdir -p "$tmpdir/ctl-state" "$tmpdir/gw-state/enrollment" \
     "$tmpdir/node-a" "$tmpdir/runtime-a" "$tmpdir/evidence"
@@ -218,7 +227,7 @@ stdbuf -o0 -e0 env WVM_TCG_QEMU_BIN="$WVM_TCG_QEMU_BIN" \
     --register-controller-address 127.0.0.1 \
     --register-controller-port "$ctl_port" \
     --failure-domain-id 1 --pod-id 7 \
-    --vnode-first 0 --vnode-count 16 \
+    --vnode-first 1 --vnode-count 16 \
     --sidecar-address 127.0.0.1 --sidecar-data-port "$a_side_data" \
     --sidecar-control-port "$a_side_ctrl" --role-bits 1 \
     --capability-profile-generation 1 \
@@ -274,7 +283,6 @@ export WVM_GATEWAY_HOSTING_NODE_ID=801
 export WVM_GATEWAY_FAILURE_DOMAIN_ID=1
 export WVM_GATEWAY_POD_ID=7
 export WVM_GATEWAY_ROLE_BITS=1
-export WVM_GATEWAY_SINGLE_RX=1
 unset WVM_GATEWAY_FORCE_SINGLE_FD || true
 
 stdbuf -o0 -e0 "$repo_root/gateway_service/wavevm_gateway" \
@@ -330,6 +338,20 @@ if [[ ! -s "$tmpdir/gw-state/route.journal" ]]; then
 fi
 
 # Alias fractal layout to s6_finish expected paths
+if [[ "${KEEP_RUNNING:-0}" == "1" ]]; then
+    echo "KEEP_RUNNING=1 — leaving fractal cluster up; tmpdir=$tmpdir"
+    echo "$tmpdir" > /tmp/wavevm-s6-fractal-keep-tmpdir
+    echo "$agent_pid" > /tmp/wavevm-s6-fractal-keep-agent
+    echo "$gw_pid" > /tmp/wavevm-s6-fractal-keep-gw
+    echo "$ctl_pid" > /tmp/wavevm-s6-fractal-keep-ctl
+    # still write ports for probe
+    ln -sfn "$tmpdir/agent-a.log" "$tmpdir/agent.log" 2>/dev/null || true
+    ln -sfn "$tmpdir/runtime-a" "$tmpdir/runtime" 2>/dev/null || true
+    sleep 3600 &
+    wait || true
+    exit 0
+fi
+
 ln -sfn "$tmpdir/agent-a.log" "$tmpdir/agent.log" 2>/dev/null || cp -a "$tmpdir/agent-a.log" "$tmpdir/agent.log"
 ln -sfn "$tmpdir/runtime-a" "$tmpdir/runtime" 2>/dev/null || true
 ln -sfn "$tmpdir/node-a" "$tmpdir/node-state" 2>/dev/null || true

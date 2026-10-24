@@ -26,6 +26,7 @@ enum wvm_vcpu_handoff_owner_state {
 struct wvm_vcpu_handoff_submit {
     uint16_t backend;
     uint32_t vcpu_index;
+    uint16_t memory_fence_result;
     uint64_t memory_fence_id;
     uint64_t local_interrupt_watermark;
     uint64_t device_event_watermark;
