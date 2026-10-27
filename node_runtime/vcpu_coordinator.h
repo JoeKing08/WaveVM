@@ -67,9 +67,13 @@ struct wvm_vcpu_handoff_coordinator_config {
 struct wvm_vcpu_handoff_coordinator {
     struct wvm_vcpu_handoff_coordinator_config config;
     pthread_mutex_t lock;
+    pthread_cond_t drain_progress;
     void *entries;
     void *lanes;
     size_t capacity;
+    /* Completions that have left REMOTE_IN_FLIGHT but whose complete()
+     * callback has not returned yet. Drain must wait for these too. */
+    size_t completions_in_progress;
     int initialized;
 };
 
@@ -80,7 +84,10 @@ int wvm_vcpu_handoff_coordinator_init(
 void wvm_vcpu_handoff_coordinator_destroy(
     struct wvm_vcpu_handoff_coordinator *coordinator);
 
-/* Wait for remote in-flight handoffs to produce a terminal result. */
+/* Wait until no remote in-flight handoff remains and every completion
+ * callback that flipped an entry out of REMOTE_IN_FLIGHT has returned.
+ * STOP must not tear down the complete opaque while a callback still runs.
+ */
 int wvm_vcpu_handoff_coordinator_drain(
     struct wvm_vcpu_handoff_coordinator *coordinator, uint32_t timeout_ms,
     char *error, size_t error_len);

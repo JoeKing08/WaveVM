@@ -215,12 +215,46 @@ int wvm_directory_store_commit_page(
         return -EINVAL;
     }
     bucket = bucket_index(gpa);
-    pthread_mutex_lock(&store->bucket_locks[bucket]);
-    page = find_page_locked(store, bucket, gpa);
-    if (!page) {
-        pthread_mutex_unlock(&store->bucket_locks[bucket]);
-        set_error(error, error_len, "V1 directory page is not materialized");
-        return -ENOENT;
+    /*
+     * Handoff / first publish: allow commit against the implicit zero page at
+     * initial_version without a prior fault-read. Cirros remote vCPU handoff
+     * dirties thousands of pages; fault-materializing each one exhausts the
+     * V1 waiter retention table. Create-on-commit with the exact initial base
+     * preserves version rules while keeping the bulk path waiter-free.
+     */
+    if (base_version == initial_version(store->config.initial_epoch)) {
+        pthread_mutex_lock(&store->allocation_lock);
+        if (store->page_record_count >= store->config.max_page_records) {
+            pthread_mutex_unlock(&store->allocation_lock);
+            set_error(error, error_len, "V1 directory page table is full");
+            return -EAGAIN;
+        }
+        pthread_mutex_lock(&store->bucket_locks[bucket]);
+        page = find_page_locked(store, bucket, gpa);
+        if (!page) {
+            page = calloc(1, sizeof(*page));
+            if (!page) {
+                pthread_mutex_unlock(&store->bucket_locks[bucket]);
+                pthread_mutex_unlock(&store->allocation_lock);
+                set_error(error, error_len,
+                          "V1 directory page allocation failed");
+                return -ENOMEM;
+            }
+            page->gpa = gpa;
+            page->version = initial_version(store->config.initial_epoch);
+            page->next = store->buckets[bucket];
+            store->buckets[bucket] = page;
+            store->page_record_count++;
+        }
+        pthread_mutex_unlock(&store->allocation_lock);
+    } else {
+        pthread_mutex_lock(&store->bucket_locks[bucket]);
+        page = find_page_locked(store, bucket, gpa);
+        if (!page) {
+            pthread_mutex_unlock(&store->bucket_locks[bucket]);
+            set_error(error, error_len, "V1 directory page is not materialized");
+            return -ENOENT;
+        }
     }
     if (page->version != base_version) {
         pthread_mutex_unlock(&store->bucket_locks[bucket]);

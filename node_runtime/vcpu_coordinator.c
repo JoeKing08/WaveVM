@@ -435,8 +435,18 @@ int wvm_vcpu_handoff_coordinator_init(
                   "cannot allocate vCPU handoff coordinator state");
         return -ENOMEM;
     }
+    if (pthread_cond_init(&coordinator->drain_progress, NULL) != 0) {
+        pthread_mutex_destroy(&coordinator->lock);
+        free(coordinator->entries);
+        free(coordinator->lanes);
+        memset(coordinator, 0, sizeof(*coordinator));
+        set_error(error, error_len,
+                  "cannot allocate vCPU handoff coordinator state");
+        return -ENOMEM;
+    }
     coordinator->config = *config;
     coordinator->capacity = capacity;
+    coordinator->completions_in_progress = 0;
     coordinator->initialized = 1;
     return 0;
 }
@@ -447,36 +457,57 @@ int wvm_vcpu_handoff_coordinator_drain(
 {
     struct coordinator_entry *entry_array;
     uint64_t start = monotonic_milliseconds();
-    struct timespec delay = {0, 10000000L};
 
     if (!coordinator || !coordinator->initialized) {
         set_error(error, error_len, "vCPU handoff coordinator is not active");
         return -EINVAL;
     }
     entry_array = entries(coordinator);
+    pthread_mutex_lock(&coordinator->lock);
     for (;;) {
         size_t i;
         int active = 0;
 
-        pthread_mutex_lock(&coordinator->lock);
         for (i = 0; i < coordinator->capacity; i++) {
             if (entry_array[i].state ==
                 COORDINATOR_ENTRY_REMOTE_IN_FLIGHT) {
-                active++;
+                active = 1;
                 break;
             }
         }
-        pthread_mutex_unlock(&coordinator->lock);
-        if (!active) {
+        if (!active && coordinator->completions_in_progress == 0) {
+            pthread_mutex_unlock(&coordinator->lock);
             return 0;
         }
         if (monotonic_milliseconds() - start >= timeout_ms) {
+            pthread_mutex_unlock(&coordinator->lock);
             set_error(error, error_len,
-                      "vCPU handoff coordinator did not drain in %u ms",
-                      timeout_ms);
+                      "vCPU handoff coordinator did not drain in %u ms "
+                      "(in_flight=%d completions_in_progress=%zu)",
+                      timeout_ms, active,
+                      coordinator->completions_in_progress);
             return -ETIMEDOUT;
         }
-        nanosleep(&delay, NULL);
+        {
+            struct timespec abstime;
+            uint64_t remaining = timeout_ms -
+                                (monotonic_milliseconds() - start);
+            uint64_t wait_ms = remaining < 10 ? remaining : 10;
+
+            if (clock_gettime(CLOCK_REALTIME, &abstime) != 0) {
+                pthread_mutex_unlock(&coordinator->lock);
+                set_error(error, error_len,
+                          "vCPU handoff drain clock_gettime failed");
+                return -errno;
+            }
+            abstime.tv_nsec += (long)wait_ms * 1000000L;
+            if (abstime.tv_nsec >= 1000000000L) {
+                abstime.tv_sec += abstime.tv_nsec / 1000000000L;
+                abstime.tv_nsec %= 1000000000L;
+            }
+            pthread_cond_timedwait(&coordinator->drain_progress,
+                                  &coordinator->lock, &abstime);
+        }
     }
 }
 
@@ -502,6 +533,7 @@ void wvm_vcpu_handoff_coordinator_destroy(
     }
     if (coordinator->initialized) {
         pthread_mutex_destroy(&coordinator->lock);
+    pthread_cond_destroy(&coordinator->drain_progress);
     }
     free(coordinator->entries);
     free(coordinator->lanes);
@@ -829,13 +861,39 @@ int wvm_vcpu_handoff_coordinator_dispatch(
                        : COORDINATOR_ENTRY_FAILED;
     entry_release_route_ref_locked(coordinator, entry);
     complete_result = coordinator->config.complete != NULL;
+    if (complete_result) {
+        /*
+         * Flip out of REMOTE_IN_FLIGHT before the callback so a concurrent
+         * drain cannot observe "idle" while complete() still touches the
+         * service/opaque. Drain waits on completions_in_progress too.
+         */
+        coordinator->completions_in_progress++;
+    }
     pthread_mutex_unlock(&coordinator->lock);
 
     if (complete_result) {
-        return coordinator->config.complete(
+        int complete_rc = coordinator->config.complete(
             coordinator->config.complete_opaque, &request, &result, error,
             error_len);
+
+        pthread_mutex_lock(&coordinator->lock);
+        if (coordinator->completions_in_progress > 0) {
+            coordinator->completions_in_progress--;
+        }
+        /*
+         * G5: keep the terminal record through operation_retention_horizon_ms.
+         * complete() only queues the ACK; duplicate exits, lookup_completed, and
+         * resubmit-as-EALREADY all need the cached result. Capacity pressure is
+         * handled by prune_locked + submit backpressure (-EAGAIN when full);
+         * production profiles publish a large vcpu_handoff_record_capacity.
+         */
+        pthread_cond_broadcast(&coordinator->drain_progress);
+        pthread_mutex_unlock(&coordinator->lock);
+        return complete_rc;
     }
+    pthread_mutex_lock(&coordinator->lock);
+    pthread_cond_broadcast(&coordinator->drain_progress);
+    pthread_mutex_unlock(&coordinator->lock);
     return 0;
 }
 

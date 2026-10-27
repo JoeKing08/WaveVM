@@ -2,6 +2,10 @@
  * SPEC-kernel-accel-acceptance-two-vm — concurrent detach/destroy isolation
  * (acceptance §10 worker-failure class). Cannot SIGKILL module TX kthreads
  * from userspace; stresses async faults vs peer destroy + mutual destroy.
+ *
+ * workerfix3: unique node_instance_id per peer/mutual cycle + wait for
+ * active_contexts to drop after unbind (avoid rebinding same key while async
+ * destroy still holds the old context active).
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -17,18 +21,25 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <stdatomic.h>
+#include <time.h>
 
 #include "../../common_include/wavevm_ioctl.h"
 
 #define SAME_GPA        0x100000000ULL
 #define MEM_SIZE        (16 * 4096)
-#define VM_KEEP         2101U
+#define VM_KEEP         2101U  /* G1: production U32 range; local path must not need 8-bit wire */
 #define VM_PEER         2102U
 
-static sigjmp_buf g_jmp;
+/* Per-thread jmp: stress thread and main must not share one buf. */
+static __thread sigjmp_buf g_jmp;
+static __thread int g_jmp_ready;
+
 static void on_sigbus(int sig)
 {
     (void)sig;
+    if (!g_jmp_ready)
+        return;
+    g_jmp_ready = 0;
     siglongjmp(g_jmp, 1);
 }
 
@@ -64,7 +75,8 @@ static int open_bind(uint32_t vm, uint64_t inst, uint8_t tag)
     }
     fill_bind(&b, vm, inst, tag);
     if (ioctl(fd, IOCTL_WVM_BIND_CONTEXT, &b) < 0) {
-        fprintf(stderr, "BIND vm=%u: %s\n", vm, strerror(errno));
+        fprintf(stderr, "BIND vm=%u inst=%llu: %s\n", vm,
+                (unsigned long long)inst, strerror(errno));
         close(fd);
         return -1;
     }
@@ -106,6 +118,40 @@ static void unbind_close(int fd, uint32_t vm, uint64_t inst, uint8_t tag)
     close(fd);
 }
 
+/* Wait until QUERY_CAPS.active_contexts <= expect_max (destroy finished). */
+static int wait_active_contexts_le(uint32_t expect_max, int timeout_ms)
+{
+    struct timespec ts0, ts1;
+    struct wvm_ioctl_context_caps caps;
+    int fd;
+    long elapsed_ms;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts0);
+    for (;;) {
+        fd = open("/dev/wavevm", O_RDWR);
+        if (fd < 0)
+            return -1;
+        memset(&caps, 0, sizeof(caps));
+        if (ioctl(fd, IOCTL_WVM_QUERY_CAPS, &caps) < 0) {
+            close(fd);
+            return -1;
+        }
+        close(fd);
+        if (caps.active_contexts <= expect_max)
+            return 0;
+        clock_gettime(CLOCK_MONOTONIC, &ts1);
+        elapsed_ms = (ts1.tv_sec - ts0.tv_sec) * 1000L +
+                     (ts1.tv_nsec - ts0.tv_nsec) / 1000000L;
+        if (elapsed_ms >= timeout_ms) {
+            fprintf(stderr,
+                    "[FAIL] active_contexts=%u still > %u after %d ms\n",
+                    caps.active_contexts, expect_max, timeout_ms);
+            return -1;
+        }
+        usleep(500);
+    }
+}
+
 struct stress_arg {
     volatile uint32_t *pages;
     size_t nwords;
@@ -119,7 +165,9 @@ static void *stress_fault_thread(void *arg)
     struct stress_arg *s = arg;
     size_t i;
     while (!atomic_load(s->stop)) {
+        g_jmp_ready = 1;
         if (sigsetjmp(g_jmp, 1) != 0) {
+            g_jmp_ready = 0;
             atomic_fetch_add(s->errors, 1);
             break;
         }
@@ -127,6 +175,7 @@ static void *stress_fault_thread(void *arg)
             s->pages[i] = (uint32_t)i ^ 0xA5A5A5A5u;
             (void)s->pages[i];
         }
+        g_jmp_ready = 0;
         atomic_fetch_add(s->faults, 1);
     }
     return NULL;
@@ -141,28 +190,41 @@ static int test_concurrent_detach_destroy(void)
     pthread_t thr;
     int i, rc = -1;
     struct wvm_ioctl_context_caps caps;
+    uint64_t peer_inst = 1;
+    uint64_t keep_inst = 1;
 
     printf("\n=== Concurrent peer destroy under keep-VM faults ===\n");
     atomic_init(&stop, 0);
     atomic_init(&faults, 0);
     atomic_init(&errors, 0);
 
-    fd_keep = open_bind(VM_KEEP, 1, 0xA1);
-    fd_peer = open_bind(VM_PEER, 1, 0xB2);
+    printf("... bind keep\n");
+    fd_keep = open_bind(VM_KEEP, keep_inst, 0xA1);
+    printf("... bind peer\n");
+    fd_peer = open_bind(VM_PEER, peer_inst, 0xB2);
     if (fd_keep < 0 || fd_peer < 0)
         goto out;
+    printf("... layout\n");
     if (set_layout(fd_keep, SAME_GPA, MEM_SIZE) < 0 ||
         set_layout(fd_peer, SAME_GPA, MEM_SIZE) < 0)
         goto out;
+    printf("... mmap keep\n");
     map_keep = map_gpa(fd_keep, SAME_GPA, MEM_SIZE);
+    printf("... mmap peer\n");
     map_peer = map_gpa(fd_peer, SAME_GPA, MEM_SIZE);
     if (!map_keep || !map_peer)
         goto out;
 
+    printf("... prime memset\n");
+    g_jmp_ready = 1;
     if (sigsetjmp(g_jmp, 1) == 0) {
         memset(map_keep, 0x11, MEM_SIZE);
+        printf("... keep primed\n");
         memset(map_peer, 0x22, MEM_SIZE);
+        printf("... peer primed\n");
+        g_jmp_ready = 0;
     } else {
+        g_jmp_ready = 0;
         fprintf(stderr, "[FAIL] SIGBUS priming\n");
         goto out;
     }
@@ -172,19 +234,29 @@ static int test_concurrent_detach_destroy(void)
     sarg.stop = &stop;
     sarg.faults = &faults;
     sarg.errors = &errors;
+    printf("... spawn stress\n");
     if (pthread_create(&thr, NULL, stress_fault_thread, &sarg) != 0) {
         perror("pthread_create");
         goto out;
     }
+    printf("... stress spawned\n");
 
     for (i = 0; i < 12; i++) {
         usleep(1500);
         munmap(map_peer, MEM_SIZE);
         map_peer = NULL;
-        unbind_close(fd_peer, VM_PEER, 1, 0xB2);
+        unbind_close(fd_peer, VM_PEER, peer_inst, 0xB2);
         fd_peer = -1;
-        usleep(1500);
-        fd_peer = open_bind(VM_PEER, 1, 0xB2);
+        /* keep still bound → expect active_contexts <= 1 once peer gone */
+        if (wait_active_contexts_le(1, 2000) != 0) {
+            fprintf(stderr, "[FAIL] peer destroy wait cycle %d\n", i);
+            atomic_store(&stop, 1);
+            pthread_join(thr, NULL);
+            goto out;
+        }
+        /* Unique instance avoids keyed reuse of a dying context. */
+        peer_inst = 1000ULL + (uint64_t)i + 1ULL;
+        fd_peer = open_bind(VM_PEER, peer_inst, 0xB2);
         if (fd_peer < 0 || set_layout(fd_peer, SAME_GPA, MEM_SIZE) < 0) {
             fprintf(stderr, "[FAIL] re-BIND peer cycle %d\n", i);
             atomic_store(&stop, 1);
@@ -197,14 +269,18 @@ static int test_concurrent_detach_destroy(void)
             pthread_join(thr, NULL);
             goto out;
         }
-        if (sigsetjmp(g_jmp, 1) == 0)
+        g_jmp_ready = 1;
+        if (sigsetjmp(g_jmp, 1) == 0) {
             memset(map_peer, 0x22, 64);
-        else {
+            g_jmp_ready = 0;
+        } else {
+            g_jmp_ready = 0;
             fprintf(stderr, "[FAIL] SIGBUS writing re-bound peer\n");
             atomic_store(&stop, 1);
             pthread_join(thr, NULL);
             goto out;
         }
+        printf("... peer cycle %d/12 faults=%d\n", i + 1, atomic_load(&faults));
     }
 
     atomic_store(&stop, 1);
@@ -219,11 +295,14 @@ static int test_concurrent_detach_destroy(void)
         fprintf(stderr, "[FAIL] no fault loops\n");
         goto out;
     }
+    g_jmp_ready = 1;
     if (sigsetjmp(g_jmp, 1) != 0) {
+        g_jmp_ready = 0;
         fprintf(stderr, "[FAIL] SIGBUS reading keep after churn\n");
         goto out;
     }
     (void)((volatile uint32_t *)map_keep)[0];
+    g_jmp_ready = 0;
 
     memset(&caps, 0, sizeof(caps));
     if (ioctl(fd_keep, IOCTL_WVM_QUERY_CAPS, &caps) < 0) {
@@ -249,9 +328,9 @@ out:
     if (map_peer)
         munmap(map_peer, MEM_SIZE);
     if (fd_keep >= 0)
-        unbind_close(fd_keep, VM_KEEP, 1, 0xA1);
+        unbind_close(fd_keep, VM_KEEP, keep_inst, 0xA1);
     if (fd_peer >= 0)
-        unbind_close(fd_peer, VM_PEER, 1, 0xB2);
+        unbind_close(fd_peer, VM_PEER, peer_inst, 0xB2);
     return rc;
 }
 
@@ -261,11 +340,14 @@ static int test_mutual_destroy(void)
     void *ma = NULL, *mb = NULL;
     int i;
     struct wvm_ioctl_context_caps caps;
+    uint64_t keep_inst, peer_inst;
 
     printf("\n=== Mutual destroy churn ===\n");
     for (i = 0; i < 10; i++) {
-        a = open_bind(VM_KEEP, 1, 0xA1);
-        b = open_bind(VM_PEER, 1, 0xB2);
+        keep_inst = 2000ULL + (uint64_t)i;
+        peer_inst = 3000ULL + (uint64_t)i;
+        a = open_bind(VM_KEEP, keep_inst, 0xA1);
+        b = open_bind(VM_PEER, peer_inst, 0xB2);
         if (a < 0 || b < 0)
             return -1;
         if (set_layout(a, SAME_GPA, MEM_SIZE) < 0 ||
@@ -275,31 +357,39 @@ static int test_mutual_destroy(void)
         mb = map_gpa(b, SAME_GPA, MEM_SIZE);
         if (!ma || !mb)
             return -1;
+        g_jmp_ready = 1;
         if (sigsetjmp(g_jmp, 1) == 0) {
             memset(ma, 0xAA, 128);
             memset(mb, 0xBB, 128);
+            g_jmp_ready = 0;
         } else {
+            g_jmp_ready = 0;
             fprintf(stderr, "[FAIL] SIGBUS mutual prime\n");
             return -1;
         }
         munmap(ma, MEM_SIZE);
         munmap(mb, MEM_SIZE);
-        unbind_close(a, VM_KEEP, 1, 0xA1);
-        unbind_close(b, VM_PEER, 1, 0xB2);
+        unbind_close(a, VM_KEEP, keep_inst, 0xA1);
+        unbind_close(b, VM_PEER, peer_inst, 0xB2);
         a = b = -1;
         ma = mb = NULL;
+        if (wait_active_contexts_le(0, 2000) != 0) {
+            fprintf(stderr, "[FAIL] mutual destroy wait iter %d\n", i);
+            return -1;
+        }
     }
-    a = open_bind(VM_KEEP, 1, 0xA1);
+    keep_inst = 4000ULL;
+    a = open_bind(VM_KEEP, keep_inst, 0xA1);
     if (a < 0)
         return -1;
     memset(&caps, 0, sizeof(caps));
     if (ioctl(a, IOCTL_WVM_QUERY_CAPS, &caps) < 0 ||
         caps.active_contexts < 1) {
         fprintf(stderr, "[FAIL] post-mutual QUERY_CAPS\n");
-        unbind_close(a, VM_KEEP, 1, 0xA1);
+        unbind_close(a, VM_KEEP, keep_inst, 0xA1);
         return -1;
     }
-    unbind_close(a, VM_KEEP, 1, 0xA1);
+    unbind_close(a, VM_KEEP, keep_inst, 0xA1);
     printf("[OK] mutual destroy×10; fresh BIND OK\n");
     return 0;
 }

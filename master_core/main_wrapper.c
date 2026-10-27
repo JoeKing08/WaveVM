@@ -1200,6 +1200,14 @@ static int wait_for_push_barrier_cookie(uint64_t cookie, uint64_t timeout_us)
     return 0;
 }
 
+/* Strong def in slave_hybrid.c (node_runtime). Sleep-fallback OK. */
+__attribute__((weak))
+int wavevm_proxy_barrier_local_helpers(uint64_t timeout_us)
+{
+    (void)timeout_us;
+    return 0;
+}
+
 int wait_local_qemu_push_barrier(uint64_t timeout_us)
 {
     pthread_mutex_lock(&g_client_lock);
@@ -1458,6 +1466,49 @@ void* client_handler(void *socket_desc) {
             }
             case WVM_IPC_TYPE_COMMIT_DIFF:
             case WVM_IPC_TYPE_COMMIT_DIFF_SYNC: {
+                /*
+                 * len==16 empty payload is the QEMU push-visibility fence
+                 * (wait_for_directory_ack_safe_us). Must reply 16 bytes or the
+                 * caller blocks forever; must also drain FE/helper PAGE_PUSH
+                 * APPLY before CPU_RUN / virtio MMIO replay.
+                 */
+                if (ipc_hdr.type == WVM_IPC_TYPE_COMMIT_DIFF_SYNC &&
+                    ipc_hdr.len == 16) {
+                    uint8_t fence_resp[16] = {0};
+                    int br;
+                    int hr = 0;
+                    int need_helpers = (payload_buf[0] == 0x02);
+                    static int fence_log_count;
+                    /*
+                     * G4: barrier errors must reach the fence waiter. Encoding
+                     * errno in the first 4 bytes (0 == success); never sleep-
+                     * claim success while ignoring br/helpers.
+                     */
+                    br = wait_local_qemu_push_barrier(5000000ULL);
+                    if (need_helpers) {
+                        hr = wavevm_proxy_barrier_local_helpers(5000000ULL);
+                    }
+                    if (br != 0 || hr != 0) {
+                        int err = br != 0 ? br : hr;
+                        if (err > 0) {
+                            err = -err;
+                        }
+                        memcpy(fence_resp, &err, sizeof(err));
+                    }
+                    if (fence_log_count < 40) {
+                        fprintf(stderr,
+                                "[IPC FENCE] push-barrier done br=%d helpers=%d "
+                                "hr=%d fd=%d\n",
+                                br, need_helpers, hr, qemu_fd);
+                        fence_log_count++;
+                    }
+                    if (write_exact(qemu_fd, fence_resp, sizeof(fence_resp)) < 0) {
+                        fprintf(stderr,
+                                "[IPC FENCE] reply failed fd=%d errno=%d\n",
+                                qemu_fd, errno);
+                    }
+                    break;
+                }
                 // This is the new IPC type for V29
                 struct wvm_diff_log* log = (struct wvm_diff_log*)payload_buf;
                 uint32_t dir_node = wvm_get_directory_node_id(WVM_NTOHLL(log->gpa));

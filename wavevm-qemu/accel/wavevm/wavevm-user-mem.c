@@ -55,6 +55,27 @@ static void *g_shm_shadow = NULL;
 static uint32_t g_slave_id = 0;
 static bool g_fault_hook_enabled = false;
 static bool g_fault_hook_checked = false;
+/* Same-host TCG: slave joined WVM_SHM_FILE; RAM coherent with master FE. */
+static int g_tcg_shm_coherent = 0;
+
+void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
+{
+    g_tcg_shm_coherent = enabled ? 1 : 0;
+    if (g_tcg_shm_coherent) {
+        /* Shared pages must stay addressable; PROT_NONE only hides already-
+         * correct SHM contents behind demand faults / IPC pulls. */
+        g_fault_hook_enabled = false;
+        fprintf(stderr,
+                "[WaveVM-User] TCG SHM coherent mode ON "
+                "(skip fault-hook / local RAM copies; directory commit stays)\n");
+    }
+}
+
+int wavevm_user_mem_tcg_shm_coherent(void)
+{
+    return g_tcg_shm_coherent;
+}
+
 
 /*
  * Deferred SIGSEGV fault path (capability-fault-engines.md §4.2 / V1 non-goal):
@@ -178,12 +199,13 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
         }
     }
     if (g_block_count >= MAX_RAM_BLOCKS) exit(1);
-    if (!kvm_enabled() && g_fault_hook_enabled) {
+    if (!kvm_enabled() && g_fault_hook_enabled && !g_tcg_shm_coherent) {
         /*
          * Only slave TCG uses host page protection.  The master owns the
          * complete RAM image and tracks writes via QEMU dirty logging; using
          * process-wide mprotect on the master also traps device DMA writes and
          * breaks BIOS/bootloader disk reads.
+         * SHM-coherent slaves share the executor file — never PROT_NONE.
          */
         int is_slave = (getenv("WVM_SOCK_REQ") != NULL);
         if (is_slave) {
@@ -729,6 +751,32 @@ static int ack_status_to_errno(uint16_t status)
         return -EIO;
     default:
         return -EPROTO;
+    }
+}
+
+
+/*
+ * G6: ESTALE resync must merge our write-set onto the directory page.
+ * Bytes we changed vs pre_image keep ours; unchanged bytes keep theirs.
+ * Without a pre-image, caller must fail closed — never retag an old full page.
+ */
+static void wvm_merge_commit_write_set(uint8_t *out,
+                                       const uint8_t *pre_image,
+                                       const uint8_t *ours,
+                                       const uint8_t *theirs,
+                                       size_t bytes)
+{
+    size_t i;
+
+    if (!out || !ours || !theirs || bytes == 0) {
+        return;
+    }
+    if (!pre_image) {
+        memcpy(out, ours, bytes);
+        return;
+    }
+    for (i = 0; i < bytes; i++) {
+        out[i] = (ours[i] != pre_image[i]) ? ours[i] : theirs[i];
     }
 }
 
@@ -1705,6 +1753,11 @@ int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
     if (journal_out) {
         *journal_out = NULL;
     }
+    /*
+     * G2: SHM coherent only means same-host joined backing may skip local
+     * RAM copies / fault-hook. Directory flush/commit must still run so
+     * remote authority sees versions and write-sets.
+     */
     if (ipc_fd < 0 || g_is_slave || g_block_count <= 0) {
         return 0;
     }
@@ -1737,14 +1790,23 @@ int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
             uint64_t cur_ver = get_local_page_version(gpa);
             if (cur_ver == 0 && is_page_all_zero(hva)) {
                 /*
-                 * Directory SHM starts zeroed and a newly created page meta starts
-                 * at version 1.  Do not turn QEMU's initial zero-fill dirty bits
-                 * into millions of full-page network commits; record that this
-                 * local snapshot matches the implicit zero version instead.
+                 * Directory SHM starts zeroed; read_page lazily materializes at
+                 * (initial_epoch<<32)|1, not plain version 1. Skip zero dirty
+                 * bits without inventing a local version — remote fault-read
+                 * will materialize matching zeros.
                  */
-                set_local_page_version(gpa, 1);
                 skipped_zero++;
                 continue;
+            }
+            if (cur_ver == 0) {
+                /*
+                 * Unset local version: commit against the directory's implicit
+                 * zero page. Production CREATE materialize logs showed base=1;
+                 * wvm_handle_local_commit create-on-commits when base matches
+                 * MAKE_VERSION(epoch,1), so we do not fault-materialize every
+                 * dirty page (that exhausted the V1 waiter retention table).
+                 */
+                cur_ver = 1;
             }
 
             uint64_t ver = cur_ver + 1;
@@ -1775,6 +1837,42 @@ int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
                 int commit_ret = request_commit_on_fd(
                     ipc_fd, gpa, cur_ver, 0, hva,
                     WVM_MEMORY_PAGE_BYTES, &ack);
+
+                if (commit_ret == -ENOENT || commit_ret == -ESTALE) {
+                    /*
+                     * G6: rematerialize alone is not enough — recommitting the
+                     * old HVA full page under a new base_version can clobber
+                     * concurrent directory writes. Handoff dirty-log has no
+                     * per-page pre-image here, so fail closed after one
+                     * rematerialize attempt that would only retag bytes.
+                     */
+                    struct wvm_mem_ack mat_ack;
+                    uint8_t mat_page[WVM_MEMORY_PAGE_BYTES];
+                    int mat_ret = request_page_over_ipc(gpa, &mat_ack, mat_page);
+                    static int handoff_retry_log;
+                    if (mat_ret == 0 &&
+                        ack_status_to_errno(mat_ack.status) == 0 &&
+                        mat_ack.version != 0 &&
+                        mat_ack.version == cur_ver) {
+                        /* Same base after rematerialize: safe to retry once. */
+                        commit_ret = request_commit_on_fd(
+                            ipc_fd, gpa, cur_ver, 0, hva,
+                            WVM_MEMORY_PAGE_BYTES, &ack);
+                    } else {
+                        commit_ret = commit_ret ? commit_ret : -ESTALE;
+                        if (handoff_retry_log < 20) {
+                            fprintf(stderr,
+                                    "[WaveVM-User] handoff ESTALE fail-closed "
+                                    "gpa=%#llx cur=%#llx mat_ver=%#llx mat=%d\n",
+                                    (unsigned long long)gpa,
+                                    (unsigned long long)cur_ver,
+                                    (unsigned long long)(mat_ret == 0 ?
+                                        mat_ack.version : 0),
+                                    mat_ret);
+                            handoff_retry_log++;
+                        }
+                    }
+                }
 
                 if (commit_ret == 0) {
                     ver = ack.result_version;
@@ -1825,7 +1923,13 @@ int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
                 flushed, skipped_zero, ipc_fd);
         flush_log_count++;
     }
-    return 0;
+    /*
+     * Callers (wavevm-cpu handoff) treat ret>0 as "pages committed on this
+     * stream — run push-visibility fence before CPU_RUN". Returning 0 on
+     * success silently skipped the fence and left remote TCG racing PAGE_PUSH
+     * APPLY (attach10/11 freeze at Cirros initramfs→vda1).
+     */
+    return flushed;
 }
 
 uint64_t wavevm_user_mem_debug_read_u64(uint64_t gpa, uint64_t offset, int *ok)
@@ -2131,17 +2235,76 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
             uint64_t base_version = get_local_page_version(curr->gpa);
             int commit_ret;
 
+            /*
+             * Slave dirty self-emit: unset local version means the page was
+             * never fault-cached here. Commit against the directory implicit
+             * zero page (epoch counter 1) — same create-on-commit contract as
+             * master handoff flush — instead of failing closed as ESTALE.
+             */
             if (base_version == 0) {
-                commit_ret = -ESTALE;
-            } else {
-                if (t_com_sock < 0) {
-                    t_com_sock = internal_connect_master();
+                base_version = 1;
+            }
+            if (t_com_sock < 0) {
+                t_com_sock = internal_connect_master();
+            }
+            commit_ret = request_commit_on_fd(
+                t_com_sock, curr->gpa, base_version, 0,
+                current_snapshot, WVM_MEMORY_PAGE_BYTES, &ack);
+            if (commit_ret == -ENOENT || commit_ret == -ESTALE) {
+                /*
+                 * G6: directory advanced. Rematerialize and merge our write-set
+                 * onto the directory page using pre_image; never retag the old
+                 * full snapshot with a new base_version alone.
+                 */
+                struct wvm_mem_ack mat_ack;
+                uint8_t mat_page[WVM_MEMORY_PAGE_BYTES];
+                uint8_t merged[WVM_MEMORY_PAGE_BYTES];
+                int mat_ret = request_page_over_ipc(curr->gpa, &mat_ack,
+                                                    mat_page);
+                static int slave_retry_log;
+                if (mat_ret == 0 &&
+                    ack_status_to_errno(mat_ack.status) == 0 &&
+                    mat_ack.version != 0 &&
+                    curr->pre_image_snapshot) {
+                    base_version = mat_ack.version;
+                    wvm_merge_commit_write_set(merged,
+                                               curr->pre_image_snapshot,
+                                               current_snapshot, mat_page,
+                                               WVM_MEMORY_PAGE_BYTES);
+                    memcpy(current_snapshot, merged, WVM_MEMORY_PAGE_BYTES);
+                    commit_ret = request_commit_on_fd(
+                        t_com_sock, curr->gpa, base_version, 0,
+                        current_snapshot, WVM_MEMORY_PAGE_BYTES, &ack);
+                    if (slave_retry_log < 20) {
+                        fprintf(stderr,
+                                "[WaveVM-User] slave dirty commit resync-merge "
+                                "gpa=%#llx base=%#llx ret=%d\n",
+                                (unsigned long long)curr->gpa,
+                                (unsigned long long)base_version, commit_ret);
+                        slave_retry_log++;
+                    }
+                } else {
+                    /* No pre-image or rematerialize failed: fail closed. */
+                    if (slave_retry_log < 20) {
+                        fprintf(stderr,
+                                "[WaveVM-User] slave dirty ESTALE fail-closed "
+                                "gpa=%#llx mat=%d pre=%d\n",
+                                (unsigned long long)curr->gpa, mat_ret,
+                                curr->pre_image_snapshot ? 1 : 0);
+                        slave_retry_log++;
+                    }
                 }
-                commit_ret = request_commit_on_fd(
-                    t_com_sock, curr->gpa, base_version, 0,
-                    current_snapshot, WVM_MEMORY_PAGE_BYTES, &ack);
             }
             if (commit_ret != 0) {
+                static int commit_fail_log;
+                if (commit_fail_log < 20) {
+                    fprintf(stderr,
+                            "[WaveVM-User] TCG dirty commit failed "
+                            "gpa=%#llx base=%#llx ret=%d\n",
+                            (unsigned long long)curr->gpa,
+                            (unsigned long long)base_version, commit_ret);
+                    commit_fail_log++;
+                }
                 ram_addr_t ra = qemu_ram_addr_from_host(page_addr);
                 if (ra != RAM_ADDR_INVALID) {
                     cpu_physical_memory_set_dirty_range(
@@ -2175,6 +2338,11 @@ int wavevm_user_mem_flush_slave_dirty_sync(void)
     long rtt;
     static int flush_log_count;
 
+    /*
+     * G2: even with coherent SHM, slave dirty must commit to the directory
+     * (version + subscriber semantics). Visibility of bytes in SHM is not
+     * a substitute for authoritative commit.
+     */
     if (!g_is_slave || g_fd_push < 0 || g_block_count <= 0) {
         return 0;
     }
@@ -2355,29 +2523,203 @@ void wvm_set_client_sync_mode(int batch_size, int auto_tune) {
  * [后果] 确保了分布式内存的"强顺序一致性"。它防止了在执行关键 IO 指令（如 GPU 命令提交）时，内存数据尚未同步完成的情况。
  */
 static long wait_for_directory_ack_safe_us(uint64_t timeout_us) {
-    (void)timeout_us;
+    /*
+     * Push-visibility fence after a dirty flush batch. Master replies only after
+     * wait_local_qemu_push_barrier (+ helper barrier). Slave commits use
+     * t_com_sock (TLS); g_ipc_diff_sock is often -1 on PROXY helpers — must not
+     * no-op the fence or FE virtio can race PAGE_PUSH APPLY.
+     */
+    int fd = -1;
+    wvm_ipc_header_t header;
+    uint8_t sync_request[16] = {0};
+    uint8_t sync_response[16];
+    struct pollfd pfd;
+    int pret;
+    int timeout_ms;
+    uint64_t start_us, now_us, elapsed_us;
+    size_t got = 0;
 
-    /* Both Master and Slave TCG use IPC for fence synchronization (F07 fix) */
-    if (g_ipc_diff_sock < 0) {
-        /* No active IPC connection - treat as local-only mode with no fence needed */
-        return 100;
+    if (timeout_us == 0) {
+        timeout_us = 1000000ULL;
     }
 
-    /* Send typed commit diff sync over IPC to ensure all pending writes are flushed */
-    wvm_ipc_header_t header;
-    uint8_t sync_request[16] = {0}; /* Minimal sync request payload */
-    uint8_t sync_response[16];
+    if (g_is_slave) {
+        if (t_com_sock < 0) {
+            t_com_sock = internal_connect_master();
+        }
+        fd = t_com_sock;
+    } else {
+        if (g_ipc_diff_sock < 0) {
+            g_ipc_diff_sock = internal_connect_master();
+        }
+        fd = g_ipc_diff_sock;
+    }
+    if (fd < 0) {
+        fprintf(stderr,
+                "[WaveVM-User] push fence: no IPC sock (slave=%d)\n",
+                g_is_slave ? 1 : 0);
+        return -ENOTCONN;
+    }
 
     header.type = WVM_IPC_TYPE_COMMIT_DIFF_SYNC;
     header.len = sizeof(sync_request);
 
-    if (write_all_fd(g_ipc_diff_sock, &header, sizeof(header)) < 0 ||
-        write_all_fd(g_ipc_diff_sock, sync_request, sizeof(sync_request)) < 0 ||
-        read_exact(g_ipc_diff_sock, sync_response, sizeof(sync_response)) < 0) {
+    if (write_all_fd(fd, &header, sizeof(header)) < 0 ||
+        write_all_fd(fd, sync_request, sizeof(sync_request)) < 0) {
+        fprintf(stderr,
+                "[WaveVM-User] push fence write failed fd=%d errno=%d\n",
+                fd, errno);
         return -1;
     }
 
-    return 100; /* Success - fence complete */
+    start_us = get_us_time();
+    while (got < sizeof(sync_response)) {
+        now_us = get_us_time();
+        elapsed_us = now_us - start_us;
+        if (elapsed_us >= timeout_us) {
+            fprintf(stderr,
+                    "[WaveVM-User] push fence timeout fd=%d waited=%lluus\n",
+                    fd, (unsigned long long)elapsed_us);
+            return -ETIMEDOUT;
+        }
+        timeout_ms = (int)((timeout_us - elapsed_us) / 1000ULL);
+        if (timeout_ms < 1) {
+            timeout_ms = 1;
+        }
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pret = poll(&pfd, 1, timeout_ms);
+        if (pret < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (pret == 0) {
+            continue;
+        }
+        {
+            ssize_t n = recv(fd, sync_response + got,
+                             sizeof(sync_response) - got, 0);
+            if (n < 0) {
+                if (errno == EINTR || errno == EAGAIN) {
+                    continue;
+                }
+                return -1;
+            }
+            if (n == 0) {
+                return -ECONNRESET;
+            }
+            got += (size_t)n;
+        }
+    }
+
+    {
+        int fence_err = 0;
+
+        memcpy(&fence_err, sync_response, sizeof(fence_err));
+        if (fence_err != 0) {
+            static int fence_err_log;
+            if (fence_err_log < 40) {
+                fprintf(stderr,
+                        "[WaveVM-User] push fence FAILED fd=%d err=%d "
+                        "slave=%d\n",
+                        fd, fence_err, g_is_slave ? 1 : 0);
+                fence_err_log++;
+            }
+            return fence_err < 0 ? fence_err : -fence_err;
+        }
+    }
+    {
+        static int fence_ok_log;
+        if (fence_ok_log < 40) {
+            fprintf(stderr,
+                    "[WaveVM-User] push fence ok fd=%d rtt=%lluus slave=%d\n",
+                    fd, (unsigned long long)(get_us_time() - start_us),
+                    g_is_slave ? 1 : 0);
+            fence_ok_log++;
+        }
+    }
+    return (long)(get_us_time() - start_us);
+}
+
+/*
+ * Same fence on an explicit IPC fd (FE handoff uses vcpu_sock so commit-before-
+ * run ordering shares the stream with the following CPU_RUN).
+ */
+int wavevm_user_mem_ipc_push_fence(int ipc_fd, uint64_t timeout_us)
+{
+    wvm_ipc_header_t header;
+    uint8_t sync_request[16] = {0};
+    uint8_t sync_response[16];
+    struct pollfd pfd;
+    int pret;
+    int timeout_ms;
+    uint64_t start_us, now_us, elapsed_us;
+    size_t got = 0;
+
+    if (ipc_fd < 0) {
+        return -EINVAL;
+    }
+    if (timeout_us == 0) {
+        timeout_us = 5000000ULL;
+    }
+
+    sync_request[0] = 0x02; /* also barrier local helpers */
+    header.type = WVM_IPC_TYPE_COMMIT_DIFF_SYNC;
+    header.len = sizeof(sync_request);
+    if (write_all_fd(ipc_fd, &header, sizeof(header)) < 0 ||
+        write_all_fd(ipc_fd, sync_request, sizeof(sync_request)) < 0) {
+        return -1;
+    }
+
+    start_us = get_us_time();
+    while (got < sizeof(sync_response)) {
+        now_us = get_us_time();
+        elapsed_us = now_us - start_us;
+        if (elapsed_us >= timeout_us) {
+            return -ETIMEDOUT;
+        }
+        timeout_ms = (int)((timeout_us - elapsed_us) / 1000ULL);
+        if (timeout_ms < 1) {
+            timeout_ms = 1;
+        }
+        pfd.fd = ipc_fd;
+        pfd.events = POLLIN;
+        pret = poll(&pfd, 1, timeout_ms);
+        if (pret < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (pret == 0) {
+            continue;
+        }
+        {
+            ssize_t n = recv(ipc_fd, sync_response + got,
+                             sizeof(sync_response) - got, 0);
+            if (n < 0) {
+                if (errno == EINTR || errno == EAGAIN) {
+                    continue;
+                }
+                return -1;
+            }
+            if (n == 0) {
+                return -ECONNRESET;
+            }
+            got += (size_t)n;
+        }
+    }
+    {
+        int fence_err = 0;
+
+        memcpy(&fence_err, sync_response, sizeof(fence_err));
+        if (fence_err != 0) {
+            return fence_err < 0 ? fence_err : -fence_err;
+        }
+    }
+    return 0;
 }
 
 static long wait_for_directory_ack_safe(void)
@@ -2570,9 +2912,17 @@ static void *mem_push_listener_thread(void *arg) {
                     }
                 }
                 flush_lazy_ro_queue();
-                if (write_all_fd(g_fd_push, &ack, sizeof(ack)) == 0) {
-                    write_all_fd(g_fd_push, &cookie, sizeof(cookie));
-                    {
+                /*
+                 * G4: one datagram (header+cookie). Split write() on UDP
+                 * becomes two packets and the proxy never reconstitutes the
+                 * cookie — sleep-fallback was papering over that.
+                 */
+                {
+                    uint8_t ack_pkt[sizeof(ack) + sizeof(cookie)];
+
+                    memcpy(ack_pkt, &ack, sizeof(ack));
+                    memcpy(ack_pkt + sizeof(ack), &cookie, sizeof(cookie));
+                    if (write_all_fd(g_fd_push, ack_pkt, sizeof(ack_pkt)) == 0) {
                         static int barrier_ack_log_count;
                         if (barrier_ack_log_count < 20) {
                             fprintf(stderr,
@@ -2626,7 +2976,8 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
      * as BIOS/bootloader disk read failures.  Track master writes through
      * QEMU's dirty log instead.  Slave TCG keeps fault-based demand paging.
      */
-    g_fault_hook_enabled = enable_fault_hook && !kvm_enabled() && g_is_slave;
+    g_fault_hook_enabled = enable_fault_hook && !kvm_enabled() && g_is_slave &&
+                           !g_tcg_shm_coherent;
     g_fault_hook_checked = true;
 
     // KVM + PROT_NONE 会导致 EPT violation，KVM 下：

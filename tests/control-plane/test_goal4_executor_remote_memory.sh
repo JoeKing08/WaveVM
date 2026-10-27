@@ -33,6 +33,7 @@ gcc -Wall -Wextra -Werror -std=gnu11 -D_DEFAULT_SOURCE \
     "$ci/wavevm_lifecycle.c" \
     "$ci/wavevm_envelope.c" \
     "$ci/wavevm_memory.c" \
+    "$ci/wavevm_local_memory.c" \
     "$ci/wavevm_runtime_dispatch.c" \
     "$ci/wavevm_runtime_gate.c" \
     "$ci/wavevm_runtime_names.c" \

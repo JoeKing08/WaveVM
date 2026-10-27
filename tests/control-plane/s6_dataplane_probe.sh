@@ -37,8 +37,8 @@ fail() { echo "dataplane FAIL: $*" | tee -a "$report" >&2; exit 1; }
 
 # Locate SHM for THIS cell's VM
 shm=""
-mapfile -t shms < <(grep -oE '/wavevm_ram_wvm-v'"$vm_id"'[^[:space:]]*' "$agent_log" 2>/dev/null \
-  | sed 's|^/wavevm_ram_|/dev/shm/wavevm_ram_|;s|^/dev/shm/dev/shm/|/dev/shm/|' | sort -u || true)
+mapfile -t shms < <(grep -oE '/wavevm_ram_wvm-v'"$vm_id"'[A-Za-z0-9_-]*' "$agent_log" 2>/dev/null \
+  | sed "s/['\":.,;)]*$//;s|^/wavevm_ram_|/dev/shm/wavevm_ram_|;s|^/dev/shm/dev/shm/|/dev/shm/|" | sort -u || true)
 if [[ ${#shms[@]} -lt 1 ]]; then
   mapfile -t shms < <(ls -1t /dev/shm/wavevm_ram_wvm-v"${vm_id}"* 2>/dev/null || true)
 fi

@@ -221,6 +221,25 @@ extern void wvm_tcg_set_master_ack_state(CPUState *cpu,
                                          const wvm_tcg_context_t *sent);
 extern void wavevm_slave_vcpu_loop(CPUState *cpu);
 typedef struct WVMHandoffDirtyJournal WVMHandoffDirtyJournal;
+extern int wavevm_user_mem_ipc_push_fence(int ipc_fd, uint64_t timeout_us);
+extern int wavevm_user_mem_tcg_shm_coherent(void);
+/*
+ * SHM join makes RAM visible across FE/helper without page copies, but
+ * concurrent BSP(local)+AP(remote) across two QEMU processes is NOT MTTCG-safe:
+ * attach18 remote TCG showed guest rss-counter corruption + Unstable clock +
+ * dhcp hang while KVM remote PASS. Default = serialize (stop-the-world) while
+ * still skipping dirty flush/fence. Opt-in concurrency: WVM_TCG_SHM_CONCURRENT=1.
+ */
+static int wavevm_tcg_shm_allow_concurrent(void)
+{
+    const char *env;
+
+    if (!wavevm_user_mem_tcg_shm_coherent()) {
+        return 0;
+    }
+    env = getenv("WVM_TCG_SHM_CONCURRENT");
+    return (env && atoi(env) != 0) ? 1 : 0;
+}
 extern int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
                                               WVMHandoffDirtyJournal **journal_out);
 extern void wavevm_user_mem_finish_handoff_dirty(WVMHandoffDirtyJournal *journal,
@@ -275,15 +294,153 @@ static int g_wavevm_tcg_local_active;
 static bool g_wavevm_tcg_remote_pending;
 static bool g_wavevm_tcg_remote_active;
 static bool g_wavevm_tcg_local_handoff;
+/* Under STW: after remote same-RIP spin, require this many additional local
+ * slice completions before remote may reclaim (attach23: 30x ...8a62a7 ACK
+ * → e1000 Tx Hang; attach19 escaped at max run 8).
+ * attach25: slice-count alone failed (HLT/idle cpu_exec returns drain prefer
+ * without guest progress). Also keep a MONOTONIC wall-clock floor. */
+static int g_wavevm_tcg_local_prefer;
+static int64_t g_wavevm_tcg_local_prefer_until_ns;
+/* attach36/37: after prefer/force arms, keep FE→helper short slice_budget
+ * + force-all-local for a wall-clock window even when spin_count resets /
+ * force_local slice budget drains on short local returns. Otherwise helper
+ * snaps back to 50ms and remote_active starves BSP (serial stuck at
+ * acpid/e1000). Window 60s covers Cirros boot-to-login under remote TCG. */
+static int64_t g_wavevm_tcg_short_budget_until_ns;
+/* attach26: prefer-BSP alone left remote AP spinning at same RIP while FE
+ * blocked in unix_stream_data_wait (serial stuck ~20KB). When same-RIP
+ * persists, force that vCPU onto local cpu_exec for a budget of slices so
+ * BSP+AP interleave in-process (MTTCG) instead of STW remote IPC. */
+static int g_wavevm_tcg_force_local[MAX_VCPUS];
+static uint64_t g_wavevm_tcg_force_local_rip[MAX_VCPUS];
+/* Shared with FE slice_budget_us pairing (see wavevm_tcg_slice_budget_us). */
+static int g_wavevm_tcg_spin_count[MAX_VCPUS];
+static bool wavevm_tcg_prefer_active(void);
 
 static bool wavevm_tcg_has_runnable_local_peer(CPUState *owner);
+static bool wavevm_tcg_has_local_peer(CPUState *owner);
 static void wavevm_tcg_kick_runnable_local_peers(CPUState *owner);
+static void wavevm_tcg_kick_all_local_peers(CPUState *owner);
+
+static int64_t wavevm_tcg_mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+}
+
+
+
+static void wavevm_tcg_clear_force_local_if_progress(CPUState *cpu)
+{
+    int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+    X86CPU *x86_cpu;
+    uint64_t rip;
+
+    if (g_wavevm_tcg_force_local[ci] <= 0) {
+        return;
+    }
+    x86_cpu = X86_CPU(cpu);
+    rip = x86_cpu->env.eip;
+    if (g_wavevm_tcg_force_local_rip[ci] != 0 &&
+        rip != g_wavevm_tcg_force_local_rip[ci]) {
+        g_wavevm_tcg_force_local[ci] = 0;
+        g_wavevm_tcg_force_local_rip[ci] = 0;
+    }
+}
+
+static bool wavevm_tcg_force_local_disabled(void)
+{
+    const char *env = getenv("WVM_TCG_DISABLE_FORCE_LOCAL");
+    return env && env[0] != '\0' && env[0] != '0';
+}
+
+/*
+ * FE→helper STW pairing: ask helper for a shorter cpu_exec quantum when the
+ * master needs BSP airtime. 0 lets helper pick its default (SHM vs UDP).
+ * This compresses remote_active hold time during blocking ACK wait — the
+ * actual mutual-starve window — without enabling unsafe SHM concurrency.
+ */
+static uint32_t wavevm_tcg_slice_budget_us(CPUState *cpu)
+{
+    int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+    int spin = g_wavevm_tcg_spin_count[ci];
+
+    if (wavevm_tcg_shm_allow_concurrent()) {
+        return 0; /* concurrent mode: helper owns its own schedule */
+    }
+    /*
+     * Only request a shorter quantum under spin/prefer/force (or the
+     * attach36 wall-clock sticky window). Steady-state returns 0 so helper
+     * keeps historical 50ms (attach32 PASS / attach35 always-20ms regress).
+     */
+    if (spin >= 8) {
+        return 5000;
+    }
+    if (spin >= 4 || wavevm_tcg_prefer_active() ||
+        g_wavevm_tcg_force_local[ci] > 0 ||
+        (g_wavevm_tcg_short_budget_until_ns != 0 &&
+         wavevm_tcg_mono_ns() < g_wavevm_tcg_short_budget_until_ns)) {
+        return 8000;
+    }
+    if (spin >= 2) {
+        return 12000;
+    }
+    return 0;
+}
+
+static bool wavevm_tcg_consume_force_local(CPUState *cpu)
+{
+    int ci;
+
+    if (wavevm_tcg_shm_allow_concurrent()) {
+        return false;
+    }
+    if (wavevm_tcg_force_local_disabled()) {
+        return false;
+    }
+    ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+    /* Slow-decay sticky: attach28 cleared force_local on any local RIP wobble
+     * → thrash back to remote (prefer-local re-armed at spin=4). Stay local
+     * for large slice budgets; only RIP-change in spin_backoff zeros early. */
+    if (g_wavevm_tcg_force_local[ci] <= 0) {
+        /* attach36: while short-budget wall-clock window is live after a
+         * spin/prefer arm, keep ALL vCPUs local so MTTCG can interleave
+         * even after per-vCPU slice budgets drained on short returns. */
+        if (g_wavevm_tcg_short_budget_until_ns != 0 &&
+            wavevm_tcg_mono_ns() < g_wavevm_tcg_short_budget_until_ns) {
+            return true;
+        }
+        return false;
+    }
+    g_wavevm_tcg_force_local[ci]--;
+    return true;
+}
+
+static bool wavevm_tcg_prefer_active(void)
+{
+    if (g_wavevm_tcg_local_prefer > 0) {
+        return true;
+    }
+    if (g_wavevm_tcg_local_prefer_until_ns != 0 &&
+        wavevm_tcg_mono_ns() < g_wavevm_tcg_local_prefer_until_ns) {
+        return true;
+    }
+    return false;
+}
 
 static void wavevm_tcg_local_slice_enter(void)
 {
     qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
-    while (g_wavevm_tcg_remote_pending || g_wavevm_tcg_remote_active) {
-        qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
+    /*
+     * Default (incl. SHM-coherent join): stop-the-world around remote slices.
+     * Only WVM_TCG_SHM_CONCURRENT=1 allows BSP to keep running during remote AP
+     * (experimental; see attach18 Cirros corruption under concurrent SHM).
+     */
+    if (!wavevm_tcg_shm_allow_concurrent()) {
+        while (g_wavevm_tcg_remote_pending || g_wavevm_tcg_remote_active) {
+            qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
+        }
     }
     g_wavevm_tcg_local_active++;
     if (g_wavevm_tcg_local_handoff) {
@@ -300,6 +457,25 @@ static void wavevm_tcg_local_slice_leave(void)
         g_wavevm_tcg_local_active--;
     }
     if (g_wavevm_tcg_local_active == 0) {
+        /*
+         * Drain prefer-local budget one completed local slice at a time so
+         * remote_slice_enter keeps seeing local_handoff until BSP has run
+         * several quanta (see wavevm_tcg_remote_spin_backoff).
+         * If slice count hits 0 but wall-clock floor remains, keep handoff
+         * so remote cannot reclaim until the deadline (attach25).
+         */
+        if (g_wavevm_tcg_local_prefer > 0) {
+            g_wavevm_tcg_local_prefer--;
+        }
+        if (g_wavevm_tcg_local_prefer > 0) {
+            g_wavevm_tcg_local_handoff = true;
+        } else if (g_wavevm_tcg_local_prefer_until_ns != 0 &&
+                   wavevm_tcg_mono_ns() < g_wavevm_tcg_local_prefer_until_ns) {
+            g_wavevm_tcg_local_prefer = 1;
+            g_wavevm_tcg_local_handoff = true;
+        } else {
+            g_wavevm_tcg_local_prefer_until_ns = 0;
+        }
         qemu_cond_broadcast(&g_wavevm_tcg_slice_cond);
     }
     qemu_mutex_unlock(&g_wavevm_tcg_slice_lock);
@@ -310,20 +486,64 @@ static void wavevm_tcg_remote_slice_enter(CPUState *owner)
     CPUState *cpu;
 
     qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
+    if (wavevm_tcg_shm_allow_concurrent()) {
+        /*
+         * Experimental: SHM-visible RAM + concurrent BSP while remote AP runs.
+         * Default path falls through to stop-the-world below.
+         */
+        while (g_wavevm_tcg_remote_active) {
+            qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
+        }
+        g_wavevm_tcg_remote_active = true;
+        g_wavevm_tcg_remote_pending = false;
+        g_wavevm_tcg_local_handoff = false;
+        qemu_mutex_unlock(&g_wavevm_tcg_slice_lock);
+        return;
+    }
     /*
      * A remote slice must not immediately reclaim execution after it returns:
      * the local peer may be required to release a guest lock observed by the
      * remote vCPU.  Leave remote_pending clear while waiting so that peer can
-     * enter cpu_exec().  If it is no longer runnable, drop the stale handoff
-     * instead of waiting forever.
+     * enter cpu_exec().
+     *
+     * attach24/25: when prefer is set but BSP is HLT/idle, do NOT drop prefer
+     * immediately — kick (and clear HLT) so BSP can make progress. Only drop
+     * after wake attempts + wall-clock deadline expire.
      */
-    while (g_wavevm_tcg_remote_active || g_wavevm_tcg_local_active > 0 ||
-           (g_wavevm_tcg_local_handoff &&
-            wavevm_tcg_has_runnable_local_peer(owner))) {
-        qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
+    {
+        int idle_wake = 0;
+        for (;;) {
+            bool prefer = wavevm_tcg_prefer_active();
+            bool peer_run = wavevm_tcg_has_runnable_local_peer(owner);
+            bool need_wait = g_wavevm_tcg_remote_active ||
+                             g_wavevm_tcg_local_active > 0 ||
+                             ((g_wavevm_tcg_local_handoff || prefer) && peer_run);
+            if (!need_wait) {
+                if (prefer && !peer_run &&
+                    wavevm_tcg_has_local_peer(owner) && idle_wake < 24) {
+                    qemu_mutex_unlock(&g_wavevm_tcg_slice_lock);
+                    wavevm_tcg_kick_all_local_peers(owner);
+                    g_usleep(1000);
+                    qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
+                    idle_wake++;
+                    continue;
+                }
+                break;
+            }
+            qemu_cond_timedwait(&g_wavevm_tcg_slice_cond,
+                                &g_wavevm_tcg_slice_lock, 5);
+        }
     }
     if (g_wavevm_tcg_local_handoff) {
         g_wavevm_tcg_local_handoff = false;
+    }
+    /* Drop prefer only when peer still idle AND wall-clock floor expired. */
+    if (wavevm_tcg_prefer_active() &&
+        !wavevm_tcg_has_runnable_local_peer(owner) &&
+        (g_wavevm_tcg_local_prefer_until_ns == 0 ||
+         wavevm_tcg_mono_ns() >= g_wavevm_tcg_local_prefer_until_ns)) {
+        g_wavevm_tcg_local_prefer = 0;
+        g_wavevm_tcg_local_prefer_until_ns = 0;
     }
     g_wavevm_tcg_remote_pending = true;
     /*
@@ -362,9 +582,106 @@ static void wavevm_tcg_remote_slice_leave(CPUState *owner)
      * path.  The local entry path clears the deliberate exit latch before it
      * re-enters cpu_exec().
     */
-    if (handoff_local) {
-        wavevm_tcg_kick_runnable_local_peers(owner);
+    if (handoff_local || wavevm_tcg_prefer_active()) {
+        wavevm_tcg_kick_all_local_peers(owner);
     }
+}
+
+/*
+ * STW remote same-RIP spin → prefer local BSP for several slices + wall clock.
+ * attach19 PASS max same-RIP run≈8; attach23 FAIL run≈30 @...8a62a7 then
+ * e1000 Tx Hang. attach25: prefer=4/8/12 by slice count alone did not stop
+ * spin (HLT/idle drains). Lower threshold, stronger budget, MONOTONIC floor;
+ * when peer !runnable kick/clear HLT instead of dropping prefer.
+ */
+static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip)
+{
+    static uint64_t last_eip[MAX_VCPUS];
+    int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+    int prefer;
+    int hold_ms;
+    int64_t until;
+    int *spin_count = g_wavevm_tcg_spin_count;
+
+    if (wavevm_tcg_shm_allow_concurrent()) {
+        spin_count[ci] = 0;
+        last_eip[ci] = ack_eip;
+        return;
+    }
+    if (ack_eip == 0) {
+        return;
+    }
+    if (ack_eip == last_eip[ci]) {
+        spin_count[ci]++;
+    } else {
+        spin_count[ci] = 1;
+        last_eip[ci] = ack_eip;
+        /* New RIP: reset spin streak only. Keep force_local budget so brief
+         * RIP wobble (attach30: a62a7↔8f38c↔b603b) does not re-enter remote
+         * STW mid e1000/SCSI and cause softlock/timeout. Budget still decays. */
+        return;
+    }
+    /* Earlier than attach19 max-run 8 so BSP gets the lock before freeze. */
+    if (spin_count[ci] < 4) {
+        return;
+    }
+    prefer = 8;
+    hold_ms = 20;
+    if (spin_count[ci] >= 8) {
+        prefer = 16;
+        hold_ms = 40;
+    }
+    if (spin_count[ci] >= 16) {
+        prefer = 24;
+        hold_ms = 80;
+    }
+    until = wavevm_tcg_mono_ns() + (int64_t)hold_ms * 1000000LL;
+    /* Sticky local budget: large enough to cover Cirros e1000 EEPROM udelay
+     * softlock window (attach27). Cleared on RIP change. */
+    if (!wavevm_tcg_force_local_disabled()) {
+        int force = 8192;
+        if (spin_count[ci] >= 8) {
+            force = 32768;
+        }
+        if (spin_count[ci] >= 16) {
+            force = 65536;
+        }
+        if (g_wavevm_tcg_force_local[ci] < force) {
+            g_wavevm_tcg_force_local[ci] = force;
+        }
+        g_wavevm_tcg_force_local_rip[ci] = ack_eip;
+    }
+    qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
+    if (g_wavevm_tcg_local_prefer < prefer) {
+        g_wavevm_tcg_local_prefer = prefer;
+    }
+    if (until > g_wavevm_tcg_local_prefer_until_ns) {
+        g_wavevm_tcg_local_prefer_until_ns = until;
+    }
+    /* Keep helper quanta short + force-all-local for 60s past this arm.
+     * attach37: 3s (attach36) expired before Cirros e1000/"Starting network"
+     * finished under TCG; PASS attach31/32 reach login ~60s wall. */
+    {
+        int64_t short_until = wavevm_tcg_mono_ns() + 60000000000LL;
+        if (short_until > g_wavevm_tcg_short_budget_until_ns) {
+            g_wavevm_tcg_short_budget_until_ns = short_until;
+        }
+    }
+    g_wavevm_tcg_local_handoff = true;
+    qemu_cond_broadcast(&g_wavevm_tcg_slice_cond);
+    qemu_mutex_unlock(&g_wavevm_tcg_slice_lock);
+    {
+        static unsigned int log_count;
+        if (log_count++ < 24) {
+            fprintf(stderr,
+                    "[WVM-TCG-STW] cpu=%d prefer-local rip=%#llx spin=%d "
+                    "prefer=%d hold_ms=%d force_local=%d\n",
+                    cpu->cpu_index, (unsigned long long)ack_eip,
+                    spin_count[ci], prefer, hold_ms,
+                    g_wavevm_tcg_force_local[ci]);
+        }
+    }
+    wavevm_tcg_kick_all_local_peers(cpu);
 }
 
 static void wavevm_tcg_clear_stale_exit(CPUState *cpu)
@@ -424,6 +741,19 @@ static bool wavevm_tcg_has_runnable_local_peer(CPUState *owner)
     return false;
 }
 
+static bool wavevm_tcg_has_local_peer(CPUState *owner)
+{
+    CPUState *cpu;
+
+    CPU_FOREACH(cpu) {
+        if (cpu != owner && !cpu->unplug &&
+            ops.schedule_policy(cpu->cpu_index) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void wavevm_tcg_kick_runnable_local_peers(CPUState *owner)
 {
     CPUState *cpu;
@@ -433,6 +763,31 @@ static void wavevm_tcg_kick_runnable_local_peers(CPUState *owner)
             ops.schedule_policy(cpu->cpu_index) == 0 && cpu_can_run(cpu)) {
             qemu_cpu_kick(cpu);
         }
+    }
+}
+
+/*
+ * Prefer-local wake: kick every local peer, including HLT/idle.
+ * Clearing halted lets the thread leave qemu_wait_io_event and enter a
+ * local slice; guest idle loops re-HLT harmlessly. Without this, prefer
+ * is drained by EXCP_HALTED no-ops or dropped while BSP sleeps (attach25).
+ */
+static void wavevm_tcg_kick_all_local_peers(CPUState *owner)
+{
+    CPUState *cpu;
+
+    CPU_FOREACH(cpu) {
+        if (cpu == owner || cpu->unplug) {
+            continue;
+        }
+        if (ops.schedule_policy(cpu->cpu_index) != 0) {
+            continue;
+        }
+        if (cpu->halted) {
+            cpu->halted = 0;
+        }
+        cpu_exit(cpu);
+        qemu_cpu_kick(cpu);
     }
 }
 
@@ -908,6 +1263,17 @@ static void wavevm_remote_exec(CPUState *cpu) {
          */
         int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
 
+        /*
+         * BSP (cpu0) never receives SIPI. The AP pre-SIPI park below used to
+         * also catch cpu0, so split=0 (all-PROXY remote) halted forever before
+         * the first CPU_RUN (serial=0, no WVM-DBG/HANDOFF). Mark BSP SIPI
+         * stages done so it falls through to remote dispatch; APs unchanged.
+         */
+        if (cpu->cpu_index == 0) {
+            ap_did_local_sipi[0] = 1;
+            ap_did_os_sipi[0] = 1;
+        }
+
         /* 1. Pre-SIPI: AP still waiting for first SIPI from BIOS */
         if (!ap_did_local_sipi[ci]) {
             X86CPU *x86cpu = X86_CPU(cpu);
@@ -1298,6 +1664,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
         } else {
             req.mode_tcg = 1;
             wvm_tcg_get_state(cpu, &req.ctx.tcg);
+            req.ctx.tcg.slice_budget_us = wavevm_tcg_slice_budget_us(cpu);
             sent_tcg = req.ctx.tcg;
             forwarded_irq = sent_tcg.interrupt_request &
                             WVM_TCG_REMOTE_IRQ_FORWARD_MASK;
@@ -1600,6 +1967,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
     } else {
         req.mode_tcg = 1;
         wvm_tcg_get_state(cpu, &req.ctx.tcg);
+        /* STW pairing: shorter helper quantum under spin/prefer (see protocol). */
+        req.ctx.tcg.slice_budget_us = wavevm_tcg_slice_budget_us(cpu);
     }
 
     {
@@ -1626,6 +1995,17 @@ static void wavevm_remote_exec(CPUState *cpu) {
         static int handoff_dbg[MAX_VCPUS] = {0};
         wavevm_tcg_remote_slice_enter(cpu);
         tcg_slice_active = true;
+        if (wavevm_user_mem_tcg_shm_coherent()) {
+            if (handoff_dbg[ci] < 20) {
+                fprintf(stderr,
+                        "[WVM-TCG-HANDOFF] cpu=%d SHM-coherent skip flush/fence "
+                        "fd=%d slice_budget_us=%u spin=%d\n",
+                        cpu->cpu_index, vcpu_sock,
+                        (unsigned)req.ctx.tcg.slice_budget_us,
+                        g_wavevm_tcg_spin_count[
+                            cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0]);
+            }
+        } else {
         if (handoff_dbg[ci] < 20) {
             fprintf(stderr, "[WVM-TCG-HANDOFF] cpu=%d flush begin fd=%d\n",
                     cpu->cpu_index, vcpu_sock);
@@ -1641,6 +2021,31 @@ static void wavevm_remote_exec(CPUState *cpu) {
             wavevm_tcg_remote_slice_leave(cpu);
             return;
         }
+        /*
+         * Handoff dirty commits publish PAGE_PUSH to helpers asynchronously.
+         * Always fence on the same vcpu_sock (even when this flush committed 0
+         * pages): prior async APPLY may still be in flight, and attach15 hung
+         * after syslogd with FE in unix_stream_data_wait while only slave
+         * fences were observed. Skipping fence on flush_ret==0 left master
+         * CPU_RUN racing stale remote pages.
+         */
+        {
+            int fence_ret = wavevm_user_mem_ipc_push_fence(vcpu_sock, 5000000ULL);
+            if (handoff_dbg[ci] < 20) {
+                fprintf(stderr,
+                        "[WVM-TCG-HANDOFF] cpu=%d push-fence fd=%d ret=%d flush=%d\n",
+                        cpu->cpu_index, vcpu_sock, fence_ret, flush_ret);
+            }
+            if (fence_ret < 0) {
+                fprintf(stderr,
+                        "[WVM-TCG-HANDOFF] cpu=%d push-fence failed ret=%d flush=%d\n",
+                        cpu->cpu_index, fence_ret, flush_ret);
+                wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
+                wavevm_tcg_remote_slice_leave(cpu);
+                return;
+            }
+        }
+        } /* !shm_coherent */
         {
             static int cr3_dbg[MAX_VCPUS] = {0};
             if (cr3_dbg[ci] < 20) {
@@ -1752,6 +2157,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
         if (tcg_slice_active) {
             wavevm_tcg_remote_slice_leave(cpu);
             tcg_slice_active = false;
+            wavevm_tcg_remote_spin_backoff(cpu,
+                                          (uint64_t)ack.ctx.tcg.eip);
         }
     } else {
         if (tcg_slice_active) {
@@ -2085,7 +2492,8 @@ static void *wavevm_cpu_thread_fn(void *arg) {
     do {
         if (cpu_can_run(cpu)) {
             /* Remote vCPU: forward to Slave via RPC */
-            if (ops.schedule_policy(cpu->cpu_index) == 1) {
+            bool force_local = wavevm_tcg_consume_force_local(cpu);
+            if (ops.schedule_policy(cpu->cpu_index) == 1 && !force_local) {
                 qemu_mutex_unlock_iothread();
                 wavevm_remote_exec(cpu);
                 qemu_mutex_lock_iothread();

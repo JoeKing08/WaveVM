@@ -46,7 +46,10 @@
 extern void wavevm_user_mem_init(void *ram_ptr, size_t ram_size);
 extern void wavevm_setup_memory_region(MemoryRegion *mr, uint64_t size, int fd);
 extern void wavevm_setup_shared_ram(MemoryRegion *mr, uint64_t size, int fd);
-extern void wavevm_attach_shared_ram_ptr(void *ram, uint64_t size, int fd);
+extern int wavevm_attach_shared_ram_ptr(void *ram, uint64_t size, int fd);
+extern int wavevm_join_shared_ram_ptr(void *ram, uint64_t size, int fd);
+extern void wavevm_user_mem_set_tcg_shm_coherent(int enabled);
+extern int wavevm_user_mem_tcg_shm_coherent(void);
 extern void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx);
 extern void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx);
 extern void wvm_set_ttl_interval(int ms);
@@ -81,6 +84,7 @@ static bool g_user_mem_inited = false;
 static uint64_t g_user_ram_size_hint = 0;
 static int g_user_shm_fd = -1;
 static uint64_t g_user_shm_size = 0;
+static bool g_user_shm_join_only = false; /* slave: MAP_FIXED without wipe */
 
 /* VM runtime identity for typed protocol */
 static struct {
@@ -1152,9 +1156,38 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             QemuThread kick_thread;
             uint64_t kick_generation;
             kick->cpu = cpu;
-            kick->delay_us = 50000;  /* V31b: 50ms per burst (was 5ms), gives slave
-                                       * enough time to fetch pages via UDP before
-                                       * being kicked out of cpu_exec */
+            /*
+             * Remote slice quantum (STW hold on FE ≈ this delay while FE
+             * blocks in read_full for ACK). Default stays 50ms (attach32 PASS
+             * / UDP page-fetch window). FE may request a shorter budget via
+             * ctx.tcg.slice_budget_us under prefer-local / same-RIP spin
+             * (IPC pairing). Floor 2ms avoids attach22 thrash. attach35:
+             * always forcing SHM 20ms hung before spin could climb.
+             */
+            {
+                unsigned int delay_us = 50000;
+                if (req.mode_tcg && req.ctx.tcg.slice_budget_us != 0) {
+                    delay_us = req.ctx.tcg.slice_budget_us;
+                }
+                if (delay_us < 2000) {
+                    delay_us = 2000;
+                }
+                if (delay_us > 100000) {
+                    delay_us = 100000;
+                }
+                kick->delay_us = delay_us;
+                {
+                    static unsigned int budget_log;
+                    if (budget_log++ < 24) {
+                        fprintf(stderr,
+                                "[WVM-TCG-KICK-BUDGET] cpu=%d delay_us=%u "
+                                "req_budget=%u shm=%d\n",
+                                cpu->cpu_index, delay_us,
+                                req.mode_tcg ? req.ctx.tcg.slice_budget_us : 0,
+                                wavevm_user_mem_tcg_shm_coherent());
+                    }
+                }
+            }
             /* The imported TCG state must be visible before cpu_exec_start().
              * Otherwise a freshly spawned slave can enter the run boundary with
              * its reset-vector state and overwrite the remote AP context. */
@@ -1939,6 +1972,38 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
     if (env_cmd) {
         // [Slave Mode]
         s->master_sock = atoi(env_cmd); // Use CMD socket for control loop
+        /*
+         * Same-host TCG helpers: join the executor WVM_SHM_FILE so remote AP
+         * slices see live guest RAM (DMA + BSP writes) without stop-the-world
+         * page copies.  Do NOT memcpy anonymous zeros into SHM.
+         * Opt out with WVM_TCG_SHM_COHERENT=0.
+         */
+        {
+            const char *coh = getenv("WVM_TCG_SHM_COHERENT");
+            const char *shm_path = getenv("WVM_SHM_FILE");
+            int want = (!coh || atoi(coh) != 0);
+            if (want && shm_path && shm_path[0] && !kvm_enabled()) {
+                int shm_fd = shm_open(shm_path, O_RDWR, 0666);
+                if (shm_fd >= 0) {
+                    g_user_shm_fd = dup(shm_fd);
+                    g_user_shm_size = ms->ram_size;
+                    g_user_shm_join_only = true;
+                    close(shm_fd);
+                    /*
+                     * G2: do not claim coherent until MAP_FIXED join succeeds
+                     * in region_add. Open alone is not proven shared backing.
+                     */
+                    fprintf(stderr,
+                            "[WaveVM-SHM] slave will attempt JOIN SHM '%s' "
+                            "size=%#llx (coherent after proven map)\n",
+                            shm_path, (unsigned long long)ms->ram_size);
+                } else {
+                    fprintf(stderr,
+                            "[WaveVM-SHM] slave coherent open failed '%s': %s\n",
+                            shm_path, strerror(errno));
+                }
+            }
+        }
     } else {
         // [Master Mode]
         // 读取环境变量以支持单机多实例
@@ -2060,6 +2125,53 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
                 (unsigned long long)size,
                 global_layout.count);
 
+        /* Join/attach SHM before register_ram_block so coherent slaves never
+         * PROT_NONE a private anonymous copy that is about to be replaced. */
+        if (wavevm_user_mode_enabled() && start_gpa == 0 &&
+            g_user_shm_fd >= 0) {
+            if (g_user_shm_join_only) {
+                int jrc = wavevm_join_shared_ram_ptr(hva, g_user_shm_size,
+                                                     g_user_shm_fd);
+                /*
+                 * G2: only proven shared MAP_FIXED join may enable coherent.
+                 * Join failure must not claim coherent (directory flush stays).
+                 */
+                if (jrc == 0) {
+                    const char *coh = getenv("WVM_TCG_SHM_COHERENT");
+                    if ((!coh || atoi(coh) != 0) && !kvm_enabled()) {
+                        wavevm_user_mem_set_tcg_shm_coherent(1);
+                    }
+                } else {
+                    fprintf(stderr,
+                            "[WaveVM-SHM] JOIN failed rc=%d; coherent OFF\n",
+                            jrc);
+                    wavevm_user_mem_set_tcg_shm_coherent(0);
+                }
+            } else {
+                int arc = wavevm_attach_shared_ram_ptr(hva, g_user_shm_size,
+                                                      g_user_shm_fd);
+                /*
+                 * G2: coherent only after attach succeeds. Same-host helpers
+                 * that JOIN the same file may skip local RAM copies; directory
+                 * flush/commit/fence still run (see user-mem).
+                 */
+                if (arc == 0) {
+                    const char *coh = getenv("WVM_TCG_SHM_COHERENT");
+                    if ((!coh || atoi(coh) != 0) && !kvm_enabled()) {
+                        wavevm_user_mem_set_tcg_shm_coherent(1);
+                    }
+                } else {
+                    fprintf(stderr,
+                            "[WaveVM-SHM] attach failed rc=%d; coherent OFF\n",
+                            arc);
+                    wavevm_user_mem_set_tcg_shm_coherent(0);
+                }
+            }
+            close(g_user_shm_fd);
+            g_user_shm_fd = -1;
+            g_user_shm_join_only = false;
+        }
+
         /* User-mem fault hook is only valid in user mode. */
         if (wavevm_user_mode_enabled()) {
             extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
@@ -2094,12 +2206,6 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
         if (start_gpa == 0 && !g_primary_ram_hva) {
             g_primary_ram_hva = hva;
             g_primary_ram_size = size;
-        }
-        if (wavevm_user_mode_enabled() && start_gpa == 0 &&
-            g_user_shm_fd >= 0) {
-            wavevm_attach_shared_ram_ptr(hva, g_user_shm_size, g_user_shm_fd);
-            close(g_user_shm_fd);
-            g_user_shm_fd = -1;
         }
         if (wavevm_user_mode_enabled() && start_gpa == 0 && !g_user_mem_inited) {
             wavevm_user_mem_init(hva, g_user_ram_size_hint ? g_user_ram_size_hint : size);

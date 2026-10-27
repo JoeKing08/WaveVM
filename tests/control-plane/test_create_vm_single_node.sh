@@ -158,6 +158,10 @@ printf '%s executor 9001 9002\n' "$(id -u)" > "$tmpdir/principals"
     --control-key "$tmpdir/controller.key" \
     >"$tmpdir/ctl.log" 2>&1 &
 ctl_pid=$!
+if [[ -f "$repo_root/scripts/wvm_cap_watch.py" ]]; then
+    python3 "$repo_root/scripts/wvm_cap_watch.py" "$tmpdir/ctl.log" "${WVM_S6_LOG_CAP_BYTES:-67108864}" --pid "$ctl_pid" --interval 15         >/dev/null 2>&1 &
+    disown $! 2>/dev/null || true
+fi
 for ((attempt = 0; attempt < 100; attempt++)); do
     if [[ -S "$tmpdir/ctl.sock" ]] && kill -0 "$ctl_pid" 2>/dev/null; then
         break
@@ -183,6 +187,38 @@ else
     agent_max_vcpus=2
     agent_max_memory_chunks=2
     agent_max_leases=2
+fi
+# Guest smoke (§7) may request ≥2 vCPUs + Cirros-sized RAM via WVM_CREATE_*.
+# Mode-B defaults (2 slots) reject that as "insufficient eligible CPU capacity".
+if [[ -n "${WVM_CREATE_VCPUS:-}" || -n "${WVM_CREATE_MEMORY_BYTES:-}" ]]; then
+    want_vcpus=${WVM_CREATE_VCPUS:-1}
+    if [[ "$want_vcpus" -lt 1 ]]; then want_vcpus=1; fi
+    if [[ "$agent_vcpu_slots" -lt $((want_vcpus + 2)) ]]; then
+        agent_vcpu_slots=$((want_vcpus + 2))
+    fi
+    if [[ "$agent_max_vcpus" -lt "$want_vcpus" ]]; then
+        agent_max_vcpus=$want_vcpus
+    fi
+    if [[ "$agent_slots" -lt 4 ]]; then
+        agent_slots=4
+    fi
+    if [[ "$agent_max_memory_chunks" -lt 4 ]]; then
+        agent_max_memory_chunks=4
+    fi
+    if [[ "$agent_max_leases" -lt 8 ]]; then
+        agent_max_leases=8
+    fi
+    # Ensure registered memory covers Cirros-sized CREATE + overhead.
+    if [[ -n "${WVM_CREATE_MEMORY_BYTES:-}" ]]; then
+        need=$((WVM_CREATE_MEMORY_BYTES + 64*1024*1024))
+        if [[ "$agent_memory_bytes" -lt "$need" ]]; then
+            agent_memory_bytes=$need
+        fi
+        if [[ "$agent_memory_bytes" -lt 2147483648 ]]; then
+            agent_memory_bytes=2147483648
+        fi
+    fi
+    echo "s6: guest-capacity bump slots=$agent_vcpu_slots max_vcpus=$agent_max_vcpus mem=$agent_memory_bytes" >&2
 fi
 agent_args=(agent
     --state-dir "$tmpdir/node-state"
@@ -213,8 +249,20 @@ agent_args=(agent
 cp "$tmpdir/evidence/capabilities-801.record" "$tmpdir/ctl-state/"
 cp "$tmpdir/evidence/runtime-profile-801.record" "$tmpdir/ctl-state/"
 
-env WVM_TCG_QEMU_BIN="$WVM_TCG_QEMU_BIN" WVM_TCG_QEMU_DATADIR="${WVM_TCG_QEMU_DATADIR:-}" WVM_TCG_QEMU_MACHINE="${WVM_TCG_QEMU_MACHINE:-}" WVM_TCG_QEMU_MEM_MB="${WVM_TCG_QEMU_MEM_MB:-}"     "$repo_root/wavevm_node_runtime" "${agent_args[@]}" >"$tmpdir/agent.log" 2>&1 &
+# Cap agent.log (Joe disk-full). Direct file redirect — process-subst tee dies when
+# this shell exits under KEEP_RUNNING (attach14 empty agent.log). No ulimit -f
+# (attach13 SIGXFSZ on guest RAM ftruncate). Live bound via wvm_cap_watch (same inode).
+_agent_log_cap="${WVM_S6_LOG_CAP_BYTES:-67108864}"
+_cap_watch="$repo_root/scripts/wvm_cap_watch.py"
+env WVM_TCG_QEMU_BIN="$WVM_TCG_QEMU_BIN" WVM_TCG_QEMU_DATADIR="${WVM_TCG_QEMU_DATADIR:-}" WVM_TCG_QEMU_MACHINE="${WVM_TCG_QEMU_MACHINE:-}" WVM_TCG_QEMU_MEM_MB="${WVM_TCG_QEMU_MEM_MB:-}" \
+    "$repo_root/wavevm_node_runtime" "${agent_args[@]}" >"$tmpdir/agent.log" 2>&1 &
 agent_pid=$!
+if [[ -f "$_cap_watch" ]]; then
+    # disown so watch survives create-shell exit (KEEP_RUNNING)
+    python3 "$_cap_watch" "$tmpdir/agent.log" "$_agent_log_cap" --pid "$agent_pid" --interval 15 \
+        >/dev/null 2>&1 &
+    disown $! 2>/dev/null || true
+fi
 for ((attempt = 0; attempt < 100; attempt++)); do
     if [[ -S "$tmpdir/node.sock" ]] && kill -0 "$agent_pid" 2>/dev/null; then
         break

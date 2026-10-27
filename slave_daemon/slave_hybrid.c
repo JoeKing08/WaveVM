@@ -78,12 +78,76 @@ static int g_nonblock_recv = 0;
 static volatile sig_atomic_t g_kvm_worker_sock = -1;
 static long g_num_cores = 0;
 static int *g_tcg_session_fds;
+/* Parent-owned FD to slave TCG push channel for post-install PAGE_PUSH. */
+static int g_tcg_install_notify_fd = -1;
+static int g_tcg_install_notify_owned = 0;
 static pid_t *g_tcg_helper_pids;
 static volatile int g_tcg_proxy_listening;
 static int *g_tcg_proxy_socks;
 static long g_tcg_proxy_sock_capacity;
 static long g_tcg_proxy_sock_count;
 static pthread_mutex_t g_tcg_proxy_sock_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* G4: correlate PUSH_BARRIER cookies with PUSH_BARRIER_ACK from helpers. */
+static pthread_mutex_t g_push_barrier_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_push_barrier_cond = PTHREAD_COND_INITIALIZER;
+static uint64_t g_push_barrier_next = 1;
+static uint64_t g_push_barrier_active_cookie = 0;
+static int g_push_barrier_expect = 0;
+static int g_push_barrier_got = 0;
+
+static void mark_push_barrier_done(uint64_t cookie)
+{
+    pthread_mutex_lock(&g_push_barrier_lock);
+    if (cookie == g_push_barrier_active_cookie && g_push_barrier_expect > 0) {
+        g_push_barrier_got++;
+        pthread_cond_broadcast(&g_push_barrier_cond);
+    }
+    pthread_mutex_unlock(&g_push_barrier_lock);
+}
+
+static uint64_t push_barrier_begin(int expect_count)
+{
+    uint64_t cookie;
+
+    pthread_mutex_lock(&g_push_barrier_lock);
+    cookie = g_push_barrier_next++;
+    g_push_barrier_active_cookie = cookie;
+    g_push_barrier_expect = expect_count > 0 ? expect_count : 1;
+    g_push_barrier_got = 0;
+    pthread_mutex_unlock(&g_push_barrier_lock);
+    return cookie;
+}
+
+static int wait_for_push_barrier_cookie(uint64_t cookie, uint64_t timeout_us)
+{
+    struct timespec ts;
+
+    if (timeout_us == 0) {
+        timeout_us = 5000000ULL;
+    }
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += (time_t)(timeout_us / 1000000ULL);
+    ts.tv_nsec += (long)((timeout_us % 1000000ULL) * 1000ULL);
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&g_push_barrier_lock);
+    while (!(g_push_barrier_active_cookie == cookie &&
+             g_push_barrier_got >= g_push_barrier_expect)) {
+        int rc = pthread_cond_timedwait(&g_push_barrier_cond,
+                                        &g_push_barrier_lock, &ts);
+        if (rc == ETIMEDOUT) {
+            pthread_mutex_unlock(&g_push_barrier_lock);
+            return -ETIMEDOUT;
+        }
+    }
+    pthread_mutex_unlock(&g_push_barrier_lock);
+    return 0;
+}
+
 
 /*
  * §6 / production: MSG_VCPU_RUN is request/reply. Track the external requester
@@ -1690,6 +1754,59 @@ static uint8_t *executor_guest_page_hva(uint64_t gpa)
  * This is deliberately not a synthetic fence: ack.version is the version
  * returned by the production memory service/directory store.
  */
+
+/*
+ * After SHM install, QEMU still has version 0 and (as slave) PROT_NONE/RW
+ * without a directory version.  MSG_PAGE_PUSH_FULL sets version and queues
+ * PROT_READ so the guest store can SIGSEGV into the writable list and the
+ * production flush_slave path can typed-commit.  G4: PAGE_PUSH+PUSH_BARRIER
+ * go through the proxy sock; PUSH_BARRIER_ACK demux marks the cookie — no
+ * sleep-claimed success.
+ */
+int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len);
+int wavevm_proxy_barrier_local_helpers(uint64_t timeout_us);
+static int notify_tcg_page_installed(uint64_t gpa, uint64_t version,
+                                     const uint8_t *page)
+{
+    struct wvm_full_page_push full;
+    int pr;
+    int br;
+
+    if (!page || version == 0) {
+        return 0;
+    }
+
+    /*
+     * G4: PAGE_PUSH + PUSH_BARRIER via proxy sock (helpers connect(push→proxy)).
+     * ACK demux marks cookies; never sleep-claim success.
+     */
+    memset(&full, 0, sizeof(full));
+    full.gpa = WVM_HTONLL(gpa);
+    full.version = WVM_HTONLL(version);
+    memcpy(full.data, page, WVM_MEMORY_PAGE_BYTES);
+    pr = wavevm_proxy_push_to_local_helpers(MSG_PAGE_PUSH_FULL, &full,
+                                            (int)sizeof(full));
+    if (pr < 0) {
+        fprintf(stderr,
+                "[Executor] TCG install PAGE_PUSH failed gpa=%#llx ret=%d\n",
+                (unsigned long long)gpa, pr);
+        return pr;
+    }
+    br = wavevm_proxy_barrier_local_helpers(5000000ULL);
+    if (br != 0) {
+        fprintf(stderr,
+                "[Executor] TCG install barrier failed gpa=%#llx ret=%d\n",
+                (unsigned long long)gpa, br);
+        return br;
+    }
+    fprintf(stderr,
+            "[Executor] TCG install notify applied gpa=%#llx version=%#llx "
+            "(barrier ack)\n",
+            (unsigned long long)gpa, (unsigned long long)version);
+    return 0;
+}
+
+
 static int ensure_remote_memory_side_effect(
     const struct wvm_node_runtime_context *runtime,
     const struct wvm_vcpu_handoff_request *request, char *error,
@@ -1774,6 +1891,12 @@ static int ensure_remote_memory_side_effect(
                     (unsigned long long)ack.version,
                     (size_t)ack.data_bytes, (void *)guest_page,
                     page[0], page[1], page[2], page[3]);
+            /*
+             * Production TCG dirty self-emit: tell QEMU the installed page's
+             * directory version and arm PROT_READ so the guest store is
+             * tracked and flushed via wavevm_user_mem_flush_slave_dirty_sync.
+             */
+            (void)notify_tcg_page_installed(entry->gpa_start, ack.version, page);
         } else {
             fprintf(stderr,
                     "[Executor] remote page gpa=%#llx has no local guest RAM "
@@ -1857,6 +1980,17 @@ void wvm_executor_runtime_publish_ready(void)
     executor_publish_startup_state(EXECUTOR_READY);
 }
 
+
+void wvm_executor_runtime_set_tcg_install_notify_fd(int fd)
+{
+    if (g_tcg_install_notify_owned && g_tcg_install_notify_fd >= 0 &&
+        g_tcg_install_notify_fd != fd) {
+        close(g_tcg_install_notify_fd);
+    }
+    g_tcg_install_notify_fd = fd;
+    g_tcg_install_notify_owned = 0;
+}
+
 void wvm_executor_runtime_unbind(void)
 {
     long i;
@@ -1878,6 +2012,11 @@ void wvm_executor_runtime_unbind(void)
     }
     free(g_tcg_helper_pids);
     g_tcg_helper_pids = NULL;
+    if (g_tcg_install_notify_owned && g_tcg_install_notify_fd >= 0) {
+        close(g_tcg_install_notify_fd);
+    }
+    g_tcg_install_notify_fd = -1;
+    g_tcg_install_notify_owned = 0;
     g_num_cores = 0;
     g_service_port = 0;
     g_slave_vm_id = 0;
@@ -4379,14 +4518,185 @@ static int spawn_tcg_processes(int base_id) {
             return -1;
         }
     }
+    /*
+     * Production TCG dirty self-emit: executor notify FD -> helper push port
+     * so ensure_remote_memory_side_effect can PAGE_PUSH the installed version.
+     * GATE/RUNTIME_SOCKET are inherited from node_runtime/main for typed commit.
+     */
+    if (tcg_endpoints && g_num_cores > 0) {
+        int notify_fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+        if (notify_fd >= 0) {
+            if (connect(notify_fd,
+                        (struct sockaddr *)&tcg_endpoints[0].push_addr,
+                        sizeof(tcg_endpoints[0].push_addr)) == 0) {
+                if (g_tcg_install_notify_owned &&
+                    g_tcg_install_notify_fd >= 0) {
+                    close(g_tcg_install_notify_fd);
+                }
+                g_tcg_install_notify_fd = notify_fd;
+                g_tcg_install_notify_owned = 1;
+                fprintf(stderr,
+                        "[Hybrid] TCG install notify fd=%d -> push port %u\n",
+                        notify_fd,
+                        (unsigned)ntohs(tcg_endpoints[0].push_addr.sin_port));
+            } else {
+                close(notify_fd);
+            }
+        }
+    }
     return 0;
 }
 
-/* 
- * [物理意图] 充当 TCG 实例与 P2P 网络之间的“物理层协议翻译官”。
- * [关键逻辑] 维护 CMD（控制）、REQ（同步请求）、PUSH（异步推送）三通道的路由，并实现 VFIO 的本地拦截。
- * [后果] 解决了模拟模式下的网络竞争问题，通过物理通道隔离，保证了高频内存同步不会阻塞关键的 CPU 控制指令。
+/*
+ * Same-node V1 publish cannot use Wavelet broadcast (enqueue drops g_my_node_id).
+ * Deliver PAGE_PUSH/FORCE_SYNC directly to every local TCG helper push UDP port
+ * so remote PROXY vCPUs observe master handoff dirty commits.
  */
+int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len)
+{
+    uint8_t *pkt;
+    struct wvm_header *hdr;
+    size_t pkt_len;
+    int fd = -1;
+    long i;
+    int sent = 0;
+
+    if (!payload || len <= 0 || !tcg_endpoints || g_num_cores <= 0) {
+        return 0;
+    }
+    if (len > 65535 - (int)sizeof(struct wvm_header)) {
+        return -EINVAL;
+    }
+
+    /*
+     * Helpers connect(push_sock → proxy g_service_port). Kernel drops UDP
+     * from any other source. Must sendto from a registered proxy sockfd so
+     * the datagram appears to come from the connected peer (same as the
+     * Wavelet→proxy PAGE_PUSH forward path).
+     */
+    pthread_mutex_lock(&g_tcg_proxy_sock_lock);
+    if (g_tcg_proxy_socks && g_tcg_proxy_sock_count > 0) {
+        fd = g_tcg_proxy_socks[0];
+    }
+    pthread_mutex_unlock(&g_tcg_proxy_sock_lock);
+    if (fd < 0) {
+        return -ENOTCONN;
+    }
+
+    pkt_len = sizeof(struct wvm_header) + (size_t)len;
+    pkt = malloc(pkt_len);
+    if (!pkt) {
+        return -ENOMEM;
+    }
+    hdr = (struct wvm_header *)pkt;
+    memset(hdr, 0, sizeof(*hdr));
+    hdr->magic = htonl(WVM_MAGIC);
+    hdr->msg_type = htons(msg_type);
+    hdr->payload_len = htons((uint16_t)len);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+    hdr->target_id = hdr->slave_id;
+    hdr->qos_level =
+        (msg_type == MSG_PAGE_PUSH_FULL || msg_type == MSG_FORCE_SYNC) ? 0 : 1;
+    memcpy(pkt + sizeof(*hdr), payload, (size_t)len);
+
+    for (i = 0; i < g_num_cores; i++) {
+        if (sendto(fd, pkt, pkt_len, MSG_NOSIGNAL,
+                   (struct sockaddr *)&tcg_endpoints[i].push_addr,
+                   sizeof(tcg_endpoints[i].push_addr)) == (ssize_t)pkt_len) {
+            sent++;
+        }
+    }
+    free(pkt);
+
+    {
+        static int log_count;
+        if (log_count < 40) {
+            fprintf(stderr,
+                    "[Hybrid] local-helper push type=%u len=%d cores=%ld sent=%d fd=%d\n",
+                    (unsigned)msg_type, len, g_num_cores, sent, fd);
+            log_count++;
+        }
+    }
+    return sent > 0 ? 0 : -EIO;
+}
+
+/*
+ * After a batch of local-helper PAGE_PUSHes, give the push listener time to
+ * APPLY + lazy-RO flush. Production UDP ACKs do not return to the proxy on a
+ * correlated FD (same as notify_tcg_page_installed), so we send a framed
+ * PUSH_BARRIER then sleep past the 100ms poll interval.
+ */
+int wavevm_proxy_barrier_local_helpers(uint64_t timeout_us)
+{
+    uint8_t barrier_pkt[sizeof(wvm_ipc_header_t) + sizeof(uint64_t)];
+    wvm_ipc_header_t *bhdr;
+    uint64_t cookie;
+    int fd = -1;
+    long i;
+    int sent = 0;
+    int br;
+
+    if (!tcg_endpoints || g_num_cores <= 0) {
+        return 0;
+    }
+
+    pthread_mutex_lock(&g_tcg_proxy_sock_lock);
+    if (g_tcg_proxy_socks && g_tcg_proxy_sock_count > 0) {
+        fd = g_tcg_proxy_socks[0];
+    }
+    pthread_mutex_unlock(&g_tcg_proxy_sock_lock);
+    if (fd < 0) {
+        return -ENOTCONN;
+    }
+
+    /*
+     * G4: one cookie for the batch; each helper ACKs after APPLY+lazy-RO.
+     * Wait for sent ACKs via proxy RX demux — never usleep-claim success.
+     */
+    cookie = push_barrier_begin((int)g_num_cores);
+
+    memset(barrier_pkt, 0, sizeof(barrier_pkt));
+    bhdr = (wvm_ipc_header_t *)barrier_pkt;
+    bhdr->type = WVM_IPC_TYPE_PUSH_BARRIER;
+    bhdr->len = (uint32_t)sizeof(cookie);
+    memcpy(barrier_pkt + sizeof(*bhdr), &cookie, sizeof(cookie));
+
+    for (i = 0; i < g_num_cores; i++) {
+        if (sendto(fd, barrier_pkt, sizeof(barrier_pkt), MSG_NOSIGNAL,
+                   (struct sockaddr *)&tcg_endpoints[i].push_addr,
+                   sizeof(tcg_endpoints[i].push_addr)) ==
+            (ssize_t)sizeof(barrier_pkt)) {
+            sent++;
+        }
+    }
+    if (sent <= 0) {
+        return -EIO;
+    }
+    if (sent != (int)g_num_cores) {
+        pthread_mutex_lock(&g_push_barrier_lock);
+        if (g_push_barrier_active_cookie == cookie) {
+            g_push_barrier_expect = sent;
+        }
+        pthread_mutex_unlock(&g_push_barrier_lock);
+    }
+
+    br = wait_for_push_barrier_cookie(cookie,
+                                      timeout_us ? timeout_us : 5000000ULL);
+    {
+        static int log_count;
+        if (log_count < 40) {
+            fprintf(stderr,
+                    "[Hybrid] local-helper barrier cores=%ld sent=%d "
+                    "cookie=%llu wait=%d\n",
+                    g_num_cores, sent, (unsigned long long)cookie, br);
+            log_count++;
+        }
+    }
+    return br;
+}
+
+
 static void tcg_proxy_sock_register(int sockfd)
 {
     pthread_mutex_lock(&g_tcg_proxy_sock_lock);
@@ -4547,7 +4857,37 @@ void* tcg_proxy_thread(void *arg) {
                   __big++;
               }
             }
-            if (hdr->magic != htonl(WVM_MAGIC)) {
+                        /*
+             * G4: helper PUSH_BARRIER_ACK is an IPC frame (no WVM_MAGIC).
+             * Connected UDP write() lands on this proxy sock; demux cookie.
+             */
+            if (msgs[i].msg_len >= (int)sizeof(wvm_ipc_header_t)) {
+                wvm_ipc_header_t *ipc = (wvm_ipc_header_t *)pkt;
+                if (ipc->type == WVM_IPC_TYPE_PUSH_BARRIER_ACK &&
+                    ipc->len == sizeof(uint64_t) &&
+                    msgs[i].msg_len >=
+                        (int)(sizeof(*ipc) + sizeof(uint64_t))) {
+                    uint64_t ack_cookie;
+                    memcpy(&ack_cookie, pkt + sizeof(*ipc),
+                           sizeof(ack_cookie));
+                    mark_push_barrier_done(ack_cookie);
+                    {
+                        static int ack_log;
+                        if (ack_log < 40) {
+                            fprintf(stderr,
+                                    "[Proxy] PUSH_BARRIER_ACK cookie=%llu "
+                                    "from %s:%u\n",
+                                    (unsigned long long)ack_cookie,
+                                    inet_ntoa(src_addrs[i].sin_addr),
+                                    (unsigned)ntohs(src_addrs[i].sin_port));
+                            ack_log++;
+                        }
+                    }
+                    continue;
+                }
+            }
+
+if (hdr->magic != htonl(WVM_MAGIC)) {
                 static int __badmagic;
                 if (__badmagic < 8) {
                     fprintf(stderr, "[Proxy] drop bad magic=0x%08x len=%u from %s:%u\n",

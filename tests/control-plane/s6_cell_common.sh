@@ -276,7 +276,7 @@ honesty=REQUIRE_STOP=0_not_full_STOP_acceptance"
         submit_stop=$tmpdir/submit_stop_vm
     fi
 
-    mapfile -t pre_shm < <(grep -oE '/wavevm_ram_wvm-v'"$vm_id"'[^[:space:]]*' "$tmpdir/agent.log" 2>/dev/null | sort -u || true)
+    mapfile -t pre_shm < <(grep -oE '/wavevm_ram_wvm-v'"$vm_id"'[A-Za-z0-9_-]*' "$tmpdir/agent.log" 2>/dev/null | sed "s/['\":.,;)]*$//" | sort -u || true)
     # N6: only children owned by THIS vm_id (cmdline/environ mentions wvm-v$vm_id
     # or matching SHM ns). Do not treat sibling VM children as leftovers.
     pre_children=()
@@ -487,7 +487,7 @@ s6_finish_reject() {
         cleanup_fail=1
     fi
     # Snapshot any SHM names that appeared during this cell before teardown.
-    mapfile -t _rej_shm < <(grep -oE '/wavevm_ram_[^[:space:]]+' "$tmpdir/agent.log" 2>/dev/null | sort -u || true)
+    mapfile -t _rej_shm < <(grep -oE '/wavevm_ram_[A-Za-z0-9_-]+' "$tmpdir/agent.log" 2>/dev/null | sort -u || true)
     for leftover in "${_rej_shm[@]}"; do
         echo "shm_before_teardown=$leftover" >>"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
     done

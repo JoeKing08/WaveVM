@@ -1,6 +1,10 @@
 
 #include "qemu/osdep.h"
 #include <sys/mman.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 #include "exec/memory.h"
 #include "qemu/mmap-alloc.h"
 #include "sysemu/kvm.h"
@@ -31,38 +35,72 @@ void wavevm_setup_memory_region(MemoryRegion *mr, uint64_t size, int fd) {
  * the executor's WVM_SHM_FILE page.  Preserve the reset/BIOS bytes first so
  * this does not turn already-initialized low memory into zeros.
  */
-void wavevm_attach_shared_ram_ptr(void *ram, uint64_t size, int fd)
+int wavevm_attach_shared_ram_ptr(void *ram, uint64_t size, int fd)
 {
     void *shm;
     int dup_fd;
 
     if (!ram || size == 0 || fd < 0) {
-        return;
+        return -EINVAL;
     }
     dup_fd = dup(fd);
     if (dup_fd < 0) {
-        return;
+        return -errno;
     }
     shm = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, dup_fd, 0);
     if (shm == MAP_FAILED) {
+        int err = -errno;
         fprintf(stderr, "[WaveVM-SHM] mmap shared RAM failed: %s\n",
                 strerror(errno));
         close(dup_fd);
-        return;
+        return err;
     }
     memcpy(shm, ram, size);
     if (mmap(ram, size, PROT_READ | PROT_WRITE,
              MAP_SHARED | MAP_FIXED, dup_fd, 0) == MAP_FAILED) {
+        int err = -errno;
         fprintf(stderr, "[WaveVM-SHM] MAP_FIXED guest RAM failed: %s\n",
                 strerror(errno));
         munmap(shm, size);
         close(dup_fd);
-        return;
+        return err;
     }
     munmap(shm, size);
     close(dup_fd);
     fprintf(stderr, "[WaveVM-SHM] guest RAM attached gpa=0 size=%#llx hva=%p\n",
             (unsigned long long)size, ram);
+    return 0;
+}
+
+/*
+ * Slave/helper join: map the executor SHM over QEMU's anonymous RAM without
+ * copying the zeroed anonymous image into SHM (that would wipe the master's
+ * live guest state). Same-host TCG then sees coherent RAM like KVM.
+ */
+int wavevm_join_shared_ram_ptr(void *ram, uint64_t size, int fd)
+{
+    int dup_fd;
+
+    if (!ram || size == 0 || fd < 0) {
+        return -EINVAL;
+    }
+    dup_fd = dup(fd);
+    if (dup_fd < 0) {
+        return -errno;
+    }
+    if (mmap(ram, size, PROT_READ | PROT_WRITE,
+             MAP_SHARED | MAP_FIXED, dup_fd, 0) == MAP_FAILED) {
+        int err = -errno;
+        fprintf(stderr, "[WaveVM-SHM] MAP_FIXED join failed: %s\n",
+                strerror(errno));
+        close(dup_fd);
+        return err;
+    }
+    close(dup_fd);
+    fprintf(stderr,
+            "[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=%#llx hva=%p\n",
+            (unsigned long long)size, ram);
+    return 0;
 }
 
 void wavevm_setup_shared_ram(MemoryRegion *mr, uint64_t size, int fd)
@@ -70,5 +108,5 @@ void wavevm_setup_shared_ram(MemoryRegion *mr, uint64_t size, int fd)
     if (!mr) {
         return;
     }
-    wavevm_attach_shared_ram_ptr(memory_region_get_ram_ptr(mr), size, fd);
+    (void)wavevm_attach_shared_ram_ptr(memory_region_get_ram_ptr(mr), size, fd);
 }

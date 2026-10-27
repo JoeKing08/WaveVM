@@ -453,7 +453,13 @@ typedef struct {
      * to local TCG execution when Linux uses FPU/SIMD in kernel threads.
      */
     uint32_t xsave_size;
-    uint32_t _pad1;
+    /*
+     * FE→helper STW pairing hint (was _pad1). 0 = helper default kick.
+     * When prefer-local / same-RIP spin is active on the master, FE requests
+     * a shorter remote cpu_exec quantum so BSP can reclaim guest progress
+     * without force_local. Helper clamps to a safe range.
+     */
+    uint32_t slice_budget_us;
     uint8_t xsave_area[WVM_TCG_XSAVE_AREA_SIZE];
 } wvm_tcg_context_t;
 

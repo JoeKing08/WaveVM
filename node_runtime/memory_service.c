@@ -1718,6 +1718,12 @@ int wvm_memory_service_global_request_fault(
         ack->data_bytes = waiter->data_bytes;
         memcpy(page, waiter->data, waiter->data_bytes);
     }
+    /*
+     * G10/G5-aligned: retain COMPLETED through completion_timeout_ms horizon so
+     * same-operation_id replay and conflict checks work. Capacity pressure is
+     * handled by reap_expired + allocate backpressure (-EAGAIN when full), not
+     * by forgetting results before the horizon.
+     */
     global_waiter_finish_locked(waiter, service);
     pthread_mutex_unlock(&g_global_memory_service.lock);
     return 0;
@@ -1911,6 +1917,10 @@ int wvm_memory_service_global_request_commit(
         }
     }
     *ack = waiter->ack;
+    /*
+     * G10/G5-aligned: retain COMPLETED commit waiters through the horizon for
+     * idempotent replay. Reap + -EAGAIN backpressure handle table pressure.
+     */
     global_commit_waiter_finish_locked(waiter, service);
     pthread_mutex_unlock(&g_global_memory_service.lock);
     return 0;

@@ -1,4 +1,6 @@
 #include <errno.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -213,6 +215,14 @@ struct completion_state {
     size_t count;
     struct wvm_vcpu_handoff_request request;
     struct wvm_vcpu_handoff_result result;
+    /* Drain vs completion-callback race (STOP quiesce). */
+    int block;
+    volatile int entered;
+    volatile int finished;
+    pthread_mutex_t lock;
+    pthread_cond_t entered_cv;
+    pthread_cond_t release_cv;
+    int released;
 };
 
 static int capture_send(void *opaque, const struct wvm_envelope *envelope,
@@ -243,10 +253,38 @@ static int capture_completion(
     if (!state || !request || !result) {
         return -EINVAL;
     }
+    if (state->block) {
+        pthread_mutex_lock(&state->lock);
+        state->entered = 1;
+        pthread_cond_broadcast(&state->entered_cv);
+        while (!state->released) {
+            pthread_cond_wait(&state->release_cv, &state->lock);
+        }
+        pthread_mutex_unlock(&state->lock);
+    }
     state->request = *request;
     state->result = *result;
     state->count++;
+    state->finished = 1;
     return 0;
+}
+
+struct drain_dispatch_args {
+    struct wvm_vcpu_handoff_coordinator *coordinator;
+    const struct wvm_envelope *exit_envelope;
+    int rc;
+    char error[256];
+};
+
+static void *drain_dispatch_thread(void *opaque)
+{
+    struct drain_dispatch_args *args = opaque;
+
+    args->error[0] = '\0';
+    args->rc = wvm_vcpu_handoff_coordinator_dispatch(
+        args->coordinator, args->exit_envelope, args->error,
+        sizeof(args->error));
+    return NULL;
 }
 
 static void fill_submit(struct wvm_vcpu_handoff_submit *submit,
@@ -664,6 +702,153 @@ int main(void)
             wvm_route_runtime_destroy(&routes);
             return 1;
         }
+    }
+
+    /*
+     * STOP drain vs completion-callback race evidence:
+     * complete() runs outside the coordinator lock. Drain must wait for
+     * completions_in_progress, not only REMOTE_IN_FLIGHT, or STOP can destroy
+     * the service/opaque while the callback still runs.
+     */
+    {
+        pthread_t dispatch_thread;
+        struct drain_dispatch_args dispatch_args;
+        struct timespec deadline;
+        int entered = 0;
+        char drain_error[256];
+        size_t count_before;
+
+        if (expect(pthread_mutex_init(&completed.lock, NULL) == 0,
+                   "init completion lock") ||
+            expect(pthread_cond_init(&completed.entered_cv, NULL) == 0,
+                   "init entered cond") ||
+            expect(pthread_cond_init(&completed.release_cv, NULL) == 0,
+                   "init release cond")) {
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+        completed.block = 1;
+        completed.entered = 0;
+        completed.finished = 0;
+        completed.released = 0;
+        count_before = completed.count;
+
+        fill_submit(&submit, 3, 0xE1, submit_context, submit_context_bytes);
+        sent.count = 0;
+        if (expect(wvm_vcpu_handoff_coordinator_submit(
+                       &coordinator, &submit, error, sizeof(error)) == 0 &&
+                       sent.count == 1,
+                   "drain-race submit new op on free lane")) {
+            completed.block = 0;
+            completed.released = 1;
+            pthread_cond_broadcast(&completed.release_cv);
+            pthread_cond_destroy(&completed.release_cv);
+            pthread_cond_destroy(&completed.entered_cv);
+            pthread_mutex_destroy(&completed.lock);
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+        if (expect(wvm_x86_context_encode(
+                       WVM_VCPU_BACKEND_TCG,
+                       WVM_VCPU_CONTEXT_FIELD_ARCHITECTURAL_STATE |
+                           WVM_VCPU_CONTEXT_FIELD_INTERRUPT_STATE,
+                       &completed_context, sizeof(completed_context),
+                       result_context, sizeof(result_context),
+                       &result_context_bytes, error, sizeof(error)) == 0 &&
+                       build_success_exit(&sent, 42, result_context,
+                                          result_context_bytes, exit_payload,
+                                          sizeof(exit_payload), &exit_envelope,
+                                          error, sizeof(error)) == 0,
+                   "drain-race build matching VCPU_EXIT")) {
+            completed.block = 0;
+            completed.released = 1;
+            pthread_cond_broadcast(&completed.release_cv);
+            pthread_cond_destroy(&completed.release_cv);
+            pthread_cond_destroy(&completed.entered_cv);
+            pthread_mutex_destroy(&completed.lock);
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+
+        dispatch_args.coordinator = &coordinator;
+        dispatch_args.exit_envelope = &exit_envelope;
+        dispatch_args.rc = -1;
+        dispatch_args.error[0] = '\0';
+        if (expect(pthread_create(&dispatch_thread, NULL, drain_dispatch_thread,
+                                  &dispatch_args) == 0,
+                   "spawn dispatch thread for drain race")) {
+            completed.block = 0;
+            completed.released = 1;
+            pthread_cond_broadcast(&completed.release_cv);
+            pthread_cond_destroy(&completed.release_cv);
+            pthread_cond_destroy(&completed.entered_cv);
+            pthread_mutex_destroy(&completed.lock);
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 5;
+        pthread_mutex_lock(&completed.lock);
+        while (!completed.entered) {
+            if (pthread_cond_timedwait(&completed.entered_cv, &completed.lock,
+                                       &deadline) != 0) {
+                break;
+            }
+        }
+        entered = completed.entered;
+        pthread_mutex_unlock(&completed.lock);
+        if (expect(entered,
+                   "complete() entered while REMOTE_IN_FLIGHT already cleared") ||
+            expect(wvm_vcpu_handoff_coordinator_drain(
+                       &coordinator, 100, drain_error,
+                       sizeof(drain_error)) == -ETIMEDOUT,
+                   "drain times out while completion callback still runs")) {
+            pthread_mutex_lock(&completed.lock);
+            completed.released = 1;
+            pthread_cond_broadcast(&completed.release_cv);
+            pthread_mutex_unlock(&completed.lock);
+            pthread_join(dispatch_thread, NULL);
+            completed.block = 0;
+            pthread_cond_destroy(&completed.release_cv);
+            pthread_cond_destroy(&completed.entered_cv);
+            pthread_mutex_destroy(&completed.lock);
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+
+        pthread_mutex_lock(&completed.lock);
+        completed.released = 1;
+        pthread_cond_broadcast(&completed.release_cv);
+        pthread_mutex_unlock(&completed.lock);
+        if (expect(wvm_vcpu_handoff_coordinator_drain(
+                       &coordinator, 5000, drain_error,
+                       sizeof(drain_error)) == 0,
+                   "drain waits for completions_in_progress to reach zero") ||
+            expect(pthread_join(dispatch_thread, NULL) == 0 &&
+                       dispatch_args.rc == 0 &&
+                       completed.finished == 1 &&
+                       completed.count == count_before + 1,
+                   "slow complete finished exactly once after drain")) {
+            completed.block = 0;
+            pthread_cond_destroy(&completed.release_cv);
+            pthread_cond_destroy(&completed.entered_cv);
+            pthread_mutex_destroy(&completed.lock);
+            wvm_vcpu_handoff_coordinator_destroy(&coordinator);
+            wvm_route_runtime_destroy(&routes);
+            return 1;
+        }
+        completed.block = 0;
+        pthread_cond_destroy(&completed.release_cv);
+        pthread_cond_destroy(&completed.entered_cv);
+        pthread_mutex_destroy(&completed.lock);
+        puts("EVID vcpu_coordinator_drain: "
+             "completion_callback_timeout=1 drained=1");
     }
 
     wvm_vcpu_handoff_coordinator_destroy(&coordinator);

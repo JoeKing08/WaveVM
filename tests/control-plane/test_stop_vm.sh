@@ -273,7 +273,7 @@ fi
 
 # Capture admitted child / lease / socket / SHM evidence while RUNNING.
 # Namespace is unique per create (digest suffix); derive endpoints from SHM name.
-mapfile -t pre_shm < <(grep -oE '/wavevm_ram_wvm-v'"$vm_id"'[^[:space:]]*' "$tmpdir/agent.log" 2>/dev/null | sort -u || true)
+mapfile -t pre_shm < <(grep -oE '/wavevm_ram_wvm-v'"$vm_id"'[A-Za-z0-9_-]*' "$tmpdir/agent.log" 2>/dev/null | sed "s/['\":.,;)]*$//" | sort -u || true)
 mapfile -t pre_children < <(pgrep -P "$agent_pid" 2>/dev/null | sort -u || true)
 pre_paths=()
 for name in "${pre_shm[@]}"; do

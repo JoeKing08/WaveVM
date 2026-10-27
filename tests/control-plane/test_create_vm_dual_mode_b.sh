@@ -300,7 +300,7 @@ if cmp -s "$manifest1" "$manifest2"; then
     exit 1
 fi
 
-mapfile -t shm_names < <(grep -oE '/wavevm_ram_wvm-v[0-9]+[^[:space:]]+' "$tmpdir/agent.log" | sort -u)
+mapfile -t shm_names < <(grep -oE '/wavevm_ram_wvm-v[0-9]+[A-Za-z0-9_-]*' "$tmpdir/agent.log" | sed "s/['\":.,;)]*$//" | sort -u)
 if [[ ${#shm_names[@]} -lt 2 ]]; then
     echo "dual Mode B expected ≥2 distinct SHM names in agent.log (got ${#shm_names[@]})" >&2
     printf '  %s\n' "${shm_names[@]}" >&2

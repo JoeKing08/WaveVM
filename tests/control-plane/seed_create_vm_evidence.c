@@ -320,7 +320,8 @@ int main(int argc, char **argv)
     profile.local_executor_control_port = executor_control_port;
     profile.executor_worker_count = 2;
     profile.sync_batch_size = 8;
-    profile.vcpu_handoff_record_capacity = 32;
+    /* Cirros remote TCG exits far more than 32 ops inside retention. */
+    profile.vcpu_handoff_record_capacity = 8192;
     profile.node_runtime_data_ports = data_ports;
     profile.node_runtime_data_port_count = 4;
     profile.local_executor_service_ports = service_ports;

@@ -39,6 +39,13 @@ int wvm_executor_runtime_bind_admitted(
 int wvm_executor_runtime_attach_tcg_session(uint32_t vcpu_index,
                                            int session_fd);
 
+/*
+ * FD used after ensure_remote_memory_side_effect SHM install to notify the
+ * slave TCG QEMU (MSG_PAGE_PUSH_FULL + PUSH_BARRIER) so version + PROT_READ
+ * arm dirty tracking. Caller retains ownership; pass -1 to clear.
+ */
+void wvm_executor_runtime_set_tcg_install_notify_fd(int fd);
+
 /* Publish EXECUTOR_READY after bind + required sessions are attached. */
 void wvm_executor_runtime_publish_ready(void);
 

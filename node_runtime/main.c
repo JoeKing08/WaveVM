@@ -1371,6 +1371,17 @@ static int run_runtime_main(int argc, char **argv)
             stop_ok = 0;
         }
         drain_error[0] = '\0';
+        /* After coordinator drain, completion callbacks have returned and any
+         * legacy ACK is either written or REPLY_QUEUED. Drain the service so
+         * STOP does not join the reply worker over an in-flight handoff ACK.
+         */
+        if (wvm_vcpu_service_drain(&vcpu_service, 30000, drain_error,
+                                   sizeof(drain_error)) != 0) {
+            fprintf(stderr, "[STOP] vCPU service drain failed: %s\n",
+                    drain_error[0] ? drain_error : "unknown error");
+            stop_ok = 0;
+        }
+        drain_error[0] = '\0';
         if (wvm_memory_service_drain(&memory_service, 30000, drain_error,
                                      sizeof(drain_error)) != 0) {
             fprintf(stderr, "[STOP] memory service drain failed: %s\n",

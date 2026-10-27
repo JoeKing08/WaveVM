@@ -125,6 +125,17 @@ int g_ctrl_port = 0; // 这里的定义同时供应给 wavevm_node_master 和 wa
 uint32_t g_curr_epoch = 0;
 #ifndef __KERNEL__
 extern int broadcast_push_to_qemu(uint16_t msg_type, void *payload, int len);
+#ifndef __KERNEL__
+/* Strong definition lives in slave_hybrid.c (node_runtime link). */
+__attribute__((weak))
+int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len)
+{
+    (void)msg_type;
+    (void)payload;
+    (void)len;
+    return 0;
+}
+#endif
 extern int broadcast_push_to_qemu_fenced(uint16_t msg_type, void *payload,
                                           int len, uint64_t timeout_us);
 extern int wait_local_qemu_push_barrier(uint64_t timeout_us);
@@ -1482,8 +1493,20 @@ int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
     pthread_mutex_lock(&active_dir_locks()[lock_idx]);
     page = find_page_meta_locked(gpa);
     if (!page) {
-        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
-        return -ENOENT;
+        /*
+         * Handoff / first publish: Cirros remote vCPU handoff dirties many
+         * pages that were never fault-read. Creating the implicit zero page
+         * when base matches the directory initial version avoids a
+         * fault-materialize storm that exhausts the V1 waiter retention table.
+         * Lookup-only remains the rule for any other base (stale/invalid).
+         */
+        if (base_version == MAKE_VERSION(g_curr_epoch, 1)) {
+            page = DIR_FIND_OR_CREATE(gpa, lock_idx);
+        }
+        if (!page) {
+            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
+            return -ENOENT;
+        }
     }
     if (page->version != base_version) {
         pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
@@ -1611,6 +1634,22 @@ int wvm_publish_local_commit(uint64_t gpa, uint64_t result_version,
         memcpy(diff->data, data, data_bytes);
     }
 
+    /*
+     * Same-node TCG PROXY helpers never see Wavelet broadcast: enqueue drops
+     * g_my_node_id, and writer exclusion skips the only local subscriber id.
+     * Mirror the legacy COMMIT_DIFF path: push to local QEMU clients and to
+     * every helper push UDP port before remote subscriber fanout.
+     */
+#ifndef __KERNEL__
+    {
+        uint16_t local_type =
+            use_full_page ? MSG_PAGE_PUSH_FULL : MSG_PAGE_PUSH_DIFF;
+        (void)notify_local_qemu_push(local_type, payload, (int)payload_bytes);
+        (void)wavevm_proxy_push_to_local_helpers(local_type, payload,
+                                                 (int)payload_bytes);
+    }
+#endif
+
     broadcast_to_subscriber_ids(
         subscriber_ids, subscriber_count, writer_node_id,
         use_full_page ? MSG_PAGE_PUSH_FULL : MSG_PAGE_PUSH_DIFF, payload,
@@ -1719,7 +1758,25 @@ void* broadcast_worker_thread(void* arg) {
 
 static void enqueue_broadcast_to_target(uint32_t target_id, uint16_t msg_type,
                                         void *payload, int len, uint8_t flags) {
-    if (target_id == (uint32_t)g_my_node_id) return;
+    if (target_id == (uint32_t)g_my_node_id) {
+        /*
+         * Same-node: do not silently drop. Local QEMU + TCG helpers need the
+         * push; network send_packet to self is not used for PROXY helpers.
+         */
+#ifndef __KERNEL__
+        (void)flags;
+        if (payload && len > 0) {
+            (void)notify_local_qemu_push(msg_type, payload, len);
+            (void)wavevm_proxy_push_to_local_helpers(msg_type, payload, len);
+        }
+#else
+        (void)msg_type;
+        (void)payload;
+        (void)len;
+        (void)flags;
+#endif
+        return;
+    }
 
     // 分配内存
     void *data_copy = NULL;

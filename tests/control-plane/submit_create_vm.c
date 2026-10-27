@@ -130,6 +130,22 @@ int main(int argc, char **argv)
         }
         requested_vcpus = (uint32_t)parsed;
     }
+    {
+        const char *vcpu_env = getenv("WVM_CREATE_VCPUS");
+        char *vcpu_end = NULL;
+        unsigned long parsed_vcpus;
+
+        if (vcpu_env && *vcpu_env) {
+            parsed_vcpus = strtoul(vcpu_env, &vcpu_end, 10);
+            if (!vcpu_end || *vcpu_end != '\0' || parsed_vcpus == 0 ||
+                parsed_vcpus > 64U) {
+                fprintf(stderr,
+                        "submit CREATE_VM: WVM_CREATE_VCPUS must be 1..64\n");
+                return 2;
+            }
+            requested_vcpus = (uint32_t)parsed_vcpus;
+        }
+    }
     if (argc >= 5 && parse_placement(argv[4], &placement_policy) != 0) {
         fprintf(stderr, "submit CREATE_VM: placement must be compact|spread\n");
         return 2;
@@ -176,7 +192,29 @@ int main(int argc, char **argv)
     snprintf(request.display_name, sizeof(request.display_name), "%s",
              display_name);
     request.requested_vcpus = requested_vcpus;
+    /*
+     * Default 16 MiB keeps existing CREATE_VM control-plane verticals cheap.
+     * Guest smoke (§7) sets WVM_CREATE_MEMORY_BYTES to a Cirros-capable size
+     * (e.g. 256 MiB). Not a production bypass — same CREATE_VM request field.
+     */
     request.requested_memory_bytes = 16ULL * 1024ULL * 1024ULL;
+    {
+        const char *mem_env = getenv("WVM_CREATE_MEMORY_BYTES");
+        char *mem_end = NULL;
+        unsigned long long parsed_mem;
+
+        if (mem_env && *mem_env) {
+            parsed_mem = strtoull(mem_env, &mem_end, 10);
+            if (!mem_end || *mem_end != '\0' || parsed_mem < (16ULL * 1024ULL * 1024ULL) ||
+                parsed_mem > (16ULL * 1024ULL * 1024ULL * 1024ULL)) {
+                fprintf(stderr,
+                        "submit CREATE_VM: WVM_CREATE_MEMORY_BYTES must be "
+                        "16MiB..16GiB decimal bytes\n");
+                return 2;
+            }
+            request.requested_memory_bytes = parsed_mem;
+        }
+    }
     request.execution_backend_policy = backend_policy;
     request.accelerator_policy =
         require_kernel ? WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL

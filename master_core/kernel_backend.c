@@ -612,21 +612,27 @@ fail_ctx:
 
 static void wvm_drain_context_diff_tasks(struct wvm_kernel_context *ctx)
 {
-    LIST_HEAD(local);
+    LIST_HEAD(queued);
+    LIST_HEAD(failed);
     struct diff_task_t *task, *tmp;
-    int n = 0;
+    int n_queued = 0;
 
     if (!ctx)
         return;
     spin_lock_bh(&ctx->diff_lock);
-    list_splice_init(&ctx->diff_queue, &local);
-    list_splice_init(&ctx->failed_diffs, &local);
+    list_splice_init(&ctx->diff_queue, &queued);
+    list_splice_init(&ctx->failed_diffs, &failed);
     ctx->failed_diff_count = 0;
     spin_unlock_bh(&ctx->diff_lock);
 
-    list_for_each_entry_safe(task, tmp, &local, list) {
+    /*
+     * diff_queue tasks hold a mkwrite context get until completion/drain.
+     * failed_diffs retain pre-image only — they must NOT pin ctx->refs, or
+     * last-unbind can never reach destroy (circular: destroy drains these).
+     */
+    list_for_each_entry_safe(task, tmp, &queued, list) {
         list_del(&task->list);
-        n++;
+        n_queued++;
         if (task->pre_image)
             vfree(task->pre_image);
         if (task->page)
@@ -634,8 +640,17 @@ static void wvm_drain_context_diff_tasks(struct wvm_kernel_context *ctx)
         wvm_kernel_put_context(task->context);
         kfree(task);
     }
-    if (n)
-        atomic_sub(n, &g_diff_pending);
+    list_for_each_entry_safe(task, tmp, &failed, list) {
+        list_del(&task->list);
+        if (task->pre_image)
+            vfree(task->pre_image);
+        if (task->page)
+            put_page(task->page);
+        /* no put_context — permanent-fail path already dropped the get */
+        kfree(task);
+    }
+    if (n_queued)
+        atomic_sub(n_queued, &g_diff_pending);
 }
 
 static void wvm_kernel_destroy_context(struct wvm_kernel_context *ctx)
@@ -1601,12 +1616,19 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             {
                 uint32_t wire_id;
 
+                /* G1: refuse lying 8-bit identity; fail closed on encode. */
                 if (wvm_wire_encode_id(context->identity.vm_id,
                                        wvm_ctx_local_vnode(context),
-                                       &wire_id) == 0)
-                    hdr->slave_id = htonl(wire_id);
-                else
-                    hdr->slave_id = 0;
+                                       &wire_id) != 0) {
+                    k_free_packet(buffer);
+                    k_free_req_id_ctx(context, rid);
+                    kfree(bounce_buf);
+                    kfree(meta);
+                    __free_page(page);
+                    result = VM_FAULT_SIGBUS;
+                    goto out;
+                }
+                hdr->slave_id = htonl(wire_id);
             }
             hdr->req_id = WVM_HTONLL(rid);
             hdr->qos_level = 1;
@@ -1656,18 +1678,20 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
                     hdr->magic = htonl(WVM_MAGIC);
                     hdr->msg_type = htons(MSG_MEM_READ);
                     hdr->payload_len = htons(sizeof(net_gpa));
+                    /* G1: skip retry emit when identity does not fit wire. */
                     if (wvm_wire_encode_id(context->identity.vm_id,
                                            wvm_ctx_local_vnode(context),
-                                           &wire_id) == 0)
+                                           &wire_id) != 0) {
+                        k_free_packet(buffer);
+                    } else {
                         hdr->slave_id = htonl(wire_id);
-                    else
-                        hdr->slave_id = 0;
-                    hdr->req_id = WVM_HTONLL(rid);
-                    hdr->qos_level = 1;
-                    hdr->crc32 = 0;
-                    memcpy(buffer + sizeof(*hdr), &net_gpa, sizeof(net_gpa));
-                    k_send_packet_ctx(context, buffer, pkt_len, dir_node);
-                    k_free_packet(buffer);
+                        hdr->req_id = WVM_HTONLL(rid);
+                        hdr->qos_level = 1;
+                        hdr->crc32 = 0;
+                        memcpy(buffer + sizeof(*hdr), &net_gpa, sizeof(net_gpa));
+                        k_send_packet_ctx(context, buffer, pkt_len, dir_node);
+                        k_free_packet(buffer);
+                    }
                 }
             }
         }
@@ -1780,114 +1804,172 @@ static int committer_thread_fn(void *data) {
         
         kunmap_atomic(current_data);
         
-        // 4. 发送 Diff
+        // 4. Commit Diff (G7 fail-closed AUTO_ROUTE; local = canonical)
         if (first_diff != -1) {
             uint16_t offset = first_diff;
             uint16_t size = last_diff - first_diff + 1;
-            
-            // 构造 COMMIT_DIFF 包
-            size_t payload_size = sizeof(struct wvm_diff_log) + size;
-            size_t pkt_len = sizeof(struct wvm_header) + payload_size;
-            
-            uint8_t *buffer = k_alloc_packet(pkt_len, 0); // Can sleep here
-            if (buffer) {
-                struct wvm_header *hdr = (struct wvm_header *)buffer;
+            uint32_t dir_node;
+            int send_rc = -EAGAIN;
+            uint8_t *diff_bytes = NULL;
+            kvm_page_meta_t *meta = NULL;
+            uint64_t base_version = 0;
+            uint64_t result_version = 0;
+
+            /*
+             * A02/G7: bind context through directory lookup and commit.
+             * Unknown route must NOT be treated as success; confirmed local
+             * owner must apply directory version + subscriber publish.
+             */
+            wvm_set_active_context(task->context);
+            dir_node = wvm_get_directory_node_id(task->gpa);
+
+            if (!WVM_IS_VALID_TARGET(dir_node)) {
+                wvm_clear_active_context();
+                send_rc = -ENODEV;
+                goto diff_commit_retain;
+            }
+
+            rcu_read_lock();
+            meta = radix_tree_lookup(&task->context->page_tree,
+                                     task->gpa >> PAGE_SHIFT);
+            base_version = meta ? meta->version : 0;
+            rcu_read_unlock();
+
+            diff_bytes = kmalloc(size, GFP_KERNEL);
+            if (!diff_bytes) {
+                wvm_clear_active_context();
+                send_rc = -ENOMEM;
+                goto diff_commit_retain;
+            }
+            current_data = kmap_atomic(task->page);
+            memcpy(diff_bytes, (uint8_t *)current_data + offset, size);
+            kunmap_atomic(current_data);
+
+            if (WVM_GET_NODEID(dir_node) ==
+                wvm_ctx_local_vnode(task->context)) {
+                if (base_version == 0)
+                    base_version = MAKE_VERSION(g_curr_epoch, 1);
+                send_rc = wvm_handle_local_commit(task->gpa, base_version,
+                                                  offset, diff_bytes, size,
+                                                  &result_version);
+                if (send_rc == 0) {
+                    int pub_rc = wvm_publish_local_commit(
+                        task->gpa, result_version, offset, diff_bytes, size,
+                        wvm_ctx_local_vnode(task->context));
+                    if (pub_rc != 0 && pub_rc != -ENOENT) {
+                        pr_warn_ratelimited(
+                            "wavevm: local commit publish rc=%d gpa=0x%llx\n",
+                            pub_rc, (unsigned long long)task->gpa);
+                    }
+                    if (meta)
+                    spin_lock(&task->context->page_tree_lock);
+                    meta = radix_tree_lookup(&task->context->page_tree,
+                                             task->gpa >> PAGE_SHIFT);
+                    if (meta)
+                        meta->version = result_version;
+                    spin_unlock(&task->context->page_tree_lock);
+                }
+                kfree(diff_bytes);
+                diff_bytes = NULL;
+                wvm_clear_active_context();
+                if (send_rc != 0)
+                    goto diff_commit_retain;
+                /* Local canonical commit succeeded — reprotect below. */
+            } else {
+                size_t payload_size = sizeof(struct wvm_diff_log) + size;
+                size_t pkt_len = sizeof(struct wvm_header) + payload_size;
+                uint8_t *buffer = k_alloc_packet(pkt_len, 0);
                 uint32_t wire_id;
 
-                hdr->magic = htonl(WVM_MAGIC);
-                hdr->msg_type = htons(MSG_COMMIT_DIFF);
-                hdr->payload_len = htons(payload_size);
-                if (wvm_wire_encode_id(task->context->identity.vm_id,
-                                       wvm_ctx_local_vnode(task->context),
-                                       &wire_id) != 0) {
-                    k_free_packet(buffer);
-                    vfree(task->pre_image);
-                    put_page(task->page);
-                    wvm_kernel_put_context(task->context);
-                    kfree(task);
-                    continue;
+                if (!buffer) {
+                    kfree(diff_bytes);
+                    wvm_clear_active_context();
+                    send_rc = -ENOMEM;
+                    goto diff_commit_retain;
                 }
-                hdr->slave_id = htonl(wire_id);
-                hdr->req_id = 0;
-                hdr->qos_level = 1;
-
-                struct wvm_diff_log *log = (struct wvm_diff_log*)(buffer + sizeof(*hdr));
-                log->gpa = WVM_HTONLL(task->gpa);
-                rcu_read_lock();
-                kvm_page_meta_t *meta = radix_tree_lookup(
-                    &task->context->page_tree, task->gpa >> PAGE_SHIFT);
-                // 如果找到了元数据，就填入网络序的版本号；找不到(极罕见)则填0触发强制同步作为保底
-                log->version = meta ? WVM_HTONLL(meta->version) : 0;
-                rcu_read_unlock();
-                log->offset = htons(offset);
-                log->size = htons(size);
-                
-                // Copy diff data (pointer past header avoids FORTIFY field-span WARN)
-                current_data = kmap_atomic(task->page);
                 {
-                    uint8_t *dst = (uint8_t *)(log + 1);
-                    memcpy(dst, (uint8_t *)current_data + offset, size);
+                    struct wvm_header *hdr = (struct wvm_header *)buffer;
+                    struct wvm_diff_log *log =
+                        (struct wvm_diff_log *)(buffer + sizeof(*hdr));
+
+                    hdr->magic = htonl(WVM_MAGIC);
+                    hdr->msg_type = htons(MSG_COMMIT_DIFF);
+                    hdr->payload_len = htons(payload_size);
+                    if (wvm_wire_encode_id(task->context->identity.vm_id,
+                                           wvm_ctx_local_vnode(task->context),
+                                           &wire_id) != 0) {
+                        /* G1: keep pre-image; do not emit lying 8-bit id. */
+                        k_free_packet(buffer);
+                        kfree(diff_bytes);
+                        wvm_clear_active_context();
+                        send_rc = -EOPNOTSUPP;
+                        goto diff_commit_retain;
+                    }
+                    hdr->slave_id = htonl(wire_id);
+                    hdr->req_id = 0;
+                    hdr->qos_level = 1;
+                    log->gpa = WVM_HTONLL(task->gpa);
+                    log->version = WVM_HTONLL(base_version);
+                    log->offset = htons(offset);
+                    log->size = htons(size);
+                    memcpy((uint8_t *)(log + 1), diff_bytes, size);
                 }
-                kunmap_atomic(current_data);
-                
+                kfree(diff_bytes);
+                diff_bytes = NULL;
+                send_rc = k_send_packet_ctx(task->context, buffer, pkt_len,
+                                            dir_node);
+                wvm_clear_active_context();
+                k_free_packet(buffer);
+                if (send_rc != 0)
+                    goto diff_commit_retain;
+            }
+
+            if (0) {
+diff_commit_retain:
                 /*
-                 * A02: keep explicit context bound through directory lookup AND
-                 * k_send_packet. Clearing before send made active context NULL
-                 * so send returned -ENODEV and diffs were silently dropped.
-                 * Check send result; failed commits skip the "success" reprotect
-                 * cycle so the page remains dirty for a later retry path.
+                 * R04/A02/G7: do not drop the unique pre-image/diff.
+                 * Requeue with a bounded retry; page stays dirty.
                  */
                 {
-                    uint32_t dir_node;
-                    int send_rc;
+                    const uint8_t max_retries = 8;
 
-                    wvm_set_active_context(task->context);
-                    dir_node = wvm_get_directory_node_id(task->gpa);
-                    send_rc = k_send_packet_ctx(task->context, buffer, pkt_len,
-                                                dir_node);
-                    wvm_clear_active_context();
-                    k_free_packet(buffer);
-                    if (send_rc != 0) {
-                        /*
-                         * R04/A02: do not drop the unique pre-image/diff.
-                         * Requeue with a bounded retry; page stays dirty.
-                         */
-                        const uint8_t max_retries = 8;
-                        pr_warn_ratelimited(
-                            "wavevm: diff commit send failed gpa=0x%llx rc=%d "
-                            "retry=%u\n",
+                    pr_warn_ratelimited(
+                        "wavevm: diff commit failed gpa=0x%llx rc=%d "
+                        "retry=%u\n",
+                        (unsigned long long)task->gpa, send_rc,
+                        task->send_retries);
+                    if (atomic_read(&task->context->file_attaches) == 0) {
+                        if (task->pre_image)
+                            vfree(task->pre_image);
+                        if (task->page)
+                            put_page(task->page);
+                        wvm_kernel_put_context(task->context);
+                        kfree(task);
+                    } else if (task->send_retries < max_retries) {
+                        task->send_retries++;
+                        spin_lock_bh(&task->context->diff_lock);
+                        list_add_tail(&task->list,
+                                      &task->context->diff_queue);
+                        spin_unlock_bh(&task->context->diff_lock);
+                        atomic_inc(&g_diff_pending);
+                        wake_up_interruptible(&g_diff_wq);
+                    } else {
+                        struct wvm_kernel_context *park_ctx = task->context;
+
+                        pr_err_ratelimited(
+                            "wavevm: diff commit failed permanently "
+                            "gpa=0x%llx rc=%d after %u retries; "
+                            "retaining pre-image\n",
                             (unsigned long long)task->gpa, send_rc,
                             task->send_retries);
-                        if (task->send_retries < max_retries) {
-                            task->send_retries++;
-                            spin_lock_bh(&task->context->diff_lock);
-                            list_add_tail(&task->list,
-                                          &task->context->diff_queue);
-                            spin_unlock_bh(&task->context->diff_lock);
-                            atomic_inc(&g_diff_pending);
-                            wake_up_interruptible(&g_diff_wq);
-                        } else {
-                            /*
-                             * R04: never free the only pre-image while the VM
-                             * keeps running.  Park the task (data, page and
-                             * context ref included) on the context's failed
-                             * list and record the failure for teardown.
-                             */
-                            pr_err_ratelimited(
-                                "wavevm: diff commit failed permanently "
-                                "gpa=0x%llx rc=%d after %u retries; "
-                                "retaining pre-image\n",
-                                (unsigned long long)task->gpa, send_rc,
-                                task->send_retries);
-                            task->context->diff_failure = send_rc;
-                            spin_lock_bh(&task->context->diff_lock);
-                            list_add_tail(&task->list,
-                                          &task->context->failed_diffs);
-                            task->context->failed_diff_count++;
-                            spin_unlock_bh(&task->context->diff_lock);
-                        }
-                        continue;
+                        park_ctx->diff_failure = send_rc;
+                        spin_lock_bh(&park_ctx->diff_lock);
+                        list_add_tail(&task->list, &park_ctx->failed_diffs);
+                        park_ctx->failed_diff_count++;
+                        spin_unlock_bh(&park_ctx->diff_lock);
+                        wvm_kernel_put_context(park_ctx);
                     }
+                    continue;
                 }
             }
         }
@@ -2685,6 +2767,11 @@ static int wvm_context_unbind_file(
         wvm_set_active_context(ctx);
         wvm_logic_unbind_route_snapshot();
         wvm_clear_active_context();
+        /*
+         * workerfix3: drop any still-queued mkwrite gets before the file put.
+         * (failed_diffs no longer pin refs; queued retries still do.)
+         */
+        wvm_drain_context_diff_tasks(ctx);
     }
 
     /* Drop the file's context reference; last put destroys + hash_del. */
@@ -3146,14 +3233,18 @@ static void wvm_vma_open(struct vm_area_struct *vma)
 static void wvm_vma_close(struct vm_area_struct *vma)
 {
     struct wvm_kernel_context *context = wvm_context_from_vma(vma);
+    int last_map = 0;
 
     if (!context)
         return;
     down_write(&context->mapping_sem);
     if (context->mapping && vma->vm_file &&
         context->mapping == vma->vm_file->f_mapping)
-        atomic_dec(&context->mapping_file_refs);
+        last_map = atomic_dec_and_test(&context->mapping_file_refs);
     up_write(&context->mapping_sem);
+    /* Drop queued mkwrite gets when no VMA remains and no FD attach. */
+    if (last_map && atomic_read(&context->file_attaches) == 0)
+        wvm_drain_context_diff_tasks(context);
     wvm_kernel_put_context(context);
 }
 

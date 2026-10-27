@@ -12,11 +12,13 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
@@ -34,6 +36,7 @@
 #include "wavevm_executor_session.h"
 #include "wavevm_membership.h"
 #include "wavevm_protocol.h"
+#include "wavevm_local_memory.h"
 #include "wavevm_runtime_gate.h"
 #include "wavevm_vcpu_handoff.h"
 #include "wavevm_x86_context.h"
@@ -44,6 +47,17 @@
 
 static int g_real_qemu;
 static int g_real_kvm;
+
+/* Slave TCG SOCK/GATE/RUNTIME_SOCKET harness for production dirty self-emit. */
+static int g_qemu_req_keep_fd = -1;
+static int g_qemu_push_notify_fd = -1;
+static int g_qemu_cmd_keep_fd = -1;
+static int g_qemu_runtime_listen_fd = -1;
+static char g_qemu_runtime_sock_path[108];
+static pthread_t g_qemu_ipc_thread;
+static volatile int g_qemu_ipc_stop;
+static int g_qemu_ipc_started;
+
 
 /* Production executor's mapping of the shared guest RAM (slave_hybrid.c). */
 extern uint8_t *wvm_executor_guest_ram_base(void);
@@ -381,11 +395,19 @@ static int complete_fault(void *opaque,
     }
     pthread_mutex_lock(&state->lock);
     state->completion_count++;
-    state->completed_gpa = gpa;
-    state->completed_version = version;
-    state->completed_status = status;
-    if (data_bytes != 0 && data_bytes <= sizeof(state->completed_page)) {
-        memcpy(state->completed_page, data, data_bytes);
+    /*
+     * Real-QEMU A14 also faults page0 (ESP) through IPC after the code-page
+     * install. Once the code page ACK is recorded, ignore other GPAs so the
+     * final expects still see the install snapshot.
+     */
+    if (!(g_real_qemu && state->completed_gpa == WVM_MEMORY_PAGE_BYTES &&
+          gpa != WVM_MEMORY_PAGE_BYTES)) {
+        state->completed_gpa = gpa;
+        state->completed_version = version;
+        state->completed_status = status;
+        if (data_bytes != 0 && data_bytes <= sizeof(state->completed_page)) {
+            memcpy(state->completed_page, data, data_bytes);
+        }
     }
     pthread_cond_broadcast(&state->available);
     pthread_mutex_unlock(&state->lock);
@@ -424,6 +446,7 @@ static int complete_commit(void *opaque,
         pthread_mutex_lock(&state->lock);
         state->completed_commit_version = result_version;
         state->commit_completion_count++;
+        pthread_cond_broadcast(&state->available);
         pthread_mutex_unlock(&state->lock);
     }
     return result;
@@ -532,6 +555,314 @@ static void *ack_worker(void *opaque)
     return NULL;
 }
 
+
+static void setenv_hex_digest(const char *name, const uint8_t *bytes, size_t n)
+{
+    char hex[WVM_SHA256_DIGEST_BYTES * 2U + 1U];
+    size_t i;
+
+    if (n > WVM_SHA256_DIGEST_BYTES) {
+        n = WVM_SHA256_DIGEST_BYTES;
+    }
+    for (i = 0; i < n; i++) {
+        snprintf(hex + i * 2U, 3, "%02x", bytes[i]);
+    }
+    hex[n * 2U] = '\0';
+    setenv(name, hex, 1);
+}
+
+static int write_exact_fd(int fd, const void *buf, size_t len)
+{
+    const uint8_t *p = buf;
+
+    while (len > 0) {
+        ssize_t n = write(fd, p, len);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (n == 0) {
+            return -1;
+        }
+        p += (size_t)n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+static int read_exact_fd(int fd, void *buf, size_t len)
+{
+    uint8_t *p = buf;
+
+    while (len > 0) {
+        ssize_t n = read(fd, p, len);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (n == 0) {
+            return -1;
+        }
+        p += (size_t)n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+static void handle_a14_ipc_fault(int qemu_fd, const uint8_t *payload,
+                                 uint32_t payload_bytes)
+{
+    struct wvm_local_memory_fault_request request;
+    struct wvm_mem_ack ack;
+    uint8_t page[WVM_MEMORY_PAGE_BYTES];
+    uint8_t ack_payload[WVM_MEM_ACK_HEADER_BYTES + WVM_MEMORY_PAGE_BYTES];
+    uint8_t result_length[WVM_LOCAL_MEMORY_RESULT_LENGTH_BYTES];
+    size_t ack_payload_bytes = 0;
+    char error[192] = {0};
+    int result;
+
+    memset(&request, 0, sizeof(request));
+    memset(&ack, 0, sizeof(ack));
+    if (wvm_local_memory_fault_request_decode(payload, payload_bytes, &request,
+                                              error, sizeof(error)) == 0) {
+        result = wvm_memory_service_global_request_fault(
+            request.gpa, request.operation_id, request.delivery_attempt_id,
+            &ack, page, error, sizeof(error));
+        if (result == 0 &&
+            wvm_mem_ack_encode(&ack, ack_payload, sizeof(ack_payload),
+                               &ack_payload_bytes, error, sizeof(error)) == 0) {
+            result = 0;
+        } else if (result == 0) {
+            result = -EPROTO;
+        }
+    } else {
+        result = -EPROTO;
+    }
+    if (result != 0) {
+        ack_payload_bytes = 0;
+        fprintf(stderr, "goal4 A14 IPC fault rejected status=%d err=%s\n",
+                result, error[0] ? error : "(empty)");
+    } else {
+        fprintf(stderr, "goal4 A14 IPC fault ok gpa=%#llx version=%#llx\n",
+                (unsigned long long)ack.gpa,
+                (unsigned long long)ack.version);
+    }
+    if (wvm_local_memory_result_length_encode(ack_payload_bytes, result_length,
+                                              error, sizeof(error)) != 0 ||
+        write_exact_fd(qemu_fd, result_length, sizeof(result_length)) < 0 ||
+        (ack_payload_bytes != 0 &&
+         write_exact_fd(qemu_fd, ack_payload, ack_payload_bytes) < 0)) {
+        fprintf(stderr, "goal4 A14 IPC fault response write failed\n");
+    }
+}
+
+static void handle_a14_ipc_commit(int qemu_fd, const uint8_t *payload,
+                                  uint32_t payload_bytes)
+{
+    struct wvm_local_memory_commit_request request;
+    struct wvm_local_memory_commit_result result;
+    uint8_t encoded[WVM_LOCAL_MEMORY_COMMIT_RESULT_BYTES];
+    char error[192] = {0};
+    int status;
+
+    memset(&request, 0, sizeof(request));
+    memset(&result, 0, sizeof(result));
+    if (wvm_local_memory_commit_request_decode(payload, payload_bytes, &request,
+                                               error, sizeof(error)) != 0) {
+        status = -EPROTO;
+    } else {
+        status = wvm_memory_service_global_request_commit(
+            request.commit.gpa, request.commit.base_version,
+            request.commit.offset, request.commit.data,
+            request.commit.data_bytes, request.operation_id,
+            request.delivery_attempt_id, &result.ack, error, sizeof(error));
+        memcpy(result.operation_id, request.operation_id,
+               sizeof(result.operation_id));
+    }
+    if (status != 0) {
+        memset(&result, 0, sizeof(result));
+        memcpy(result.operation_id, request.operation_id,
+               sizeof(result.operation_id));
+        result.ack.gpa = request.commit.gpa;
+        result.ack.status = WVM_MEM_COMMIT_ACK_INTERNAL_FAILURE;
+        fprintf(stderr, "goal4 A14 IPC commit rejected status=%d err=%s\n",
+                status, error[0] ? error : "(empty)");
+    } else {
+        fprintf(stderr,
+                "goal4 A14 IPC commit ok gpa=%#llx base=%#llx result=%#llx\n",
+                (unsigned long long)result.ack.gpa,
+                (unsigned long long)request.commit.base_version,
+                (unsigned long long)result.ack.result_version);
+    }
+    if (wvm_local_memory_commit_result_encode(&result, encoded, error,
+                                              sizeof(error)) != 0 ||
+        write_exact_fd(qemu_fd, encoded, sizeof(encoded)) < 0) {
+        fprintf(stderr, "goal4 A14 IPC commit response write failed\n");
+    }
+}
+
+static void *a14_qemu_ipc_client(void *opaque)
+{
+    int qemu_fd = (int)(intptr_t)opaque;
+    /*
+     * Commit payload is header + one page; keep a modest heap buffer rather
+     * than a 1MiB stack frame.
+     */
+    enum { A14_IPC_PAYLOAD_CAP =
+               WVM_LOCAL_MEMORY_COMMIT_REQUEST_HEADER_BYTES +
+               WVM_MEMORY_PAGE_BYTES + 64U };
+    uint8_t *payload_buf = malloc(A14_IPC_PAYLOAD_CAP);
+
+    if (!payload_buf) {
+        close(qemu_fd);
+        return NULL;
+    }
+    while (!g_qemu_ipc_stop) {
+        wvm_ipc_header_t ipc_hdr;
+        struct pollfd pfd = {.fd = qemu_fd, .events = POLLIN};
+        int pr = poll(&pfd, 1, 50);
+
+        if (pr <= 0) {
+            continue;
+        }
+        if (read_exact_fd(qemu_fd, &ipc_hdr, sizeof(ipc_hdr)) < 0) {
+            break;
+        }
+        if (ipc_hdr.len > A14_IPC_PAYLOAD_CAP) {
+            fprintf(stderr, "goal4 A14 IPC oversized type=%u len=%u\n",
+                    (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len);
+            break;
+        }
+        if (ipc_hdr.len != 0 &&
+            read_exact_fd(qemu_fd, payload_buf, ipc_hdr.len) < 0) {
+            break;
+        }
+        switch (ipc_hdr.type) {
+        case WVM_IPC_TYPE_REGISTER:
+            fprintf(stderr,
+                    "goal4 A14 IPC REGISTER fd=%d len=%u (GATE slave sync)\n",
+                    qemu_fd, (unsigned)ipc_hdr.len);
+            break;
+        case WVM_IPC_TYPE_TYPED_MEM_FAULT:
+            handle_a14_ipc_fault(qemu_fd, payload_buf, ipc_hdr.len);
+            break;
+        case WVM_IPC_TYPE_TYPED_MEM_COMMIT:
+            handle_a14_ipc_commit(qemu_fd, payload_buf, ipc_hdr.len);
+            break;
+        case WVM_IPC_TYPE_COMMIT_DIFF_SYNC: {
+            uint8_t sync_response[16] = {0};
+
+            if (write_exact_fd(qemu_fd, sync_response,
+                               sizeof(sync_response)) < 0) {
+                fprintf(stderr, "goal4 A14 COMMIT_DIFF_SYNC ack failed\n");
+            }
+            break;
+        }
+        default:
+            fprintf(stderr, "goal4 A14 IPC ignore type=%u len=%u\n",
+                    (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len);
+            break;
+        }
+    }
+    free(payload_buf);
+    close(qemu_fd);
+    return NULL;
+}
+
+static void *a14_qemu_ipc_listener(void *opaque)
+{
+    (void)opaque;
+    while (!g_qemu_ipc_stop) {
+        struct pollfd pfd = {.fd = g_qemu_runtime_listen_fd, .events = POLLIN};
+        int client;
+        pthread_t client_thread;
+
+        if (poll(&pfd, 1, 50) <= 0) {
+            continue;
+        }
+        client = accept(g_qemu_runtime_listen_fd, NULL, NULL);
+        if (client < 0) {
+            if (errno == EINTR || errno == EAGAIN) {
+                continue;
+            }
+            break;
+        }
+        if (pthread_create(&client_thread, NULL, a14_qemu_ipc_client,
+                           (void *)(intptr_t)client) != 0) {
+            close(client);
+            continue;
+        }
+        pthread_detach(client_thread);
+    }
+    return NULL;
+}
+
+static int start_a14_qemu_ipc_listener(char *error, size_t error_len)
+{
+    struct sockaddr_un addr;
+    int fd;
+
+    if (g_qemu_ipc_started) {
+        return 0;
+    }
+    snprintf(g_qemu_runtime_sock_path, sizeof(g_qemu_runtime_sock_path),
+             "/tmp/wavevm_goal4_rt_%d.sock", (int)getpid());
+    unlink(g_qemu_runtime_sock_path);
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        snprintf(error, error_len, "A14 runtime socket: %s", strerror(errno));
+        return -1;
+    }
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s",
+             g_qemu_runtime_sock_path);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        listen(fd, 8) != 0) {
+        snprintf(error, error_len, "A14 runtime bind/listen: %s",
+                 strerror(errno));
+        close(fd);
+        unlink(g_qemu_runtime_sock_path);
+        return -1;
+    }
+    g_qemu_runtime_listen_fd = fd;
+    g_qemu_ipc_stop = 0;
+    if (pthread_create(&g_qemu_ipc_thread, NULL, a14_qemu_ipc_listener,
+                       NULL) != 0) {
+        snprintf(error, error_len, "A14 runtime listener thread failed");
+        close(fd);
+        g_qemu_runtime_listen_fd = -1;
+        unlink(g_qemu_runtime_sock_path);
+        return -1;
+    }
+    g_qemu_ipc_started = 1;
+    fprintf(stderr, "goal4 A14 RUNTIME_SOCKET=%s listening\n",
+            g_qemu_runtime_sock_path);
+    return 0;
+}
+
+static void stop_a14_qemu_ipc_listener(void)
+{
+    if (!g_qemu_ipc_started) {
+        return;
+    }
+    g_qemu_ipc_stop = 1;
+    if (g_qemu_runtime_listen_fd >= 0) {
+        close(g_qemu_runtime_listen_fd);
+        g_qemu_runtime_listen_fd = -1;
+    }
+    pthread_join(g_qemu_ipc_thread, NULL);
+    if (g_qemu_runtime_sock_path[0]) {
+        unlink(g_qemu_runtime_sock_path);
+        g_qemu_runtime_sock_path[0] = '\0';
+    }
+    g_qemu_ipc_started = 0;
+}
+
 static int prepare_real_qemu_shm(char *name, size_t name_size, char *error,
                                size_t error_len)
 {
@@ -566,10 +897,14 @@ static int prepare_real_qemu_shm(char *name, size_t name_size, char *error,
 static pid_t launch_real_qemu_session(
     const struct wvm_node_runtime_manifest *manifest,
     const struct wvm_runtime_dispatch_projection *projection,
+    const uint8_t profile_digest[WVM_SHA256_DIGEST_BYTES],
     int *parent_fd_out, char *shm_name, size_t shm_name_size, char *error,
     size_t error_len)
 {
     int pair[2] = {-1, -1};
+    int req_pair[2] = {-1, -1};
+    int push_pair[2] = {-1, -1};
+    int cmd_pair[2] = {-1, -1};
     pid_t pid;
     const char *qemu_bin = getenv("WVM_TCG_QEMU_BIN");
     const char *prepared_name = getenv("WVM_SHM_FILE");
@@ -586,10 +921,25 @@ static pid_t launch_real_qemu_session(
                  "real QEMU requires prepare_real_qemu_shm before runtime bind");
         return -1;
     }
+    if (!g_qemu_runtime_sock_path[0]) {
+        snprintf(error, error_len,
+                 "real QEMU requires start_a14_qemu_ipc_listener first");
+        return -1;
+    }
     snprintf(name, sizeof(name), "%s", prepared_name);
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) != 0) {
         snprintf(error, error_len, "real QEMU socketpair: %s", strerror(errno));
         return -1;
+    }
+    /*
+     * CMD/REQ/PUSH must survive exec into QEMU.  Do not use SOCK_CLOEXEC on
+     * these pairs; clear FD_CLOEXEC explicitly as a belt-and-suspenders.
+     */
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, req_pair) != 0 ||
+        socketpair(AF_UNIX, SOCK_DGRAM, 0, push_pair) != 0 ||
+        socketpair(AF_UNIX, SOCK_DGRAM, 0, cmd_pair) != 0) {
+        snprintf(error, error_len, "real QEMU SOCK pairs: %s", strerror(errno));
+        goto fail;
     }
 
     pid = fork();
@@ -599,17 +949,33 @@ static pid_t launch_real_qemu_session(
     }
     if (pid == 0) {
         close(pair[0]);
-        if (fcntl(pair[1], F_SETFD, 0) != 0) {
-            _exit(127);
-        }
+        close(req_pair[0]);
+        close(push_pair[0]);
+        close(cmd_pair[0]);
+        (void)fcntl(pair[1], F_SETFD, 0);
+        (void)fcntl(req_pair[1], F_SETFD, 0);
+        (void)fcntl(push_pair[1], F_SETFD, 0);
+        (void)fcntl(cmd_pair[1], F_SETFD, 0);
         snprintf(fd_text, sizeof(fd_text), "%d", pair[1]);
         setenv("WVM_EXECUTOR_SESSION_FD", fd_text, 1);
+        snprintf(fd_text, sizeof(fd_text), "%d", cmd_pair[1]);
+        setenv("WVM_SOCK_CMD", fd_text, 1);
+        snprintf(fd_text, sizeof(fd_text), "%d", req_pair[1]);
+        setenv("WVM_SOCK_REQ", fd_text, 1);
+        snprintf(fd_text, sizeof(fd_text), "%d", push_pair[1]);
+        setenv("WVM_SOCK_PUSH", fd_text, 1);
+        setenv("WVM_SLAVE_ID", "1", 1);
         setenv("WVM_SHM_FILE", name, 1);
         setenv("WVM_DISABLE_AUTO_KVM", "1", 1);
         setenv("WVM_ROLE", "SLAVE", 1);
         setenv("WVM_SLAVE_VCPU_COUNT", "1", 1);
+        /* GATE + RUNTIME_SOCKET unlock production typed dirty commit. */
+        setenv("WVM_RUNTIME_GATE_ACTIVE", "1", 1);
+        setenv("WVM_RUNTIME_SOCKET", g_qemu_runtime_sock_path, 1);
+        setenv("WVM_RUNTIME_NAMESPACE",
+               manifest->local_names.namespace_name, 1);
         {
-            char value[32];
+            char value[64];
 
             snprintf(value, sizeof(value), "%llu",
                      (unsigned long long)manifest->vm_id);
@@ -621,12 +987,36 @@ static pid_t launch_real_qemu_session(
                      (unsigned long long)manifest->manifest_generation);
             setenv("WVM_MANIFEST_GENERATION", value, 1);
             snprintf(value, sizeof(value), "%llu",
+                     (unsigned long long)manifest->expected_node_instance_id);
+            setenv("WVM_RUNTIME_LOCAL_INSTANCE_ID", value, 1);
+            snprintf(value, sizeof(value), "%llu",
                      (unsigned long long)projection->local_primary
                          .destination_vnode);
             setenv("WVM_EXECUTOR_ID", value, 1);
             snprintf(value, sizeof(value), "%u", TEST_VCPU);
             setenv("WVM_EXECUTOR_VCPU_INDEX", value, 1);
+            /*
+             * fill_commit_reply_destination() in QEMU requires these three
+             * for TYPED_MEM_COMMIT. Without them request_commit_on_fd returns
+             * -EPROTO after REGISTER and the handoff becomes EXECUTOR_ERROR
+             * with an empty dirty flush (no commit payload ever written).
+             */
+            snprintf(value, sizeof(value), "%u",
+                     (unsigned)projection->local_primary.destination_kind);
+            setenv("WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_KIND", value, 1);
+            snprintf(value, sizeof(value), "%llu",
+                     (unsigned long long)projection->local_primary
+                         .destination_scope);
+            setenv("WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_SCOPE", value, 1);
+            snprintf(value, sizeof(value), "%u",
+                     (unsigned)projection->local_primary.destination_vnode);
+            setenv("WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_VNODE", value, 1);
         }
+        setenv_hex_digest("WVM_CANDIDATE_MANIFEST_DIGEST",
+                          manifest->candidate_manifest_digest,
+                          sizeof(manifest->candidate_manifest_digest));
+        setenv_hex_digest("WVM_CAPABILITY_PROFILE_DIGEST", profile_digest,
+                          WVM_SHA256_DIGEST_BYTES);
         snprintf(object_arg, sizeof(object_arg), "/dev/shm/%s", name);
         snprintf(machine_arg, sizeof(machine_arg), "pc");
         execl(qemu_bin, qemu_bin, "-accel", "wavevm", "-m", "16",
@@ -637,11 +1027,72 @@ static pid_t launch_real_qemu_session(
     }
     close(pair[1]);
     pair[1] = -1;
+    close(req_pair[1]);
+    req_pair[1] = -1;
+    close(push_pair[1]);
+    push_pair[1] = -1;
+    close(cmd_pair[1]);
+    cmd_pair[1] = -1;
+    g_qemu_req_keep_fd = req_pair[0];
+    req_pair[0] = -1;
+    g_qemu_push_notify_fd = push_pair[0];
+    push_pair[0] = -1;
+    /* Keep CMD peer open so QEMU's master_sock stays valid. */
+    g_qemu_req_keep_fd = g_qemu_req_keep_fd; /* quiet lint */
+    {
+        int cmd_keep = cmd_pair[0];
+
+        cmd_pair[0] = -1;
+        /* Stash CMD on the unused side of req keep by dup into a static. */
+        if (g_qemu_cmd_keep_fd >= 0) {
+            close(g_qemu_cmd_keep_fd);
+        }
+        g_qemu_cmd_keep_fd = cmd_keep;
+    }
+    wvm_executor_runtime_set_tcg_install_notify_fd(g_qemu_push_notify_fd);
     snprintf(shm_name, shm_name_size, "%s", name);
     *parent_fd_out = pair[0];
-    /* Let QEMU finish its reset/BIOS setup.  The production executor then
-     * installs the remote page into the same SHM before VCPU_RUN. */
-    usleep(1500000);
+    /* Let QEMU finish its reset/BIOS setup + register RAM + start push listener. */
+    usleep(2000000);
+    fprintf(stderr,
+            "goal4 A14 QEMU pid=%d push_notify_fd=%d cmd_keep=%d req_keep=%d\n",
+            (int)pid, g_qemu_push_notify_fd, g_qemu_cmd_keep_fd,
+            g_qemu_req_keep_fd);
+    {
+        char path[128];
+        char environ_buf[4096];
+        int efd;
+        ssize_t n;
+        snprintf(path, sizeof(path), "/proc/%d/environ", (int)pid);
+        efd = open(path, O_RDONLY);
+        if (efd >= 0) {
+            n = read(efd, environ_buf, sizeof(environ_buf) - 1);
+            close(efd);
+            if (n > 0) {
+                size_t i;
+                environ_buf[n] = '\0';
+                for (i = 0; i < (size_t)n; i++) {
+                    if (environ_buf[i] == '\0') {
+                        environ_buf[i] = '\n';
+                    }
+                }
+                fprintf(stderr, "goal4 A14 QEMU environ (filtered):\n");
+                {
+                    char *line = environ_buf;
+                    while (line && *line) {
+                        char *nl = strchr(line, '\n');
+                        if (nl) {
+                            *nl = '\0';
+                        }
+                        if (strncmp(line, "WVM_", 4) == 0) {
+                            fprintf(stderr, "  %s\n", line);
+                        }
+                        line = nl ? nl + 1 : NULL;
+                    }
+                }
+            }
+        }
+    }
     return pid;
 
 fail:
@@ -650,6 +1101,24 @@ fail:
     }
     if (pair[1] >= 0) {
         close(pair[1]);
+    }
+    if (req_pair[0] >= 0) {
+        close(req_pair[0]);
+    }
+    if (req_pair[1] >= 0) {
+        close(req_pair[1]);
+    }
+    if (push_pair[0] >= 0) {
+        close(push_pair[0]);
+    }
+    if (push_pair[1] >= 0) {
+        close(push_pair[1]);
+    }
+    if (cmd_pair[0] >= 0) {
+        close(cmd_pair[0]);
+    }
+    if (cmd_pair[1] >= 0) {
+        close(cmd_pair[1]);
     }
     return -1;
 }
@@ -876,22 +1345,36 @@ static int make_request(const struct wvm_node_runtime_manifest *manifest,
         legacy_context.eip = g_real_qemu ? REAL_QEMU_GPA :
                                          UINT64_C(0x1122334455667788);
         if (g_real_qemu) {
-            /* The real QEMU TCG path must start in a flat 32-bit code/data
-             * context.  A zeroed context has CS.limit=0, so the debug read
-             * and guest fetch at 0x1000 both fault before executing HLT. */
+            /* Flat 32-bit protected-mode context for real QEMU TCG.
+             * SegmentCache.flags must use QEMU's descriptor-high-dword
+             * layout (type byte at bits 15:8, DPL at 14:13, G/B at 23/22).
+             * The older 0xcf9b|0x00c00000 packing left DPL=2, so HLT #GP'd
+             * and a zero IDT limit turned that into a triple-fault reset. */
             for (int seg = 0; seg < 6; seg++) {
                 legacy_context.segs[seg].base = 0;
                 legacy_context.segs[seg].limit = 0xffffffffU;
                 legacy_context.segs[seg].selector = seg == 1 ? 0x8 : 0x10;
-                /* DESC_B | DESC_G are bits 22/23; without them QEMU
-                 * recomputes 16-bit CS/SS even with a flat limit. */
+                /* 0x00cf9b00: P|DPL0|S|code-XR|A + G|B; 0x00cf9300 data-RW. */
                 legacy_context.segs[seg].flags =
-                    (seg == 1 ? 0xcf9b : 0xcf93) | 0x00c00000U;
+                    seg == 1 ? 0x00cf9b00U : 0x00cf9300U;
             }
+            legacy_context.tr.selector = 0x18;
+            legacy_context.tr.base = 0;
+            legacy_context.tr.limit = 0xffff;
+            legacy_context.tr.flags = 0x00008b00U; /* P|DPL0|busy TSS16/32-ish */
+            legacy_context.ldt.flags = 0; /* unusable */
+            legacy_context.gdt_base = 0;
+            legacy_context.gdt_limit = 0xffff;
+            legacy_context.idt_base = 0;
+            legacy_context.idt_limit = 0xffff;
+            /* ESP in admitted page0 (local directory); 0x2000 is unmapped. */
+            legacy_context.regs[4] = 0x0FF0ULL;
+            legacy_context.eflags = 0x2ULL;
             legacy_context.cr[0] = 0x60000011ULL;
             legacy_context.cr[4] = 0x10ULL;
-            legacy_context.hflags = 0x30U; /* HF_CS32 | HF_SS32 */
+            legacy_context.hflags = 0x30U; /* HF_CS32 | HF_SS32; CPL recomputed */
             legacy_context.a20_mask = 0xffffffffU;
+            legacy_context.old_exception = -1;
         }
         if (wvm_x86_context_encode(
                 WVM_VCPU_BACKEND_TCG,
@@ -1295,9 +1778,13 @@ int main(void)
         kvm_cache_installed = 1;
     }
     if (g_real_qemu) {
+        if (start_a14_qemu_ipc_listener(error, sizeof(error)) != 0) {
+            fprintf(stderr, "real QEMU IPC listener: %s\n", error);
+            goto out;
+        }
         qemu_pid = launch_real_qemu_session(
-            &storage.manifest, &projection, &session_pair[0], qemu_shm,
-            sizeof(qemu_shm), error, sizeof(error));
+            &storage.manifest, &projection, profile_digest, &session_pair[0],
+            qemu_shm, sizeof(qemu_shm), error, sizeof(error));
         if (qemu_pid <= 0) {
             fprintf(stderr, "real QEMU launch: %s\n", error);
             goto out;
@@ -1425,40 +1912,51 @@ int main(void)
         uint64_t final_version = 0;
 
         if (g_real_qemu) {
-            struct wvm_mem_commit_ack commit_ack;
-            uint64_t base_version;
-            int commit_rc;
-
+            struct timespec deadline;
             uint8_t *guest_ram = wvm_executor_guest_ram_base();
 
-            if (!guest_ram) {
-                fprintf(stderr, "real QEMU guest RAM is not mapped\n");
-                goto out;
+            /*
+             * Executor SHM is the install mirror; WaveVM TCG slave RAM is
+             * anonymous (or a distinct mapping). Guest stores land in QEMU
+             * RAM and reach the directory only via production dirty flush
+             * TYPED_MEM_COMMIT. Treat SHM bytes as advisory; the self-emit
+             * + directory check below is the authoritative proof.
+             */
+            if (guest_ram) {
+                memcpy(guest_page, guest_ram + REAL_QEMU_GPA,
+                       sizeof(guest_page));
+                fprintf(stderr,
+                        "goal4 TCG executor-SHM after HLT "
+                        "bytes=%02x%02x%02x%02x "
+                        "(anonymous QEMU RAM may differ)\n",
+                        guest_page[0], guest_page[1], guest_page[2],
+                        guest_page[3]);
+            } else {
+                fprintf(stderr, "goal4 TCG executor guest RAM not mapped\n");
             }
-            memcpy(guest_page, guest_ram + REAL_QEMU_GPA,
-                   sizeof(guest_page));
-            if (expect(guest_page[0] == 0x78 && guest_page[1] == 0x56 &&
-                           guest_page[2] == 0x34 && guest_page[3] == 0x12,
-                       "real TCG guest store wrote its code page") != 0) {
-                goto out;
-            }
+            /*
+             * Production TCG dirty self-emit: QEMU slave flush must have
+             * typed-committed via RUNTIME_SOCKET after the guest store.
+             * Do not call memory_service commit from the test harness.
+             */
+            clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_sec += 5;
             pthread_mutex_lock(&remote.lock);
-            base_version = remote.completed_version;
+            while (remote.completed_commit_version == 0) {
+                if (pthread_cond_timedwait(&remote.available, &remote.lock,
+                                           &deadline) != 0) {
+                    break;
+                }
+            }
             pthread_mutex_unlock(&remote.lock);
-            memset(&commit_ack, 0, sizeof(commit_ack));
-            commit_rc = wvm_memory_service_global_request_commit(
-                REAL_QEMU_GPA, base_version, 0, guest_page,
-                sizeof(guest_page), request.operation_id, 2, &commit_ack,
-                error, sizeof(error));
-            if (expect(commit_rc == 0 &&
-                           commit_ack.status == WVM_MEM_ACK_SUCCESS,
-                       "real TCG dirty commit reached remote directory") !=
-                0) {
-                fprintf(stderr, "TCG commit rc=%d status=%u err=%s\n",
-                        commit_rc, (unsigned)commit_ack.status,
-                        error[0] ? error : "(empty)");
+            if (expect(remote.completed_commit_version != 0,
+                       "real TCG dirty self-emit reached remote fence") != 0) {
+                fprintf(stderr,
+                        "TCG self-emit timeout commit_version=0\n");
                 goto out;
             }
+            printf("EVID goal4_A14: tcg_dirty_self_emit_version=0x%llx\n",
+                   (unsigned long long)remote.completed_commit_version);
         } else {
             struct timespec deadline;
 
@@ -1721,12 +2219,26 @@ int main(void)
     puts("goal4 A14: executor_bridge → wvm_executor_runtime_execute_handoff");
     puts(g_real_kvm
              ? "           → remote memory_service fault/ACK → real KVM_RUN PASS"
-             : "           → remote memory_service fault/ACK → TCG run-once PASS");
+             : "           → remote memory_service fault/ACK → TCG self-emit dirty PASS");
     puts("(production entry; not test-local execute; not pause-stub READY)");
     puts("(live multi-node guest OS/SSH still §7)");
     exit_code = 0;
 
 out:
+    wvm_executor_runtime_set_tcg_install_notify_fd(-1);
+    if (g_qemu_push_notify_fd >= 0) {
+        close(g_qemu_push_notify_fd);
+        g_qemu_push_notify_fd = -1;
+    }
+    if (g_qemu_req_keep_fd >= 0) {
+        close(g_qemu_req_keep_fd);
+        g_qemu_req_keep_fd = -1;
+    }
+    if (g_qemu_cmd_keep_fd >= 0) {
+        close(g_qemu_cmd_keep_fd);
+        g_qemu_cmd_keep_fd = -1;
+    }
+    stop_a14_qemu_ipc_listener();
     if (coordinated.service_initialized) {
         wvm_vcpu_service_destroy(&coordinated.service);
         coordinated.service_initialized = 0;
