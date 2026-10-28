@@ -1,0 +1,4 @@
+G8_FILL filled=196608
+G8_DRAIN_BLOCKED rc=-110 err=vCPU service did not drain in 50 ms (pending=0 reply_queued=0 reply_sending=1)
+G8_DRAIN_AFTER_UNBLOCK rc=0 err=
+G8_VCPU_SERVICE_DRAIN PASS

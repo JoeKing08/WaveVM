@@ -134,6 +134,68 @@ static struct local_slave_req_t g_local_slave_reqs[LOCAL_SLAVE_REQS];
 static pthread_mutex_t g_local_slave_req_locks[LOCAL_SLAVE_REQS];
 
 /*
+ * s23g10: Mode A FE REMOTE_RUN arrives UDP from kernel :9000 onto V30-RX
+ * (LOCAL_PORT). Forward to Hybrid replaces the UDP client with LOCAL_PORT,
+ * so Hybrid Ack sendto(client) comes back here — not to :9000. FE pack_src
+ * often has slave_id=0 (unbound FE context), so target_id return also fails.
+ * Track req_id -> original UDP src and demux MSG_VCPU_EXIT back to it.
+ */
+#define VCPU_REPLY_PENDING_SLOTS 128
+struct vcpu_reply_pending_t {
+    uint64_t req_id;
+    struct sockaddr_in client;
+    int valid;
+};
+static struct vcpu_reply_pending_t g_vcpu_reply_pending[VCPU_REPLY_PENDING_SLOTS];
+static pthread_mutex_t g_vcpu_reply_pending_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int vcpu_reply_pending_put(uint64_t req_id, const struct sockaddr_in *client)
+{
+    int i, free_slot = -1;
+    if (!client || req_id == 0 || req_id == (uint64_t)-1)
+        return -1;
+    pthread_mutex_lock(&g_vcpu_reply_pending_lock);
+    for (i = 0; i < VCPU_REPLY_PENDING_SLOTS; i++) {
+        if (g_vcpu_reply_pending[i].valid &&
+            g_vcpu_reply_pending[i].req_id == req_id) {
+            g_vcpu_reply_pending[i].client = *client;
+            pthread_mutex_unlock(&g_vcpu_reply_pending_lock);
+            return 0;
+        }
+        if (!g_vcpu_reply_pending[i].valid && free_slot < 0)
+            free_slot = i;
+    }
+    if (free_slot < 0) {
+        pthread_mutex_unlock(&g_vcpu_reply_pending_lock);
+        return -1;
+    }
+    g_vcpu_reply_pending[free_slot].req_id = req_id;
+    g_vcpu_reply_pending[free_slot].client = *client;
+    g_vcpu_reply_pending[free_slot].valid = 1;
+    pthread_mutex_unlock(&g_vcpu_reply_pending_lock);
+    return 0;
+}
+
+static int vcpu_reply_pending_take(uint64_t req_id, struct sockaddr_in *out)
+{
+    int i, found = 0;
+    if (!out || req_id == 0 || req_id == (uint64_t)-1)
+        return 0;
+    pthread_mutex_lock(&g_vcpu_reply_pending_lock);
+    for (i = 0; i < VCPU_REPLY_PENDING_SLOTS; i++) {
+        if (g_vcpu_reply_pending[i].valid &&
+            g_vcpu_reply_pending[i].req_id == req_id) {
+            *out = g_vcpu_reply_pending[i].client;
+            g_vcpu_reply_pending[i].valid = 0;
+            found = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_vcpu_reply_pending_lock);
+    return found;
+}
+
+/*
  * TCG slave dirty commits arrive at the local master before they reach the
  * directory.  Keep a small local fence state so a slave-side SYNC PING is
  * acknowledged only after every forwarded commit has received a directory
@@ -233,12 +295,16 @@ static int send_local_slave_fence_ack(int sockfd, uint32_t slave_target, int ok)
     ack->magic = htonl(WVM_MAGIC);
     ack->msg_type = htons(MSG_MEM_ACK);
     ack->payload_len = htons(1);
-    ack->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, (uint32_t)g_my_node_id));
+    (void)wvm_header_pack_src(ack, g_my_vm_id, (uint32_t)g_my_node_id);
     ack->target_id = htonl(slave_target);
     ack->req_id = WVM_HTONLL(SYNC_MAGIC);
     ack->qos_level = 1;
-    ack->flags = ok ? 0 : WVM_FLAG_ERROR;
-    ack->epoch = htonl(g_curr_epoch);
+    {
+        uint8_t keep = (uint8_t)(ack->flags & WVM_FLAG_FULL_VMID);
+        ack->flags = (uint8_t)(keep | (ok ? 0 : WVM_FLAG_ERROR));
+        if (!(ack->flags & WVM_FLAG_FULL_VMID))
+            ack->epoch = htonl(g_curr_epoch);
+    }
     ack->node_state = g_my_node_state;
     packet[sizeof(*ack)] = ok ? 1 : 0;
     ack->crc32 = 0;
@@ -748,7 +814,7 @@ static void u_send_packet_async(uint16_t msg_type, void* payload, int len, uint3
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+    (void)wvm_header_pack_src(hdr, g_my_vm_id, (uint32_t)g_my_node_id);
     hdr->target_id = htonl(target_id);
     hdr->req_id = 0;
     hdr->qos_level = qos;
@@ -892,16 +958,21 @@ static int u_send_packet(void *data, int len, uint32_t target_id) {
                 target_id);
         return -EPROTONOSUPPORT;
     }
-    if (g_runtime_context &&
-        g_my_vm_id != 0 &&
-        (!wvm_logic_route_snapshot_valid() ||
-         (WVM_IS_VALID_TARGET(target_id) &&
-          WVM_GET_VMID(target_id) != g_my_vm_id))) {
-        fprintf(stderr,
-                "[Route] refusing packet without matching admitted snapshot "
-                "target=%u vm=%u\n",
-                target_id, (unsigned)g_my_vm_id);
-        return -EPROTO;
+    if (g_runtime_context && g_my_vm_id != 0) {
+        /*
+         * G1: production nonzero VMs use FULL_VMID + bare node targets.
+         * Legacy composite targets still accepted when high 8 matches vm.
+         * Bare node (GET_VMID==0) is the FULL_VMID send shape — do not refuse.
+         */
+        uint32_t tvm = WVM_IS_VALID_TARGET(target_id) ? WVM_GET_VMID(target_id) : 0;
+        if (!wvm_logic_route_snapshot_valid() ||
+            (tvm != 0 && tvm != g_my_vm_id)) {
+            fprintf(stderr,
+                    "[Route] refusing packet without matching admitted snapshot "
+                    "target=%u vm=%u\n",
+                    target_id, (unsigned)g_my_vm_id);
+            return -EPROTO;
+        }
     }
     struct wvm_header *hdr = (struct wvm_header *)data;
     tx_queue_t *q;
@@ -1027,7 +1098,7 @@ static void handle_slave_read(int fd, struct sockaddr_in *dest, struct wvm_heade
     // 注意：payload_len 现在是 4112 字节 (16 + 4096)，而不是 4096！
     ack_hdr->payload_len = htons(sizeof(struct wvm_mem_ack_payload));
     ack_hdr->req_id = req->req_id;
-    ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+    (void)wvm_header_pack_src(ack_hdr, g_my_vm_id, (uint32_t)g_my_node_id);
     ack_hdr->target_id = req->slave_id;
     ack_hdr->qos_level = 0; // 慢车道包
     ack_hdr->crc32 = 0;
@@ -1113,7 +1184,7 @@ static void handle_ipc_rpc_passthrough(int qemu_fd, void *data, uint32_t len) {
         handle_rpc_batch_execution(payload, payload_len);
         
         // 2. [Broadcast] 全网广播 (Source ID = Me)
-        hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+        (void)wvm_header_pack_src(hdr, g_my_vm_id, (uint32_t)g_my_node_id);
         wvm_logic_broadcast_rpc(data, len, msg_type);
     }
     
@@ -1298,8 +1369,14 @@ static void* rx_thread_loop(void *arg) {
                         u_log("[HB RX] rid=%llu", (unsigned long long)hb_rid);
                     }
 
-                    // [自治策略]：丢弃来自未来的非法包，或处理落后包
-                    if (msg_epoch > g_curr_epoch + 5) {
+                    // [自治策略]：丢弃来自未来的非法包，或处理落后包.
+                    // s23g7: FULL_VMID stashes vm_id in epoch (G1 wire identity);
+                    // do NOT treat that as cluster epoch — matches logic_core.c
+                    // which already skips the check when FULL_VMID is set.
+                    // Without this, Mode A FE REMOTE_RUN (epoch=vm_id) is
+                    // dropped by Mode B sidecar RX (local epoch often 0).
+                    if (!(hdr->flags & WVM_FLAG_FULL_VMID) &&
+                        msg_epoch > g_curr_epoch + 5) {
                         if (msg_type == MSG_VCPU_RUN || msg_type == MSG_HEARTBEAT) {
                             u_log("[RX Drop Epoch] msg=%u src_port=%u epoch=%u local=%u",
                                   (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
@@ -1314,13 +1391,16 @@ static void* rx_thread_loop(void *arg) {
                     hdr->crc32 = htonl(received_crc);
                     void *payload = (void*)hdr + sizeof(struct wvm_header);
 
-                    // [Multi-VM] vm_id 过滤：丢弃不属于本 VM 的包
+                    // [Multi-VM] vm_id 过滤：FULL_VMID 用 epoch；legacy 用 8+8 target
                     {
                         uint32_t target_raw = ntohl(hdr->target_id);
-                        if (target_raw != WVM_NODE_AUTO_ROUTE &&
-                            WVM_GET_VMID(target_raw) != g_my_vm_id) {
-                            offset += current_pkt_len;
-                            continue;
+                        uint32_t pkt_vm = 0, pkt_node = 0;
+                        if (target_raw != WVM_NODE_AUTO_ROUTE) {
+                            wvm_header_unpack_assoc(hdr, target_raw, &pkt_vm, &pkt_node);
+                            if (pkt_vm != g_my_vm_id) {
+                                offset += current_pkt_len;
+                                continue;
+                            }
                         }
                     }
 
@@ -1383,8 +1463,22 @@ static void* rx_thread_loop(void *arg) {
                     // 新协议下回包目标在 hdr->target_id；旧包可回退到 hdr->slave_id。
                     if (from_local_slave &&
                         (msg_type == MSG_VCPU_EXIT || msg_type == MSG_BLOCK_ACK)) {
+                        struct sockaddr_in reply_client;
+                        if (msg_type == MSG_VCPU_EXIT &&
+                            vcpu_reply_pending_take(rid, &reply_client)) {
+                            ssize_t rs = sendto(sockfd, base_ptr + offset,
+                                                current_pkt_len, 0,
+                                                (struct sockaddr *)&reply_client,
+                                                sizeof(reply_client));
+                            u_log("[Slave Return] UDP demux msg=%u rid=%llu -> %s:%u ret=%zd",
+                                  (unsigned)msg_type, (unsigned long long)rid,
+                                  inet_ntoa(reply_client.sin_addr),
+                                  (unsigned)ntohs(reply_client.sin_port), rs);
+                            offset += current_pkt_len;
+                            continue;
+                        }
                         uint32_t return_target = ntohl(hdr->target_id);
-                        uint32_t my_composite_id = WVM_ENCODE_ID(g_my_vm_id, g_my_node_id);
+                        uint32_t my_composite_id = wvm_wire_target(g_my_vm_id, g_my_node_id);
                         // 新协议优先用 target_id；仅当 target_id 无效/自动路由时回退到旧字段。
                         if (!WVM_IS_VALID_TARGET(return_target) ||
                             return_target == WVM_NODE_AUTO_ROUTE) {
@@ -1422,6 +1516,11 @@ static void* rx_thread_loop(void *arg) {
                             u_log("[Slave Forward] msg=%u src_port=%u dst_port=%d len=%d",
                                   (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                                   g_slave_forward_port, current_pkt_len);
+                            if (vcpu_reply_pending_put(rid, &src_addrs[i]) != 0) {
+                                u_log("[Slave Forward] reply-pending full rid=%llu src_port=%u",
+                                      (unsigned long long)rid,
+                                      (unsigned)ntohs(src_addrs[i].sin_port));
+                            }
                         }
                         offset += current_pkt_len;
                         continue;

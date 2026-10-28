@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.SewxUT/runtime/vm-256-1-1.manifest
+1af09e01e30b84f7bf9ae4242486a506150b400168b022c23641e420ae841fd3  /tmp/wavevm-create-vm-single.SewxUT/runtime/vm-256-1-1.manifest
+7abbf54919efd2741b332289b6af4b83df570289a9197bb6b895b905e41bfc13  /tmp/wavevm-create-vm-single.SewxUT/runtime/vm-256-1-1.manifest.dispatch
+0ba110a11be6963df91683b2da17d8063c13cb3e367caaf1942329b41d453cf7  /tmp/wavevm-create-vm-single.SewxUT/runtime/vm-256-1-1.manifest.route

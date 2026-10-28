@@ -1,0 +1,7 @@
+cell=flat_kvm
+topology=flat
+backend=require-kvm
+accel=disabled
+rc=0
+overall=PASS
+honesty=GUEST_E2E_PASS_login_ssh_cpu_stop

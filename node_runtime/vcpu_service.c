@@ -18,6 +18,8 @@ enum vcpu_service_entry_state {
     VCPU_SERVICE_ENTRY_EMPTY = 0,
     VCPU_SERVICE_ENTRY_PENDING = 1,
     VCPU_SERVICE_ENTRY_REPLY_QUEUED = 2,
+    /* G8: ACK bytes are being written; drain must observe this, not only queued. */
+    VCPU_SERVICE_ENTRY_REPLY_SENDING = 3,
 };
 
 struct vcpu_service_entry {
@@ -111,17 +113,51 @@ static struct vcpu_service_entry *find_reply_locked(
     return NULL;
 }
 
-static int write_reply(int fd, const struct wvm_ipc_cpu_run_ack *reply)
+static uint64_t monotonic_milliseconds(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return ((uint64_t)ts.tv_sec * 1000ULL) +
+           ((uint64_t)ts.tv_nsec / 1000000ULL);
+}
+
+/*
+ * G8: never poll(POLLOUT, -1). Bound each wait and honor service->stopping so
+ * STOP/destroy cannot hang forever on a slow or disconnected QEMU receiver.
+ */
+static int write_reply(struct wvm_vcpu_service *service, int fd,
+                       const struct wvm_ipc_cpu_run_ack *reply,
+                       uint32_t timeout_ms)
 {
     const uint8_t *bytes = (const uint8_t *)reply;
     size_t written = 0;
+    uint64_t start = monotonic_milliseconds();
 
     if (fd < 0 || !reply) {
         return -EINVAL;
     }
+    if (timeout_ms == 0) {
+        timeout_ms = 1000;
+    }
     while (written < sizeof(*reply)) {
-        ssize_t result = send(fd, bytes + written, sizeof(*reply) - written,
-                              MSG_NOSIGNAL | MSG_DONTWAIT);
+        ssize_t result;
+        uint64_t elapsed;
+        uint32_t remaining;
+        int poll_ms;
+
+        if (service && service->stopping) {
+            return -ESHUTDOWN;
+        }
+        elapsed = monotonic_milliseconds() - start;
+        if (elapsed >= timeout_ms) {
+            return -ETIMEDOUT;
+        }
+        remaining = (uint32_t)(timeout_ms - elapsed);
+        result = send(fd, bytes + written, sizeof(*reply) - written,
+                      MSG_NOSIGNAL | MSG_DONTWAIT);
 
         if (result > 0) {
             written += (size_t)result;
@@ -136,16 +172,52 @@ static int write_reply(int fd, const struct wvm_ipc_cpu_run_ack *reply)
                 .events = POLLOUT,
             };
 
-            if (poll(&pollfd, 1, -1) > 0) {
+            poll_ms = remaining > 100 ? 100 : (int)remaining;
+            if (poll_ms <= 0) {
+                return -ETIMEDOUT;
+            }
+            if (poll(&pollfd, 1, poll_ms) > 0) {
                 continue;
             }
             if (errno == EINTR) {
                 continue;
             }
+            /* timed out chunk or error — loop checks overall deadline */
+            continue;
         }
         return result < 0 ? -errno : -EPIPE;
     }
     return 0;
+}
+
+static void count_active_locked(const struct wvm_vcpu_service *service,
+                                 int *pending_out, int *queued_out,
+                                 int *sending_out)
+{
+    const struct vcpu_service_entry *entry_array = entries(service);
+    size_t i;
+    int pending = 0;
+    int queued = 0;
+    int sending = 0;
+
+    for (i = 0; i < service->capacity; i++) {
+        if (entry_array[i].state == VCPU_SERVICE_ENTRY_PENDING) {
+            pending++;
+        } else if (entry_array[i].state == VCPU_SERVICE_ENTRY_REPLY_QUEUED) {
+            queued++;
+        } else if (entry_array[i].state == VCPU_SERVICE_ENTRY_REPLY_SENDING) {
+            sending++;
+        }
+    }
+    if (pending_out) {
+        *pending_out = pending;
+    }
+    if (queued_out) {
+        *queued_out = queued;
+    }
+    if (sending_out) {
+        *sending_out = sending;
+    }
 }
 
 static void *reply_worker(void *opaque)
@@ -156,24 +228,44 @@ static void *reply_worker(void *opaque)
         struct vcpu_service_entry *entry;
         struct wvm_ipc_cpu_run_ack reply;
         int qemu_fd;
+        int write_rc;
 
         pthread_mutex_lock(&service->lock);
         while (!service->stopping &&
                (entry = find_reply_locked(service)) == NULL) {
             pthread_cond_wait(&service->reply_available, &service->lock);
         }
-        if (service->stopping) {
+        if (service->stopping &&
+            (entry = find_reply_locked(service)) == NULL) {
             pthread_mutex_unlock(&service->lock);
             break;
         }
+        /*
+         * G8: mark SENDING before releasing the lock so drain cannot observe
+         * "idle" while write_reply is blocked on a full socket.
+         */
         qemu_fd = entry->qemu_fd;
         reply = entry->reply;
-        entry->qemu_fd = -1;
-        memset(entry, 0, sizeof(*entry));
-        entry->qemu_fd = -1;
+        entry->state = VCPU_SERVICE_ENTRY_REPLY_SENDING;
         pthread_mutex_unlock(&service->lock);
 
-        (void)write_reply(qemu_fd, &reply);
+        write_rc = write_reply(service, qemu_fd, &reply, 5000);
+        if (write_rc != 0) {
+            fprintf(stderr,
+                    "[vCPU-service] reply send failed fd=%d rc=%d "
+                    "(bounded; STOP-safe)\n",
+                    qemu_fd, write_rc);
+        }
+
+        pthread_mutex_lock(&service->lock);
+        if (entry->state == VCPU_SERVICE_ENTRY_REPLY_SENDING &&
+            entry->qemu_fd == qemu_fd) {
+            entry->qemu_fd = -1;
+            memset(entry, 0, sizeof(*entry));
+            entry->qemu_fd = -1;
+        }
+        pthread_cond_broadcast(&service->reply_available);
+        pthread_mutex_unlock(&service->lock);
         close(qemu_fd);
     }
     return NULL;
@@ -259,7 +351,17 @@ static int reply_from_result(
     reply->status = legacy_status_from_result(result);
     reply->mode_tcg = entry->legacy_request.mode_tcg;
     reply->error_gpa = result->error_gpa;
-    if (reply->status != 0) {
+
+    /*
+     * s23g2: on MEMORY_FAILURE (legacy status < 0) still populate CPU ctx when
+     * the handoff result carries one. Returning a zeroed ACK forced FE into
+     * either silent drop or corrupted import (dual-yes hang).
+     */
+    if (reply->status != 0 &&
+        result->status != WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE) {
+        return 0;
+    }
+    if (result->context == NULL || result->context_bytes == 0) {
         return 0;
     }
 
@@ -273,6 +375,14 @@ static int reply_from_result(
                                legacy_context, legacy_bytes, error,
                                error_len) != 0 ||
         valid_fields != result->context_valid_fields) {
+        if (reply->status != 0) {
+            /* Keep MEMORY_FAILURE status; leave ctx zeroed rather than fail the
+             * whole completion path. FE will refuse import of dead ctx. */
+            if (error && error_len) {
+                error[0] = '\0';
+            }
+            return 0;
+        }
         if (!error || error[0] == '\0') {
             set_error(error, error_len,
                       "typed vCPU completion context cannot populate QEMU ACK");
@@ -349,6 +459,11 @@ void wvm_vcpu_service_destroy(struct wvm_vcpu_service *service)
     if (!service || !service->initialized) {
         return;
     }
+    /*
+     * G8: stop the worker with bounded reply sends already honoring
+     * service->stopping; join is then finite. Prefer drain() before destroy
+     * in STOP paths so in-flight ACKs settle with an explicit timeout.
+     */
     pthread_mutex_lock(&service->lock);
     service->stopping = 1;
     pthread_cond_broadcast(&service->reply_available);
@@ -363,6 +478,61 @@ void wvm_vcpu_service_destroy(struct wvm_vcpu_service *service)
     pthread_mutex_destroy(&service->lock);
     free(service->entries);
     memset(service, 0, sizeof(*service));
+}
+
+int wvm_vcpu_service_drain(struct wvm_vcpu_service *service,
+                           uint32_t timeout_ms, char *error,
+                           size_t error_len)
+{
+    uint64_t start = monotonic_milliseconds();
+
+    if (!service || !service->initialized) {
+        set_error(error, error_len, "vCPU service is not initialized");
+        return -EINVAL;
+    }
+    if (timeout_ms == 0) {
+        timeout_ms = 1;
+    }
+    pthread_mutex_lock(&service->lock);
+    for (;;) {
+        int pending = 0;
+        int queued = 0;
+        int sending = 0;
+        uint64_t elapsed;
+        uint32_t remaining;
+        struct timespec abstime;
+        uint64_t wait_ms;
+
+        count_active_locked(service, &pending, &queued, &sending);
+        if (pending == 0 && queued == 0 && sending == 0) {
+            pthread_mutex_unlock(&service->lock);
+            return 0;
+        }
+        elapsed = monotonic_milliseconds() - start;
+        if (elapsed >= timeout_ms) {
+            pthread_mutex_unlock(&service->lock);
+            set_error(error, error_len,
+                      "vCPU service did not drain in %u ms "
+                      "(pending=%d reply_queued=%d reply_sending=%d)",
+                      timeout_ms, pending, queued, sending);
+            return -ETIMEDOUT;
+        }
+        remaining = (uint32_t)(timeout_ms - elapsed);
+        wait_ms = remaining < 10 ? remaining : 10;
+        if (clock_gettime(CLOCK_REALTIME, &abstime) != 0) {
+            pthread_mutex_unlock(&service->lock);
+            set_error(error, error_len,
+                      "vCPU service drain clock_gettime failed");
+            return -errno;
+        }
+        abstime.tv_nsec += (long)wait_ms * 1000000L;
+        if (abstime.tv_nsec >= 1000000000L) {
+            abstime.tv_sec += abstime.tv_nsec / 1000000000L;
+            abstime.tv_nsec %= 1000000000L;
+        }
+        pthread_cond_timedwait(&service->reply_available, &service->lock,
+                               &abstime);
+    }
 }
 
 int wvm_vcpu_service_submit(struct wvm_vcpu_service *service, int qemu_fd,

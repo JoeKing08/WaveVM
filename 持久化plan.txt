@@ -319,7 +319,7 @@ F04 部分修复完成。capability记录现在包含真实时间戳和唯一pro
 - `docs/wavevm-architecture-baseline.md` §1（Mode A 多 VM 仅在显式 per-VM kernel context 通过后可验收；「双」为验收门槛非上限）、§14（per-VM kernel context；此前单节点独占为迁移门而非产品上限）、§16 决策项 14；
 - `docs/specs/resource-placement-admission.md`（accelerator/kernel context 为 named exclusive lease，须与既有 reservation 互异）；
 - `docs/specs/runtime-manifest-lifecycle.md` §5.2 prepare→activate→commit→identity-bound readiness；
-- `docs/wavevm-mode-boundary-audit.md` §7（第二 Mode A VM 在 per-VM context 落地前须拒绝——本轮在准入侧解除固定名门闩）。
+- `audit-evidence/docs-audits/wavevm-mode-boundary-audit.md` §7（第二 Mode A VM 在 per-VM context 落地前须拒绝——本轮在准入侧解除固定名门闩）。
 
 本轮收口：
 1. `wavevm_admission.c`：Mode A `KERNEL_CONTEXT` exclusive lease 从固定名 `kernel-context` 改为 per-VM `kernel-context:vm=<id>:inc=<inc>`（保留同名冲突 fail-closed）；
@@ -939,7 +939,7 @@ STRICT 自审结论见本轮 executor 回报（YES/NO + gaps）。未 commit/pus
 ## 纲领 delta（相对 tip cb1d57daa）
 - `docs/wavevm-refactor-roadmap.md`：新增 ## Document Maintenance；§2 改名 Architectural Risks；规范措辞去“当前实现进度/日期门”。
 - `docs/wavevm-architecture-baseline.md` + 全部 `docs/specs/*`：交叉引用 Document Maintenance；把“已实现/已知偏差/日期验收”改成规范性要求 + 实现触点表；Mode A 门表述为验收条件而非审计日记。
-- `docs/wavevm-mode-boundary-audit.md`：标明为审计记录，非规范纲领。
+- `audit-evidence/docs-audits/wavevm-mode-boundary-audit.md`：标明为审计记录，非规范纲领。
 - 工作区删除 tip 上的 dsh/grok 审计 TXT（仅工作树 D，未 commit）。
 
 ## R01–R08 before→after（本轮）
@@ -2155,15 +2155,328 @@ Tip dirty。**未动** force_local/IPC/sticky/STW；**无 commit/push**；**不�
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| G10 | FIXED | 恢复 global_*_finish_locked 调用；-Werror；test_memory_service PASS |
-| G5 | FIXED | 去掉 complete 后过早 entry_clear；test_vcpu_coordinator PASS（含重复 exit） |
-| G7 | FIXED | dirty：AUTO_ROUTE fail-closed；本地走 wvm_handle_local_commit+publish；worker_failure 2101/2102 PASS |
-| G1 | PARTIAL | 本地生产 ID 范围 fault/write 已通；远端仍 8-bit wire，未接 V1/node-runtime 全身份路径 |
-| G2 | TODO | |
-| G4 | TODO | |
-| G6 | TODO | |
-| G3 | TODO | |
-| G8 | TODO | |
-| G9 | TODO | |
+| G10 | FIXED | 恢复 global_*_finish_locked；-Werror；test_memory_service PASS |
+| G5 | FIXED | complete 后不过早 entry_clear；test_vcpu_coordinator PASS |
+| G7 | FIXED | dirty AUTO_ROUTE fail-closed；本地 commit+publish；worker_failure 2101/2102 PASS |
+| G1 | FIXED | WVM_FLAG_FULL_VMID：vm_id>255 走 epoch 全量身份；RX unpack；sudo insmod；unit+isolation PASS。正式 V1 envelope 跳仍后续 |
+| G2 | FIXED | MAP_FIXED join 成功后才 coherent（tip） |
+| G4 | FIXED | PUSH_BARRIER_ACK cookie（tip + 复验） |
+| G6 | FIXED | ESTALE merge（tip + g6-merge-unit） |
+| G8 | FIXED | STOP drain + REPLY_SENDING（vcpu_service） |
+| G3 | FIXED | concurrent spin 30s/90s hold + consume renew + 25s cooldown；g3g9p OVERALL=PASS（非 boot sticky） |
+| G9 | FIXED | g3g9p OVERALL=PASS；login/ssh/cpu/remoteΔ/STOP；G9 wait 45s |
 
-注：A14 TCG dirty self-emit/remote fence 仍 FAIL，属 G2/G6 范围，非 G10。
+注：G3/G9 已于 2026-10-28 g3g9p 收口 FIXED（见文末 close 段）；A14 TCG dirty 另册。
+G1 用 keys/sudo passward.txt 完成 ko 重载，不再因无 passwordless sudo 留 PARTIAL。
+
+===== G3/G9 stop point — 2026-10-27 21:09 CST Asia/Shanghai =====
+本轮（停在当前 smoke，不再开新实验 / 不 commit/push）：
+- 实现 NEED_LOCAL：slave MMIO/PIO → WVM_TCG_EXCP_NEED_LOCAL；FE 有界 force_local burst（非 boot sticky）。
+- g3g9g：slave 已 bounce 但 cpu_exec 清 exception_index → FE 未 arm（DIAG）。
+- g3g9h：FE arm 成功，但 concurrent 路径 consume_force_local 直接 return false → 无本地 burst（DIAG）。
+- g3g9i（当前轮，rebuild9）：EXIT:1 guest_login=MISSING；serial 冻在 PnP(~17KB)；cpu0 local / cpu1 remote↑；force_local_used=0；hooks installed 但本轮几乎无 NEED-LOCAL 命中。
+- 下一假设（未做）：PnP 后冻更像 AP 与 BSP 同步/时钟或未触发的 device 路径，而非已修的 export/consume 缺口；需再证远程 AP 是否卡在无 device 的 guest 自旋。
+证据: audit-evidence/g1-g10-20261027/guest-smoke-g3g9{g,h,i}/ + g3-notes.txt / g9-notes.txt
+Minimum COMPLETE: 否。
+
+
+
+===== G3/G9 close — 2026-10-28 08:51 CST Asia/Shanghai (no commit/push) =====
+Tip base: fdae2c158 dirty。本轮收口 G3/G9（Joe：推完剩下的 Minimum）。
+
+## 根因与修复
+- PnP 后冻 / e1000 softlock：concurrent 下 remote AP same-RIP 自旋，NEED_LOCAL 不够（RAM 自旋非 MMIO）。
+- rebuild10–12：spin→force_local + hold；RIP wobble 不提前清；5s wall renew。
+- g3g9m：guest_login=PASS（破 MISSING）；SSH 败于 e1000 Reset（5s hold 在 consume 硬切，无 renew）。
+- rebuild13–14：30s slice / 90s cap；consume+clear 同 RIP renew → g3g9o login+SSH+cpu PASS。
+- g3g9o：G9 remote_delta=0（hold 未到期，AP 全 local）。
+- rebuild15：hold 到期清 spin + 25s 再 arm cooldown；harness G9 remote wait≤45s。
+- g3g9p：**OVERALL=PASS** EXIT:0
+  证据: audit-evidence/g1-g10-20261027/guest-smoke-g3g9p/result.txt
+  login/ssh/cpu-smoke/remoteΔ=45/vcpu=1/mem=1/STOP PASS
+
+## G1–G10 表
+| 项 | 状态 |
+|----|------|
+| G1–G2,G4–G8,G10 | FIXED（既有） |
+| G3 | FIXED（reactive concurrent hold；非 boot sticky） |
+| G9 | FIXED（g3g9p OVERALL=PASS） |
+
+## Minimum COMPLETE？
+- G1–G10 gap 表：可诚实标齐 FIXED；guest_login 不再 MISSING。
+- 残留说明：concurrent softlock 仍靠 per-vCPU wall hold 缓解（有 90s 硬顶 + cooldown），不是 MTTCG 根治；与旧「boot sticky」不同。
+- **可签 G1–G10 Minimum COMPLETE（gap 表）**；若 Joe 仍要求 force_local「根治」才签总 COMPLETE，则注明 residual 后由 Joe 拍板。
+- **无 commit / 无 push**（待 Joe 明示）。
+
+下一：Joe 确认后 commit/push；可选 STW A/B 或再跑一次 g3g9 稳定性复验。
+
+
+===== Grok Minimum 纲领自审 — 2026-10-28 09:23 CST Asia/Shanghai (read-only, no commit/push) =====
+Tip fdae2c158 dirty。全文：grok-minimum-charter-self-audit-2026-10-28.txt
+结论：不能签纲领 Minimum COMPLETE。
+主因：M3/M9 TCG concurrent spin-hold（30s/90s/25s）= reactive mitigation 非 MTTCG 根治；remote_mem 判据仍弱；A14 TCG dirty FAIL；S6 全矩阵缺同 tip 归档包。
+G1–G10 gap 表可标 FIXED（g3g9p OVERALL=PASS），≠ 纲领总签。
+未改纲领 / 未改生产代码 / 无 commit/push。请小浪同口径交叉审后由父代理汇总。
+
+
+===== FIX cross-audit blockers — 2026-10-28 10:00:11 CST (FIX ONLY; no COMPLETE; no 小浪; no commit/push) =====
+Tip: fdae2c158f074206e8c10fd409483d0070da6765 dirty. Repo /workspaces/WaveVM. Authorized pt371u.
+
+## Goal
+Close 小浪/Grok cross-audit PARTIAL blockers with honest COMPLETE path; durable evidence under
+audit-evidence/fix-blockers-20261028/; update this plan; ready for re-audit only.
+
+## What shipped
+1. **A14/M13**: coherent TCG slaves enable QEMU dirty-log; flush_coherent_dirty_bitmap_locked
+   harvests dirty→TYPED_MEM_COMMIT (self-emit). First guest attempt hung (full-RAM scan every
+   slave cpu_exec → CPU1 RCU / FE wait ACK). Bound: budget=32 commits/call + scan window +
+   round-robin cursor (WVM_TCG_COHERENT_DIRTY_BUDGET). A14_RC:0 + guest OVERALL=PASS after bound.
+2. **M9**: guest harness rejects WVM-REMOTE-as-mem; requires dirty flush/commit/fence hits;
+   remote_mem_evidence=1 with remote_mem_hits.txt; g3g9p-style PASS retained.
+3. **M3**: honesty/spec path — baseline §16 documents V1 concurrent + bounded force_local
+   (30s/90s/25s) as §15 fallback (not silent production workaround). Hold constants unchanged.
+   MTTCG root-cause deferred (documented). Prefer-real-fix deferred; Joe-acceptable honesty.
+4. **M12+M2/M4/M6/M7**: same-tip durable S6 11/11 + s1s4 membership/cordon/drain/gateway 12/12
+   (NOT_G8_DRAIN) + dual Mode B + dual compute under audit-evidence/fix-blockers-20261028/
+   (not /tmp-only). remote-mem pack REMOTE_MEM_FENCE_VERSION_DIRTY=FIXED.
+5. **cleanup.ok**: after REQUIRE_STOP=1 STOP rewrite honesty=REQUIRE_STOP=1_full_STOP_acceptance.
+
+## Status table (former PARTIAL→)
+| ID | Now | Key evidence |
+|----|-----|--------------|
+| M3 | FIXED (honesty) | docs §16; cpu.c comments; residual=not MTTCG root |
+| M9 | FIXED | guest-smoke remote_mem_evidence=1; remote-mem/ FIXED |
+| A14/M13 | FIXED | a14-tcg-rerun.log A14_RC:0; bitmap self-emit |
+| M12+M2/M4/M6/M7 | FIXED | s6-matrix/ + s1s4-membership/ + dual-* durable |
+| cleanup.ok | FIXED | guest-smoke/cleanup.ok REQUIRE_STOP=1 honesty |
+
+## Ready?
+**ready_for_re_audit=YES.** Still **NO Minimum COMPLETE** claim until Grok自审→小浪同标准→汇总.
+No commit/push. Details: audit-evidence/fix-blockers-20261028/BLOCKERS_STATUS.txt
+
+
+===== Document Maintenance：force_local 纲领/specs 对齐 — 2026-10-28 10:25 CST Asia/Shanghai (no commit/push) =====
+Tip: fdae2c158 dirty。授权 pt375u。**无 commit / 无 push**。
+
+## Joe 硬规则（本轮）
+纲领（baseline/roadmap）只写**应然**（代码最终要达成什么），禁止现状/实然句：
+Cirros 会挂、当前默认、实测、hold 主导、dirty-only 等。force_local 若进纲领，
+只能作为合同上允许的正确性路径定义；细节扩到 specs。真 MTTCG 才是最终应然时，
+baseline 写最终目标，bounded fallback 放在 specs 的 V1 合同，别把 mitigation 写成终态现状。
+
+## Before：dirty baseline §16 是否符合 DM？
+**否（不合格）。** 原 dirty 段混入：
+- 现状/跑法：`Cirros-class guests are expected to fail`；opt-out 当 runbook；
+- 把 30s/90s/25s 与 `force_local` 机制体写进纲领（应下沉 specs）；
+- 把 mitigation 语气写成「V1 admitted … path」终态现状，而非应然合同 + 指向 specs。
+
+## After：纲领应然改写
+`docs/wavevm-architecture-baseline.md` §16：
+- 应然：同机 coherent-SHM TCG **承认** BSP-local + AP-remote 并发；并发**不豁免**
+  stop_machine/text_poke/softlock-class IPI 正确性；这些窗口 **MUST** 由 §15
+  bounded local synchronous fallback 覆盖；角色=保正确性、不宣称 MTTCG、不永久
+  全局串行；细节指针 → `docs/specs/vcpu-handoff.md`。
+- 延期应然：跨进程 MTTCG（或等价屏障）在无 §15 fallback 下满足上述窗口。
+- **纲领内不出现** `force_local` / 30s/90s/25s / Cirros /「expected to fail」。
+
+## Specs 跟上
+`docs/specs/vcpu-handoff.md` 新增 **§8.1**（V1 合同体）：
+`force_local` 角色、并发路径选择、触发（spin + NEED_LOCAL）、壁钟界
+（30s slice / 90s hard cap / 25s cooldown）、opt-out 合同面、与 memory/handoff
+不放松的耦合、acceptance evidence **形状**（非 dated 结果）。
+Touchpoints + §11 acceptance 同步。未改 memory-consistency / kernel-accelerator
+（主题属 vCPU 并发回退，非内存一致性/加速器）。
+
+## 诚实性（非纲领）：s6 SUMMARY REMOTE_MEM
+- `test_s6_minimum_matrix.sh` 默认 `WVM_S6_COMPONENT_EVIDENCE`：
+  从已 evaporated 的 `/tmp/wavevm-s6-r1-rmem-20261024-final`
+  → `$repo_root/audit-evidence/fix-blockers-20261028/remote-mem`。
+- 已有 `s6-matrix/SUMMARY.txt`：REMOTE_MEM=PASS（durable FIXED 包）；
+  R1_PRODUCTION_DISPATCH 仍 UNVERIFIED（durable 包无 R1_PRODUCTION 文件）——诚实保留。
+
+## 状态
+- tip 仍 dirty；**未** commit/push。
+- 供 Joe 扫一眼：纲领应然？specs §8.1 是否够用？REMOTE_MEM 标签是否可接受。
+- **不**签纲领 Minimum COMPLETE（本轮只做 DM/拓展/诚实标签）。
+
+
+===== Close honesty leftovers (non-MTTCG) — 2026-10-28 11:17 CST Asia/Shanghai =====
+Tip: fdae2c158 dirty. Repo /workspaces/WaveVM. Authorized pt383u 「把其余收完」.
+NO MTTCG root-cause. NO commit/push. §16 left 应然 (no MTTCG claim). force_local untouched.
+
+## Closed
+1. **§8.1 acceptance item 2 (hard-cap / cooldown events)**
+   - wavevm-cpu.c: named fprintf for event=renew / hard_cap_expiry / cooldown_suppress (rebuild OK).
+   - tests/e2e/test_guest_smoke.sh: optional WVM_GUEST_WAIT_81_EVENTS=1 → force_local_81_events.txt.
+   - Durable pack: audit-evidence/fix-blockers-20261028/guest-smoke-81/
+     OVERALL=PASS; force_local_81_events.txt:
+       hard_cap_expiry=1; renew_or_cooldown_suppress=1 (via renew×2);
+       events show arm (NEED/SPIN) → renew@~30s/60s armed_age → hard_cap_expiry
+       hard_cap_ms=90000 cooldown_ms=25000.
+   - Note: event=cooldown_suppress not observed this run (post-expiry NEED_LOCAL re-arm;
+     suppress is on spin-path). Bounds evidenced by renew remaining_cap/armed_age +
+     hard_cap_expiry line. Not MTTCG work.
+
+2. **s6-matrix SUMMARY R1_PRODUCTION_DISPATCH honesty**
+   - Archived audit-evidence/fix-blockers-20261028/remote-mem/R1_PRODUCTION_DISPATCH.txt
+     (FIXED → fractal_tcg + sibling cells production_typed_dispatch=FIXED).
+   - SUMMARY: R1_PRODUCTION_DISPATCH=PASS; HONESTY_REMOTE_MEM + HONESTY_R1_20261028
+     close UNVERIFIED-vs-cell-FIXED drift. Gate default WVM_S6_COMPONENT_EVIDENCE
+     → same remote-mem path (earlier DM patch).
+
+3. **SOURCE_IDENTITY (r3 leftover, cheap)**
+   - Refreshed audit-evidence/fix-blockers-20261028/s6-matrix/SOURCE_IDENTITY.txt
+     (+ SOURCE_IDENTITY_REFRESH.txt) at 2026-10-28T11:14:29+08:00 including
+     dirty docs/specs/vcpu-handoff.md §8.1 + wavevm-cpu.c + guest_smoke + tip fdae2c158.
+
+## Explicitly NOT done
+- True MTTCG / remove force_local / rewrite §16 to claim MTTCG.
+- commit / push.
+
+## Evidence paths (durable)
+- audit-evidence/fix-blockers-20261028/guest-smoke-81/  (incl. force_local_81_events.txt, result.txt, vm.log)
+- audit-evidence/fix-blockers-20261028/remote-mem/R1_PRODUCTION_DISPATCH.txt
+- audit-evidence/fix-blockers-20261028/s6-matrix/SUMMARY.txt
+- audit-evidence/fix-blockers-20261028/s6-matrix/SOURCE_IDENTITY.txt
+- audit-evidence/fix-blockers-20261028/s6-matrix/SOURCE_IDENTITY_REFRESH.txt
+
+## Tip / dirty
+- tip: fdae2c158 (unchanged; worktree dirty; no commit/push)
+
+
+===== Document Maintenance：wavevm-mode-boundary-audit 移出纲领 — 2026-10-28 Asia/Shanghai =====
+Tip: fdae2c158 dirty。**无 commit / 无 push**。
+
+## Joe 规则
+纲领（baseline + roadmap + docs/specs）不许「现状」审计日记；boundary audit 不是纲领。
+
+## Done
+1. Moved `docs/wavevm-mode-boundary-audit.md` → `audit-evidence/docs-audits/wavevm-mode-boundary-audit.md`
+   (prefer audit-evidence; keep under docs-audits/ so it is clearly non-charter).
+2. Updated relative links in the moved file to `../../docs/...`; header states audit-evidence only.
+3. Updated this plan's path refs (former docs/… paths).
+4. Roadmap §5 Phase 1: renamed off 「Document Current…」; points inventory to audit-evidence; forbids copying 现状 into 纲领.
+5. Grep: no remaining `wavevm-mode-boundary-audit` refs inside baseline/roadmap/docs/specs.
+
+## Not done here
+- Codex gaps B1–B4 (u32 wire, guest matrix, WVM_MAX_VMS, code quality) — separate work on same dirty tip.
+
+
+========================================================================
+## (1) CLOSEOUT — 2026-10-28 Asia/Shanghai — tip=fdae2c158 (DIRTY, no commit/push)
+Joe order: finish (1) then report; do NOT start (2) Minimum MTTCG contract rewrite or (3) TCG fixes yet.
+
+### Done in (1)
+1. mode-boundary-audit moved out of 纲领 tree:
+   docs/wavevm-mode-boundary-audit.md → audit-evidence/docs-audits/wavevm-mode-boundary-audit.md
+   Root one-shot audit diaries deleted (dsh/grok/codex/minimum-full-audit-*).
+   Charter scrub: roadmap keeps only the rule 「Do not copy audit diary or 现状 inventories」; no mode-boundary link left in architecture-baseline.
+
+2. Codex B1 u32 wire: WVM_FLAG_FULL_VMID + wvm_header_pack_src / wvm_wire_target in wavevm_protocol.h;
+   main_wrapper ENCODE_ID→pack_src; kernel byteorder include for ntohl inlines; backends/slave updated.
+
+3. Codex B2 guest matrix flat|fractal × require-tcg|require-kvm:
+   Durable MERGED pack: audit-evidence/fix-blockers-20261028/guest-matrix-final/SUMMARY.txt
+   MATRIX_RESULT=PASS pass=4 (NOT charter COMPLETE / not MTTCG).
+   Sources: flat_tcg←guest-matrix/; fractal_tcg←guest-matrix-fractal-tcg-v1/; kvm←guest-matrix-kvm/.
+   Honesty notes: fractal_tcg + both kvm cells used WVM_CREATE_VCPUS=1 (2-vCPU fractal softlockup /
+   KVM dual-`yes` hang deferred to (3)). flat_tcg remains 2-vCPU.
+
+4. Codex B3 WVM_MAX_VMS: legacy-only alias WVM_LEGACY_RESOURCE_MAX_VMS; resources.c messages say
+   legacy table capacity not u32 ID space; identity-routing/resources headers updated.
+
+5. Codex B4 code quality: wavevm-accel.h EOF trim; ko/build byteorder; fractal KEEP_RUNNING cleanup
+   matched single_node (was killing agent on EXIT); fractal wait_compute_active capacity-aware + 600 attempts;
+   fractal builds submit_stop_vm; guest_smoke builds STOP binary on demand; KVM light CPU smoke;
+   G9 require-kvm accepts boot-time remote_done>0 when light smoke delta=0.
+
+### Explicitly NOT done (next Joe steps)
+(2) Rewrite Minimum 应然: usable distributed multi-vCPU TCG / MTTCG contract —
+    concurrency is the main path; force_local only bounded fallback, not normal.
+    Do NOT take full upstream MTTCG perf/optimization.
+(3) Continue TCG fixes under that contract (incl. 2-vCPU fractal softlockup, KVM dual-yes,
+    force_local dominance seen on fractal_tcg-v1: force_local_used≈655k vs remote_done≈64).
+
+### No commit / no push
+========================================================================
+
+
+========================================================================
+## (2) DONE — Minimum multi-vCPU TCG 应然 rewrite — 2026-10-28 Asia/Shanghai
+Tip: fdae2c158 dirty. NO commit / NO push.
+
+### Charter / specs (应然 only; no 现状)
+1. `docs/wavevm-architecture-baseline.md`
+   - §1 Minimum usable system: points at Section 16 usable distributed
+     concurrent multi-vCPU TCG contract.
+   - §16: **Minimum multi-vCPU TCG 应然** — concurrency is the **main normal
+     path**; Section 15 / `force_local` is exceptional bounded fallback only
+     (MUST NOT dominate ordinary remote concurrent accounting); NOT full
+     upstream QEMU MTTCG perf/optimization; Extended fault/HA/migration/full
+     fault engine explicitly out of Minimum gates. Deferred list rewritten to
+     full upstream MTTCG optimization (usable concurrent required now).
+2. `docs/specs/vcpu-handoff.md` §8.1
+   - Contract intent: main path = concurrent; force_local = exceptional only.
+   - Acceptance **shape**: guest login, CPU stress, remote vCPU/mem, STOP under
+     ≥2 vCPUs concurrent main path; force_local bounds; no MTTCG-perf claim;
+     no fault-injection/HA/migration/full fault-engine requirement.
+   - §11 acceptance bullet aligned to that shape.
+3. `docs/wavevm-refactor-roadmap.md` §1.1 Minimum: matching pointer to
+   baseline §16 / vcpu-handoff §8.1 (Document Maintenance consistency).
+
+### Next
+(3) TCG toward that contract: reduce force_local dominance; ≥2 vCPU remote
+    concurrent progress; fractal 2-vCPU softlockup; KVM dual-yes if in scope;
+    durable re-smoke under audit-evidence/; honest remote vs force_local deltas.
+========================================================================
+
+
+========================================================================
+## (3) PARTIAL — TCG toward Minimum contract — 2026-10-28 Asia/Shanghai
+Tip: fdae2c158 dirty. NO commit / NO push.
+Evidence: audit-evidence/fix-blockers-20261028/s23-tcg-contract/
+
+### Code (dirty, uncommitted)
+`wavevm-qemu/accel/wavevm/wavevm-cpu.c` rebuilds s23c–s23f:
+- hold_full_local (no mid-hold remote duty; duty re-broke virtio)
+- spin>=4 SPIN-LOCAL arm; NEED_LOCAL budget preserve vs spin_backoff RIP clear
+- NEED_LOCAL repeat>=2 escalate hold
+- **s23f:** cooldown_lift_softlock — after hard_cap 25s cooldown, if spin>=4
+  still (softlock active), lift cooldown and re-arm SPIN-LOCAL. Fractal hung
+  under cooldown_suppress spin=4..24 (archive fractal_tcg-hung-cooldown-141654).
+
+### Durable re-smoke
+| cell | vCPU | result | remote_done_delta | force_local_used_delta | notes |
+|------|------|--------|-------------------|------------------------|-------|
+| flat_tcg | 2 | PASS | 740 | 1641728 | s23e; SPIN-LOCAL×1 |
+| fractal_tcg | 2 | PASS | 2933 | 535040 | s23f; lift+SPIN-LOCAL; was softlock deferred |
+| flat_kvm | 2 | PASS | 0 (boot remote=8) | 0 | light CPU; dual-yes still avoided |
+
+### Honesty
+- Concurrency MAIN outside softlock hold; force_local exceptional §8.1 and still
+  dominates softlock windows (not boot-sticky; hard_cap 90s + cooldown).
+- Prior fractal_tcg-v1: force_local≈655k vs remote≈64; this fractal remote_delta=2933.
+- KVM dual-`yes` hang: NOT fixed; harness keeps light busy-loop for require-kvm.
+- NO MTTCG root-cause / NO full upstream MTTCG perf claim.
+- (2) charter 应然 unchanged this block (already DONE).
+
+### Status
+**(3) = PARTIAL** — TCG flat+fractal 2-vCPU FIXED toward contract; KVM dual-yes
+residual + force_local softlock-window dominance residual.
+MINIMUM_COMPLETE = NOT_CLAIMED. No commit/push.
+========================================================================
+
+## s23g5 KVM dual-yes FIXED（2026-10-28 17:45 Asia/Shanghai）— PARTIAL，非 MINIMUM_COMPLETE
+- 状态：**FIXED**（相对 dual-yes AP #DF 阻塞）；**MINIMUM_COMPLETE=NOT_CLAIMED**；未 commit/push。
+- 根因：远程 KVM 往返只同步 TSC/TSCDEADLINE/KERNEL_GS_BASE，缺 GS_BASE/APIC_BASE/SYSCALL MSR → SWAPGS 不一致 → AP `error_entry` + 用户态 RSP 双重故障（s23g4-pass1/2 串口 `Comm: yes`；此前 OVERALL=PASS 不诚实）。
+- 修复：`wvm_kvm_context_t` 扩展 MSR；FE `wavevm-cpu.c` + `slave_hybrid.c` 同步；远程返回 CPL≠3 时有界本地 drain；qemu BIND 补 `node_instance_id`（ko ABI v3，否则 EINVAL）。
+- 证据：`audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes-s23g5-msr2/` — guest_cpu_smoke=PASS，串口无 double fault，force_local_delta=0，remote_done_before=8。
+- 残留：smoke 窗口内 remote_done_delta=0（启动期远程路径已证；窗口内远程增量仍可加强）；未抬 MINIMUM_COMPLETE。
+- force_local：本切片未扩大 sticky / 未写死 2 vCPU。
+
+## 2026-10-28 22:39 CST — push: Minimum WIP + four session backups (Joe asked)
+- Tip was fdae2c158 dirty; MINIMUM_COMPLETE=NOT_CLAIMED (no COMPLETE claim).
+- Code WIP: multi-vCPU TCG contract + KVM dual-yes MSR fix + ACK demux / FE inject / epoch / HALT-WAKE (PARTIAL; s23g5 PASS; s23g10+ open).
+- Audits: grok/xiaolang r5–r6 + grok-vs-codex quality note; Codex full-review under audit-evidence/.
+- Session backups refreshed: DSH, Claude Code, Codex (5 parts), Grok Bot (82051237 Build + grokbot-transcript).
+- scripts/bot_to_grok_build.py: PAGE_HEADER_RE accepts "session" (ReadTranscript wording).

@@ -51,7 +51,15 @@
 // --- 核心常量定义 ---
 #define WVM_MAX_SLAVES (1UL << WVM_SLAVE_BITS)
 #define WVM_MAX_GATEWAYS (WVM_MAX_SLAVES)
-#define WVM_MAX_VMS 256  // Multi-VM 资源池化：最多 256 个 VM 共享同一集群
+/*
+ * LEGACY resource-plan table capacity (indexed by uint8_t/legacy vm slot).
+ * This is NOT the V1 u32 VM namespace limit (see identity allocator / baseline §14:
+ * UINT32_MAX nonzero namespaces with WVM_CAP_VM_ID_U32). Production u32 identities
+ * (allocator next_vm_id starts at 256) must not use this table as a dense index;
+ * callers must fail-closed or use the typed identity/admission path instead.
+ */
+#define WVM_MAX_VMS 256
+#define WVM_LEGACY_RESOURCE_MAX_VMS WVM_MAX_VMS
 /*
  * [协议特征与物理限制]
  * WVM_MAGIC: 数据包特征码 "WVMX"，用于在接收端快速识别并丢弃非法/垃圾流量。

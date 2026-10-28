@@ -1,0 +1,4 @@
+G8 FIXED 2026-10-27
+变更: node_runtime/vcpu_service.c — REPLY_SENDING 状态；write_reply 有界 poll(≤deadline)；drain 计入 sending。
+证据: g8-drain-unit.txt (DRAIN_BLOCKED=-ETIMEDOUT reply_sending=1; AFTER_UNBLOCK=0 PASS)
+回归: g8-service-regression.txt PASS；runtime 已重编 g8-rebuild-runtime.txt

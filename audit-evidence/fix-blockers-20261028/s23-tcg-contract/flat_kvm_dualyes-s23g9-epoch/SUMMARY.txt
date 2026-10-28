@@ -1,0 +1,13 @@
+s23g9-epoch KVM dual-yes — OVERALL=FAIL_harness (pre-dual-yes)
+
+Cause: set -euo pipefail + empty [WVM-TCG-STATS] at SSH.
+Honest g_wavevm_remote_rpc_ok no longer counts HALT-WAKE as remote_done,
+so boot STATS were zero; grep|sed|awk pipeline returned 1 and aborted
+before guest CPU dual-yes. result.txt stopped at guest_ssh=PASS.
+
+FE inject OK: mapped=1 vnode=1 gw=127.0.0.1:29350 (sidecar V30-RX).
+FULL_VMID epoch skip present in wavevm_node_runtime (18:07).
+HALT-WAKE timer=1s (not 250ms).
+
+Harness fix: STATS extraction uses { grep || true; } | sed | awk.
+Re-run: flat_kvm_dualyes-s23g10-epoch

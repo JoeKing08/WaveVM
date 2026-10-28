@@ -1,0 +1,10 @@
+vm_id=257
+vm_incarnation=1
+manifest_generation=1
+route_scope_id=3583089784346426128
+backend=require-kvm
+accel=
+cap_source=live
+tcg_helper=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+run_id=s6-20261028-094911-28184
+cell=fractal_kvm

@@ -1,0 +1,25 @@
+=== result ===
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=8
+local_done_before=0
+force_local_used_before=0
+guest_cpu_smoke=PASS
+remote_done_after=67712
+local_done_after=0
+force_local_used_after=0
+remote_done_delta=67704
+local_done_delta=0
+force_local_used_delta=0
+remote_vcpu_evidence=1
+remote_mem_evidence=1
+REQUIRE_STOP=1
+guest_stop=PASS
+OVERALL=PASS
+=== markers ===
+0
+0
+1
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes-s23g4-pass2/vm.log:[WVM-KVM-DRAIN] cpu=1 bounded local kvm_cpu_exec after preempt/hlt
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes-s23g4-pass2/result.txt:guest_cpu_smoke=PASS
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes-s23g4-pass2/result.txt:OVERALL=PASS

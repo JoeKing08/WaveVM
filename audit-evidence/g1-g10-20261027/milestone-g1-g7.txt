@@ -1,0 +1,32 @@
+=== G1+G7 milestone 2026-10-27 13:29:11 +0800 Asia/Shanghai ===
+tip=dd167b625 dirty_files=127 (no commit)
+
+G7: FIXED
+  prod: master_core/kernel_backend.c dirty committer
+    - !WVM_IS_VALID_TARGET / AUTO_ROUTE → fail-closed retain dirty (not send_rc=0)
+    - confirmed local → wvm_handle_local_commit + wvm_publish_local_commit + meta.version
+    - remote → wire encode; encode fail retains dirty (no free-drop)
+  accept: test_worker_failure_isolation ALL PASS (VM 2101/2102)
+    log: g1-worker_failure.log
+  also: test_two_vm_isolation PASS; test_targeted_isolation PASS
+
+G1: PARTIAL
+  done:
+    - fault TX: encode fail → SIGBUS (no slave_id=0 continue)
+    - dirty: encode fail retain (above); local path no longer needs 8-bit wire
+    - worker_failure restored VM_KEEP=2101 VM_PEER=2102; production-range fault/write PASS
+  remaining:
+    - remote Mode A still on legacy 8-bit composite wire (wvm_wire_encode_id)
+    - RX assoc still WVM_GET_VMID 8-bit
+    - not yet wired through full-identity V1 envelope / node-runtime data path
+    - Codex: temporary Mode A refuse is safety door only — remote U32 path still open
+
+build: g7-build.log (wavevm.ko rebuilt+insmod)
+
+=== G1 follow-up 2026-10-27 20:45 Asia/Shanghai ===
+G1: FIXED (FULL_VMID legacy-header U32 dataplane)
+  tip dirty: protocol.h + kernel_backend + logic_core + slave_hybrid
+  sudo insmod via SSH Keys & API Tokens/sudo passward.txt
+  unit: g1-full-vmid-unit.log
+  isolation: g1-two_vm_isolation.log g1-targeted_isolation.log g1-worker_failure_isolation.log
+  residual: formal V1 envelope carriage still future; VIEW/HB skip when vm>255

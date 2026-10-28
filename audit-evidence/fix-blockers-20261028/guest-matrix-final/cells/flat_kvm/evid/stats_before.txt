@@ -1,0 +1,8 @@
+[WVM-TCG-STATS] cpu=0 remote_done=1 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=2 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=3 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=4 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=5 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=6 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=7 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=8 local_done=0 force_local_used=0

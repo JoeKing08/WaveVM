@@ -1,0 +1,1 @@
+expected_reject:status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0

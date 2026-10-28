@@ -1,0 +1,13 @@
+tip=fdae2c158f074206e8c10fd409483d0070da6765
+time_asia_shanghai=2026-10-28 09:59:52 CST
+remote_mem_evidence=1
+remote_vcpu_evidence=1
+source=guest-smoke OVERALL=PASS (g3g9p-style)
+honesty_cleanup=honesty=REQUIRE_STOP=1_full_STOP_acceptance
+--- sample dirty flush (from evid/agent.log if present) ---
+--- remote_mem_hits head ---
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-smoke/remote_evidence.txt:=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-smoke/remote_evidence.txt:/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=93us coherent=1
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-smoke/remote_evidence.txt:/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=172us coherent=1
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-smoke/remote_evidence.txt:/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=79us coherent=1
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-smoke/remote_evidence.txt:/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=144us coherent=1

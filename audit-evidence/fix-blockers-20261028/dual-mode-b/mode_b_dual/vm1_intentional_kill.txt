@@ -1,0 +1,9 @@
+intentional_kill=1
+killed_child=34363
+preserved_child=34412
+note=N6 Mode B: vm1 child KILL before STOP; vm1 cleanup_ok may be 0
+cleanup_ok=0
+stop=status=6 recorded_state=14 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14698524013413943769
+vm_id=256
+--- stop_result.vm1 ---
+status=6 recorded_state=14 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14698524013413943769

@@ -62,18 +62,91 @@ static void wavevm_sync_topology(int dev_fd);
 static int write_all(int fd, const void *buf, size_t len);
 
 #define WVM_TCG_INTERRUPT_SYNC_MASK \
-    (CPU_INTERRUPT_HARD | CPU_INTERRUPT_HALT | \
+    (CPU_INTERRUPT_HARD | CPU_INTERRUPT_HALT | CPU_INTERRUPT_NMI | \
+     CPU_INTERRUPT_SMI | CPU_INTERRUPT_MCE | CPU_INTERRUPT_VIRQ | \
      CPU_INTERRUPT_TGT_EXT_0 | CPU_INTERRUPT_TGT_EXT_1 | \
      CPU_INTERRUPT_TGT_EXT_2 | CPU_INTERRUPT_TGT_EXT_3 | \
      CPU_INTERRUPT_TGT_EXT_4 | CPU_INTERRUPT_TGT_INT_0 | \
      CPU_INTERRUPT_TGT_INT_1 | CPU_INTERRUPT_TGT_INT_2)
 
 /*
- * A remote TCG slice can consume a master-owned LAPIC IRQ only when the
- * master transfers both the LAPIC snapshot and its pending HARD indication.
- * Other interrupt_request bits remain local lifecycle/control state.
+ * Remote TCG must see HARD and NMI/SMI/MCE/VIRQ so guest RCU/stop_machine
+ * IPIs reach the helper (G3 concurrent). INIT/SIPI stay master-local.
  */
-#define WVM_TCG_REMOTE_IRQ_FORWARD_MASK CPU_INTERRUPT_HARD
+#define WVM_TCG_REMOTE_IRQ_FORWARD_MASK \
+    (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI | CPU_INTERRUPT_SMI | \
+     CPU_INTERRUPT_MCE | CPU_INTERRUPT_VIRQ)
+
+/*
+ * G3: helper QEMU is -nodefaults and does not own guest devices. A remote TCG
+ * slice that touches MMIO/PIO must restore EIP and ask FE for bounded local
+ * execution (WVM_TCG_EXCP_NEED_LOCAL) — not silently drop the access.
+ */
+void (*wavevm_slave_pio_hook)(CPUState *cpu, uintptr_t retaddr);
+
+static bool wavevm_role_is_slave(void)
+{
+    const char *role = getenv("WVM_ROLE");
+    return role && strcmp(role, "SLAVE") == 0;
+}
+
+static void QEMU_NORETURN wavevm_slave_request_local_io(CPUState *cpu,
+                                                        uintptr_t retaddr)
+{
+    static unsigned log_count;
+    if (log_count++ < 64) {
+        fprintf(stderr,
+                "[WVM-TCG-NEED-LOCAL] slave cpu=%d rip-restore retaddr=%p\n",
+                cpu ? cpu->cpu_index : -1, (void *)retaddr);
+    }
+    if (cpu) {
+        cpu->exception_index = WVM_TCG_EXCP_NEED_LOCAL;
+        cpu_loop_exit_restore(cpu, retaddr);
+    }
+    abort();
+}
+
+static void wavevm_slave_transaction_failed(CPUState *cpu, hwaddr physaddr,
+                                            vaddr addr, unsigned size,
+                                            MMUAccessType access_type,
+                                            int mmu_idx, MemTxAttrs attrs,
+                                            MemTxResult response,
+                                            uintptr_t retaddr)
+{
+    (void)physaddr;
+    (void)addr;
+    (void)size;
+    (void)access_type;
+    (void)mmu_idx;
+    (void)attrs;
+    (void)response;
+    wavevm_slave_request_local_io(cpu, retaddr);
+}
+
+static void wavevm_slave_pio_hook_fn(CPUState *cpu, uintptr_t retaddr)
+{
+    wavevm_slave_request_local_io(cpu, retaddr);
+}
+
+static void wavevm_slave_install_device_authority_hooks(void)
+{
+    CPUState *cpu;
+    static bool installed;
+
+    if (installed || !wavevm_role_is_slave()) {
+        return;
+    }
+    installed = true;
+    wavevm_slave_pio_hook = wavevm_slave_pio_hook_fn;
+    CPU_FOREACH(cpu) {
+        CPUClass *cc = CPU_GET_CLASS(cpu);
+        cc->do_transaction_failed = wavevm_slave_transaction_failed;
+        cpu->ignore_memory_transaction_failures = false;
+    }
+    fprintf(stderr,
+            "[WVM-TCG-NEED-LOCAL] slave device-authority hooks installed\n");
+}
+
 
 int g_wvm_local_split = 0;
 static bool g_wvm_split_explicit = false;
@@ -148,6 +221,7 @@ static void wavevm_slave_apply_tcg_identity(CPUState *cpu, uint32_t vcpu_index)
 static void wavevm_slave_prepare_tcg_slice(CPUState *cpu,
                                            const struct wvm_ipc_cpu_run_req *req)
 {
+    wavevm_slave_install_device_authority_hooks();
     /*
      * A slave TCG vCPU is a remote compute slice, not the authority for the
      * guest's device model.  Lifecycle and interrupt bits queued on the slave's
@@ -1331,6 +1405,14 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             cpu->halted = 1;
             cpu->exception_index = exec_ret;
         }
+        /*
+         * cpu_exec returns exception_index via longjmp then clears
+         * cpu->exception_index. NEED_LOCAL must still reach FE as
+         * ack.ctx.tcg.exit_reason so FE can arm a bounded local burst.
+         */
+        if (local_is_tcg && exec_ret == WVM_TCG_EXCP_NEED_LOCAL) {
+            cpu->exception_index = WVM_TCG_EXCP_NEED_LOCAL;
+        }
 
         memset(&ack, 0, sizeof(ack));
         wavevm_slave_export_ctx(cpu, &req, &ack, local_is_tcg);
@@ -1945,6 +2027,19 @@ static int wavevm_init_machine_kernel(WaveVMAccelState *s, MachineState *ms) {
             close(s->dev_fd);
             s->dev_fd = -1;
             return bind_result;
+        }
+        /* s23g7: inject CPU route + sidecar gateway into *this* FE context. */
+        {
+            int vcpus = (ms && ms->smp.cpus > 0) ? ms->smp.cpus : 1;
+            int inj = wavevm_qemu_inject_fe_compute_routes(s->dev_fd, vcpus,
+                                                          g_wvm_local_split);
+            if (inj < 0) {
+                fprintf(stderr,
+                        "[WaveVM-QEMU] FE compute-route inject failed: %s "
+                        "(Mode A remotes will ENODEV)\n",
+                        strerror(-inj));
+                /* Non-fatal for boot: local path still works; remotes soft. */
+            }
         }
     }
     wavevm_setup_memory_region(ms->ram, ms->ram_size, s->dev_fd);

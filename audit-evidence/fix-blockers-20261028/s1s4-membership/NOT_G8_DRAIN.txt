@@ -1,0 +1,5 @@
+This pack is REAL membership cordon/drain/gateway evidence.
+It is NOT test_vcpu_service_g8_drain (vCPU REPLY_SENDING unit).
+Tests: cordon_drain_compute, gateway_drain, gateway_drain_prepare_commit,
+gateway_drain_successor, membership_drain_transport, membership_coordinator,
+membership_route, membership_controller (+ dual Mode B / same-host / placement).

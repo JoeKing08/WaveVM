@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.5glACA/runtime/vm-256-1-1.manifest
+3c2edbaeffd66d24d680be1beabc321c26d1ea3d88c9a12963445616e9a821ce  /tmp/wavevm-create-vm-single.5glACA/runtime/vm-256-1-1.manifest
+493cc3c35c4c8d5bcb8e8a70a97aa0a5fc1efa773cbc802f6c55288d5152bc26  /tmp/wavevm-create-vm-single.5glACA/runtime/vm-256-1-1.manifest.dispatch
+1909850586bf9b969ae7bb17e195bdfa90a994b031d9bac0da593acdc1571950  /tmp/wavevm-create-vm-single.5glACA/runtime/vm-256-1-1.manifest.route

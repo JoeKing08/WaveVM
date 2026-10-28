@@ -1,0 +1,3 @@
+wvm_ctl: admission submit type=0x403 peer=801:802 port=43058 rc=0 err=
+wvm_ctl: admission submit type=0x403 peer=901:902 port=43056 rc=0 err=
+wvm_ctl: STOP_VM rc=0 status=0 recorded_state=17 err=(none)

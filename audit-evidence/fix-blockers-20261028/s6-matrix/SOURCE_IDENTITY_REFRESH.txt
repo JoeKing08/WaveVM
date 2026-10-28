@@ -1,0 +1,4 @@
+SOURCE_IDENTITY_REFRESHED_AT=2026-10-28T11:14:29+08:00
+reason=r3 leftover: capture after docs/specs/vcpu-handoff.md §8.1 + baseline §16 DM + test_s6_minimum_matrix.sh + wavevm-cpu.c event logs
+includes_vcpu_handoff=1
+original_matrix_capture_was=2026-10-28T09:49:11+08:00 (pre-§8.1 doc write)

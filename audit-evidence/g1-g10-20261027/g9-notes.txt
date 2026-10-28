@@ -1,0 +1,14 @@
+G9 状态 2026-10-28 08:51 Asia/Shanghai — FIXED
+脚本: tests/e2e/test_guest_smoke.sh
+- OVERALL 仅 STOP 后；负载前后 remote/local/force delta；禁 banner 独过
+- 本轮：G9 remote wait 最多 45s（WVM_GUEST_G9_REMOTE_WAIT_S），避免与 concurrent hold 到期竞态
+
+最新: guest-smoke-g3g9p
+  guest_login=PASS
+  guest_ssh=PASS
+  guest_cpu_smoke=PASS
+  remote_done_delta=45  remote_vcpu_evidence=1  remote_mem_evidence=1
+  guest_stop=PASS  REQUIRE_STOP=1
+  OVERALL=PASS  EXIT:0
+证据: audit-evidence/g1-g10-20261027/guest-smoke-g3g9p/
+G9 FIXED。

@@ -1,0 +1,4 @@
+host_capabilities_report=present
+ctl_capabilities_record=present
+cap_source=deny-kvm
+note=admission used ctl capabilities-*.record; agent also published host_capabilities.report

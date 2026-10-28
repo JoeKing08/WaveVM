@@ -1,0 +1,13 @@
+=== backend/topology snippets ===
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v256-i1-g1-n801-2fecfee10f55b9fc': No such file or directory
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 8, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v256-i1-g1-n801-2fecfee10f55b9fc': No such file or directory
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:38594
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-2fecfee10f55b9fc (Size: 16 MB)
+=== child runtime logs (names) ===
+/tmp/wavevm-create-vm-single.F3qHbP/runtime/vm-256-1-1.manifest
+/tmp/wavevm-create-vm-single.F3qHbP/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-single.F3qHbP/runtime/vm-256-1-1.manifest.route

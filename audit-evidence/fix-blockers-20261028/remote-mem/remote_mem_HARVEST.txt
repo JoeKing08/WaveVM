@@ -1,0 +1,76 @@
+directory_store_rc=0
+EVID directory_store: initial_version=0x900000001 commit_next=38654705666 ESTALE_stale_base=1
+V1 directory-store tests: PASS
+---
+memory_service_rc=0
+EVID memory_service: dirty_commit base_version=7->result_version=8 STALE_BASE_VERSION=1 ack_version_path=9
+memory-service tests: PASS
+---
+fence_reject_rc=0
+s6 fence/version gate: PASS
+  fence_reject_nonzero_required=1 fence_id=99 encoded_bytes=4576
+---
+goal4_a14_rc=0
+=== section 4 remote memory production path (memory_service) ===
+EVID memory_service: dirty_commit base_version=7->result_version=8 STALE_BASE_VERSION=1 ack_version_path=9
+memory-service tests: PASS
+EVID executor_bridge_drain: in_flight_timeout=1 drained=1
+executor bridge tests: PASS
+=== section 4 A14 bridge -> wvm_executor_runtime_execute_handoff -> remote mem ===
+  WVM_S6_OUT_DIR=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem
+goal4 remote service request type=0x1
+[A3] remote ACK type=0x3 dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+[Executor] installed remote page gpa=0x1000 version=0x100000009 bytes=4096 hva=0x7abf41200000 first=c7050010
+[Executor] TCG install notify applied gpa=0x1000 version=0x100000009 (barrier ack)
+goal4 remote service request type=0x1c
+[A3] remote ACK type=0x1e dispatch rc=0 err=V1 directory commit base version is stale
+goal4 remote service dispatch rc=0 err=V1 directory commit base version is stale
+goal4 remote service request type=0x1
+[A3] remote ACK type=0x3 dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+goal4 A14 IPC fault ok gpa=0x1000 version=0x100000009
+goal4 remote service request type=0x1c
+[A3] remote ACK type=0x1e dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+[WaveVM-User] push fence ok fd=15 rtt=26us slave=1
+EVID goal4_A14: real_qemu_pid=37911 guest_hlt_gpa=0x1000
+EVID goal4_A14: real_qemu_exit_class=2 context_bytes=4408 status=0
+EVID goal4_A14: tcg_dirty_self_emit_version=0x10000000a
+EVID goal4_A14: guest_store_remote_version=0x10000000a guest_store_bytes=78563412
+EVID goal4_A14: remote_fault_ACK version=0x100000009 request_fence_id=11 produced_fence_id=1 production_execute_handoff=1
+           → remote memory_service fault/ACK → TCG self-emit dirty PASS
+goal section 4 / A14 production execute_handoff + remote memory PASS
+---
+goal4_a14_kvm_rc=0
+=== section 4 remote memory production path (memory_service) ===
+EVID memory_service: dirty_commit base_version=7->result_version=8 STALE_BASE_VERSION=1 ack_version_path=9
+memory-service tests: PASS
+EVID executor_bridge_drain: in_flight_timeout=1 drained=1
+executor bridge tests: PASS
+=== section 4 A14 bridge -> wvm_executor_runtime_execute_handoff -> remote mem ===
+goal4 remote service request type=0x1
+[A3] remote ACK type=0x3 dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+[Executor] installed remote page gpa=0x1000 version=0x100000009 bytes=4096 hva=0x7b06ec600000 first=c7050010
+[Executor] TCG install notify applied gpa=0x1000 version=0x100000009 (barrier ack)
+goal4 remote service request type=0x1
+[A3] remote ACK type=0x3 dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+goal4 remote service request type=0x1c
+[A3] remote ACK type=0x1e dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+goal4 remote service request type=0x1
+[A3] remote ACK type=0x3 dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+[Executor] installed remote page gpa=0x1000 version=0x10000000b bytes=4096 hva=0x7b06ec600000 first=f4000000
+[Executor] TCG install notify applied gpa=0x1000 version=0x10000000b (barrier ack)
+goal4 remote service request type=0x1
+[A3] remote ACK type=0x3 dispatch rc=0 err=(empty)
+goal4 remote service dispatch rc=0 err=(empty)
+EVID goal4_A14: real_kvm_exit_class=2 context_bytes=2696 status=0
+EVID goal4_A14: guest_store_remote_version=0x10000000a guest_store_bytes=78563412
+EVID goal4_A14: coordinator_fence_id=0x1 coordinator_seed_version=0x10000000b coordinator_exit_class=2 coordinator_context_bytes=2696 coordinator_status=0 legacy_ack_status=0 legacy_ack_mode=0 legacy_ack_bytes=4400
+EVID goal4_A14: remote_fault_ACK version=0x10000000b request_fence_id=11 produced_fence_id=1 production_execute_handoff=1
+           → remote memory_service fault/ACK → real KVM_RUN PASS
+goal section 4 / A14 production execute_handoff + remote memory PASS

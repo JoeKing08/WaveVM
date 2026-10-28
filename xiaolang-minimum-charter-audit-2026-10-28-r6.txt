@@ -1,0 +1,261 @@
+WaveVM Minimum 纲领交叉审 r6（小浪 / xiaolang cross-audit）
+======================================================================
+Tip SHA:     fdae2c158f074206e8c10fd409483d0070da6765  (short fdae2c158)
+Dirty:       Yes（纲领 4 改 + mode-boundary 迁出 + 大量代码/测试/产物；独立核实）
+Date:        2026-10-28 21:54:17 CST Asia/Shanghai
+Auditor:     小浪 r6（交叉审；非 Grok 自审正文；relay 目标 = Grok Bot agent，非 Joe）
+Machine:     2e4d3ec5-e1b1-4a36-9903-de6309119499 /workspaces/WaveVM
+Scope:       Charter = baseline + roadmap + docs/specs；Document Maintenance 应然-only；
+             Minimum 闭合 vs 耐久证据（audit-evidence/、tests、非禁审文件）
+Action:      STRICT READ-ONLY on code/charter；仅写本文件
+HARD_BAN_OBSERVED: Yes
+  — ls 可见 `minimum-full-review-codex-agent-2026-10-28.txt` 文件名；
+    本轮未 open / read / cat / less / head / tail / grep / ripgrep /
+    find-name-open / cite 该文件任何路径或内容。
+Prior xiaolang r*: 仓库内无 xiaolang-minimum-charter-audit-2026-10-28-r*.txt
+对照（只读，不盲抄）：grok-minimum-charter-self-audit-2026-10-28-r6.txt
+证据根默认：audit-evidence/fix-blockers-20261028/
+另见：audit-evidence/g1-g10-20261027/、codex-minimum-review-20261028/
+口径：纲领=应然；G1–G10 FIXED ≠ COMPLETE；plan≠证据；dirty WT≠已提交 tip 合同
+评分：PASS / PARTIAL / FAIL
+
+一、中文总结论
+----------------------------------------------------------------------
+1) Tip+dirty 诚实：tip=fdae2c158，工作树 dirty。核实通过。
+2) 纲领泄漏：No — dirty 纲领 hard-scan 无 现状/实然/进度/checkbox/dated
+   approval/test-tally/audit-verdict 回灌；Document Maintenance 禁止条款
+   自身提及「现状」/checkboxes 不算泄漏。
+3) MINIMUM_COMPLETE=No — 不能诚实签署。
+4) 相对 grok r6：整体同意 COMPLETE=No 与泄漏=No；对本轮主门 M3
+   （§16/§8.1 concurrent-MAIN）独立更严 → FAIL（grok=PARTIAL）。
+
+二、HARD_BAN_OBSERVED
+----------------------------------------------------------------------
+HARD_BAN_OBSERVED: Yes
+
+三、Document Maintenance / leakage
+----------------------------------------------------------------------
+规则源：roadmap ## Document Maintenance（约 L9–L30）：禁 implementation
+progress、completion checkboxes、dated approval、test results、coverage、
+audit verdicts；门禁用所需证据形状，不用审计 ID；「现状」库存不得进
+baseline/roadmap/specs。
+
+Hard-scan 覆盖：dirty WT baseline + roadmap + docs/specs 全部 11 份。
+模式含：现状|实然|进度|已完成|已实现|目前/当前代码|implementation progress|
+MINIMUM_COMPLETE|BLOCKERS_STATUS|OVERALL=PASS|audit-evidence/|2026-10-日期|
+guest-smoke-|fdae2c158|force_local_used|本轮/已修|checkbox 等。
+
+结果：
+  纲领泄漏?  No
+  具体泄漏 file:line / 摘录：无（无硬泄漏命中需引用）。
+  边界残留（披露，非硬泄漏）：
+    - baseline L35：「Until a subsystem specification is accepted, current
+      code remains the source of truth…」——过渡过程规则，非跑分表。
+    - identity-routing.md L188：「The current WVM_SLAVE_BITS=12 …」——常量
+      迁移边界说明，非实现进度日记。
+    - roadmap L16/L262：Document Maintenance / Phase1 禁止条款自身提及
+      「implementation progress」「现状」——反泄漏规则，非回灌。
+  dirty 方向 = scrub + multi-vCPU 应然（baseline §16；vcpu-handoff §8.1；
+    禁 dated tallies 入规格）——与 Document Maintenance 一致。
+  mode-boundary-audit 已迁出 docs/ → audit-evidence/docs-audits/。
+  tip 仍无 §16/§8.1 应然正文（force_local / multi-vCPU 应然计数 tip=0；
+    WT baseline≥1、vcpu-handoff≥1）——合同只在 dirty，非泄漏问题。
+
+四、纲领 Minimum 范围（与 grok r6 对齐的条目表）
+----------------------------------------------------------------------
+来源 A：roadmap §1.1 Minimum usable system → M1–M9
+来源 B：Phase 7/8/10 Minimum 验收 → 并入 M6/M11/M12/M13
+来源 C：baseline Minimum + §14/§15/§16（含 dirty multi-vCPU 应然）
+来源 D：门禁=所需证据形状，不是 G/A 审计 ID
+另列：charter multi-vCPU（§16 + vcpu-handoff §8.1）+ DM
+排除：Phase 9 完整故障引擎、HA/迁移/透明恢复、full upstream MTTCG 性能
+
+五、逐条裁决（PASS / PARTIAL / FAIL）+ 一句话理由 + 证据路径
+----------------------------------------------------------------------
+【M1】manifest 绑定分布式 VM：隔离身份/路由/socket/SHM/端口/日志/临时文件
+裁决：PASS
+理由：guest smoke / dual Mode B 耐久包含 manifest·identity 与隔离运行痕迹。
+证据：audit-evidence/fix-blockers-20261028/guest-smoke-81/evid/；
+      dual-mode-b/；guest-smoke-81/result.txt OVERALL=PASS
+
+【M2】flat 与 fractal 路由，同一 VM namespace
+裁决：PASS
+理由：s6 四格 + guest-matrix-final 四格均 PASS（tip=fdae2c158）。
+证据：s6-matrix/SUMMARY.txt；guest-matrix-final/SUMMARY.txt
+      MATRIX_RESULT=PASS（4 cells）
+
+【M3】同一 memory/vCPU 合同下正确的 TCG 与 KVM 执行（含 §16/§8.1）
+裁决：FAIL  ← 主阻断（相对 grok r6 PARTIAL 更严）
+理由：§8.1 要求 concurrent MAIN 为常态且 force_local 不得主导；耐久证据
+      未闭合该应然形状——(a) §16/§8.1 仅 dirty、未进 tip；(b) TCG
+      guest-smoke-81 虽 OVERALL=PASS 但 force_local_used_delta=7609 ≫
+      remote_done_delta=6，且 fractal 2-vCPU softlockup deferred
+      （BLOCKERS_STATUS）；(c) KVM dual-yes 仅 s23g5-msr2 OVERALL=PASS，
+      随后 s23g10 FAIL_boot_hang_ack_demux、s23g11 SUMMARY=FAIL、
+      s23g12 至 19:35 仍 boot-poll、无 result/OVERALL。
+证据（正）：s23-tcg-contract/flat_kvm_dualyes-s23g5-msr2/{SUMMARY,result}.txt；
+            guest-smoke-81/{result,force_local_81_events}.txt；
+            dirty docs baseline §16 + specs/vcpu-handoff.md §8.1
+证据（负）：BLOCKERS_STATUS.txt（task 2/3 NOT；MINIMUM_COMPLETE=NOT_CLAIMED）；
+            s23-tcg-contract/SUMMARY.txt；
+            flat_kvm_dualyes-s23g10-epoch/{SUMMARY,result}.txt；
+            flat_kvm_dualyes-s23g11-demux/SUMMARY.txt；
+            flat_kvm_dualyes-s23g12-gw9000/（无 result/SUMMARY；runner 停于 boot-poll）
+
+【M4】同一物理机多个 Mode B VM
+裁决：PASS
+理由：s6 mode_b_dual PASS；dual-mode-b 包存在。
+证据：s6-matrix/SUMMARY.txt（mode_b_dual PASS）；dual-mode-b/
+
+【M5】显式 per-VM 内核加速上下文；多 VM Mode A 前两 VM 隔离
+裁决：PARTIAL
+理由：g1 双 VM isolation PASS + s6 mode_a_one/mode_a_dual PASS；正式 V1
+      envelope / VIEW·HB>255 迁移动作未在本 tip 耐久证据闭环。
+证据：g1-g10-20261027/g1-two_vm_isolation.log（Mode A dual-VM isolation: PASS）；
+      s6-matrix/SUMMARY.txt（mode_a_one/mode_a_dual PASS）
+
+【M6】基础成员：join / cordon / safe drain / gateway 换血经 ack snapshot
+裁决：PASS
+理由：s1s4 12/12 PASS；明确 NOT_G8_DRAIN（非 vCPU drain 单元冒充）。
+证据：s1s4-membership/SUMMARY.txt；s1s4-membership/NOT_G8_DRAIN.txt
+
+【M7】同机多 compute-node：host 聚合 / per-instance 租约 / 相关故障语义
+裁决：PASS
+理由：s6 compute_dual + s1s4 same_host/placement/physical_host_aggregate PASS。
+证据：s6-matrix/SUMMARY.txt（compute_dual）；dual-compute/；
+      s1s4-membership/SUMMARY.txt
+
+【M8】create/activate/start/stop/partial-start 清理 + 对账
+裁决：PARTIAL
+理由：guest-smoke-81 / s23g5 REQUIRE_STOP=1 guest_stop=PASS；本 tip 无
+      ACTIVATION_DECIDED recover 归档重跑；codex 包 test_coordinator rc=1
+      （耐久单元残差，披露）。
+证据：guest-smoke-81/result.txt；s23g5-msr2/result.txt；
+      codex-minimum-review-20261028/results.txt（test_coordinator rc=1）
+
+【M9】guest 就绪 + e2e 远端 vCPU 与远端 memory 活动证据
+裁决：PARTIAL
+理由：guest-smoke-81 remote_vcpu=1 remote_mem=1；REMOTE_MEM_GUEST_PASS.txt；
+      s23g5 remote_*_evidence=1 但 remote_done_delta=0；与 M3 同根——
+      concurrent 主路径耐久弱；codex 另见 false_memory_evidence 标题alone
+      风险（披露，未据此单独 FAIL）。
+证据：guest-smoke-81/result.txt；REMOTE_MEM_GUEST_PASS.txt；
+      s23g5-msr2/result.txt；
+      codex-minimum-review-20261028/false_memory_evidence.txt
+
+【M10】Phase 0–4 规格交付物
+裁决：PASS（相对「规格存在且应然」）
+理由：docs/specs/ 11 份齐全；§8.1/§16 在 dirty WT 且无进度回灌。
+证据：docs/specs/*；docs/wavevm-architecture-baseline.md §16；
+      docs/specs/vcpu-handoff.md §8.1
+残留：§8.1/§16 未进 tip（并入 M3/multi-vCPU，不另开 FAIL）
+
+【M11】Phase 8 短门：未过隔离拒第二 Mode A；过隔离可双
+裁决：PARTIAL
+理由：与 M5 同源（s6 mode_a_dual PASS + g1 isolation）；envelope 迁移未闭环。
+证据：s6-matrix/SUMMARY.txt；g1-two_vm_isolation.log
+
+【M12】Phase 10 Minimum smoke 矩阵 + 证据字段
+裁决：PARTIAL
+理由：s6 11/11 PASS；guest-matrix-final MATRIX_RESULT=PASS；均自标
+      MINIMUM_COMPLETE=NOT_CLAIMED_*（正确拒签）；fractal 2-vCPU softlockup
+      deferred；§8.1 TCG concurrent MAIN 未耐久重闭合。
+证据：s6-matrix/SUMMARY.txt；guest-matrix-final/SUMMARY.txt；
+      BLOCKERS_STATUS.txt
+
+【M13】受限 TCG fallback + KVM dirty/resync（非完整故障引擎）
+裁决：PARTIAL
+理由：s6 auto_tcg_fallback PASS；a14-tcg-rerun A14_RC:0；REMOTE_MEM 痕迹；
+      hung-rcu 历史仍在证据树；完整故障引擎仍 Extended。
+证据：s6-matrix/SUMMARY.txt（auto_tcg_fallback）；a14-tcg-rerun.log；
+      guest-smoke-hung-rcu-095801/（历史痕迹目录存在）
+
+【charter multi-vCPU】baseline §16 + vcpu-handoff §8.1
+纲领应然文本（dirty）：PASS（无泄漏；concurrent MAIN；force_local 有界；
+  非 full MTTCG；禁 dated tallies 入规格）
+证据闭合：FAIL（与 M3 同判；相对 grok PARTIAL 更严）
+  - 合同只在 dirty，未提交 tip
+  - TCG：force_local 主导窗口 + softlock deferred
+  - KVM：s23g5 PASS 后 g10/g11 FAIL、g12 未闭合
+
+【DM】Document Maintenance 应然-only
+裁决：PASS（泄漏总判 No；见第三节）
+
+六、MINIMUM_COMPLETE
+----------------------------------------------------------------------
+MINIMUM_COMPLETE: No
+
+不能诚实签署。理由（耐久证据优先）：
+  - BLOCKERS_STATUS（13:44 CST）MINIMUM_COMPLETE=NOT_CLAIMED；任务 (2)(3) 未闭合
+  - s23 / s23g11 / guest-matrix-final / s6-matrix 均 NOT_CLAIMED_*
+  - dirty §16+§8.1 应然成文 ≠ tip 合同 ≠ concurrent-MAIN 耐久验收
+  - guest-smoke-81 force_local 主导违反 §8.1「MUST NOT dominate」
+  - G1–G10 FIXED / 矩阵 PASS / s23g5 PASS ≠ 纲领 Minimum COMPLETE
+
+七、Top blockers（有序）
+----------------------------------------------------------------------
+B1. M3 + charter multi-vCPU（主门）— FAIL
+    (a) §16/§8.1 应然未进已提交 tip；
+    (b) TCG concurrent MAIN：force_local 主导（smoke-81）+ fractal 2-vCPU
+        softlock deferred；无本 slice 耐久再证；
+    (c) ACK demux / Hybrid→V30 EXIT：s23g10 FAIL、s23g11 FAIL、s23g12
+        无 OVERALL —— concurrent MAIN 验收形状未闭合。
+B2. 大 dirty 生产树未提交（披露；与 B1 合同落 tip 绑定）。
+B3. M5/M8/M9/M11/M12/M13 PARTIAL 残留（envelope、recover 归档、
+    smoke remote_delta、A14/hung-rcu、codex test_coordinator rc=1）——
+    单独不足 COMPLETE；B1 打开时披露。
+
+八、Diff vs grok r6
+----------------------------------------------------------------------
+读过：grok-minimum-charter-self-audit-2026-10-28-r6.txt（只读对照）。
+同意：
+  - 纲领泄漏 = No；DM PASS
+  - MINIMUM_COMPLETE = No
+  - Tip=fdae2c158 dirty；HARD BAN 合规
+  - M1/M2/M4/M6/M7/M10 = PASS
+  - M5/M8/M9/M11/M12/M13 = PARTIAL
+  - Top blocker 主题 = multi-vCPU / concurrent MAIN / tip 合同
+更严（stricter）：
+  - M3：小浪 FAIL（grok PARTIAL）——以 §8.1「force_local MUST NOT dominate」
+    + softlock deferred + post-s23g5 ACK 回归 作为耐久拒签依据，不以
+    「有过 PASS 痕迹」保留 PARTIAL。
+  - charter multi-vCPU 证据闭合：小浪 FAIL（grok PARTIAL）
+更软（softer）：无。
+其他：codex-minimum-review-20261028 本轮纳入披露（test_coordinator rc=1；
+  false_memory_evidence 标题alone 风险）——grok r6 正文未强调；不单独改门，
+  但加强 M8/M9 披露。
+
+九、一页表
+----------------------------------------------------------------------
+DM   纲领无现状/实然/进度回灌     PASS / 泄漏=No
+M1   PASS
+M2   PASS
+M3   FAIL     ← 主阻断（stricter than grok）
+M4   PASS
+M5   PARTIAL
+M6   PASS
+M7   PASS
+M8   PARTIAL
+M9   PARTIAL
+M10  PASS
+M11  PARTIAL
+M12  PARTIAL
+M13  PARTIAL
+charter multi-vCPU  应然文本=PASS(dirty) / 证据闭合=FAIL
+
+纲领泄漏?              No
+MINIMUM_COMPLETE?      No
+Tip honesty:           fdae2c158 dirty — confirmed
+HARD_BAN_OBSERVED:     Yes
+G1–G10 FIXED ≠ COMPLETE — affirmed
+
+十、本轮动作清单
+----------------------------------------------------------------------
+- 只读：git tip/status；纲领 tip↔dirty；Document Maintenance hard-scan；
+  §16/§8.1；BLOCKERS_STATUS；guest-matrix-final；s6-matrix；s1s4；
+  s23 SUMMARY + s23g5/g10/g11/g12；guest-smoke-81；g1 isolation；
+  a14-tcg-rerun；codex-minimum-review-20261028；grok r6 对照
+- 未改纲领 / 代码 / plan / 既有证据
+- 未跑 smoke / 无 commit / 无 push
+- 未触碰被禁文件内容（仅 ls 见文件名）
+- 本文件：/workspaces/WaveVM/xiaolang-minimum-charter-audit-2026-10-28-r6.txt

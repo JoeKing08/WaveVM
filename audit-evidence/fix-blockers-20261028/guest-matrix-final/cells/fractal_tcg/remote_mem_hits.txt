@@ -1,0 +1,17 @@
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-fractal-tcg-v1/cells/fractal_tcg/remote_evidence.txt:=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-fractal-tcg-v1/cells/fractal_tcg/remote_evidence.txt:/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=89us coherent=1
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-fractal-tcg-v1/cells/fractal_tcg/remote_evidence.txt:/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=4 bitmap=4 rtt=130us coherent=1
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-fractal-tcg-v1/cells/fractal_tcg/remote_evidence.txt:/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=1 rtt=143us coherent=1
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-fractal-tcg-v1/cells/fractal_tcg/remote_evidence.txt:/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=10 bitmap=10 rtt=141us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=89us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=4 bitmap=4 rtt=130us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=1 rtt=143us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=10 bitmap=10 rtt=141us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent-a.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=89us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent-a.log:[WaveVM-User] slave TCG slice dirty flush pages=4 bitmap=4 rtt=130us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent-a.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=1 rtt=143us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent-a.log:[WaveVM-User] slave TCG slice dirty flush pages=10 bitmap=10 rtt=141us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=89us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=4 bitmap=4 rtt=130us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=1 rtt=143us coherent=1
+/tmp/wavevm-create-vm-fractal.vQHWRe/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=10 bitmap=10 rtt=141us coherent=1

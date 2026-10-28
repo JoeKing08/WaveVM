@@ -49,3 +49,10 @@ extern int g_wvm_local_split;
 
 /* Bounded diagnostic for remote TCG handoff stack visibility. */
 void wavevm_tcg_log_stack(CPUState *cpu, const char *phase);
+
+/*
+ * SLAVE TCG helpers: when non-NULL, x86 in/out helpers call this with GETPC()
+ * before touching address_space_io so device PIO returns to FE authority.
+ * Function does not return (cpu_loop_exit_restore).
+ */
+extern void (*wavevm_slave_pio_hook)(CPUState *cpu, uintptr_t retaddr);

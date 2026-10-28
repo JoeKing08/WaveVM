@@ -1,0 +1,4 @@
+G4 FIXED（代码在 tip fdae2c158；本轮复验）
+生产: slave_daemon/slave_hybrid.c wavevm_proxy_barrier_local_helpers — PUSH_BARRIER cookie + wait_for_push_barrier_cookie，无 sleep 冒充成功
+生产: master_core/main_wrapper.c fence — br/hr 错误写入 fence_resp，不忽略
+证据: g2-g4-g6-goal4.log 含 "[Executor] TCG install notify applied ... (barrier ack)"

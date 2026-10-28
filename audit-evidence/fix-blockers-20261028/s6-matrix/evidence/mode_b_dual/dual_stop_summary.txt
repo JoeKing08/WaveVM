@@ -1,0 +1,17 @@
+# dual STOP summary (Mode B post-isolation)
+vm1_id=256
+vm2_id=257
+vm1_intentional_kill=1
+--- cleanup.ok.vm1 ---
+cleanup_ok=0
+stop=status=6 recorded_state=14 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14698524013413943769
+vm_id=256
+--- stop_result.vm1 ---
+status=6 recorded_state=14 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14698524013413943769
+--- cleanup.ok.vm2 ---
+cleanup_ok=1
+stop=status=0 recorded_state=17 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=817413230435559498
+retired_shm=/wavevm_ram_wvm-v257-i1-g1-n801-b95f320a309d3a48
+vm_id=257
+--- stop_result.vm2 ---
+status=0 recorded_state=17 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=817413230435559498

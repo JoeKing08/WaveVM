@@ -1,0 +1,4 @@
+=== CELL flat_tcg topology=flat backend=require-tcg ===
+RESULT=flat_tcg PASS rc=124
+RESULT=flat_tcg PASS rc=124
+matrix_counters: pass=1 fail=0

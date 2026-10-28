@@ -1,0 +1,6 @@
+cell=flat_kvm_dualyes pass=1 rebuild=s23g3b
+OVERALL=PASS Asia/Shanghai
+remote_done_delta=68792 local_done_delta=0 force_local_used_delta=0
+guest_cpu_smoke=dual-yes PASS; guest_stop=PASS
+fixes: SHM skip typed fence; MF keeps ctx; FE ctx_live gate; pending-IO SEND (segfault fix)
+NO MTTCG claim; concurrency MAIN (force_local_delta=0 this cell)

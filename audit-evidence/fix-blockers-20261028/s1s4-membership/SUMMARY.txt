@@ -1,0 +1,39 @@
+tip=fdae2c158f074206e8c10fd409483d0070da6765
+started=2026年 10月 28日 星期三 09:49:11 CST
+=== RUN test_cordon_drain_compute.sh ===
+rc=0
+PASS test_cordon_drain_compute
+=== RUN test_gateway_drain.sh ===
+rc=0
+PASS test_gateway_drain
+=== RUN test_gateway_drain_prepare_commit.sh ===
+rc=0
+PASS test_gateway_drain_prepare_commit
+=== RUN test_gateway_drain_successor.sh ===
+rc=0
+PASS test_gateway_drain_successor
+=== RUN test_membership_drain_transport.sh ===
+rc=0
+PASS test_membership_drain_transport
+=== RUN test_membership_coordinator.sh ===
+rc=0
+PASS test_membership_coordinator
+=== RUN test_membership_route.sh ===
+rc=0
+PASS test_membership_route
+=== RUN test_membership_controller.sh ===
+rc=0
+PASS test_membership_controller
+=== RUN test_create_vm_dual_mode_b.sh ===
+rc=0
+PASS test_create_vm_dual_mode_b
+=== RUN test_same_host_dual_agent_live.sh ===
+rc=0
+PASS test_same_host_dual_agent_live
+=== RUN test_placement_spread.sh ===
+rc=0
+PASS test_placement_spread
+=== RUN test_physical_host_aggregate.sh ===
+rc=0
+PASS test_physical_host_aggregate
+pass=12 fail=0 finished=2026年 10月 28日 星期三 09:50:29 CST

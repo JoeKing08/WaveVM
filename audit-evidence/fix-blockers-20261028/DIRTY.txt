@@ -1,0 +1,111 @@
+ M common_include/wavevm_protocol.h
+ M docs/wavevm-architecture-baseline.md
+ M master_core/kernel_backend.c
+ M master_core/logic_core.c
+ M node_runtime/vcpu_service.c
+ M node_runtime/vcpu_service.h
+ M slave_daemon/slave_hybrid.c
+ M tests/control-plane/s6_cell_common.sh
+ M tests/e2e/test_guest_smoke.sh
+ M wavevm-qemu/accel/wavevm/wavevm-accel.h
+ M wavevm-qemu/accel/wavevm/wavevm-all.c
+ M wavevm-qemu/accel/wavevm/wavevm-cpu.c
+ M wavevm-qemu/accel/wavevm/wavevm-user-mem.c
+ M wavevm-qemu/target/i386/misc_helper.c
+ M "\346\214\201\344\271\205\345\214\226plan.txt"
+?? --bytes
+?? audit-evidence/
+?? grok-minimum-charter-self-audit-2026-10-28.txt
+?? master_core/..module-common.o.cmd
+?? master_core/.Module.symvers.cmd
+?? master_core/.kernel_backend.o.cmd
+?? master_core/.logic_core.o.cmd
+?? master_core/.module-common.o
+?? master_core/.modules.order.cmd
+?? master_core/.wavevm.ko.cmd
+?? master_core/.wavevm.mod.cmd
+?? master_core/.wavevm.mod.o.cmd
+?? master_core/.wavevm.o.cmd
+?? master_core/Module.symvers
+?? master_core/kernel_backend.o
+?? master_core/logic_core.o
+?? master_core/modules.order
+?? master_core/wavevm.ko
+?? master_core/wavevm.mod
+?? master_core/wavevm.mod.c
+?? master_core/wavevm.mod.o
+?? master_core/wavevm.o
+?? node_runtime/admission_main.o
+?? node_runtime/admission_node_service.o
+?? node_runtime/admission_receiver.o
+?? node_runtime/admission_runtime_agent.o
+?? node_runtime/admission_slot_registry.o
+?? node_runtime/admission_stage.o
+?? node_runtime/block_chunk_store.o
+?? node_runtime/block_client.o
+?? node_runtime/block_service.o
+?? node_runtime/block_wire.o
+?? node_runtime/canonical.o
+?? node_runtime/capability.o
+?? node_runtime/control.o
+?? node_runtime/control_owner.o
+?? node_runtime/control_transport.o
+?? node_runtime/directory_store.o
+?? node_runtime/envelope.o
+?? node_runtime/executor_abi.o
+?? node_runtime/executor_bridge.o
+?? node_runtime/executor_session.o
+?? node_runtime/host_probe.o
+?? node_runtime/identity.o
+?? node_runtime/ingress.o
+?? node_runtime/kvm_execution_fetch.o
+?? node_runtime/kvm_page_cache.o
+?? node_runtime/lifecycle.o
+?? node_runtime/local_memory.o
+?? node_runtime/main.o
+?? node_runtime/manifest.o
+?? node_runtime/master_logic.o
+?? node_runtime/master_main.o
+?? node_runtime/master_user.o
+?? node_runtime/membership_control.o
+?? node_runtime/membership_controller.o
+?? node_runtime/memory.o
+?? node_runtime/memory_service.o
+?? node_runtime/reservation_runtime.o
+?? node_runtime/resources.o
+?? node_runtime/route_control.o
+?? node_runtime/route_delivery.o
+?? node_runtime/route_runtime.o
+?? node_runtime/runtime_delivery.o
+?? node_runtime/runtime_dispatch.o
+?? node_runtime/runtime_gate.o
+?? node_runtime/runtime_names.o
+?? node_runtime/sha256.o
+?? node_runtime/slave_hybrid.o
+?? node_runtime/slave_vfio.o
+?? node_runtime/tls_control_connector.o
+?? node_runtime/vcpu_coordinator.o
+?? node_runtime/vcpu_handoff.o
+?? node_runtime/vcpu_handoff_cache.o
+?? node_runtime/vcpu_service.o
+?? node_runtime/x86_context.o
+?? scripts/__pycache__/
+?? scripts/import_to_devin_cli.py
+?? scripts/wvm_cap_tee.py
+?? scripts/wvm_cap_watch.py
+?? scripts/wvm_hang_watch.py
+?? tests/control-plane/s6_dataplane_probe.sh.bak
+?? tests/control-plane/test_vcpu_service_g8_drain.c
+?? tests/control-plane/test_vcpu_service_g8_drain.sh
+?? tests/mode-a/test_targeted_isolation
+?? tests/mode-a/test_two_vm_context_bind
+?? tests/mode-a/test_two_vm_isolation
+?? tests/mode-a/test_worker_failure_isolation
+?? tests/mode-a/test_worker_failure_isolation.c.bak-before-workerfix3
+?? tests/mode-a/test_worker_failure_isolation.c.bak-workerfix2
+?? tests/scripts/__pycache__/
+?? tests/unit/
+?? wavevm-qemu/pc-bios/kvmvapic.bin
+?? wavevm-qemu/pc-bios/optionrom/kvmvapic.S
+?? wavevm_node_runtime
+?? xiaolang-minimum-charter-audit-2026-10-28.txt

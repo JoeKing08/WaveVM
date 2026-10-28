@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.O7TRVd/runtime/vm-256-1-1.manifest
+1f87f5d134c1bcc1bde91e13567218c603f84ce483a6e3ece61fe6bf82d9ecd5  /tmp/wavevm-create-vm-single.O7TRVd/runtime/vm-256-1-1.manifest
+350c5351a210582a2eec7b78cb2686d6efa61aa9f949f17767aba004251efc83  /tmp/wavevm-create-vm-single.O7TRVd/runtime/vm-256-1-1.manifest.dispatch
+7392e4145f8e89ba23425449a92c0382bf3185a79914a815c522d98605c33a7d  /tmp/wavevm-create-vm-single.O7TRVd/runtime/vm-256-1-1.manifest.route

@@ -37,6 +37,16 @@ int wvm_vcpu_service_init(struct wvm_vcpu_service *service,
 void wvm_vcpu_service_destroy(struct wvm_vcpu_service *service);
 
 /*
+ * G8: wait until no PENDING / REPLY_QUEUED / REPLY_SENDING entries remain.
+ * reply_sending covers ACK bytes still being written — drain must not return
+ * success while write_reply is blocked on a full/disconnected socket.
+ * Timeout is a failed STOP (bounded); never poll forever.
+ */
+int wvm_vcpu_service_drain(struct wvm_vcpu_service *service,
+                           uint32_t timeout_ms, char *error,
+                           size_t error_len);
+
+/*
  * Submit one already-drained local QEMU run request. Success means that the
  * typed VCPU_RUN is now owned by the coordinator; its typed VCPU_EXIT is
  * returned asynchronously on the supplied QEMU IPC connection.

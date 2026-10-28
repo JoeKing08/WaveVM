@@ -1,0 +1,23 @@
+R1_PRODUCTION_DISPATCH=FIXED
+tip=fdae2c158
+captured_at_asia_shanghai=2026-10-28T11:14:00+08:00
+source=archive_from_s6_matrix_cell_evidence (not /tmp-only)
+primary_cell=fractal_tcg
+evidence_paths=
+  audit-evidence/fix-blockers-20261028/s6-matrix/evidence/fractal_tcg/dataplane.txt
+  audit-evidence/fix-blockers-20261028/s6-matrix/evidence/fractal_tcg/dataplane_detail.txt
+  audit-evidence/fix-blockers-20261028/s6-matrix/fractal_tcg.log
+markers=
+  dataplane_probe=PASS_PRODUCTION_TYPED
+  production_typed_dispatch=FIXED
+  dispatch_path=typed_WVM1_ingress_via_gateway
+  via_gateway=1
+  typed_short_exec=PASS backend=tcg via_gateway=1
+  guest_shm_store=PASS
+  not=direct_Hybrid_UDP_VCPU_RUN
+  not=PASS_COMPONENT_SMOKE
+  not=direct_executor_udp
+also_cells_with_production_typed_dispatch_FIXED=
+  flat_tcg flat_kvm fractal_kvm mode_a_one mode_a_dual mode_b_dual auto_tcg_fallback
+note=SUMMARY previously said UNVERIFIED because remote-mem/ lacked this file while matrix cells already FIXED; this archives the pointer durably.
+R1_LIVE_CREATE_SHORT_EXEC=PASS_PRODUCTION_TYPED (see s6-matrix/SUMMARY.txt from same tip run s6-20261028-094911-28184)

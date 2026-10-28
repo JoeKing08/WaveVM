@@ -1,0 +1,3 @@
+guest_login=PASS
+guest_ssh=PASS
+OVERALL=FAIL_harness_pipefail_empty_STATS

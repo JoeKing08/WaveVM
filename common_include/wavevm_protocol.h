@@ -95,6 +95,13 @@ struct wvm_header {
 #define WVM_FLAG_NEED_ACK 0x04
 #define WVM_FLAG_BLOCK_FUA  0x08  /* storage FUA on MSG_BLOCK_* */
 #define WVM_FLAG_BLOCK_SYNC 0x10  /* storage SYNC barrier */
+/*
+ * G1: full u32 vm_id on legacy header without V1 envelope.
+ * When set, epoch carries source/assoc vm_id (host order via htonl) and
+ * slave_id (or echoed target_id) carries bare node_id (not 8+8 pack).
+ * Heartbeats keep legacy pack + real epoch; do not set this flag on HB.
+ */
+#define WVM_FLAG_FULL_VMID 0x20
 
 // --- 3. Payload 结构体 (Data Structures) ---
 
@@ -238,6 +245,74 @@ struct wvm_ipc_runtime_registration {
 // 所有需要判断"是否是有效路由目标"的地方必须先过此检查
 #define WVM_IS_VALID_TARGET(id) ((uint32_t)(id) != WVM_NODE_AUTO_ROUTE)
 
+#ifdef __KERNEL__
+#include <linux/types.h>
+#include <linux/byteorder/generic.h>
+/* Ensure ntohl/htonl are macros (not unresolved externals) for inlines below. */
+#else
+#include <arpa/inet.h>
+#endif
+
+/*
+ * G1 production wire identity:
+ * - Nonzero vm_id ALWAYS uses WVM_FLAG_FULL_VMID (epoch=vm_id, slave_id=bare node).
+ *   Never put a nonzero VM through the legacy 8+8 ENCODE_ID pack.
+ * - vm_id==0 may use legacy 8+8 when node_id fits in 8 bits (fabric / no VM assoc).
+ * - Heartbeats that need a real cluster epoch must keep legacy pack and must not
+ *   set FULL_VMID (callers skip HB when vm/node need the wide path).
+ */
+static inline int wvm_header_pack_src(struct wvm_header *hdr,
+                                      uint32_t vm_id, uint32_t node_id)
+{
+    if (!hdr)
+        return -1;
+    if (vm_id == 0 && node_id <= 0xffu) {
+        hdr->slave_id = htonl(WVM_ENCODE_ID(0, node_id));
+        hdr->flags = (uint8_t)(hdr->flags & (uint8_t)~WVM_FLAG_FULL_VMID);
+        return 0;
+    }
+    hdr->flags = (uint8_t)(hdr->flags | WVM_FLAG_FULL_VMID);
+    hdr->epoch = htonl(vm_id);
+    hdr->slave_id = htonl(node_id);
+    return 0;
+}
+
+/* Send/route target for the legacy header target_id field. */
+static inline uint32_t wvm_wire_target(uint32_t vm_id, uint32_t node_id)
+{
+    if (vm_id == 0)
+        return WVM_ENCODE_ID(0, node_id);
+    /* FULL_VMID: target_id carries bare node; vm_id lives in epoch via pack_src. */
+    return node_id;
+}
+
+static inline void wvm_header_unpack_assoc(const struct wvm_header *hdr,
+                                          uint32_t packed_target,
+                                          uint32_t *vm_id_out,
+                                          uint32_t *node_id_out)
+{
+    if (hdr && (hdr->flags & WVM_FLAG_FULL_VMID)) {
+        if (vm_id_out)
+            *vm_id_out = ntohl(hdr->epoch);
+        if (node_id_out)
+            *node_id_out = packed_target;
+        return;
+    }
+    if (vm_id_out)
+        *vm_id_out = WVM_GET_VMID(packed_target);
+    if (node_id_out)
+        *node_id_out = WVM_GET_NODEID(packed_target);
+}
+
+/* Unpack source identity from slave_id (+ epoch when FULL_VMID). */
+static inline void wvm_header_unpack_src(const struct wvm_header *hdr,
+                                        uint32_t *vm_id_out,
+                                        uint32_t *node_id_out)
+{
+    uint32_t raw = hdr ? ntohl(hdr->slave_id) : 0;
+    wvm_header_unpack_assoc(hdr, raw, vm_id_out, node_id_out);
+}
+
 #define WVM_CTRL_MAGIC 0x57564D43
 
 #define SYNC_MAGIC 0x53594E43 
@@ -313,6 +388,21 @@ typedef struct {
         uint8_t is_write;
         uint8_t data[8];
     } mmio;
+    /*
+     * s23g5: extended MSRs for KVM dual-yes. Incomplete GS/SYSCALL/APIC_BASE
+     * sync across remote bounce left KERNEL_GS_BASE/SWAPGS incoherent → AP
+     * double-fault in error_entry with userspace RSP under yes/yes load
+     * (flat_kvm_dualyes-s23g4-pass1/2 serial: CPU1 Comm:yes #DF).
+     * Old peers without these fields leave msr_ext_valid=0 (safe no-op).
+     */
+    uint64_t gs_base;       /* MSR_GS_BASE 0xC0000101 */
+    uint64_t apic_base;     /* IA32_APIC_BASE 0x1b */
+    uint64_t star;          /* STAR 0xC0000081 */
+    uint64_t lstar;         /* LSTAR 0xC0000082 */
+    uint64_t cstar;         /* CSTAR 0xC0000083 */
+    uint64_t sfmask;        /* SFMASK 0xC0000084 */
+    uint32_t msr_ext_valid; /* bit0=gs bit1=apic bit2=syscall */
+    uint32_t _pad5;
 } wvm_kvm_context_t;
 
 /* Per-segment descriptor state (mirrors QEMU SegmentCache / KVM kvm_segment) */
@@ -325,6 +415,16 @@ typedef struct {
 } wvm_seg_reg_t;
 
 #define WVM_TCG_APIC_LVT_NB 6
+/*
+ * TCG helper hit guest device MMIO/PIO it does not own (-nodefaults).
+ * Slice exits with EIP restored to the faulting insn; FE runs bounded
+ * local slices so QEMU device authority completes the access.
+ * Not a boot-duration force_local sticky.
+ */
+#ifndef WVM_TCG_EXCP_NEED_LOCAL
+#define WVM_TCG_EXCP_NEED_LOCAL 0x10010
+#endif
+
 #define WVM_TCG_XSAVE_AREA_SIZE 0xB00U
 #define WVM_TCG_MTRR_FIXED_NB 11
 #define WVM_TCG_MTRR_VAR_NB 8

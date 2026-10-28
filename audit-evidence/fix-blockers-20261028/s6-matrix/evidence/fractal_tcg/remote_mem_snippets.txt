@@ -1,0 +1,9 @@
+=== remote_mem / fence / dirty snippets ===
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WaveVM] dirty log tracking enabled (kvm=0 slave=1 coherent=1).
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WaveVM] dirty log tracking enabled (kvm=0 slave=1 coherent=1).
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WVM-PUSH-APPLY] pid=30054 n=1 type=26 gpa=0x2000 version=0x2 local=0 t=6063299375
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WVM-PUSH-APPLY] pid=30055 n=1 type=26 gpa=0x2000 version=0x2 local=0 t=6063299819
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WaveVM-User] push fence ok fd=15 rtt=147us slave=1
+/tmp/wavevm-create-vm-fractal.bB1fgc/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=1 rtt=168us coherent=1

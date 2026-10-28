@@ -1,0 +1,12 @@
+flat_kvm 2-vCPU Cirros smoke — Asia/Shanghai 2026-10-28 ~14:26
+OVERALL=PASS tip=fdae2c158 dirty (no commit/push)
+rebuild=qemu-rebuild-s23f
+WVM_CREATE_VCPUS=2 smp=2 split=1 backend=require-kvm
+CPU smoke: harness LIGHT busy-loop (NOT dual `yes`/`yes`)
+  — dual-yes hang under wavevm-KVM remote AP still NOT fixed; harness avoids it
+  (test_guest_smoke.sh comment + light path). This cell proves 2-vCPU KVM
+  login/ssh/light-cpu/stop + boot-time remote_done>0 (G9 kvm accept).
+remote_done_delta=0 remote_done_before=8 → remote_vcpu_evidence=1 (kvm rule)
+force_local_used_delta=0 (KVM path)
+Honesty vs (1) guest-matrix-kvm flat_kvm: was WVM_CREATE_VCPUS=1; now 2-vCPU PASS
+  with light CPU. dual-yes residual remains.

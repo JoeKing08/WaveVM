@@ -1,0 +1,5 @@
+orchestrator_stop: participant_abort[0] failed: admission stage rejected with status 6
+wvm_ctl: orchestrator_stop failed: admission stage rejected with status 6
+wvm_ctl: STOP_VM rc=0 status=6 recorded_state=14 err=admission stage rejected with status 6
+wvm_ctl: admission submit type=0x403 peer=801:802 port=26245 rc=0 err=
+wvm_ctl: STOP_VM rc=0 status=0 recorded_state=17 err=(none)

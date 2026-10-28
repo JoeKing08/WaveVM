@@ -1,0 +1,43 @@
+cell=mode_a_dual
+backend=require-tcg
+vm_id=257
+vm_incarnation=1
+manifest_generation=1
+create_out=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17656900999394824408
+marker=0x5267
+shm=/dev/shm/wavevm_ram_wvm-v257-i1-g1-n801-fa375008e83a347a
+manifest=/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest
+gw_data_port=none
+mode_line=[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:28115
+tcg_helper=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+real_qemu=1 path=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+35465 /workspaces/WaveVM/wavevm_node_runtime child --parent-pid 35390 --manifest /tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest --node-instance 802
+node_runtime_data_port=28113
+local_executor_service_port=28164
+typed_send_port=28113 via_gateway=0 backend=tcg
+production_typed_dispatch=1
+dispatch_path=typed_WVM1_ingress
+via_gateway=0
+ingress_port=28113
+manifest=/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest
+node_runtime_data_port=28113
+local_executor_service_port=28164
+vm_id=257 incarnation=1 generation=1
+local_primary kind=1 scope=0 vnode=1
+topology_kind=1 physical_node=801 instance=802
+cpu0_executor kind=1 scope=0 vnode=1
+code_at_gpa=0x2000 store_gpa=0x2020 marker=0x5267
+sent_typed_vcpu_run ingress_port=28113 payload_bytes=4576
+guest_shm_store=PASS marker=0x5267 store_gpa=0x2020 waited_ms=20
+typed_short_exec=PASS backend=tcg via_gateway=0
+not=direct_Hybrid_UDP_VCPU_RUN
+not=PASS_COMPONENT_SMOKE
+dispatch_path=typed_WVM1_ingress
+probe_class=production_typed_short_exec
+production_typed_dispatch=FIXED
+gateway_dataplane_forward=N_A_FLAT
+not=direct_executor_udp
+not=PASS_COMPONENT_SMOKE
+guest_ssh=§7_not_claimed
+note=live CREATE short-exec via production typed handoff; EXIT to sidecar; SHM guest store proves exec
+dataplane_probe=PASS_PRODUCTION_TYPED

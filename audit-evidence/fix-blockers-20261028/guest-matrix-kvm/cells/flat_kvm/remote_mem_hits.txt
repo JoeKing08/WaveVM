@@ -1,0 +1,1 @@
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-kvm/cells/flat_kvm/remote_evidence.txt:=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===

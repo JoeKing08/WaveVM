@@ -673,10 +673,18 @@ int wvm_resource_plan_load(const char *path, struct wvm_resource_plan *plan,
                 /* Legacy VM <id> <start_vnode> <vnode_count>. */
                 continue;
             }
-            if (fields != 4 || vm_id >= WVM_MAX_VMS || vcpus == 0 ||
+            if (fields != 4 || vcpus == 0 ||
                 vcpus > WVM_CPU_ROUTE_TABLE_SIZE || memory_mb == 0) {
                 set_error(error, error_len, "invalid VM resource request: %s",
                           line);
+                goto fail;
+            }
+            if (vm_id >= WVM_MAX_VMS) {
+                set_error(error, error_len,
+                          "legacy resource plan rejects vm_id %u "
+                          "(WVM_MAX_VMS=%u is legacy table capacity, not "
+                          "u32 namespace); use typed identity/admission",
+                          vm_id, (unsigned)WVM_MAX_VMS);
                 goto fail;
             }
             if (request_count >= WVM_MAX_VMS ||

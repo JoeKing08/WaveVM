@@ -1,0 +1,12 @@
+# reject path — track agent/ctl + no-partial-activation
+pid=36366
+pid=36359
+ctl_state_file=admission.journal
+ctl_state_file=membership.journal
+ctl_state_file=membership-control.journal
+reject_state=19
+reject_status=unknown
+early_abort_no_durable_route=0
+abort_cleanup_error=0
+expected_reason_verified=1
+admission_journal_bytes=1448

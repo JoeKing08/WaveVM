@@ -1,0 +1,265 @@
+WaveVM Minimum 纲领自审 r6（Grok Bot self-audit only）
+======================================================================
+时间：2026-10-28 21:52:00 CST Asia/Shanghai
+仓库：/workspaces/WaveVM  machineId=2e4d3ec5-e1b1-4a36-9903-de6309119499
+Tip：fdae2c158f074206e8c10fd409483d0070da6765  dirty（本轮独立核实）
+本轮动作：STRICT READ-ONLY — 未改纲领/代码/plan/既有证据；仅新建本审计 txt
+HARD BAN（测试遵守）：未 open / read / grep / cite
+  `minimum-full-review-codex-agent-2026-10-28.txt`（ls 可见为 ?? 时已忽略）
+角色：Grok 自审 only（非小浪交叉审正文）
+主焦点：Document Maintenance — 纲领应然-only；扫 现状/实然/进度 泄漏；
+        Minimum 闭合诚实 vs 耐久证据（无耐久证明不得 COMPLETE）
+依据纲领：docs/wavevm-architecture-baseline.md
+           docs/wavevm-refactor-roadmap.md（#document-maintenance）
+           docs/specs/*（含 dirty：identity-routing / vcpu-handoff）
+对照线索（非纲领）：goal.txt / 持久化plan /
+           audit-evidence/fix-blockers-20261028/{BLOCKERS_STATUS,s23-tcg-contract,
+           guest-matrix-final,s6-matrix,guest-smoke-81,...}
+口径：纲领=应然；G1–G10 FIXED ≠ COMPLETE；plan≠证据；dirty WT≠已提交 tip 合同
+评分：PASS / PARTIAL / FAIL
+对照：r5（20:21 CST）作分歧基线；本轮独立重扫，不复读被禁文件
+
+一、中文总结论（给 Joe）
+----------------------------------------------------------------------
+1) Tip+dirty 诚实：tip=fdae2c158，工作树 dirty（纲领 4 改 + mode-boundary
+   迁出 + 大量代码/测试/产物）。核实通过。
+2) 纲领泄漏：No — dirty 纲领 hard-scan 无 现状/实然/进度/checkbox/dated
+   approval/test-tally/audit-verdict 回灌；本轮是 scrub + multi-vCPU 应然。
+3) MINIMUM_COMPLETE=No — 不能诚实签署。应然合同仍只在 dirty；TCG/ACK
+   concurrent-MAIN 耐久形状未闭合；证据包自标 NOT_CLAIMED。
+
+二、Tip + dirty 诚实报告
+----------------------------------------------------------------------
+tip short = fdae2c158（与任务期望一致）
+origin/main = fdae2c158；本机 HEAD 对齐 tip
+dirty（纲领相关，git status -- docs/）：
+  M  docs/wavevm-architecture-baseline.md   （+§16 Minimum multi-vCPU TCG 应然）
+  M  docs/wavevm-refactor-roadmap.md        （anti-「现状」+ Phase1 改名 + §1.1 引用）
+  M  docs/specs/identity-routing.md        （WVM_MAX_VMS legacy-only 应然）
+  M  docs/specs/vcpu-handoff.md            （+§8.1 应然 + dated tallies 禁入规格）
+  RM docs/wavevm-mode-boundary-audit.md
+     -> audit-evidence/docs-audits/wavevm-mode-boundary-audit.md
+计数核实：
+  tip vcpu-handoff force_local=0；WT=15
+  tip baseline force_local=0 / multi-vCPU 应然=0；WT force_local=1 / 应然=1
+另有大量非纲领 dirty（代码/测试/plan/ko/o/??）——本轮不审、不改、不 commit/push。
+箱内只读克隆曾停在 dd167b625 behind1；裁决以 joeking /workspaces/WaveVM 为准。
+
+三、Document Maintenance：应然-only / 泄漏扫描
+----------------------------------------------------------------------
+规则源：roadmap ## Document Maintenance（L9–L30）：禁 implementation progress、
+completion checkboxes、dated approval、test results、coverage、audit verdicts；
+门禁用所需证据形状，不用审计 ID；现状库存不得进 baseline/roadmap/specs。
+
+Hard-scan 模式：现状|实然|进度|已完成|已实现|目前/当前代码|implementation
+progress|[x]|MINIMUM_COMPLETE|BLOCKERS_STATUS|OVERALL=PASS|audit-evidence/|
+2026-10-日期|guest-smoke-|fdae2c158|force_local_used|本轮/已修|FIXED/WIP 跑分词
+覆盖：dirty WT 的 baseline + roadmap + docs/specs 全部 11 份。
+
+结果：
+  【DM1】纲领无 现状/实然/进度 跑分回灌
+        裁决：PASS
+        证据：除 Document Maintenance **禁止条款自身**提及「现状」/
+              checkboxes（roadmap L16、L262）外，无泄漏命中。
+  【DM2】dirty 变更方向 = scrub + 应然，非日记
+        裁决：PASS
+        证据：baseline §16 标题明示「应然」；vcpu-handoff L516–517
+              「Dated run results… belong in the persistent plan… not in
+              this specification」；roadmap Phase1「Document Current」→
+              「Inventory Mode A/B Ownership Boundaries」+ anti-现状句；
+              Risk 去「last known working」实然味。
+  【DM3】审计/边界日记已迁出纲领树
+        裁决：PASS
+        证据：mode-boundary-audit 仅在 audit-evidence/docs-audits/；
+              docs/ 下无该文件。
+  【DM4】边界残留（披露，非硬泄漏）
+        裁决：PASS（披露级）
+        证据：baseline「Until a subsystem specification is accepted, current
+              code remains the source of truth…」——过渡过程规则，非跑分表；
+              「Current master_core/slave_daemon process names…」兼容名说明；
+              identity-routing「current WVM_SLAVE_BITS=12」常量迁移边界。
+              HEAD tip 仍有「Current Mode A code may…」（dirty 已 scrub）。
+
+纲领泄漏总判：No（dirty NOW）；历史曾有 → 已 scrub；tip 仍缺 §16/§8.1 应然正文。
+
+四、纲领 Minimum 范围
+----------------------------------------------------------------------
+来源 A：roadmap §1.1 Minimum usable system → M1–M9
+来源 B：Phase 7/8/10 Minimum 验收 → 并入 M6/M11/M12/M13
+来源 C：baseline Minimum + §14/§15/§16（含 dirty multi-vCPU 应然）
+来源 D：门禁=所需证据形状，不是 G/A 审计 ID
+另列：charter multi-vCPU（§16 + vcpu-handoff §8.1）+ Document Maintenance 项
+排除：Phase 9 完整故障引擎、HA/迁移/透明恢复、full upstream MTTCG 性能
+
+五、逐条裁决（PASS / PARTIAL / FAIL）+ 证据
+----------------------------------------------------------------------
+证据根默认：audit-evidence/fix-blockers-20261028/
+（相对 r5：另见 s23g11-demux FAIL、s23g12-gw9000 无 OVERALL 闭合）
+
+【M1】manifest 绑定分布式 VM：隔离身份/路由/socket/SHM/端口/日志/临时文件
+裁决：PASS
+证据：guest-smoke-81/evid/{runtime_manifest*,identity,*}；dual-mode-b/；
+      specs identity/manifest 应然干净
+纲领注：无泄漏。
+
+【M2】flat 与 fractal 路由，同一 VM namespace
+裁决：PASS
+证据：s6-matrix tip=fdae2c158 四格 flat/fractal×TCG/KVM PASS；
+      guest-matrix-final SUMMARY MATRIX_RESULT=PASS（4 cells）
+纲领注：identity-routing dirty 仅 u32/legacy 表容量应然澄清。
+
+【M3】同一 memory/vCPU 合同下正确的 TCG 与 KVM 执行
+裁决：PARTIAL  ← 主阻断
+证据（正）：
+  - dirty 纲领：baseline §16 + vcpu-handoff §8.1 应然（concurrent MAIN；
+    force_local 有界兜底；非 full MTTCG）
+  - KVM：s23g5-msr2 OVERALL=PASS（login/ssh/cpu-smoke/STOP；MSR sync）
+  - 历史 TCG：guest-smoke-81 含 §8.1 事件包（较早窗）
+证据（负）：
+  - §16/§8.1 **未进已提交 tip**（dirty-only）
+  - TCG softlock/force_local 本 slice **无耐久再证**
+  - s23g10 FAIL_boot_hang_ack_demux；s23g11 SUMMARY=FAIL（Ack not RX'd /
+    demux alone insufficient）；s23g12-gw9000 至 19:35 仍 boot-poll、
+    无 result/OVERALL（未闭合）
+  - s23g5-msr2 窗 force_local_delta=0 且 remote_done_delta=0
+    （非 concurrent-MAIN 耐久证明）
+纲领注：dirty 应然干净；实现未闭合 ≠ 纲领写了现状。
+
+【M4】同一物理机多个 Mode B VM
+裁决：PASS
+证据：s6 mode_b_dual PASS；dual-mode-b/
+纲领注：无泄漏。
+
+【M5】显式 per-VM 内核加速上下文；多 VM Mode A 前两 VM 隔离
+裁决：PARTIAL
+证据：g1-g10-20261027 isolation PASS；s6 mode_a_one/mode_a_dual PASS
+残留：正式 V1 envelope / VIEW·HB>255 迁移动作未在耐久证据闭环
+纲领注：kernel-accelerator.md CLEAN。
+
+【M6】基础成员：join / cordon / safe drain / gateway 换血经 ack snapshot
+裁决：PASS
+证据：s1s4-membership tip=fdae2c158；NOT_G8_DRAIN 口径保留
+纲领注：membership specs CLEAN；g8≠membership。
+
+【M7】同机多 compute-node：host 聚合 / per-instance 租约 / 相关故障语义
+裁决：PASS
+证据：s6 compute_dual；dual-compute/；s1s4 same_host/placement
+纲领注：无泄漏。
+
+【M8】create/activate/start/stop/partial-start 清理 + ACTIVATION_DECIDED 对账
+裁决：PARTIAL
+证据：guest-smoke-81 / s23g5-msr2 REQUIRE_STOP=1 guest_stop=PASS
+残留：本 tip 无 ACTIVATION_DECIDED recover 归档重跑
+纲领注：lifecycle specs CLEAN。
+
+【M9】guest 就绪 + e2e 远端 vCPU 与远端 memory 活动证据
+裁决：PARTIAL
+证据：guest-smoke-81 remote_vcpu=1 remote_mem=1；REMOTE_MEM_GUEST_PASS.txt；
+      s23g5-msr2 remote_*_evidence=1 但 remote_done_delta=0
+残留：与 M3 同根——concurrent 主路径耐久窗口弱；TCG 本 slice 未再证
+纲领注：跑分未回灌纲领。
+
+【M10】Phase 0–4 规格交付物
+裁决：PASS（相对「规格存在且应然」）
+证据：docs/specs/ 11 份齐全；§8.1 在 dirty WT
+残留：§8.1/§16 未进 tip（并入 M3/multi-vCPU，不另开 FAIL）
+纲领注：交付物遵守 Document Maintenance。
+
+【M11】Phase 8 短门：未过隔离拒第二 Mode A；过隔离可双
+裁决：PARTIAL
+证据：与 M5 同源（s6 mode_a_dual PASS）
+纲领注：无泄漏。
+
+【M12】Phase 10 Minimum smoke 矩阵 + 证据字段
+裁决：PARTIAL
+证据：s6-matrix 11/11 PASS；guest-matrix-final MATRIX_RESULT=PASS；
+      均自标 MINIMUM_COMPLETE=NOT_CLAIMED_*（正确拒签）
+残留：§8.1 acceptance shape 对 TCG concurrent MAIN 未耐久重闭合；
+      fractal 2-vCPU softlockup deferred（BLOCKERS_STATUS 诚实）
+纲领注：矩阵结果在 audit-evidence，未回灌纲领。
+
+【M13】受限 TCG fallback + KVM dirty/resync（非完整故障引擎）
+裁决：PARTIAL
+证据：s6 auto_tcg_fallback PASS；a14-tcg-rerun A14_RC:0；REMOTE_MEM 痕迹
+残留：hung-rcu 历史；完整故障引擎仍 Extended
+纲领注：capability-fault-engines Extended 分层正确。
+
+【charter multi-vCPU】baseline §16 + vcpu-handoff §8.1
+纲领应然文本（dirty）：PASS（无泄漏；concurrent MAIN；force_local 有界；
+  非 full MTTCG；arbitrary-N；禁 dated tallies）
+证据闭合：PARTIAL / 拒 COMPLETE
+  - 合同只在 dirty，未提交 tip
+  - KVM dual-yes：s23g5-msr2 PASS；其后 s23g10/g11 FAIL；s23g12 未闭合
+  - TCG softlock/force_local：本 slice 未再证明
+
+【DM1–DM4】见第三节 — 均为 PASS（泄漏总判 No）
+
+六、MINIMUM_COMPLETE？
+----------------------------------------------------------------------
+**MINIMUM_COMPLETE = No**
+
+不能诚实签署。理由（耐久证据优先）：
+  - BLOCKERS_STATUS（13:44）MINIMUM_COMPLETE=NOT_CLAIMED；任务 (2)(3) 未标闭合
+  - s23 SUMMARY / s23g11 / guest-matrix-final / s6-matrix 均 NOT_CLAIMED_*
+  - dirty §16+§8.1 应然成文 ≠ tip 合同 ≠ concurrent-MAIN 耐久验收
+  - G1–G10 FIXED / 矩阵 PASS / s23g5-msr2 PASS ≠ 纲领 Minimum COMPLETE
+
+七、Top blockers
+----------------------------------------------------------------------
+B1. M3 + charter multi-vCPU（主门）
+    应然已写入 dirty 且无现状回灌，但：
+    (a) 合同未进已提交 tip；
+    (b) TCG softlock/force_local 无本 slice 耐久再证；
+    (c) ACK demux / Hybrid→V30 EXIT 路径仍开：s23g10 FAIL、s23g11 FAIL、
+        s23g12 无 OVERALL —— concurrent MAIN 验收形状未闭合。
+B2. 大 dirty 生产树未提交（披露；与 B1 合同落 tip 绑定）。
+B3. M5/M8/M9/M11/M12/M13 PARTIAL 残留（envelope、recover 归档、
+    smoke remote_delta、A14/hung-rcu）——单独不足 COMPLETE，B1 打开时披露。
+
+八、相对 r5 变化（只读）
+----------------------------------------------------------------------
+纲领泄漏：仍 No（与 r5 一致；本轮独立 hard-scan 复核）
+证据对照新增/确认：
+  - s23g11-demux SUMMARY=FAIL（post-r5 目录；Ack hairpin 根因仍 open）
+  - s23g12-gw9000：runner/smoke 至 19:35 boot-poll，无 result.txt/OVERALL
+    （未改善主门）
+签署门：不变 — MINIMUM_COMPLETE 仍 No
+被禁文件：本轮未读（测试合规）
+
+九、一页表
+----------------------------------------------------------------------
+DM1 纲领无现状/实然/进度回灌     PASS
+DM2 dirty=scrub+应然               PASS
+DM3 审计日记迁出纲领树             PASS
+DM4 边界残留披露                   PASS（非硬泄漏）
+M1   PASS
+M2   PASS
+M3   PARTIAL   ← 主阻断
+M4   PASS
+M5   PARTIAL
+M6   PASS
+M7   PASS
+M8   PARTIAL
+M9   PARTIAL
+M10  PASS
+M11  PARTIAL
+M12  PARTIAL
+M13  PARTIAL
+charter multi-vCPU  纲领应然=PASS(dirty,无泄漏) / 证据闭合=PARTIAL
+
+纲领泄漏?              No
+MINIMUM_COMPLETE?      No
+Tip honesty:           fdae2c158 dirty — confirmed
+Banned-file compliance: ignored (no open/read/grep/cite)
+G1–G10 FIXED ≠ COMPLETE — affirmed
+
+十、本轮动作清单
+----------------------------------------------------------------------
+- 只读：git tip/status/diff；纲领 tip↔dirty hard-scan；Document Maintenance；
+  §16/§8.1；BLOCKERS_STATUS；guest-matrix-final；s6-matrix SUMMARY；
+  s23 SUMMARY + s23g5-msr2/g10/g11/g12；guest-smoke-81 存在性；
+  r4(Trash)/r5 格式对照；RecallMemory
+- 未改纲领 / 代码 / plan / 既有证据
+- 未跑 smoke / 无 commit / 无 push
+- 未触碰被禁文件内容
+- 本文件：/workspaces/WaveVM/grok-minimum-charter-self-audit-2026-10-28-r6.txt

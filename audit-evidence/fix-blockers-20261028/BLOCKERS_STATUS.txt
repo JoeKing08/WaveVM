@@ -1,0 +1,25 @@
+tip=fdae2c158f074206e8c10fd409483d0070da6765
+time_asia_shanghai=2026-10-28 13:44:13 CST
+task=(1)_CLOSED — report to Joe; (2)(3) NOT started
+ready_for_re_audit=PENDING_after_(2)(3)
+no_commit_push=YES
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+## (1) gaps closed
+| Gap | Status | Evidence |
+|-----|--------|----------|
+| mode-boundary-audit out of 纲领 + 现状 scrub | DONE | audit-evidence/docs-audits/; roadmap anti-现状 rule only |
+| B1 u32 wire FULL_VMID/pack_src | DONE | wavevm_protocol.h; main_wrapper pack_src |
+| B2 guest matrix 4 cells | DONE PASS | guest-matrix-final/SUMMARY.txt MATRIX_RESULT=PASS |
+| B3 WVM_MAX_VMS legacy-only | DONE | wavevm_config.h LEGACY alias; resources.c |
+| B4 code quality KEEP/STOP/EOF/byteorder | DONE | fractal KEEP cleanup; submit_stop_vm; accel.h |
+
+## Guest matrix honesty
+- flat_tcg: PASS 2-vCPU (guest-matrix/)
+- fractal_tcg: PASS 1-vCPU + STOP (guest-matrix-fractal-tcg-v1/); 2-vCPU softlockup deferred
+- flat_kvm / fractal_kvm: PASS 1-vCPU light CPU smoke + G9 boot-remote accept (guest-matrix-kvm/)
+- NOT MTTCG / NOT charter COMPLETE
+
+## Next (Joe order)
+(2) Minimum MTTCG contract rewrite (concurrent main path; force_local bounded兜底)
+(3) TCG fixes under that contract

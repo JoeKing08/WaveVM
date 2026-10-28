@@ -22,6 +22,28 @@ agent_pid=
 source "$repo_root/tests/control-plane/s6_cell_common.sh"
 
 cleanup() {
+    # Match test_create_vm_single_node.sh: KEEP_RUNNING must not tear down the
+    # cluster — guest smoke (§7) attaches via /tmp/wavevm-s6-keep-*.
+    if [[ "${WVM_S6_KEEP_RUNNING:-0}" == "1" || "${KEEP_RUNNING:-0}" == "1" ]]; then
+        echo "s6: KEEP_RUNNING=1 — leaving fractal cluster up tmpdir=$tmpdir agent_pid=${agent_pid:-} ctl_pid=${ctl_pid:-} gw_pid=${gw_pid:-}" >&2
+        if [[ -n "${tmpdir:-}" ]]; then
+            echo "$tmpdir" > /tmp/wavevm-s6-keep-tmpdir
+            echo "${agent_pid:-}" > /tmp/wavevm-s6-keep-agent-pid
+            echo "${ctl_pid:-}" > /tmp/wavevm-s6-keep-ctl-pid
+            [[ -n "${gw_pid:-}" ]] && echo "$gw_pid" > /tmp/wavevm-s6-keep-gw-pid || true
+            if [[ -f "$tmpdir/agent.log" || -f "$tmpdir/agent-a.log" ]]; then
+                alog="$tmpdir/agent.log"
+                [[ -f "$alog" ]] || alog="$tmpdir/agent-a.log"
+                grep -E 'Listening on|Mode:|SHM File|executor READY' "$alog" \
+                    > /tmp/wavevm-s6-keep-ports.txt 2>/dev/null || true
+            fi
+            echo "$tmpdir" > /tmp/wavevm-s6-fractal-keep-tmpdir
+            echo "${agent_pid:-}" > /tmp/wavevm-s6-fractal-keep-agent
+            echo "${gw_pid:-}" > /tmp/wavevm-s6-fractal-keep-gw
+            echo "${ctl_pid:-}" > /tmp/wavevm-s6-fractal-keep-ctl
+        fi
+        return 0
+    fi
     for pid_var in agent_pid gw_pid ctl_pid; do
         pid=${!pid_var:-}
         if [[ -n "$pid" ]]; then
@@ -78,6 +100,28 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_identity.c" \
     "$repo_root/common_include/wavevm_runtime_names.c" \
     "$repo_root/common_include/wavevm_manifest.c" \
+    "$repo_root/common_include/wavevm_lifecycle.c" \
+    "$repo_root/common_include/wavevm_control.c" \
+    "$repo_root/common_include/wavevm_capability.c" \
+    "$repo_root/common_include/wavevm_admission.c" \
+    "$repo_root/common_include/wavevm_cluster.c" \
+    "$repo_root/common_include/wavevm_reservation_runtime.c" \
+    "$repo_root/common_include/wavevm_fault_engine.c" \
+    "$repo_root/common_include/wavevm_coordinator.c" \
+    "$repo_root/common_include/wavevm_envelope.c" \
+    "$repo_root/common_include/wavevm_membership_controller.c" \
+    "$repo_root/common_include/wavevm_membership_control.c" \
+    "$repo_root/common_include/wavevm_control_transport.c" \
+    "$repo_root/common_include/wavevm_runtime_profile.c" \
+    "$repo_root/tests/control-plane/submit_stop_vm.c" \
+    -pthread -o "$tmpdir/submit_stop_vm"
+gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+    -I"$repo_root/common_include" \
+    "$repo_root/common_include/wavevm_sha256.c" \
+    "$repo_root/common_include/wavevm_canonical.c" \
+    "$repo_root/common_include/wavevm_identity.c" \
+    "$repo_root/common_include/wavevm_runtime_names.c" \
+    "$repo_root/common_include/wavevm_manifest.c" \
     "$repo_root/common_include/wavevm_control.c" \
     "$repo_root/common_include/wavevm_lifecycle.c" \
     "$repo_root/common_include/wavevm_envelope.c" \
@@ -102,13 +146,15 @@ s6_select_tcg_helper
 wait_compute_active() {
     local attempts=$1
     local i
+    local expect_slots=${agent_vcpu_slots:-2}
+    local expect_mem=${agent_memory_bytes:-1073741824}
     for ((i = 0; i < attempts; i++)); do
         if [[ -s "$tmpdir/ctl-state/membership.journal" ]]; then
             cp -f "$tmpdir/ctl-state/membership.journal" \
                 "$tmpdir/membership.journal.snap" 2>/dev/null || true
             if [[ -s "$tmpdir/membership.journal.snap" ]] &&
                "$tmpdir/check_compute_active" "$tmpdir/membership.journal.snap" \
-                   "$a_control" >/dev/null 2>&1; then
+                   "$a_control" "$expect_slots" "$expect_mem" >/dev/null 2>&1; then
                 return 0
             fi
         fi
@@ -206,6 +252,39 @@ for ((i = 0; i < 100; i++)); do
 done
 [[ -S "$tmpdir/ctl.sock" ]]
 
+# Guest smoke (§7) may request ≥2 vCPUs + Cirros-sized RAM via WVM_CREATE_*.
+agent_vcpu_slots=2
+agent_memory_bytes=1073741824
+agent_slots=2
+agent_max_vcpus=4
+agent_max_memory_chunks=2
+if [[ -n "${WVM_CREATE_VCPUS:-}" || -n "${WVM_CREATE_MEMORY_BYTES:-}" ]]; then
+    want_vcpus=${WVM_CREATE_VCPUS:-1}
+    if [[ "$want_vcpus" -lt 1 ]]; then want_vcpus=1; fi
+    if [[ "$agent_vcpu_slots" -lt $((want_vcpus + 2)) ]]; then
+        agent_vcpu_slots=$((want_vcpus + 2))
+    fi
+    if [[ "$agent_max_vcpus" -lt "$want_vcpus" ]]; then
+        agent_max_vcpus=$want_vcpus
+    fi
+    if [[ "$agent_slots" -lt $((want_vcpus + 2)) ]]; then
+        agent_slots=$((want_vcpus + 2))
+    fi
+    if [[ "$agent_max_memory_chunks" -lt 4 ]]; then
+        agent_max_memory_chunks=4
+    fi
+    if [[ -n "${WVM_CREATE_MEMORY_BYTES:-}" ]]; then
+        need=$((WVM_CREATE_MEMORY_BYTES + 64*1024*1024))
+        if [[ "$agent_memory_bytes" -lt "$need" ]]; then
+            agent_memory_bytes=$need
+        fi
+        if [[ "$agent_memory_bytes" -lt 2147483648 ]]; then
+            agent_memory_bytes=2147483648
+        fi
+    fi
+    echo "s6: fractal guest-capacity bump slots=$agent_vcpu_slots max_vcpus=$agent_max_vcpus mem=$agent_memory_bytes" >&2
+fi
+
 # Phase A: compute-only ACTIVE → FRACTAL CREATE_VM must fail-closed (no gateway).
 stdbuf -o0 -e0 env WVM_TCG_QEMU_BIN="$WVM_TCG_QEMU_BIN" \
     WVM_TCG_QEMU_DATADIR="${WVM_TCG_QEMU_DATADIR:-}" \
@@ -215,10 +294,10 @@ stdbuf -o0 -e0 env WVM_TCG_QEMU_BIN="$WVM_TCG_QEMU_BIN" \
     --state-dir "$tmpdir/node-a" --runtime-dir "$tmpdir/runtime-a" \
     --socket "$tmpdir/node-a.sock" \
     --node-id 801 --instance-id 802 --inventory-revision 1 \
-    --vcpu-slots 2 --memory-bytes 1073741824 \
+    --vcpu-slots "$agent_vcpu_slots" --memory-bytes "$agent_memory_bytes" \
     --controller-node-id 701 --controller-instance-id 702 \
     --controller-uid "$(id -u)" \
-    --slots 2 --max-vcpus 4 --max-memory-chunks 2 \
+    --slots "$agent_slots" --max-vcpus "$agent_max_vcpus" --max-memory-chunks "$agent_max_memory_chunks" \
     --max-storage 1 --max-members 8 --max-leases 2 \
     --control-address 127.0.0.1 --control-port "$a_control" \
     --data-port "$a_data" \
@@ -243,8 +322,14 @@ for ((i = 0; i < 200; i++)); do
 done
 [[ -S "$tmpdir/node-a.sock" ]]
 
-if ! wait_compute_active 200; then
+if ! wait_compute_active 600; then
     echo "compute did not reach ACTIVE before FRACTAL fail-closed probe" >&2
+    echo "expected slots=$agent_vcpu_slots mem=$agent_memory_bytes control_port=$a_control" >&2
+    if [[ -s "$tmpdir/ctl-state/membership.journal" ]]; then
+        cp -f "$tmpdir/ctl-state/membership.journal" "$tmpdir/membership.journal.snap" 2>/dev/null || true
+        "$tmpdir/check_compute_active" "$tmpdir/membership.journal.snap" \
+            "$a_control" "$agent_vcpu_slots" "$agent_memory_bytes" >&2 || true
+    fi
     cat "$tmpdir/ctl.log" >&2 || true
     cat "$tmpdir/agent-a.log" >&2 || true
     exit 1
@@ -298,7 +383,7 @@ for ((i = 0; i < 200; i++)); do
 done
 grep -q "REGISTER accepted" "$tmpdir/gw.log"
 
-if ! wait_fractal_active 200; then
+if ! wait_fractal_active 600; then
     echo "gateway+compute did not reach FRACTAL ACTIVE before CREATE_VM" >&2
     echo "--- ctl ---" >&2; cat "$tmpdir/ctl.log" >&2 || true
     echo "--- gw ---" >&2; cat "$tmpdir/gw.log" >&2 || true
@@ -337,24 +422,29 @@ if [[ ! -s "$tmpdir/gw-state/route.journal" ]]; then
     exit 1
 fi
 
-# Alias fractal layout to s6_finish expected paths
-if [[ "${KEEP_RUNNING:-0}" == "1" ]]; then
-    echo "KEEP_RUNNING=1 — leaving fractal cluster up; tmpdir=$tmpdir"
-    echo "$tmpdir" > /tmp/wavevm-s6-fractal-keep-tmpdir
-    echo "$agent_pid" > /tmp/wavevm-s6-fractal-keep-agent
-    echo "$gw_pid" > /tmp/wavevm-s6-fractal-keep-gw
-    echo "$ctl_pid" > /tmp/wavevm-s6-fractal-keep-ctl
-    # still write ports for probe
-    ln -sfn "$tmpdir/agent-a.log" "$tmpdir/agent.log" 2>/dev/null || true
-    ln -sfn "$tmpdir/runtime-a" "$tmpdir/runtime" 2>/dev/null || true
-    sleep 3600 &
-    wait || true
-    exit 0
-fi
-
+# Alias fractal layout to s6_finish / guest-smoke expected paths
 ln -sfn "$tmpdir/agent-a.log" "$tmpdir/agent.log" 2>/dev/null || cp -a "$tmpdir/agent-a.log" "$tmpdir/agent.log"
 ln -sfn "$tmpdir/runtime-a" "$tmpdir/runtime" 2>/dev/null || true
 ln -sfn "$tmpdir/node-a" "$tmpdir/node-state" 2>/dev/null || true
+
+# Guest E2E (§7): WVM_S6_KEEP_RUNNING=1 leaves cluster up with the same
+# /tmp/wavevm-s6-keep-* handshake as test_create_vm_single_node.sh.
+# Legacy KEEP_RUNNING=1 kept as alias.
+if [[ "${WVM_S6_KEEP_RUNNING:-0}" == "1" || "${KEEP_RUNNING:-0}" == "1" ]]; then
+    echo "s6: KEEP_RUNNING — leaving fractal cluster up; tmpdir=$tmpdir" >&2
+    echo "$tmpdir" > /tmp/wavevm-s6-keep-tmpdir
+    echo "$agent_pid" > /tmp/wavevm-s6-keep-agent-pid
+    echo "$ctl_pid" > /tmp/wavevm-s6-keep-ctl-pid
+    [[ -n "${gw_pid:-}" ]] && echo "$gw_pid" > /tmp/wavevm-s6-keep-gw-pid || true
+    grep -E 'Listening on|Mode:|SHM File|executor READY' "$tmpdir/agent.log"         > /tmp/wavevm-s6-keep-ports.txt || true
+    # Compat paths for older fractal probes
+    echo "$tmpdir" > /tmp/wavevm-s6-fractal-keep-tmpdir
+    echo "$agent_pid" > /tmp/wavevm-s6-fractal-keep-agent
+    echo "${gw_pid:-}" > /tmp/wavevm-s6-fractal-keep-gw
+    echo "$ctl_pid" > /tmp/wavevm-s6-fractal-keep-ctl
+    echo "FRACTAL CREATE_VM prepare→activate→commit→RUNNING: PASS backend=$s6_backend (KEEP_RUNNING)"
+    exit 0
+fi
 
 # R4: production STOP + cleanup evidence while agent still up
 s6_finish_running_vm "$create_out"

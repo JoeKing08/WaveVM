@@ -1,0 +1,3 @@
+g3g9k rebuild11 EXIT:killed: serial freeze@27132 (initramfs); SPIN hold armed but
+RIP wobble a62a7↔f38c cleared hold via clear_if_progress → remote thrash resumed
+(remote_done still climbing). Next: wall-clock renew hold, ignore micro-RIP clear.

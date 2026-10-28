@@ -1,0 +1,7 @@
+# cleanup.manifest for vm_id=256 inc=1
+shm=/wavevm_ram_wvm-v256-i1-g1-n801-fbd16e15c4df71f1
+path=/tmp/wvm_user_wvm-v256-i1-g1-n801-fbd16e15c4df71f1.sock
+path=/tmp/wvm-v256-i1-g1-n801-fbd16e15c4df71f1-executor.sock
+path=/tmp/wvm-v256-i1-g1-n801-fbd16e15c4df71f1-worker.sock
+path=/tmp/wvm-v256-i1-g1-n801-fbd16e15c4df71f1-monitor.sock
+path=/tmp/wvm-v256-i1-g1-n801-fbd16e15c4df71f1-ready

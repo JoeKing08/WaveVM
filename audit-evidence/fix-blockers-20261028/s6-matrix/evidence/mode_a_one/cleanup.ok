@@ -1,0 +1,5 @@
+cleanup_ok=1
+stop=status=0 recorded_state=17 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=7304347848044404945
+retired_shm=/wavevm_ram_wvm-v256-i1-g1-n801-2fecfee10f55b9fc
+vm_id=256
+honesty=REQUIRE_STOP=1_full_STOP_acceptance

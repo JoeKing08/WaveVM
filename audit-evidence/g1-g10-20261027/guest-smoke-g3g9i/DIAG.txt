@@ -1,0 +1,1 @@
+g3g9i rebuild9 (NEED_LOCAL export+concurrent consume): EXIT:1 guest_login=MISSING; serial freeze after PnP (~17314B); force_local_used=0; remote↑ on cpu1; almost no NEED-LOCAL hits this run.

@@ -1,0 +1,5 @@
+pass3 boot hang Asia/Shanghai ~15:17-15:22 (s23g3b, pre-s23g4)
+serial frozen ~31KB during metadata IID; MSR/x2apic IPI TRACE then silence
+HLT-LAPIC: cur=0 (timer expired) int_inj=0 int_nr=251; WVM-KVM-DRAIN count=0
+remote_done kept climbing (~278k) while login MISSING — AP re-remote HLT spin
+Root (s23g4): keep_pending_irq used stale interrupt.nr; no local irqchip drain on expired LAPIC

@@ -4,8 +4,14 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
 
 #include "../../../common_include/wavevm_manifest.h"
+#include "../../../common_include/wavevm_config.h"
 #include "../../../common_include/wavevm_protocol.h"
 #include "../../../common_include/wavevm_ioctl.h"
 
@@ -172,6 +178,18 @@ static inline int wavevm_qemu_bind_kernel_context(int dev_fd)
         return -EINVAL;
     }
     request.physical_node_id = (uint32_t)value;
+    /* F11/s23g5: kernel rejects node_instance_id==0 (ABI v3). Prefer
+     * WVM_NODE_INSTANCE_ID, fall back to WVM_RUNTIME_LOCAL_INSTANCE_ID. */
+    if (wavevm_qemu_parse_u64_env("WVM_NODE_INSTANCE_ID", &value) != 0) {
+        if (wavevm_qemu_parse_u64_env("WVM_RUNTIME_LOCAL_INSTANCE_ID",
+                                      &value) != 0 ||
+            value == 0) {
+            return -EINVAL;
+        }
+    } else if (value == 0) {
+        return -EINVAL;
+    }
+    request.node_instance_id = value;
     if (wavevm_qemu_parse_u64_env("WVM_VM_INCARNATION",
                                   &request.vm_incarnation) != 0 ||
         wavevm_qemu_parse_u64_env("WVM_MANIFEST_GENERATION",
@@ -215,5 +233,117 @@ static inline int wavevm_qemu_bind_kernel_context(int dev_fd)
     if (ioctl(dev_fd, IOCTL_WVM_BIND_CONTEXT, &request) < 0) {
         return -errno;
     }
+    return 0;
+}
+
+/*
+ * s23g7: Mode A FE BIND creates a *separate* kernel context from the node
+ * daemon. Dual-yes KVM often runs the sidecar as Mode B (bits==0), so the
+ * child never IOCTL_UPDATE_CPU_ROUTE / SET_GATEWAY into the FE fd.
+ * Without FE-local inject, REMOTE_RUN stays on AUTO_ROUTE => ENODEV and
+ * remote_done only accumulates via HALT-WAKE false counts.
+ *
+ * Populate bare vnode routes for vCPUs >= split and the sidecar gateway
+ * from launch.env (PRIMARY_DESTINATION_VNODE + RUNTIME_LOCAL_PORT).
+ * Returns 0 on success / nothing-to-do; negative -errno on ioctl failure.
+ */
+static inline int wavevm_qemu_inject_fe_compute_routes(int dev_fd, int vcpus,
+                                                      int local_split)
+{
+    uint64_t vnode_u = 0;
+    uint64_t port_u = 0;
+    uint32_t vnode;
+    uint16_t port_n;
+    uint32_t ip_n;
+    int remote_cpus;
+    size_t buf_size;
+    struct wvm_ioctl_route_update *payload;
+    struct wvm_ioctl_gateway gw;
+    int i;
+    int mapped = 0;
+
+    if (dev_fd < 0) {
+        return -EINVAL;
+    }
+    if (vcpus <= 0) {
+        vcpus = 1;
+    }
+    if (local_split < 0) {
+        local_split = 0;
+    }
+    if (local_split > vcpus) {
+        local_split = vcpus;
+    }
+    remote_cpus = vcpus - local_split;
+    if (remote_cpus <= 0) {
+        fprintf(stderr,
+                "[WaveVM-QEMU] FE compute routes: split=%d vcpus=%d "
+                "(no remote vCPUs; skip inject)\n",
+                local_split, vcpus);
+        return 0;
+    }
+    if (wavevm_qemu_parse_u64_env(
+            "WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_VNODE", &vnode_u) != 0 ||
+        vnode_u == 0 || vnode_u >= WVM_MAX_GATEWAYS) {
+        fprintf(stderr,
+                "[WaveVM-QEMU] FE compute routes: missing/invalid "
+                "WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_VNODE\n");
+        return -EINVAL;
+    }
+    vnode = (uint32_t)vnode_u;
+    /* Prefer data-plane port (V30-RX accepts MSG_VCPU_RUN); fall back to
+     * executor service port used by Hybrid KVM listen. */
+    if (wavevm_qemu_parse_u64_env("WVM_RUNTIME_LOCAL_PORT", &port_u) != 0 ||
+        port_u == 0 || port_u > 65535) {
+        if (wavevm_qemu_parse_u64_env("WVM_EXECUTOR_SERVICE_PORT",
+                                      &port_u) != 0 ||
+            port_u == 0 || port_u > 65535) {
+            fprintf(stderr,
+                    "[WaveVM-QEMU] FE compute routes: missing sidecar port "
+                    "(WVM_RUNTIME_LOCAL_PORT / WVM_EXECUTOR_SERVICE_PORT)\n");
+            return -EINVAL;
+        }
+    }
+    port_n = htons((uint16_t)port_u);
+    ip_n = htonl(0x7f000001u); /* 127.0.0.1 — same-host dual-yes sidecar */
+
+    memset(&gw, 0, sizeof(gw));
+    gw.gw_id = vnode; /* bare node_id index into gateway_table */
+    gw.ip = ip_n;
+    gw.port = port_n;
+    if (ioctl(dev_fd, IOCTL_SET_GATEWAY, &gw) < 0) {
+        fprintf(stderr,
+                "[WaveVM-QEMU] FE SET_GATEWAY vnode=%u port=%u failed: %s\n",
+                vnode, (unsigned)port_u, strerror(errno));
+        return -errno;
+    }
+
+    buf_size = sizeof(*payload) + (size_t)vcpus * sizeof(uint32_t);
+    payload = calloc(1, buf_size);
+    if (!payload) {
+        return -ENOMEM;
+    }
+    payload->start_index = 0;
+    payload->count = (uint32_t)vcpus;
+    for (i = 0; i < vcpus; i++) {
+        if (i >= local_split) {
+            payload->entries[i] = vnode; /* bare vnode */
+            mapped++;
+        } else {
+            payload->entries[i] = WVM_NODE_AUTO_ROUTE;
+        }
+    }
+    if (ioctl(dev_fd, IOCTL_UPDATE_CPU_ROUTE, payload) < 0) {
+        fprintf(stderr,
+                "[WaveVM-QEMU] FE UPDATE_CPU_ROUTE failed: %s\n",
+                strerror(errno));
+        free(payload);
+        return -errno;
+    }
+    free(payload);
+    fprintf(stderr,
+            "[WaveVM-QEMU] FE compute routes injected: split=%d vcpus=%d "
+            "mapped=%d vnode=%u gw=127.0.0.1:%u\n",
+            local_split, vcpus, mapped, vnode, (unsigned)port_u);
     return 0;
 }

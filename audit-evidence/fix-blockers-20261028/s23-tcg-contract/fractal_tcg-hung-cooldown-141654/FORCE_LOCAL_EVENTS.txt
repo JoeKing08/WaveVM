@@ -1,0 +1,26 @@
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff9061f37e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff908a1abf arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff908a1abf arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=90000 cooldown_ms=25000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc01c532e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=4 remaining_cooldown_ms=22228
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=5 remaining_cooldown_ms=22219
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=6 remaining_cooldown_ms=22211
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=7 remaining_cooldown_ms=22203
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=8 remaining_cooldown_ms=22194
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=9 remaining_cooldown_ms=22185
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=10 remaining_cooldown_ms=22178
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=11 remaining_cooldown_ms=22169
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=12 remaining_cooldown_ms=22160
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=13 remaining_cooldown_ms=22153
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=14 remaining_cooldown_ms=22145
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=15 remaining_cooldown_ms=22138
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=16 remaining_cooldown_ms=22130
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=17 remaining_cooldown_ms=22121
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=18 remaining_cooldown_ms=22112
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=19 remaining_cooldown_ms=22105
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=20 remaining_cooldown_ms=22098
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=21 remaining_cooldown_ms=22090
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=22 remaining_cooldown_ms=22083
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=23 remaining_cooldown_ms=22075
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=1 spin=24 remaining_cooldown_ms=22068

@@ -1,0 +1,7 @@
+cell=fractal_tcg
+topology=fractal
+backend=require-tcg
+accel=disabled
+rc=1
+overall=FAIL
+honesty=GUEST_E2E_FAIL_see_log

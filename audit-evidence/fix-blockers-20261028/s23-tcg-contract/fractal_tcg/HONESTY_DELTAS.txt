@@ -1,0 +1,27 @@
+fractal_tcg 2-vCPU Cirros smoke — Asia/Shanghai 2026-10-28 ~14:22
+OVERALL=PASS tip=fdae2c158 dirty (no commit/push)
+rebuild=qemu-rebuild-s23f (cooldown_lift_softlock when spin>=4 after hard_cap)
+
+result.txt deltas:
+  remote_done_delta=2933
+  local_done_delta=-145152 (stats_before captured mid-hold; not comparable absolute)
+  force_local_used_delta=535040
+  remote_vcpu_evidence=1 remote_mem_evidence=1
+  guest_login/ssh/cpu_smoke/stop=PASS
+
+FORCE_LOCAL path (see FORCE_LOCAL_EVENTS.txt):
+  NEED-LOCAL escalate hold (repeat=2) → hard_cap_expiry ×2
+  then cooldown_lift_softlock cpu=1 spin=4 cleared_remaining_ms≈10381
+  then SPIN-LOCAL arm hold_full_local=1 + renew → login/SSH
+
+Honesty vs prior:
+  (1) guest-matrix-final fractal_tcg used WVM_CREATE_VCPUS=1 (2-vCPU softlock deferred)
+  hung archive fractal_tcg-hung-cooldown-141654: hard_cap → cooldown_suppress
+    spin=4..24 serial frozen @metadata; no lift; FAIL/hang
+  this run: same hard_cap window but lift re-arms SPIN-LOCAL → PASS
+  force_local still dominates softlock windows (exceptional §8.1); remote_done
+  advances (2933) — concurrency MAIN outside hold; hold NOT boot-sticky
+
+Prior fractal_tcg-v1 (plan): force_local_used≈655k vs remote_done≈64
+This run: remote_done_delta=2933 force_local_used_delta=535040 (better remote;
+  still hold-dominated during softlock — honest residual under Minimum contract)

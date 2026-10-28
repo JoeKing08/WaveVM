@@ -1,0 +1,100 @@
+=== G9 attribution (not boot banner) ===
+remote_done 42 -> 42 delta=0
+local_done  1689344 -> 1695744 delta=6400
+force_local 1689344 -> 1695744 delta=6400
+=== recent WVM-TCG-STATS / WVM-REMOTE ===
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=568320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=568576 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1683968 force_local_used=1683968
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=568832 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1684224 force_local_used=1684224
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1684480 force_local_used=1684480
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1684736 force_local_used=1684736
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1684992 force_local_used=1684992
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1685248 force_local_used=1685248
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=569088 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1685504 force_local_used=1685504
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1685760 force_local_used=1685760
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1686016 force_local_used=1686016
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=569344 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1686272 force_local_used=1686272
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=569600 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1686528 force_local_used=1686528
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=569856 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1686784 force_local_used=1686784
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=570112 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1687040 force_local_used=1687040
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=570368 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1687296 force_local_used=1687296
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=570624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=570880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=571136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=571392 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1687552 force_local_used=1687552
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=571648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=571904 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1687808 force_local_used=1687808
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1688064 force_local_used=1688064
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=572160 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1688320 force_local_used=1688320
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1688576 force_local_used=1688576
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1688832 force_local_used=1688832
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1689088 force_local_used=1689088
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1689344 force_local_used=1689344
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=572416 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1689600 force_local_used=1689600
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=572672 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1689856 force_local_used=1689856
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=572928 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1690112 force_local_used=1690112
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1690368 force_local_used=1690368
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=573184 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1690624 force_local_used=1690624
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1690880 force_local_used=1690880
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=573440 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1691136 force_local_used=1691136
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1691392 force_local_used=1691392
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=573696 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1691648 force_local_used=1691648
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1691904 force_local_used=1691904
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=573952 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1692160 force_local_used=1692160
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=574208 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1692416 force_local_used=1692416
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=574464 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1692672 force_local_used=1692672
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=574720 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1692928 force_local_used=1692928
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1693184 force_local_used=1693184
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=574976 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1693440 force_local_used=1693440
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1693696 force_local_used=1693696
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=575232 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1693952 force_local_used=1693952
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=575488 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1694208 force_local_used=1694208
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1694464 force_local_used=1694464
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=575744 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1694720 force_local_used=1694720
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1694976 force_local_used=1694976
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=576000 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1695232 force_local_used=1695232
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=576256 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1695488 force_local_used=1695488
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=576512 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=42 local_done=1695744 force_local_used=1695744
+=== memory / dirty commit signals (supporting) ===
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #0 rip=0xffffffffb23bb0d2 cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc00bbe60 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #1 rip=0xffffffffb23bb0d2 cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc00bbe60 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #2 rip=0xffffffffb23bb0d2 cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc00bbe60 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #3 rip=0xffffffffb2378688 cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc00d8f00 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #4 rip=0xffffffffb238f38c cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc0013ad8 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #5 rip=0xffffffffb238f38c cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc0013ae8 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #6 rip=0xffffffffb238f38c cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc0013ae8 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #7 rip=0xffffffffb238f38c cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc0013ae8 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #8 rip=0xffffffffb238f38c cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc0013ae8 oldex=-1
+/workspaces/WaveVM/audit-evidence/g1-g10-20261027/guest-smoke-g3g9o/vm.log:[WVM-REMOTE] cpu=1 dispatch #9 rip=0xffffffffb238f38c cs=0x10 cr0=0x80050033 cr3=0x6c10000 efer=0xd01 rsp=0xffffb91cc0013ae8 oldex=-1
+/tmp/wavevm-create-vm-single.jqAeLT/agent.log:[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+/tmp/wavevm-create-vm-single.jqAeLT/agent.log:[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+/tmp/wavevm-create-vm-single.jqAeLT/agent.log:[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory

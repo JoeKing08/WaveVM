@@ -838,20 +838,15 @@ static uint32_t wvm_ctx_local_vnode(const struct wvm_kernel_context *ctx)
 }
 
 /*
- * A04: legacy wire still packs vm into 8 bits. Semantic authority is full u32
- * on the context; refuse to emit a lying composite when vm_id does not fit.
+ * Compat send-target helper. Production nonzero VMs use bare node targets
+ * (FULL_VMID on the header via wvm_header_pack_src). Legacy vm_id==0 keeps
+ * ENCODE_ID. Never silently truncate a nonzero vm into the 8-bit pack.
  */
 static int wvm_wire_encode_id(uint32_t vm_id, uint32_t node_id, uint32_t *out)
 {
     if (!out)
         return -EINVAL;
-    if (vm_id > 0xffu) {
-        pr_warn_ratelimited(
-            "wavevm: vm_id=%u exceeds legacy 8-bit wire; need V1 envelope\n",
-            vm_id);
-        return -EOPNOTSUPP;
-    }
-    *out = WVM_ENCODE_ID(vm_id, node_id);
+    *out = wvm_wire_target(vm_id, node_id);
     return 0;
 }
 
@@ -1318,7 +1313,9 @@ static int k_send_packet_ctx(struct wvm_kernel_context *context,
     if (!context || !context->transport || !data)
         return -ENODEV;
 
-    hdr->epoch = htonl(READ_ONCE(context->kernel_epoch));
+    /* G1: FULL_VMID stashes vm_id in epoch; do not clobber it. */
+    if (!(hdr->flags & WVM_FLAG_FULL_VMID))
+        hdr->epoch = htonl(READ_ONCE(context->kernel_epoch));
     hdr->node_state = 2;
     hdr->target_id = htonl(target_id);
 
@@ -1362,22 +1359,24 @@ static void k_send_packet_async(uint16_t msg_type, void *payload, int len,
     uint8_t *buffer = k_alloc_packet(pkt_len, 1);
     struct wvm_kernel_context *context = wvm_active_context();
     struct wvm_header *hdr;
-    uint32_t wire_id;
 
     if (!buffer)
         return;
-    if (!context ||
-        wvm_wire_encode_id(context->identity.vm_id,
-                           wvm_ctx_local_vnode(context), &wire_id) != 0) {
+    if (!context) {
         k_free_packet(buffer);
         return;
     }
 
     hdr = (struct wvm_header *)buffer;
+    memset(hdr, 0, sizeof(*hdr));
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(wire_id);
+    if (wvm_header_pack_src(hdr, context->identity.vm_id,
+                            wvm_ctx_local_vnode(context)) != 0) {
+        k_free_packet(buffer);
+        return;
+    }
     hdr->req_id = 0;
     hdr->qos_level = qos;
     if (payload && len > 0)
@@ -1610,25 +1609,20 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         uint8_t *buffer = k_alloc_packet(pkt_len, 1);
         if (likely(buffer)) {
             struct wvm_header *hdr = (struct wvm_header *)buffer;
+            memset(hdr, 0, sizeof(*hdr));
             hdr->magic = htonl(WVM_MAGIC);
             hdr->msg_type = htons(MSG_MEM_READ);
             hdr->payload_len = htons(sizeof(net_gpa));
-            {
-                uint32_t wire_id;
-
-                /* G1: refuse lying 8-bit identity; fail closed on encode. */
-                if (wvm_wire_encode_id(context->identity.vm_id,
-                                       wvm_ctx_local_vnode(context),
-                                       &wire_id) != 0) {
-                    k_free_packet(buffer);
-                    k_free_req_id_ctx(context, rid);
-                    kfree(bounce_buf);
-                    kfree(meta);
-                    __free_page(page);
-                    result = VM_FAULT_SIGBUS;
-                    goto out;
-                }
-                hdr->slave_id = htonl(wire_id);
+            /* G1: FULL_VMID when vm_id/node exceed 8-bit pack. */
+            if (wvm_header_pack_src(hdr, context->identity.vm_id,
+                                    wvm_ctx_local_vnode(context)) != 0) {
+                k_free_packet(buffer);
+                k_free_req_id_ctx(context, rid);
+                kfree(bounce_buf);
+                kfree(meta);
+                __free_page(page);
+                result = VM_FAULT_SIGBUS;
+                goto out;
             }
             hdr->req_id = WVM_HTONLL(rid);
             hdr->qos_level = 1;
@@ -1673,18 +1667,15 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
                 buffer = k_alloc_packet(pkt_len, 1);
                 if (buffer) {
                     struct wvm_header *hdr = (struct wvm_header *)buffer;
-                    uint32_t wire_id;
 
+                    memset(hdr, 0, sizeof(*hdr));
                     hdr->magic = htonl(WVM_MAGIC);
                     hdr->msg_type = htons(MSG_MEM_READ);
                     hdr->payload_len = htons(sizeof(net_gpa));
-                    /* G1: skip retry emit when identity does not fit wire. */
-                    if (wvm_wire_encode_id(context->identity.vm_id,
-                                           wvm_ctx_local_vnode(context),
-                                           &wire_id) != 0) {
+                    if (wvm_header_pack_src(hdr, context->identity.vm_id,
+                                            wvm_ctx_local_vnode(context)) != 0) {
                         k_free_packet(buffer);
                     } else {
-                        hdr->slave_id = htonl(wire_id);
                         hdr->req_id = WVM_HTONLL(rid);
                         hdr->qos_level = 1;
                         hdr->crc32 = 0;
@@ -1879,7 +1870,6 @@ static int committer_thread_fn(void *data) {
                 size_t payload_size = sizeof(struct wvm_diff_log) + size;
                 size_t pkt_len = sizeof(struct wvm_header) + payload_size;
                 uint8_t *buffer = k_alloc_packet(pkt_len, 0);
-                uint32_t wire_id;
 
                 if (!buffer) {
                     kfree(diff_bytes);
@@ -1892,12 +1882,12 @@ static int committer_thread_fn(void *data) {
                     struct wvm_diff_log *log =
                         (struct wvm_diff_log *)(buffer + sizeof(*hdr));
 
+                    memset(hdr, 0, sizeof(*hdr));
                     hdr->magic = htonl(WVM_MAGIC);
                     hdr->msg_type = htons(MSG_COMMIT_DIFF);
                     hdr->payload_len = htons(payload_size);
-                    if (wvm_wire_encode_id(task->context->identity.vm_id,
-                                           wvm_ctx_local_vnode(task->context),
-                                           &wire_id) != 0) {
+                    if (wvm_header_pack_src(hdr, task->context->identity.vm_id,
+                                            wvm_ctx_local_vnode(task->context)) != 0) {
                         /* G1: keep pre-image; do not emit lying 8-bit id. */
                         k_free_packet(buffer);
                         kfree(diff_bytes);
@@ -1905,7 +1895,6 @@ static int committer_thread_fn(void *data) {
                         send_rc = -EOPNOTSUPP;
                         goto diff_commit_retain;
                     }
-                    hdr->slave_id = htonl(wire_id);
                     hdr->req_id = 0;
                     hdr->qos_level = 1;
                     log->gpa = WVM_HTONLL(task->gpa);
@@ -2450,11 +2439,11 @@ static void wavevm_udp_data_ready(struct sock *sk) {
             // 3. [Multi-VM] 从协议头 target_id 解码 vm_id 并查找对应 context
             // F11 fix: Use RCU lookup in sk_data_ready (softirq context)
             uint32_t target_id = ntohl(hdr->target_id);
-            uint32_t vm_id = WVM_GET_VMID(target_id);
+            uint32_t vm_id = 0, pkt_node = 0;
             struct wvm_kernel_context *context = NULL;
 
             {
-                uint32_t pkt_node = WVM_GET_NODEID(target_id);
+                wvm_header_unpack_assoc(hdr, target_id, &vm_id, &pkt_node);
                 /* Explicit vm_id required; no module-global legacy fallback. */
                 if (vm_id != 0)
                     context = wvm_kernel_find_context_rcu(vm_id, pkt_node);

@@ -1,0 +1,1 @@
+probe=budget return=32 commits=32 remaining_dirty=1 directory_x=1 directory_y=0

@@ -1,0 +1,10 @@
+live_probe=0
+deny_kvm=0
+deny_kernel=1
+deny_kvm_dirty=0
+record_count=5
+cap id=1 state=3 bits=0x7
+cap id=2 state=3 bits=0x1
+cap id=3 state=3 bits=0x1
+cap id=4 state=3 bits=0x1
+cap id=5 state=4 bits=0x0

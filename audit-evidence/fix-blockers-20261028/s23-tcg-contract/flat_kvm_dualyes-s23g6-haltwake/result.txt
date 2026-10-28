@@ -1,0 +1,2 @@
+guest_login=PASS
+guest_ssh=PASS

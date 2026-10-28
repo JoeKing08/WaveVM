@@ -1,0 +1,433 @@
+WaveVM 纲领与完整 Minimum 复审
+Codex agent / 2026-10-28
+收件对象：Grok bot agent；亦可作为后续交叉审计的核对底稿。
+
+一、裁决与范围
+
+目前不能签署“全部 Minimum 已完成，落地代码质量全部过关”。
+这次包含 goal 7 / 真实 guest E2E，不再采用“除 goal 7 外”的口径。
+控制面和 runtime 主体已有大量真实实现；本轮不是否定整个重构。
+但是，内存提交、内核数据面、调度与验收判据仍有实际缺陷，不能统称为
+性能残留，也不能由四格 guest 的 PASS 汇总抵消。
+
+依据：两份总纲与 docs/specs/ 下全部 11 份规格。goal/plan 和自审状态仅作
+证据索引，不是规范，也不直接采信 FIXED/COMPLETE。
+审计对象：HEAD fdae2c158f074206e8c10fd409483d0070da6765 及当前未提交修改。
+未暂存工作区差异 SHA-256（git diff --binary）：
+73dc22ae15c33dd388b3a9972d1ac7432c84d728dc107296a51edfeab2a054a2
+规范与源码复核期间该摘要保持不变。
+
+方法：全文扫描纲领中的状态/进度表述，逐项对照 Minimum 的拥有者、生产
+入口与验收要求；检查当前补丁、运行现有短测试，并复核已归档集成证据。
+本轮独立运行 30 个现有短测试：29 通过，1 失败，见第六节。
+另做四组小复现，使用当前源函数或判据，见对应发现。
+没有重跑完整 guest 矩阵，没有 reload 内核，没有改生产代码、纲领或 plan，
+没有 commit/push。不能将本轮源码确认说成已动态复现全部内核/guest 故障。
+所有新增审计材料位于 audit-evidence/codex-minimum-review-20261028/。
+
+Minimum 的 TCG 判据按当前规范处理：可用的分布式多 vCPU 并发为主路径，
+允许有界、例外性的本地兜底；不额外要求完整上游 QEMU MTTCG 性能。
+HA、热迁移、RECOVERY_REBIND、完整故障矩阵与完全插件化 fault engine
+继续属于 Extended，不是本轮新增门槛。同机多个显式 compute 实例可以验收，
+不要求为了这次审计再准备跨物理机云实例。
+
+二、纲领是否只有“应然”
+
+总体方向正确：没有发现把当前完成率、日期审批、PASS 数量或逐任务完成
+勾选表写回两份总纲与 subsystem specs。mode-boundary 审计记录也已移到
+audit-evidence/docs-audits/；docs/ 中未发现引用该审计文件的残留。
+
+但严格说还不是完全没有实然：
+
+D1 [文档清理] docs/specs/memory-consistency.md:390-392 仍写：
+  “The current emergency dirty-page direct-send behavior ... remains
+   nonconforming until it carries the canonical versioned commit semantics.”
+这是对某个实现现状作不合规判定，应留在审计记录。建议改成纯合同：
+  “Emergency dirty-page direct submission must carry canonical versioned
+   commit semantics and must not report success before its required ACKs.”
+不需要连同规范里的状态机、条件准入门、技术基座、旧 ABI 的格式定义一起删。
+后几者用于定义目标与迁移边界，并不等于实现进度日志。
+
+D2 [规范冲突] baseline:1171-1175 的 Immediate Architectural Decision
+仍要求保留 master/slave compatibility adapters 和静态 NODE/ROUTE bootstrap；
+roadmap:239-249、:499-517、:572-574 却要求删除独立旧入口与旧配置生产路径。
+这是两条相互冲突的“应然”，不是进度记录。应把 baseline 末尾那两句同步为
+统一 node runtime 与 manifest/typed 路径，避免接手 agent 将保留旧接口当任务。
+无需借本轮审计重写整个纲领，也无需把本报告的修复状态塞回纲领。
+
+三、代码与验收阻断（本报告编号独立于此前 G/R 表）
+
+R1 [P1 / 合同未落地] 扩展旧包头、借 epoch 装 VM ID，仍不是 typed 身份路径
+
+位置：common_include/wavevm_protocol.h:98-104、:263-311；
+master_core/kernel_backend.c:1187-1207、:1316-1325；
+master_core/user_backend.c:946-975、:1373-1403。
+
+新增 FULL_VMID 明确把 vm_id 写进旧 wvm_header.epoch，将 source/target 改为
+裸 node ID；接收端相应跳过 epoch 比较。它解决了部分 8-bit VM ID 截断，
+但没有携带 vm_incarnation、origin runtime instance、完整 route snapshot key
+和语义 operation ID。kernel raw_kernel_send 仍直接把该旧头发到 UDP；
+flat user backend 也允许该形状，而 fractal 分支反而拒绝 legacy packet。
+不能用“已 BIND 一个 context”证明每个网络操作的完整寿命/路由身份已校验。
+
+依据：identity-routing §2.2 明确 V1 VM 不经过 legacy header hop；
+wire-ipc-abi §1.1/§1.3；roadmap Phase 5 要求同一条 canonical 语义路径。
+
+修复方向：复用已有 envelope、node-runtime ingress、vcpu/memory services，
+让 QEMU/内核加速请求首先进入带完整身份与操作键的本地 runtime 边界，
+跨节点由 runtime 通过 fabric 派发；内核只执行该语义操作的派生加速。
+不要继续给旧头分配 flag、借用 epoch，或为让它通过而跳过陈旧性校验。
+这不要求把 UDP 改成 TCP，也不要求放弃异步队列和批处理。
+
+最小验证：高于 255 的 VM ID 走真实 fault/commit/vCPU 往返；同时构造旧
+incarnation 或旧 runtime instance 请求，在产生执行/内存副作用前拒绝。
+flat/fractal 必须保持同一身份与成功条件，不能只测 pack/unpack 数字没截断。
+
+R2 [P1 / 新生产旁路] QEMU 用本机 vnode 重建全部远端 CPU 路由
+
+位置：wavevm-qemu/accel/wavevm/wavevm-runtime-registration.h:250-347；
+wavevm-qemu/accel/wavevm/wavevm-all.c:2031-2042；
+master_core/kernel_backend.c:2899-2910、:3096-3137。
+
+新增 inject_fe_compute_routes 读取 LOCAL_PRIMARY_DESTINATION_VNODE，
+把每个 i>=local_split 的 vCPU 都指向这个同一 vnode，网关固定为 127.0.0.1，
+再依次 SET_GATEWAY / UPDATE_CPU_ROUTE。它没有读取各 vCPU 的 admitted
+executor placement，也没有核对目标、端点与完整 manifest/dispatch 的对应。
+对分配到不同 compute 实例的计划，这会改写实际执行目的地；context 若与
+已有 descriptor 共享，同样不能因此授权覆盖它的已准入路由。
+注入失败后调用方只打印“non-fatal for boot”，仍继续启动。
+它还把 vnode 0 拒绝为无效，而正式路由 ABI 允许 0。
+
+依据：baseline §4.3/§7.3，roadmap Phase 5；kernel-accelerator §4.1 要求
+完整派生快照 prepare/commit，不允许重新以分字段写入建立另一配置权威。
+
+修复方向：将 admitted per-vCPU dispatch 和 fabric endpoint 作为完整派生
+配置交给该 context；QEMU 负责 attach/使用，不能按 split 重新规划。
+缺派生配置时拒绝该启动/操作，或者只按明确准入策略选择另一个 backend；
+不能“远端失败但本地能 boot”就继续宣称原资源计划有效。
+
+最小验证：同一个 manifest 的两个远端 vCPU 指向不同 compute/vnode，实际
+执行必须分别落到这两个目的地；缺配置与非法目的地失败，合法 vnode 0 成功。
+不需要新增完整云平台，只需有两个显式 runtime 实例和精确派发记录。
+
+R3 [P1 / 可丢数据] 新 coherent dirty 分支再次出现“旧整页换新版号”
+
+位置：wavevm-qemu/accel/wavevm/wavevm-user-mem.c:2433-2462。
+
+原 WritablePage 分支已有写集合并，但新 flush_coherent_dirty_bitmap_locked
+没有 pre-image。遇到 ESTALE/ENOENT 后读取 mat_page，只使用 mat_ack.version，
+随后再次提交未改变的 current_snapshot 全页，丢弃读取到的权威字节。
+这与之前要求修掉的 stale snapshot 覆盖问题同类，不能因注释写了
+“Prefer fail-closed”就当作已经 fail closed。
+
+复现：直接提取当前函数，使用按 base_version 拒绝冲突的内存服务替身。
+本地旧页 [x=1,y=0]、权威新版 [x=0,y=1]，输出：
+  probe=stale return=1 commits=1 remaining_dirty=0 directory_x=1 directory_y=0
+即 y=1 的已确认更新被覆盖，函数仍成功并清除脏位。
+这是源函数级复现；没有冒充真实多节点 guest 动态测试。
+
+依据：memory-consistency §4.2/§4.3。
+修复方向：把真实写集应用到权威基页，或使用规范允许、可证明的排他写入
+机制；无法建立写集/排他证据时保留脏数据并显式 RESYNC/失败，禁止把旧整页
+重新贴上新版号。优先复用已有 merge/write-set 机制，避免再造恢复体系。
+最小验证：两 writer 修改同页不同字节，冲突后两者都在；相同字节的冲突按
+既定顺序/错误语义处理。必须覆盖 coherent bitmap 分支，不能只测旧分支。
+
+R4 [P1 / fence 提前成功] 每次 32 页预算被用于“全部提交完”的同步返回
+
+位置：wavevm-user-mem.c:2377-2410、:2498、:2529-2560；
+wavevm-all.c:1372、:1417-1420。（前两文件均位于 QEMU accel/wavevm/）
+
+新的 bitmap flush 默认提交最多 32 页，并限制扫描范围；达到预算即返回
+非负 committed 数。外层只等待这部分提交的 ACK，然后返回 0；helper 可以
+继续导出成功 CPU ACK。剩余 dirty bits 留待下一次处理，不代表本次 handoff
+所依赖的脏页已经提交。扫描到干净区而漏掉后方脏页时也没有“未完成”状态。
+
+提取当前函数，对 33 个脏页运行一次，得到：
+  probe=budget return=32 commits=32 remaining_dirty=1
+结合调用方“非负 -> fence -> 成功 ACK”的生产逻辑，不能满足完整 handoff。
+共享 RAM 上可见字节不能替代远端 directory 的版本/提交状态。
+
+依据：memory-consistency §4.6；capability-fault-engines §9 dirty/fence 要求。
+修复方向：保留分批限额，但把一次 handoff 对应的 dirty generation/集合
+固定下来；分批异步 drain，全部所需提交和 delivery 完成后才完成该 fence。
+预算耗尽返回可重试的未完成/背压，而非成功。不要改回无限全 RAM 同步扫描。
+最小验证：超过预算的脏页，以及扫描窗口之外的脏页，在 ACK 前全部完成，
+或当前 handoff 明确失败且保留 dirty；不能以“下次 slice 会处理”通过。
+
+R5 [P1 / 多 vCPU TCG Minimum 未闭合] 并发、兜底界限与证据仍不匹配
+
+位置：wavevm-cpu.c:432-485、:635-731、:798-815、:969-1007；
+docs/specs/vcpu-handoff.md §8.1；baseline §16。
+
+三个相关但不能混为一个计数调整的问题：
+1. concurrent 分支仍用单个 g_wavevm_tcg_remote_active，整个远端区间互斥。
+   BSP 可以与一个 remote 并行，但两个独立 remote vCPU 仍相互排队。
+   这没有实现规范中 placement 允许时的 multi-remote concurrent 主路径。
+2. 规范写 hold slice 30s / hard cap 90s / cooldown 25s；当前代码使用
+   8s / 30s / 12s，而且 spin>=4 会直接清除剩余 cooldown，再次 re-arm。
+   cap 后的冷却门因此可以被原先同一类 spin 信号立即绕过。
+3. 归档 flat_tcg 的 remote_delta=740、force_local_delta=1641728；
+   fractal_tcg 为 2933、535040。fractal 还出现 local_delta 为负。
+   计数按 cpu 打印，但脚本只取日志最后一行，没有按 cpu 分别作差；这些
+   数字不能直接换算精确执行时间占比，也不足以证明“远端并发是主路径”。
+   能证明登录/CPU smoke 的记录应保留，不能自动升级为当前 §8.1 全通过。
+
+修复方向：独立 vCPU 使用各自的 owner/in-flight 状态，只在真正共享的
+资源或原子边界同步；使 softlock/NEED_LOCAL 回到局部、有恢复条件的兜底，
+而非靠 cap 后抹掉 cooldown 继续接回本地维持进展。优先修实际 IPI/设备
+完成依赖。不要为了让计数好看插入象征性的 remote probe。
+计数应按 VM/CPU/executor 关联，至少同时记录成功远端区间、本地代执行
+原因及时间，区分正常区间和例外窗口。较短 hold 本身不必然错误，重点是
+整个状态机与约定界限一致，且主路径有可核对的进展；不能只把时长改大。
+
+最小验证：现有 ≥2-vCPU guest 登录/负载/STOP，加一个 BSP+两个 remote
+的有界并发证明（可以是短执行合同测试，不必再起一套完整 guest 矩阵）；
+按同一 CPU 的计数/执行时间核对主路径，证明 cooldown 不被同一 spin 绕过。
+完整上游 MTTCG 性能不是修复要求；当前允许的有界兜底也不要求一概删除。
+
+R6 [P1 / 不完整 ACK 集] helper barrier 仍可被重复 ACK 或部分发送满足
+
+位置：slave_daemon/slave_hybrid.c:99-148、:4824-4852、:5033-5040。
+
+相较此前 sleep 2ms，代码已有等待 cookie 和向上返回错误的进步。
+但 mark_push_barrier_done 只递增整数，不识别哪个 helper 已 ACK；同一个
+helper 的重复 UDP ACK 可以凑够 g_num_cores。发送只成功一部分时，又将
+expected 从所需 helper 数减成 sent，主动把未送达的 required participant
+排除，最后依然可能返回成功。
+
+源函数小复现：期望两个 helper，对同一 cookie 连续调用同一个 ACK
+入口两次，wait 返回：
+  same_helper_duplicate_acks=2 required_helpers=2 fence_rc=0
+它没有证明两个 helper 都 APPLY。并发 barrier 共用 active_cookie 也需要
+明确操作关联；不能靠后一个覆盖前一个的隐式行为提供合同。
+
+依据：memory-consistency §4.6，vcpu-handoff 的成功 fence 前置条件。
+修复方向：固定该次 fence 所需 helper identity/instance 集，逐成员去重，
+保留 cookie 与 VM/操作关联。部分发送失败重试或显式失败，不缩 required
+set。复用现有 barrier 结构即可，不需要构造完整分布式故障引擎。
+最小验证：重复一个 helper 的 ACK，另一个不回，fence 不得成功；漏发一个
+required helper 同样不得成功；全员 APPLY 后正常完成。
+
+R7 [P1 / Mode A 脏页主路径不成立] socket send 返回值仍被当作 commit 结果
+
+位置：master_core/kernel_backend.c:1187-1211、:1324-1325、:1881-1913、
+:1950-1980。
+
+睡眠上下文中的 k_send_packet_ctx 直接返回 kernel_sendmsg 的值；成功发送
+返回正的字节数。committer 却使用 if (send_rc != 0) 判断失败，因而一笔
+成功送达的远端 diff 仍被重试，最终可能写入 failed_diffs；last_failure
+甚至会得到正数。该 worker 路径没有经过 atomic TX-ring 的“入队返回 0”。
+
+而且该包 req_id=0，没有关联此次提交的语义 ACK/结果版本。仅把判断改为
+send_rc<0，只会变成“UDP 发出即释放 pre-image/reprotect”的另一种错误，
+仍无法证明目录已经提交。确认本地 owner 后也仍直接调用 kernel 链接的
+logic_core 目录语义，不等于 user-space canonical authority 已收口。
+
+依据：kernel-accelerator §1/§1.2/§4，memory-consistency §4.2/§8。
+本项是源码确认，没有声称本轮加载内核复现。
+
+修复方向：先统一 transport send 的返回约定，再让 dirty operation 通过
+同一 user-space memory authority 得到 typed commit ACK/result_version；
+以该语义结果结算 dirty/pre-image/重试状态。保留异步 queue，不需阻塞全部
+页面，更不能靠把所有目录设置为 local 绕开远端分支。
+最小验证：真实 Mode A 写入非本地 directory 后检查其数据和版本；延迟或
+拒绝 ACK 时不得提前 clean，正常成功不得进入 failed_diffs。双 context
+隔离证据应继续保留，但不能替代这个数据面验证。
+
+R8 [P1 / guest 验收假阳性] 内存证据自匹配；矩阵忽略失败退出；CPU 计数偏弱
+
+位置：tests/e2e/test_guest_smoke.sh:361-366、:450-480；
+tests/e2e/test_guest_minimum_matrix.sh:110-118、:138-150；
+wavevm-cpu.c:2656-2674。
+
+1. remote_evidence.txt 先写标题：
+   “=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===”
+   后续 mem_hits grep 把这个文件作为输入，而模式包含 “dirty commit”。
+   只有这个标题、完全没有任何内存操作的文件，也令 remote_mem=1。
+   本轮用完全相同标题/模式复现，见 false_memory_evidence.txt。
+2. matrix 只要 result.txt 中出现 OVERALL=PASS 就置 overall=PASS，不要求
+   当前 child rc=0。提取当前 run_cell，模拟先写 PASS、清理阶段超时，得到：
+     RESULT=flat_tcg PASS rc=124
+     matrix_counters: pass=1 fail=0
+   所以外层 timeout 或退出错误也可以变成绿色结果。
+3. socket 分支收到 ACK 后，在检查 ack.status 之前就把 remote_rpc_ok=true；
+   后续 remote_done 可以把失败回包算成成功进展。KVM smoke 又接受
+   remote_delta=0 但 boot 期 remote_before>0，无法排除运行期全被本地接管。
+   最后一条旧计数也不包含独立 compute 节点的身份/实际执行证明。
+
+修复方向：机器可判定的完成记录与说明标题分开；记录实际完成的页/版本、
+源目的 runtime 和 VM 身份，按同一 CPU/executor 取成功执行增量。
+最低限度先锚定真实事件行，不能把文字标签、send、负 ACK 当作成功操作。
+matrix 成功必须同时满足本次 rc=0、该 run 的明确最终结果、required cells
+完成及 cleanup 成功；SKIP/未执行不能用于声明完整矩阵完成。
+运行期没有进展时继续定位生产路径，不能放宽到“启动时成功过一次”。
+最小验证：保留标题但移除真实远端操作，guest evidence 必须失败；
+有 PASS 文件但 child rc=124/非零也必须失败；真实执行/提交后的正例再通过。
+无需重写全部测试框架。本轮不否认已归档 guest 登录记录本身。
+
+R9 [P2 / 现有回归未通过] coordinator prepare 测试输出缓冲区不足
+
+入口：bash tests/control-plane/test_coordinator.sh
+失败点：tests/control-plane/test_coordinator.c:1874-1897。
+原始输出：coordinator test: prepare deterministic canonical VM proposal
+只加错误打印、不改调用逻辑的诊断副本进一步输出：
+  prepare diagnostic: placement plan output buffers are too small
+
+这证明当前现有合同测试没有跑通，不等于已证明每次生产 CREATE 都失败。
+本报告不把 fixture 容量问题猜成另一个生产事务大缺陷，也不把它静默跳过。
+修复方向：核对 initialize_prepared_vm、嵌套输出容量与当前 planner 需求；
+fixture 落后则按实际需求修 fixture；生产需求计算不对则修计算。
+保持有界存储与拒绝检查，不靠删除 assert、放宽 Werror 或绕过 prepare 通过。
+最小验证：原 test_coordinator 通过，并保持正常 authority/admission 回归。
+
+四、其余证据缺口及附带质量点
+
+E1 [验收证据缺口，不直接判代码不存在] multi-Pod >4096 的完整证据未核实
+依据：identity-routing:397-410；membership-topology-lifecycle:681-685。
+本轮 flat_gt_4096 确实 compiled+resolved 4100 个 vnode，不能再说连这个
+都没有。但它使用一个 node record，不能替代“多个 Pod、总成员超过单 Pod
+预算、复用本地 vnode、实际 membership capture/admission/forwarding”。
+当前找到的 fractal guest/S6 包也不是该规模的证明。
+修复方向：若已有这种 fixture，给出具体入口、原始结果及源码对应；否则补
+有界的记录级生产 API fixture，覆盖 capture -> admission -> 路由查找/转发，
+无需真的启动 4097 个 OS 进程，也无需扩成规模性能基准。不要改成只初始化表。
+未找到名为 test_fractal_multi_pod_fixture.sh 的脚本不单独计测试失败；名称
+不是合同。缺的是可对应这条验收的证据，而不是某个指定名字的文件。
+
+C1 [P2 / 应收紧] 新 KVM 本地 drain 的 wall-clock bound 不可靠
+位置：wavevm-cpu.c:3212-3249。
+一次性 POSIX timer 只在循环前 arm 一次；最多五轮 kvm_cpu_exec，后续轮没有
+重 arm，也没有循环总 deadline，timer_create/settime 失败仍进入执行。
+“最多调用五次”不是每次调用都可阻塞时的 wall-clock 上限。
+建议：使用现有 KVM/QEMU kick/exit 机制，以明确总 deadline 结算本次 drain；
+设置失败显式返回，不能把 timer 创建成功当成整个循环有界。只需覆盖这条
+新加局部路径，无需因此启动 Extended 故障注入矩阵。
+
+交付检查：新增 cap/watch 等脚本及新测试仍有未跟踪文件。下一次 push 要把
+生产/测试入口实际引用的源码脚本一并提交；构建 .o/.ko 和临时 .bak 不应混成
+“缺源码”的证据。本轮没有替用户 stage、删除或提交任何现有文件。
+
+五、Minimum 按规范范围核对
+
+以下“未发现新阻断”只说明本轮覆盖到的代码/证据，不是对未运行路径保证无 bug。
+
+M01 canonical-record-schema / 请求、manifest、RouteSnapshot 编码：
+  canonical_record、control_transport、route_delivery 等测试通过；规范对象和
+  入口主体存在。不能从 codec 通过推导所有调用者都用了它，R1/R2 是反例。
+
+M02 控制面真实 CREATE、authority、membership 快照与 admission 事务：
+  ctl_tool/main.c 已有 authority owner 及 admission binding，也有
+  recover_midflight_admissions 接线。不是仍缺 set_admission_authority。
+  authority_owner/admission_route 测试通过；coordinator 回归见 R9。
+
+M03 注册、零 VM scope 入群证明、ACTIVE、cordon、compute drain、gateway 替换：
+  cluster_admission_proof、membership_controller/route、gateway route control
+  集成短测通过；s1s4-membership 归档有 12 个通过的相关现有入口。
+  本轮未发现需要重做成员架构的新阻断；运行数据面的 R1/R6/R8 仍影响总签。
+
+M04 资源粒度、host 显式选择、physical_host_id 聚合、同机多 compute、并发预留：
+  physical_host_aggregate、placement_spread、四并发 CREATE 合同短测通过；
+  s6 同机双 compute 归档存在。planner 已有主体；执行时不能再被 R2/R5 改写。
+
+M05 统一 node runtime / 本地 executor / gateway 唯一跨节点语义边界：
+  统一二进制和 typed ingress/services 都存在，不能评价为“只有骨架”。
+  但 R1/R2/R7 的旧协议与独立内核语义仍在生产调用链，不能签这条全完成。
+
+M06 Mode B 多 VM、命名/端口/socket/SHM/route 隔离：
+  multivm_isolation、shared_gateway_retire、remote_owner_retire 等测试通过；
+  s6 mode_b_dual 与双 compute 归档为 PASS。未发现需推翻隔离结构的新问题。
+  全部 Minimum 完成仍不能只靠单 VM guest 启动向外推广。
+
+M07 生命周期 STOP、部分启动补偿、重启基础对账、资源退役：
+  partial_start_release、stop_retire_ack、remote_owner_retire 短测通过；
+  vcpu_service 和新增 g8_drain 均通过，之前 ACK 正在发送时 drain 提前完成
+  的问题已有针对性修复。冷启动对账入口仍在；本轮没有重演全部恢复阶段。
+  未要求 HA/透明恢复，未要求每一个崩溃点都注入后才能做 Minimum。
+
+M08 identity-routing / flat-fractal / 容量与 route generation：
+  membership_route、gateway route control、flat>4096 测试通过。
+  宽 VM ID 的旧头扩展仍被 R1 阻断；multi-Pod 大于单域预算的验收见 E1。
+
+M09 memory-consistency / no-root TCG / KVM dirty-resync：
+  memory_service、directory_store、fault_engine 短测通过，之前 Werror
+  编译失败已不是现状。新增 QEMU coherent 路径有 R3/R4，barrier 有 R6，
+  Mode A committer 有 R7。组件通过不能抵消这些调用方违反合同的代码。
+
+M10 vCPU handoff、一次执行/重复结果、KVM/TCG 共享语义与设备权威：
+  vcpu_coordinator、vcpu_handoff_cache、vcpu_service、x86_context 短测通过；
+  之前立即清 completed entry 的回归已不再复现。NEED_LOCAL/PIO/MMIO bounce
+  和 KVM 新 MSR 同步是有效方向；R1/R2/R5、附带 C1 尚不能忽略。
+
+M11 kernel-accelerator / Mode A 真多 context 与可选加速：
+  已有真实 registry、context 引用、VMA/队列隔离及双 context 证据，不能
+  再说只有控制面租约名。但隔离成立不等于内核语义与 Mode B 一致，R1/R2/R7
+  正是此边界。当前已有双 Mode A 归档不直接证明最新内核数据面全通过。
+
+M12 storage-device-authority / block 队列、去重、flush、FUA、错误：
+  block_service 测试通过，typed block/runtime 服务及 QEMU device authority
+  主体存在。本轮没有独立重跑 guest 远端磁盘 flush/FUA，不将本地 qcow2
+  的 Cirros 登录当作这条新证据；也没有因此判定存储实现必然缺失。
+
+M13 capability-fault-engines / 自动 backend 选择与独立能力维度：
+  fault_engine/authority 等短测通过；s6 有 require-kvm、require-kernel
+  负例和 AUTO fallback PASS。Mode A/B 与 KVM/TCG 仍按两维处理。
+  完整 UFFD 插件化、live engine switching 与全故障矩阵不列 Minimum 缺口。
+
+M14 roadmap Phase 10 / goal 6 与完整 goal 7：
+  s6 11 格归档、guest 四格归档及后续 2-vCPU TCG 登录/CPU/STOP 记录存在。
+  这些记录是进展，不是“从未 guest 登录过”。但 R8 使分布式成功判据不可靠，
+  R5 尚不满足新 concurrent-main 合同，且后续源码又有变化。总签必须建立在
+  修正判据后的当前路径上，不能拼接数份旧包的 PASS 当作全部条款已验证。
+
+六、本轮独立验证记录
+
+路径：audit-evidence/codex-minimum-review-20261028/
+现有测试串行运行，单项 timeout 70s；没有启动完整 guest 集群或加载模块。
+结果见 results.txt：30 项实际执行，29 PASS，1 FAIL。
+
+PASS：
+test_vcpu_coordinator, test_memory_service, test_vcpu_service,
+test_vcpu_service_g8_drain, test_admission_authority_owner,
+test_cluster_admission_proof, test_membership_controller,
+test_membership_route, test_physical_host_aggregate, test_placement_spread,
+test_multivm_isolation, test_gateway_route_control_integration,
+test_block_service, test_directory_store, test_vcpu_handoff_cache,
+test_fault_engine, test_flat_gt_4096_fixture, test_canonical_record,
+test_rm_p7_concurrent_create, test_rm_p7_partial_start_release,
+test_cluster_shared_gateway_retire, test_stop_retire_ack_f5,
+test_f6_remote_owner_retire, test_running_member_health_reconcile,
+test_tls_admission_node_service, test_control_transport, test_admission_route,
+test_route_delivery, test_x86_context。
+
+FAIL：test_coordinator，原因见 R9。
+一次按名字搜索不到的 multi-Pod 脚本不计入以上执行总数。
+git diff --check 通过。
+
+小复现材料：
+coherent_dirty_probe.c：提取当前函数，分别复现 R3 旧页覆盖与 R4 预算未完成。
+barrier_duplicate_probe.c：提取当前 barrier 函数，复现 R6 重复 ACK 假满足。
+remote_evidence_no_memory_operations.txt / false_memory_evidence.txt：R8 自匹配。
+matrix_exit_probe.sh / .txt：提取当前 run_cell，复现 R8 rc=124 却 PASS。
+coordinator_diagnostic.log：只增加报错打印的测试副本，确认 R9 的具体错误。
+这些是局部代码/判据复现，不冒充已完成真实 guest 的负例矩阵。
+
+七、修复顺序与代码质量评价
+
+建议先做 R8 的短修复，停止产生假阳性；然后依次收 R1/R2/R7 的生产入口
+与派生配置，R3/R4/R6 的内存完成语义，再收 R5 的 TCG 并发与例外路径。
+R9/C1 可在对应局部代码收尾时处理。E1 优先索取已有原始证据，缺才补 fixture。
+完成一条生产路径 -> 编译与少量针对性验证 -> 下一条；最后补当前代码的
+guest/分布式证据。无需先扩展 HA、迁移或庞大通用故障平台。
+
+正面：authority、事务、隔离、typed services 和去重缓存均有可运行实现；
+29 个短测通过，之前若干具体回归已修。项目已经有实际 guest 登录证据。
+主要问题：新启动补丁又跨越了权威边界；同一类正确性修复没有覆盖新增
+分支；以代码注释/日志计数替代完成条件；生产特殊路径与已有组件测试脱节。
+因此模块基础可以保留，新增启动/数据面补丁的质量仍需要收口，不能评价为
+“全部过关，仅剩性能与小 bug”。
+
+后续若交叉审计，本报告每项均允许用具体调用链/排除条件/原始结果推翻，
+但不能只用另一个总体 PASS 声明抵消。最终汇总结论也应保留：违反哪条合同、
+具体位置与触发、已验证事实/未验证边界、修复方向及一个最小验收方法。
+修复记录继续写 plan/审计证据，不写回规范当完成清单。

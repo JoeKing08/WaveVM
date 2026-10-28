@@ -215,7 +215,7 @@ static int apply_runtime_dispatch(void)
             return -1;
         }
         u_ops.set_gateway_ip(
-            WVM_ENCODE_ID(g_my_vm_id,
+            wvm_wire_target(g_my_vm_id,
                           dispatch->local_primary.destination_vnode),
             sidecar_ip, htons(dispatch->local_sidecar_endpoint.data_port));
         return 0;
@@ -245,7 +245,7 @@ static int apply_runtime_dispatch(void)
         /* Set gateway for this vnode to local sidecar */
         if (u_ops.set_gateway_ip) {
             u_ops.set_gateway_ip(
-                WVM_ENCODE_ID(g_my_vm_id,
+                wvm_wire_target(g_my_vm_id,
                              dispatch->cpu_dispatch.entries[i].executor.destination_vnode),
                 sidecar_ip,
                 htons(dispatch->local_sidecar_endpoint.data_port));
@@ -264,7 +264,7 @@ static int apply_runtime_dispatch(void)
         /* Set gateway for memory directory vnode to local sidecar */
         if (u_ops.set_gateway_ip) {
             u_ops.set_gateway_ip(
-                WVM_ENCODE_ID(g_my_vm_id, entry->directory.destination_vnode),
+                wvm_wire_target(g_my_vm_id, entry->directory.destination_vnode),
                 sidecar_ip,
                 htons(dispatch->local_sidecar_endpoint.data_port));
         }
@@ -1056,12 +1056,14 @@ static int enqueue_commit_diff_sync(struct pending_commit_queue *queue,
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons((uint16_t)len);
-    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+    (void)wvm_header_pack_src(hdr, g_my_vm_id, (uint32_t)g_my_node_id);
+    /* pack_src may claim epoch for FULL_VMID; restore cluster epoch only on legacy. */
+    if (!(hdr->flags & WVM_FLAG_FULL_VMID))
+        hdr->epoch = htonl(g_curr_epoch);
     hdr->target_id = htonl(dir_node);
     hdr->req_id = WVM_HTONLL(entry->rid);
     hdr->qos_level = 1;
-    hdr->flags = WVM_FLAG_NEED_ACK;
-    hdr->epoch = htonl(g_curr_epoch);
+    hdr->flags = (uint8_t)(hdr->flags | WVM_FLAG_NEED_ACK);
     hdr->node_state = g_my_node_state;
     memcpy(entry->pkt + sizeof(*hdr), log, len);
 
@@ -1120,10 +1122,11 @@ static int broadcast_push_to_qemu_locked(uint16_t msg_type, void* payload, int l
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons((uint16_t)len);
-    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
-    hdr->target_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+    (void)wvm_header_pack_src(hdr, g_my_vm_id, (uint32_t)g_my_node_id);
+    if (!(hdr->flags & WVM_FLAG_FULL_VMID))
+        hdr->epoch = htonl(g_curr_epoch);
+    hdr->target_id = htonl(wvm_wire_target(g_my_vm_id, (uint32_t)g_my_node_id));
     hdr->qos_level = (msg_type == MSG_PAGE_PUSH_FULL || msg_type == MSG_FORCE_SYNC) ? 0 : 1;
-    hdr->epoch = htonl(g_curr_epoch);
     hdr->node_state = g_my_node_state;
     memcpy((void *)hdr + sizeof(*hdr), payload, len);
 
@@ -1524,12 +1527,13 @@ void* client_handler(void *socket_desc) {
                     hdr.magic = htonl(WVM_MAGIC);
                     hdr.msg_type = htons(MSG_COMMIT_DIFF);
                     hdr.payload_len = htons((uint16_t)ipc_hdr.len);
-                    hdr.slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                    (void)wvm_header_pack_src(&hdr, g_my_vm_id, (uint32_t)g_my_node_id);
+                    if (!(hdr.flags & WVM_FLAG_FULL_VMID))
+                        hdr.epoch = htonl(g_curr_epoch);
                     hdr.target_id = htonl(dir_node);
-                    hdr.epoch = htonl(g_curr_epoch);
                     hdr.node_state = g_my_node_state;
                     wvm_logic_process_packet(&hdr, log,
-                                             WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                                             wvm_wire_target(g_my_vm_id, (uint32_t)g_my_node_id));
                 } else if (ipc_hdr.type == WVM_IPC_TYPE_COMMIT_DIFF_SYNC) {
                     int ret = enqueue_commit_diff_sync(&commit_queue, log, ipc_hdr.len,
                                                        dir_node);
@@ -1703,7 +1707,9 @@ void* client_handler(void *socket_desc) {
                     h->magic = htonl(WVM_MAGIC);
                     h->msg_type = htons(req->is_write ? MSG_BLOCK_WRITE : MSG_BLOCK_READ);
                     h->payload_len = htons(blk_size);
-                    h->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                    (void)wvm_header_pack_src(h, g_my_vm_id, (uint32_t)g_my_node_id);
+                    if (!(h->flags & WVM_FLAG_FULL_VMID))
+                        h->epoch = htonl(g_curr_epoch);
                     h->req_id = WVM_HTONLL(rid); // [FIX] 必须赋予请求ID才能收到ACK
                     h->qos_level = 1; 
                     

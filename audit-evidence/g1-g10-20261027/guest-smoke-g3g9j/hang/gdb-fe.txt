@@ -1,0 +1,80 @@
+[New LWP 5806]
+[New LWP 5805]
+[New LWP 5803]
+[New LWP 5800]
+[New LWP 5798]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x0000728e9af1bcd0 in __GI_ppoll (fds=0x5cff8059d5c0, nfds=10, timeout=<optimized out>, timeout@entry=0x7ffe1a9fff80, sigmask=sigmask@entry=0x0) at ../sysdeps/unix/sysv/linux/ppoll.c:42
+
+warning: 42	../sysdeps/unix/sysv/linux/ppoll.c: 没有那个文件或目录
+  Id   Target Id                                          Frame 
+* 1    Thread 0x728e9b01de00 (LWP 5794) "qemu-system-x86" 0x0000728e9af1bcd0 in __GI_ppoll (fds=0x5cff8059d5c0, nfds=10, timeout=<optimized out>, timeout@entry=0x7ffe1a9fff80, sigmask=sigmask@entry=0x0) at ../sysdeps/unix/sysv/linux/ppoll.c:42
+  2    Thread 0x728e3d4c86c0 (LWP 5806) "qemu-system-x86" 0x0000728e9af1b79d in __GI___poll (fds=fds@entry=0x728e3d487788, nfds=nfds@entry=1, timeout=timeout@entry=100) at ../sysdeps/unix/sysv/linux/poll.c:29
+  3    Thread 0x728e3e1ff6c0 (LWP 5805) "qemu-system-x86" 0x0000728e9ae98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5cff8055369c) at ./nptl/futex-internal.c:57
+  4    Thread 0x728e98ede6c0 (LWP 5803) "qemu-system-x86" 0x0000728e9ae98e51 in __futex_abstimed_wait_common64 (private=-1, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5cff80506648) at ./nptl/futex-internal.c:57
+  5    Thread 0x728e997d06c0 (LWP 5800) "qemu-system-x86" 0x0000728e9af1bd6a in __GI___libc_read (nbytes=8, buf=0x728e997bf718, fd=11) at ../sysdeps/unix/sysv/linux/read.c:26
+  6    Thread 0x728e9acfd6c0 (LWP 5798) "qemu-system-x86" syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+
+Thread 6 (Thread 0x728e9acfd6c0 (LWP 5798) "qemu-system-x86"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00005cff5b85e202 in qemu_futex_wait (val=<optimized out>, f=<optimized out>) at /workspaces/WaveVM/wavevm-qemu/include/qemu/futex.h:29
+#2  qemu_event_wait (ev=ev@entry=0x5cff5c01d1a8 <rcu_call_ready_event>) at ../util/qemu-thread-posix.c:460
+#3  0x00005cff5b88321e in call_rcu_thread (opaque=opaque@entry=0x0) at ../util/rcu.c:258
+#4  0x00005cff5b85d390 in qemu_thread_start (args=0x5cff80159c50) at ../util/qemu-thread-posix.c:521
+#5  0x0000728e9ae9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x0000728e9af29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x728e997d06c0 (LWP 5800) "qemu-system-x86"):
+#0  0x0000728e9af1bd6a in __GI___libc_read (nbytes=8, buf=0x728e997bf718, fd=11) at ../sysdeps/unix/sysv/linux/read.c:26
+#1  __GI___libc_read (fd=fd@entry=11, buf=buf@entry=0x728e997bf718, nbytes=nbytes@entry=8) at ../sysdeps/unix/sysv/linux/read.c:24
+#2  0x00005cff5b6f21fa in read (__nbytes=8, __buf=0x728e997bf718, __fd=11) at /usr/include/x86_64-linux-gnu/bits/unistd.h:28
+#3  read_exact (fd=11, buf=buf@entry=0x728e997bf718, len=len@entry=8) at ../accel/wavevm/wavevm-all.c:1525
+#4  0x00005cff5b6f3e50 in wavevm_master_ipc_thread (arg=arg@entry=0x5cff803d04f0) at ../accel/wavevm/wavevm-all.c:1616
+#5  0x00005cff5b6f4081 in wavevm_master_ipc_thread (arg=arg@entry=0x5cff803d04f0) at ../accel/wavevm/wavevm-all.c:1605
+#6  0x00005cff5b85d390 in qemu_thread_start (args=0x5cff803a6680) at ../util/qemu-thread-posix.c:521
+#7  0x0000728e9ae9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#8  0x0000728e9af29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x728e98ede6c0 (LWP 5803) "qemu-system-x86"):
+#0  0x0000728e9ae98e51 in __futex_abstimed_wait_common64 (private=-1, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5cff80506648) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=-1, abstime=0x0, clockid=0, expected=0, futex_word=0x5cff80506648) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5cff80506648, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000728e9ae9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5cff5bf8a680 <qemu_global_mutex>, cond=0x5cff80506620) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=cond@entry=0x5cff80506620, mutex=mutex@entry=0x5cff5bf8a680 <qemu_global_mutex>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00005cff5b85da52 in qemu_cond_wait_impl (cond=0x5cff80506620, mutex=0x5cff5bf8a680 <qemu_global_mutex>, file=0x5cff5b9291df "../softmmu/cpus.c", line=411) at ../util/qemu-thread-posix.c:174
+#6  0x00005cff5b6ec04e in qemu_wait_io_event (cpu=cpu@entry=0x5cff804d5980) at ../softmmu/cpus.c:411
+#7  0x00005cff5b653790 in wavevm_cpu_thread_fn (arg=arg@entry=0x5cff804d5980) at ../accel/wavevm/wavevm-cpu.c:3020
+#8  0x00005cff5b85d390 in qemu_thread_start (args=0x5cff80506660) at ../util/qemu-thread-posix.c:521
+#9  0x0000728e9ae9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#10 0x0000728e9af29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x728e3e1ff6c0 (LWP 5805) "qemu-system-x86"):
+#0  0x0000728e9ae98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5cff8055369c) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5cff8055369c) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5cff8055369c, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000728e9ae9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5cff5bf8a680 <qemu_global_mutex>, cond=0x5cff80553670) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=cond@entry=0x5cff80553670, mutex=mutex@entry=0x5cff5bf8a680 <qemu_global_mutex>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00005cff5b85da52 in qemu_cond_wait_impl (cond=0x5cff80553670, mutex=0x5cff5bf8a680 <qemu_global_mutex>, file=0x5cff5b9291df "../softmmu/cpus.c", line=411) at ../util/qemu-thread-posix.c:174
+#6  0x00005cff5b6ec04e in qemu_wait_io_event (cpu=cpu@entry=0x5cff805195d0) at ../softmmu/cpus.c:411
+#7  0x00005cff5b653790 in wavevm_cpu_thread_fn (arg=arg@entry=0x5cff805195d0) at ../accel/wavevm/wavevm-cpu.c:3020
+#8  0x00005cff5b85d390 in qemu_thread_start (args=0x5cff805536b0) at ../util/qemu-thread-posix.c:521
+#9  0x0000728e9ae9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#10 0x0000728e9af29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x728e3d4c86c0 (LWP 5806) "qemu-system-x86"):
+#0  0x0000728e9af1b79d in __GI___poll (fds=fds@entry=0x728e3d487788, nfds=nfds@entry=1, timeout=timeout@entry=100) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x00005cff5b731bca in poll (__timeout=100, __nfds=1, __fds=0x728e3d487788) at /usr/include/x86_64-linux-gnu/bits/poll2.h:39
+#2  mem_push_listener_thread (arg=<optimized out>) at ../accel/wavevm/wavevm-user-mem.c:2800
+#3  0x0000728e9ae9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#4  0x0000728e9af29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x728e9b01de00 (LWP 5794) "qemu-system-x86"):
+#0  0x0000728e9af1bcd0 in __GI_ppoll (fds=0x5cff8059d5c0, nfds=10, timeout=<optimized out>, timeout@entry=0x7ffe1a9fff80, sigmask=sigmask@entry=0x0) at ../sysdeps/unix/sysv/linux/ppoll.c:42
+#1  0x00005cff5b85f382 in ppoll (__ss=0x0, __timeout=0x7ffe1a9fff80, __nfds=<optimized out>, __fds=<optimized out>) at /usr/include/x86_64-linux-gnu/bits/poll2.h:88
+#2  qemu_poll_ns (fds=<optimized out>, nfds=<optimized out>, timeout=timeout@entry=494819511) at ../util/qemu-timer.c:349
+#3  0x00005cff5b85cbbe in os_host_main_loop_wait (timeout=494819511) at ../util/main-loop.c:239
+#4  main_loop_wait (nonblocking=nonblocking@entry=0) at ../util/main-loop.c:520
+#5  0x00005cff5b62845e in qemu_main_loop () at ../softmmu/vl.c:1683
+#6  0x00005cff5b3c37e2 in main (argc=<optimized out>, argv=<optimized out>, envp=<optimized out>) at ../softmmu/main.c:50
+[Inferior 1 (process 5794) detached]

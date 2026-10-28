@@ -1,0 +1,1 @@
+probe=stale return=1 commits=1 remaining_dirty=0 directory_x=1 directory_y=0

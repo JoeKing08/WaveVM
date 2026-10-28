@@ -1,0 +1,4 @@
+G2 FIXED（tip fdae2c158）
+生产: wavevm-all.c 仅 MAP_FIXED join 成功后 set coherent；失败 coherent=0
+生产: wavevm-user-mem.c G2 注释 — coherent 不豁免目录 dirty commit
+证据: g3-qemu-rebuild.log 已链入；goal4 日志可见 SHM/barrier；coherent 默认并发见 G3

@@ -1,0 +1,5 @@
+fractal_gateway=1
+route_scope_id=12885672655183681637
+route_journal_bytes=4944
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 43057
+[Gateway] active V1 route snapshot via control scope=12885672655183681637 generation=1

@@ -1,0 +1,6 @@
+guest_matrix run_id=guest-20261028-131903-18238 out_dir=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-r3 tip=fdae2c158 have_kvm=1
+cells=flat_tcg,fractal_tcg,flat_kvm,fractal_kvm
+2026年 10月 28日 星期三 13:19:03 CST
+=== CELL fractal_tcg topology=fractal backend=require-tcg ===
+RESULT=fractal_tcg FAIL rc=1
+=== CELL flat_kvm topology=flat backend=require-kvm ===

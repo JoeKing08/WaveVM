@@ -1,0 +1,8 @@
+cell=flat_tcg
+topology=flat
+backend=require-tcg
+accel=disabled
+rc=0
+overall=PASS
+honesty=GUEST_E2E_PASS_login_ssh_cpu_stop
+note=WVM_CREATE_VCPUS=2 default; durable from guest-matrix first pack

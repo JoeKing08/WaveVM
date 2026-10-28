@@ -1,0 +1,2 @@
+OVERALL=INCOMPLETE epoch_drop_before_fix
+NOTE=FE inject OK; VCPU_RUN reached sidecar but RX Drop Epoch (FULL_VMID vm_id in epoch)

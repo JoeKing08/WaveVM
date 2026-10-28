@@ -55,7 +55,11 @@ The first usable release must provide:
 - a manifest-bound distributed VM with isolated VM identity, routes, sockets,
   shared memory, ports, logs, and temporary files;
 - flat and fractal routing with the same VM namespace rules;
-- correct TCG and KVM execution against the same memory and vCPU contracts;
+- correct TCG and KVM execution against the same memory and vCPU contracts,
+  including the baseline Section 16 / `vcpu-handoff` §8.1 Minimum usable
+  distributed multi-vCPU concurrent TCG contract (concurrency as the main
+  path; Section 15 bounded `force_local` only as exceptional coverage; not
+  full upstream QEMU MTTCG performance);
 - multiple Mode B VMs on one physical host;
 - explicit per-VM kernel accelerator contexts, including two-VM isolation tests
   before Mode A is advertised for multi-VM hosts;
@@ -249,13 +253,14 @@ Risk:
 
 - No direct runtime improvement.
 
-## 5. Phase 1: Document Current Mode A/B Boundaries
+## 5. Phase 1: Inventory Mode A/B Ownership Boundaries
 
-Purpose: make current divergence explicit before changing it.
+Purpose: make Mode A/B ownership and coupling explicit before changing them.
 
-Keep the resulting code inventory and observed deviations in a separate
-boundary audit; the normative specifications define the required ownership
-and behavior rather than reporting this phase's completion.
+Keep any code inventory and observed deviations in separate audit-evidence
+records outside this charter. The normative specifications define required
+ownership and behavior. Do not copy audit diary or 「现状」 inventories into
+the baseline, this roadmap, or `docs/specs/`.
 
 Actions:
 
@@ -524,8 +529,9 @@ Acceptance criteria:
 
 Risk:
 
-- Current Mode A code may depend on kernel-only state. Preserve the last known
-  working KVM test as a regression fixture while each dependency is migrated.
+- Mode A migration must not silently drop kernel-only dependencies. Preserve a
+  known-good KVM regression fixture while each dependency is migrated onto the
+  canonical contracts.
 
 ## 10. Phase 6: Implement VM Runtime Isolation
 

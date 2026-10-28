@@ -1,0 +1,4 @@
+pass2 boot hang Asia/Shanghai ~15:11-15:16
+serial frozen after dhcpcd preempt_count WARNING; tainted D
+ACK storm exit=5 (HLT) same RIP; remote_done advancing; no login
+pass1 was OVERALL=PASS — flake residual

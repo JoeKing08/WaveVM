@@ -1,0 +1,9 @@
+run_id=s6-20261028-094911-28184
+cell=fractal_kvm
+rc=0
+elapsed_s=18
+class=ok
+cleanup_ok=1
+log=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s6-matrix/fractal_kvm.log
+note=ok
+invoked=1

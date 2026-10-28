@@ -1,0 +1,8 @@
+fractal_tcg 2-vCPU hang — Asia/Shanghai 2026-10-28
+serial frozen at 28639 after "Starting network"/metadata failed 3/20
+root cause: hard_cap_expiry (90s) → 25s cooldown_suppress while AP still
+same-RIP spinning (spin 4→24+). SPIN-LOCAL re-arm blocked; guest softlock.
+NEED-LOCAL hold armed earlier; no SPIN-LOCAL log this run (hold from NEED escalate).
+cpu1: remote_done stuck ~256, local_done=force_local_used=447731 then frozen
+cpu0: local_done kept advancing, remote_done=0
+Fix target: lift cooldown when spin>=4 (softlock still active).

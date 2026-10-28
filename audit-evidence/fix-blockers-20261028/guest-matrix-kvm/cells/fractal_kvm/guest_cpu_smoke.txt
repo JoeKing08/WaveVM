@@ -1,0 +1,6 @@
+sh: 200000: unknown operand
+cpu-smoke-ok
+              total        used        free      shared  buff/cache   available
+Mem:         219724       27380      153084          52       39260      184412
+Swap:             0           0           0
+1

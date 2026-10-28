@@ -1,0 +1,12 @@
+=== backend/topology snippets ===
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v257-i1-g1-n801-031a74dcd988cd8b
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:43114
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[WaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v257-i1-g1-n801-031a74dcd988cd8b' size=0x1000000 (coherent after proven map)
+[qWaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v257-i1-g1-n801-031a74dcd988cd8b' size=0x1000000 (coherent after proveemu-system-x86_64:n map)
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 6, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[RuntimeDispatch] fractal projection uses typed node-runtime dispatch; legacy route caches are disabled
+[System] Initializing SHM: /wavevm_ram_wvm-v257-i1-g1-n801-031a74dcd988cd8b (Size: 16 MB)
+=== child runtime logs (names) ===

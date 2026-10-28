@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.egOxHL/runtime/vm-256-1-1.manifest
+9d8c5e77c1099319c9795b8de9c4144bf87f4034882ba551fd20142c90bec365  /tmp/wavevm-create-vm-single.egOxHL/runtime/vm-256-1-1.manifest
+68f14a58fab945859647675343cb3222a91e47525f16fd7a5205b6bfb06ef4e3  /tmp/wavevm-create-vm-single.egOxHL/runtime/vm-256-1-1.manifest.dispatch
+04aa19211d5ad3fcef38a448f3565db776202f65bd9ae875991985ac980f0f24  /tmp/wavevm-create-vm-single.egOxHL/runtime/vm-256-1-1.manifest.route

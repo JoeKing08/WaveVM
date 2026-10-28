@@ -1,0 +1,16 @@
+guest_matrix run_id=guest-20261028-134007-24192 out_dir=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-kvm tip=fdae2c158 have_kvm=1
+cells=flat_tcg,fractal_tcg,flat_kvm,fractal_kvm
+2026年 10月 28日 星期三 13:40:07 CST
+=== CELL flat_kvm topology=flat backend=require-kvm ===
+RESULT=flat_kvm PASS rc=0
+=== CELL fractal_kvm topology=fractal backend=require-kvm ===
+RESULT=fractal_kvm PASS rc=0
+==== SUMMARY ====
+pass=2 fail=0 skip=0 blocked=0
+ran=flat_kvm fractal_kvm
+tip=fdae2c158
+out_dir=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/guest-matrix-kvm
+MATRIX_RESULT=PASS
+MINIMUM_COMPLETE=NOT_CLAIMED_BY_GUEST_MATRIX
+NOTE: guest matrix proves §7 Cirros path per cell; not MTTCG / not charter COMPLETE.
+2026年 10月 28日 星期三 13:43:46 CST

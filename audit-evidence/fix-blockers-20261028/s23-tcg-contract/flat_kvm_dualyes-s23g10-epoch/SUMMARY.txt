@@ -1,0 +1,11 @@
+s23g10-epoch KVM dual-yes — OVERALL=FAIL_boot_hang (REMOTE_RUN Ack demux)
+
+FE inject OK (mapped=1 vnode=1). FULL_VMID epoch skip OK — RX VCPU_RUN
+reached sidecar (no Drop Epoch). First Hybrid Slave Ack exit=8 sent to
+dst=LOCAL_PORT (V30-RX), NOT kernel :9000. FE request slave_id=0 so
+target_id return path also fails. Kernel retransmits same req forever;
+guest serial frozen at initramfs (27831 bytes).
+
+Root: Mode A FE UDP src :9000 lost when V30-RX forwards to Hybrid;
+Ack sendto(client) returns to LOCAL_PORT. Fix in user_backend.c:
+req_id→sockaddr pending + UDP demux on MSG_VCPU_EXIT (s23g11).

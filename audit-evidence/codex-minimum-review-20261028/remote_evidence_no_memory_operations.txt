@@ -1,0 +1,1 @@
+=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===

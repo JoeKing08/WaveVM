@@ -1,0 +1,4 @@
+s23g3 dual-yes: SHM fence skip WORKED (status=0 real RIP) but qemu segfaulted
+dmesg: qemu-system-x86 segfault at 15:03:15 Asia/Shanghai
+root: SEND memcpy from run+uninit data_offset after remote IO-IN replay
+fix: s23g3b pending-io stash + bounds-checked SEND

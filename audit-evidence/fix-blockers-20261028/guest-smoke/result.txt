@@ -1,0 +1,17 @@
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=0
+local_done_before=845056
+force_local_used_before=845056
+guest_cpu_smoke=PASS
+remote_done_after=596
+local_done_after=850432
+force_local_used_after=850432
+remote_done_delta=596
+local_done_delta=5376
+force_local_used_delta=5376
+remote_vcpu_evidence=1
+remote_mem_evidence=1
+REQUIRE_STOP=1
+guest_stop=PASS
+OVERALL=PASS

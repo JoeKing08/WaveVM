@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest
+d1ae3a20ffc634a24c1be890247a7fef3f89175617210f294f72b40e16358771  /tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest
+f10bcb0dd5b1c6edf51cbf42650fee652a5b626bb57c261916f00bf518458518  /tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest.dispatch
+caae082e391b59c0461d1483644306786d35def2f942319255831f00a2fafdc6  /tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest.route

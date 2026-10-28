@@ -1,0 +1,17 @@
+s23-tcg-contract / KVM dual-yes status (2026-10-28 Asia/Shanghai)
+=================================================================
+MINIMUM_COMPLETE=NOT_CLAIMED
+tip=fdae2c158 dirty
+
+KVM dual-yes (yes >/dev/null ×2) guest_cpu_smoke: PASS
+  evidence: flat_kvm_dualyes-s23g5-msr2/  (see that SUMMARY.txt)
+  vs dishonest s23g4-pass1/pass2 (serial double-fault Comm:yes)
+
+Fixes landed (dirty tree, no commit):
+  - extended KVM MSR sync (GS_BASE/APIC_BASE/SYSCALL) FE+slave+wire
+  - CPL3-bounded local drain after remote mid-kernel
+  - qemu BIND fills node_instance_id (ABI v3)
+
+force_local: delta=0 this run (not expanded)
+Remaining: stronger in-smoke remote_done delta under dual-yes; TCG
+softlock/force_local windows (out of this slice); charter 纲领 应然 only.

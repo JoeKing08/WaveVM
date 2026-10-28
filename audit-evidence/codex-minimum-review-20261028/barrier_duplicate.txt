@@ -1,0 +1,1 @@
+same_helper_duplicate_acks=2 required_helpers=2 fence_rc=0

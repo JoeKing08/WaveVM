@@ -1,0 +1,13 @@
+section=8.1_acceptance_item_2
+wait_s=150
+hard_cap_expiry=1
+renew_or_cooldown_suppress=1
+--- events ---
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff8a2a1abf arm force_local=48
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff8a2a1abf arm force_local=48
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffff8998f38c spin=8 arm force_local=64 hold_ms=30000
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffff8a5b603b slice_ms=30000 remaining_cap_ms=59952 armed_age_ms=30047
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0x7fb021650dd0 slice_ms=30000 remaining_cap_ms=29949 armed_age_ms=60050
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=90000 cooldown_ms=25000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc019732e arm force_local=48
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc019732e arm force_local=48

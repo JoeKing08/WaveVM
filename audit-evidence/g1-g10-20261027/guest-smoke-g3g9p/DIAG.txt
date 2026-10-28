@@ -1,0 +1,1 @@
+g3g9p rebuild15: hold expire cooldown 25s + G9 remote wait 45s (g3g9o login/ssh/cpu PASS but remote_delta=0 under hold)

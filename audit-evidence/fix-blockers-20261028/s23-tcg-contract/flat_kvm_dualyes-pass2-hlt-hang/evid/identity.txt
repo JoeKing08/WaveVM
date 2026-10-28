@@ -1,0 +1,10 @@
+vm_id=256
+vm_incarnation=1
+manifest_generation=1
+route_scope_id=2671340228020754773
+backend=require-kvm
+accel=disabled
+cap_source=fixture
+tcg_helper=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+run_id=
+cell=

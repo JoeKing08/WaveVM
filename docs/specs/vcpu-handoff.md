@@ -368,11 +368,159 @@ bits that would restart an already initialized AP.
 - Completion-cache eviction must retain an entry at least through the origin's
   documented retry/query horizon or return a clear `RESULT_EXPIRED` error.
 
+### 8.1 Same-host coherent-SHM concurrent TCG and bounded `force_local`
+
+This subsection is the V1 **Minimum** contract for usable distributed
+multi-vCPU TCG on same-host coherent SHM. It realizes the architecture
+baseline Section 16 Minimum multi-vCPU TCG 应然.
+
+**Contract intent**
+
+- Concurrent multi-vCPU progress (BSP-local + AP-remote, and multi-remote when
+  placement admits it) is the **main normal path**.
+- The Section 15 bounded local synchronous fallback (`force_local`) is
+  **only** exceptional, per-vCPU, wall-clock-bounded coverage for softlock /
+  IPI / NEED_LOCAL windows. It is **not** the normal execution mode and MUST
+  NOT dominate ordinary guest progress.
+- The contract requires usable guest-visible multi-vCPU concurrent correctness.
+  It does **not** require full upstream QEMU in-process MTTCG performance,
+  scheduling optimization, or helper-thread MTTCG parity.
+- Fault injection, coordinator HA, live migration, automatic resharding,
+  transparent recovery, and a full pluggable fault engine are **out of
+  scope** for this subsection's Minimum acceptance.
+
+Cross-process / full upstream MTTCG that removes the need for this fallback
+remains deferred architecture work (baseline Section 16 deferred list).
+
+#### Role
+
+`force_local` is the named V1 realization of the Section 15 bounded local
+synchronous fallback on the concurrent SHM TCG path. Its contract role is to
+preserve guest correctness for stop_machine / text_poke / softlock-class IPI
+windows when remote AP slices cannot interleave with the local BSP the way
+true MTTCG would, and for NEED_LOCAL device-authority bounce. It MUST NOT:
+
+- silently replace the concurrent normal path with permanent global
+  serialization of all vCPUs;
+- become the ordinary accounting majority under healthy guest progress
+  (remote concurrent slices remain the main path);
+- be treated as full upstream MTTCG equivalence or performance parity;
+- become an unbounded or boot-duration sticky hold.
+
+#### Concurrent path selection
+
+When same-host guest RAM is coherent SHM, the admitted **main** path is
+concurrent BSP-local + AP-remote TCG. Configuration knob
+`WVM_TCG_SHM_CONCURRENT=0` selects stop-the-world (non-concurrent) scheduling
+instead. That knob is part of the contract surface, not an operations tip:
+both modes must obey the memory and handoff contracts; only the concurrent
+mode is obligated to supply the `force_local` fallback below for the
+softlock/IPI windows this subsection covers, and only as bounded exceptional
+coverage on top of the concurrent main path.
+
+#### Triggers
+
+The frontend MAY arm per-vCPU `force_local` when any of the following hold:
+
+1. **Spin / softlock signal:** a remote AP repeatedly completes slices on the
+   same guest RIP (or an equivalent elevated spin signal) while concurrent
+   with a local BSP, indicating a softlock-class wait that needs local
+   interleaving.
+2. **NEED_LOCAL device bounce:** a remote TCG helper returns a typed
+   `NEED_LOCAL` / device-authority exit (MMIO/PIO or equivalent) that must
+   complete on the authoritative QEMU frontend; the origin arms `force_local`
+   so the next interval runs locally through that bounce.
+
+Arming is per `{vm_incarnation, vcpu_index}`. It does not globally lock other
+vCPUs. Continuous re-arm without guest-visible softlock/IPI need MUST NOT
+redefine the main path as local-only.
+
+#### Bounds (wall-clock)
+
+Once armed under the concurrent path, `force_local` obeys:
+
+| Parameter | Contract value | Meaning |
+| --- | --- | --- |
+| Hold slice | 30 s | Local-hold window after arm or renew. |
+| Hard cap | 90 s | Maximum continuous hold from first arm of this episode. |
+| Re-arm cooldown | 25 s | After hard-cap expiry (or equivalent clear), spin-triggered re-arm is suppressed until cooldown elapses. |
+
+Renewal rules:
+
+- While the hold is active, the frontend MAY renew the slice (subject to the
+  hard cap) when the armed RIP remains stuck or the spin signal stays elevated.
+- RIP wobble alone MUST NOT clear an active softlock hold early when the spin
+  signal remains elevated.
+- When the hard cap is reached, the hold clears, spin state for that episode
+  resets, and the cooldown begins. Remote execution may resume afterward
+  subject to ordinary placement and the cooldown.
+
+Device-bounce arms that are not softlock holds still consume a bounded local
+budget and MUST clear on guest progress (RIP change / successful local
+completion) rather than become sticky.
+
+#### Opt-out of the fallback
+
+`WVM_TCG_DISABLE_FORCE_LOCAL=1` disables `force_local` arming and the coupled
+NEED_LOCAL device-bounce path. Under that configuration, the concurrent path
+no longer supplies this subsection's correctness coverage for the softlock/IPI
+windows above. Guests that require that coverage therefore cannot meet the
+concurrent-path acceptance criteria of this specification while the fallback
+is disabled. Disabling the fallback is an explicit contract choice, not a
+silent production default.
+
+#### Ordering and memory coupling
+
+`force_local` changes only where the next interval executes (local vs remote).
+It does not relax:
+
+- per-vCPU ownership exclusion;
+- required memory fences before `VCPU_RUN`;
+- interrupt watermark merge on import;
+- QEMU device-authority ownership of PIO/MMIO completion.
+
+A local interval under `force_local` still returns through the ordinary
+`VCPU_EXIT` / import path when it later hands off again.
+
+#### Acceptance evidence (required shape)
+
+Minimum acceptance evidence for this subsection MUST show the following shape
+(dated pass/fail tallies belong in the persistent plan or verification
+records, not here):
+
+1. **Guest login** (or equivalent interactive readiness) on a multi-vCPU
+   coherent-SHM TCG guest under the concurrent main path.
+2. **CPU stress** on that guest (guest-visible multi-vCPU work progresses;
+   ≥2 vCPUs are admitted and used).
+3. **Remote vCPU and remote memory** activity evidence on the concurrent path
+   (remote slice / remote memory progress is observable; concurrent remote
+   progress is the main path, not a token trickle under force_local
+   dominance).
+4. **STOP** completes with clean teardown (no leaked vCPU ownership, SHM, or
+   executor leases attributable to the run).
+5. `force_local` arm / renew / hard-cap expiry / cooldown obey the stated
+   wall-clock bounds (slice 30 s, cap 90 s, cooldown 25 s) when the fallback
+   fires; NEED_LOCAL device exits bounce to the authoritative QEMU frontend
+   and arm local execution for the affected vCPU only.
+6. Configuration that disables the fallback (`WVM_TCG_DISABLE_FORCE_LOCAL=1`)
+   is explicit; under that choice, softlock/IPI windows this contract covers
+   are not claimed correct on the concurrent path.
+7. No claim of full upstream QEMU MTTCG performance or equivalence is made
+   solely because `force_local` exists or because the concurrent path passes
+   the shape above.
+
+This Minimum acceptance shape does **not** require fault injection matrices,
+coordinator HA, live migration, automatic resharding, transparent recovery,
+or a full pluggable fault engine.
+
+Dated run results, guest-image pass/fail tallies, and audit verdict IDs belong
+in the persistent plan or verification records, not in this specification.
+
 ## 9. Implementation Touchpoints and Requirements
 
 | File, symbol, or boundary | Required responsibility |
 | --- | --- |
-| `wavevm-qemu/.../wavevm-cpu.c` | Bind capture/import to explicit handoff sequence, fence result, event watermark, and versioned context schema. |
+| `wavevm-qemu/.../wavevm-cpu.c` | Bind capture/import to explicit handoff sequence, fence result, event watermark, and versioned context schema; implement §8.1 concurrent SHM selection and bounded `force_local` / NEED_LOCAL fallback. |
 | `master_core/main_wrapper.c` | Node runtime validates manifest/route generation and maintains per-vCPU ownership/correlation. |
 | `master_core/logic_core.c` | Split delivery retry from execution completion; use a deduplicated result query/replay model. |
 | `slave_daemon/slave_hybrid.c` | Make cache key/lifetime VM-incarnation-scoped and expose typed `IN_PROGRESS`/completion state. |
@@ -409,3 +557,10 @@ bits that would restart an already initialized AP.
 - Concurrent independent vCPUs progress without a global handoff lock.
 - Executor overload and completion-cache expiry produce bounded typed failures,
   not a false success or indefinite retry loop.
+- Same-host coherent-SHM concurrent TCG meets the §8.1 Minimum acceptance
+  shape: guest login, CPU stress, remote vCPU/memory evidence, and STOP under
+  the concurrent main path (≥2 vCPUs); `force_local` remains exceptional
+  bounded fallback (arm/renew/cap/cooldown); NEED_LOCAL bounce is per-vCPU;
+  disabling the fallback is explicit and withdraws softlock/IPI coverage
+  claims; full upstream QEMU MTTCG performance and Extended fault/HA/migration
+  work are not required for this gate.

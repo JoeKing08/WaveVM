@@ -1,0 +1,9 @@
+REMOTE_MEM_FENCE_VERSION_DIRTY=FIXED
+evidence:
+  directory_store: materialize version + commit advances version + ESTALE stale base
+  memory_service: remote V1 dirty commit base_version->result_version + STALE_BASE_VERSION ACK
+  fence_reject: memory_fence_result!=SUCCEEDED cannot encode typed VCPU_RUN
+  goal4 A14 TCG: DEFAULT real no-root QEMU -> production execute_handoff; remote fault ACK + real guest store + remote dirty commit/version
+  goal4 A14 KVM: vcpu_service -> real coordinator -> real KVM remote-page HLT + real dirty-commit ACK version/fence; same-physical two-instance path (A3 closed)
+not=source_grep_only
+2026-10-28T09:52:46+08:00

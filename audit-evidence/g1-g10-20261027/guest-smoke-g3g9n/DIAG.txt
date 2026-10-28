@@ -1,0 +1,2 @@
+g3g9n rebuild13: concurrent spin 30s sliding hold renew same-RIP, hard cap 90s (fix e1000 Reset after 5s hold expire)
+g3g9n: login PASS but e1000 Reset@63s / carrier lost; hold expired in consume without renew (local path). rebuild14 adds consume renew.

@@ -1,0 +1,9 @@
+run_id=s6-20261028-094911-28184
+cell=mode_a_dual
+rc=0
+elapsed_s=24
+class=ok
+cleanup_ok=1
+log=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s6-matrix/mode_a_dual.log
+note=ok
+invoked=1

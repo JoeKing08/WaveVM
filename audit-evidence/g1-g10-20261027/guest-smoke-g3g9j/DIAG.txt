@@ -1,0 +1,4 @@
+g3g9j rebuild10 EXIT:killed (hung): past PnP (serial 31417 vs g3g9i 17314) — SPIN-LOCAL fired.
+Stuck after e1000 softlock + metadata fail; cpu1 force_local_used≈894k then both vCPUs
+qemu_wait_io_event. Root: spin re-arm thrashed remote↔local through e1000 window
+(RIP 0xffffffff8ed8f38c). Next: hold concurrent spin force_local until RIP progress.

@@ -1,0 +1,6 @@
+=== backend/topology snippets ===
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v257-i1-g1-n801-1de650b72a53b0a9
+[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:48693
+[RuntimeDispatch] fractal projection uses typed node-runtime dispatch; legacy route caches are disabled
+[System] Initializing SHM: /wavevm_ram_wvm-v257-i1-g1-n801-1de650b72a53b0a9 (Size: 16 MB)
+=== child runtime logs (names) ===

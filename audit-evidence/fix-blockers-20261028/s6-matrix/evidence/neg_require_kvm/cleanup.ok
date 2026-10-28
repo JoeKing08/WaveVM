@@ -1,0 +1,8 @@
+cleanup_ok=1
+note=reject_path_terminal_aborted
+reason=expected_reject:status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+reject_state=19
+durable_route_snapshot_absent=1
+compensation=no_route_no_reservation_required
+no_residual_shm=1
+expected_reason_verified=1

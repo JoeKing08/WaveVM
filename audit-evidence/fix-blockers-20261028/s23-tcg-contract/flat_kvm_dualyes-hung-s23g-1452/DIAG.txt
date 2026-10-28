@@ -1,0 +1,10 @@
+s23g dual-yes hang diagnosis (Asia/Shanghai 2026-10-28 ~14:43-14:51):
+Root cause: every remote KVM slice returned ack.status=MEMORY_FAILURE (-117)
+because typed dirty capture failed for GPAs dirtied outside the execution
+snapshot ("KVM memory slice requires resync" / no clean base), typically
+GPA=0x1000000. FE dropped ACK without importing CPU state → DBG-RAW always
+re-sent rip=0xffffffffa4451e05 → AP never advanced → serial freeze / no login.
+WVM-ACK/DRAIN/LAPIC never logged because status<0 returned before import.
+Prior light KVM PASS had ~0 remote VCPU-RUN / 0 slice-commit failures (AP idle).
+s23g2 fix: SHM skip typed dirty on capture miss; FE import-on-MEMORY_FAILURE;
+ack.error_gpa propagated.

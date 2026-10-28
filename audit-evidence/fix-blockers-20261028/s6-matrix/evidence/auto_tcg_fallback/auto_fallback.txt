@@ -1,0 +1,4 @@
+fallback=TCG
+cap_source=deny-kvm
+backend_policy=auto
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:34381

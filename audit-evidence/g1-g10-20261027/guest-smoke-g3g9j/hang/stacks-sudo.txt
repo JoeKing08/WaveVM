@@ -1,0 +1,55 @@
+---- /proc/5794/task/5794/stack ----
+[<0>] poll_schedule_timeout.constprop.0+0x41/0x90
+[<0>] do_poll.constprop.0+0x2ed/0x350
+[<0>] do_sys_poll+0x19f/0x280
+[<0>] __x64_sys_ppoll+0xdd/0x170
+[<0>] x64_sys_call+0x1ed3/0x26e0
+[<0>] do_syscall_64+0xd9/0x5b0
+[<0>] entry_SYSCALL_64_after_hwframe+0x76/0x7e
+---- /proc/5794/task/5798/stack ----
+[<0>] futex_do_wait+0x3a/0x80
+[<0>] __futex_wait+0x99/0x110
+[<0>] futex_wait+0x72/0x120
+[<0>] do_futex+0x105/0x260
+[<0>] __x64_sys_futex+0x129/0x200
+[<0>] x64_sys_call+0x2158/0x26e0
+[<0>] do_syscall_64+0xd9/0x5b0
+[<0>] entry_SYSCALL_64_after_hwframe+0x76/0x7e
+---- /proc/5794/task/5800/stack ----
+[<0>] unix_stream_data_wait+0xb6/0x180
+[<0>] unix_stream_read_generic+0x681/0xb10
+[<0>] unix_stream_recvmsg+0x85/0x90
+[<0>] sock_recvmsg+0xbd/0xc0
+[<0>] sock_read_iter+0x8b/0x100
+[<0>] vfs_read+0x353/0x390
+[<0>] ksys_read+0xce/0xf0
+[<0>] __x64_sys_read+0x19/0x30
+[<0>] x64_sys_call+0x2554/0x26e0
+[<0>] do_syscall_64+0xd9/0x5b0
+[<0>] entry_SYSCALL_64_after_hwframe+0x76/0x7e
+---- /proc/5794/task/5803/stack ----
+[<0>] futex_do_wait+0x3a/0x80
+[<0>] __futex_wait+0x99/0x110
+[<0>] futex_wait+0x72/0x120
+[<0>] do_futex+0x105/0x260
+[<0>] __x64_sys_futex+0x129/0x200
+[<0>] x64_sys_call+0x2158/0x26e0
+[<0>] do_syscall_64+0xd9/0x5b0
+[<0>] entry_SYSCALL_64_after_hwframe+0x76/0x7e
+---- /proc/5794/task/5805/stack ----
+[<0>] futex_do_wait+0x3a/0x80
+[<0>] __futex_wait+0x99/0x110
+[<0>] futex_wait+0x72/0x120
+[<0>] do_futex+0x105/0x260
+[<0>] __x64_sys_futex+0x129/0x200
+[<0>] x64_sys_call+0x2158/0x26e0
+[<0>] do_syscall_64+0xd9/0x5b0
+[<0>] entry_SYSCALL_64_after_hwframe+0x76/0x7e
+---- /proc/5794/task/5806/stack ----
+[<0>] poll_schedule_timeout.constprop.0+0x41/0x90
+[<0>] do_poll.constprop.0+0x2ed/0x350
+[<0>] do_sys_poll+0x19f/0x280
+[<0>] __x64_sys_poll+0xc6/0x150
+[<0>] x64_sys_call+0x16a9/0x26e0
+[<0>] do_syscall_64+0xd9/0x5b0
+[<0>] entry_SYSCALL_64_after_hwframe+0x76/0x7e

@@ -89,11 +89,29 @@ export WVM_S6_KEEP_RUNNING=1
 # Default remains require-tcg; set WVM_S6_BACKEND=require-kvm for same Cirros path on KVM helpers.
 export WVM_S6_BACKEND="${WVM_S6_BACKEND:-require-tcg}"
 export WVM_S6_ACCEL="${WVM_S6_ACCEL:-disabled}"
+# flat (default) | fractal — guest matrix cells
+export WVM_GUEST_TOPOLOGY="${WVM_GUEST_TOPOLOGY:-flat}"
 export WVM_CREATE_MEMORY_BYTES="$mem_bytes"
 export WVM_CREATE_VCPUS="$vcpus"
 
-log "CREATE_VM via test_create_vm_single_node.sh (production child + live TCG helpers)"
-if ! bash "$repo_root/tests/control-plane/test_create_vm_single_node.sh" \
+case "${WVM_GUEST_TOPOLOGY}" in
+    flat)
+        create_script="$repo_root/tests/control-plane/test_create_vm_single_node.sh"
+        ;;
+    fractal)
+        create_script="$repo_root/tests/control-plane/test_create_vm_fractal.sh"
+        ;;
+    *)
+        log "ERROR: WVM_GUEST_TOPOLOGY must be flat|fractal (got ${WVM_GUEST_TOPOLOGY})"
+        exit 2
+        ;;
+esac
+
+log "CREATE_VM via $(basename "$create_script") topology=${WVM_GUEST_TOPOLOGY} backend=${WVM_S6_BACKEND} (production + live helpers)"
+echo "topology=${WVM_GUEST_TOPOLOGY}" >"$art_dir/cell_id.txt"
+echo "backend=${WVM_S6_BACKEND}" >>"$art_dir/cell_id.txt"
+echo "accel=${WVM_S6_ACCEL}" >>"$art_dir/cell_id.txt"
+if ! bash "$create_script" \
     >"$art_dir/create.log" 2>&1; then
     log "ERROR: CREATE_VM failed; see $art_dir/create.log"
     tail -n 60 "$art_dir/create.log" | tee -a "$art_dir/smoke.log" || true
@@ -335,55 +353,185 @@ fi
 log "guest SSH PASS: $(tr -d '\r' <"$art_dir/ssh_probe.txt")"
 echo 'guest_ssh=PASS' >>"$art_dir/result.txt"
 
-timeout 30s sshpass -p 'gocubsgo' ssh \
+# G9: snapshot remote completion counters BEFORE controlled load.
+stats_before=$(grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null | tail -n 40 || true)
+printf '%s\n' "$stats_before" >"$art_dir/stats_before.txt"
+# s23g9: honest rpc_ok may leave zero STATS at SSH (HALT-WAKE no longer
+# inflates remote_done). grep miss must not abort under pipefail.
+remote_before=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
+    | sed -n 's/.*remote_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+local_before=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
+    | sed -n 's/.*local_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+force_before=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
+    | sed -n 's/.*force_local_used=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+echo "remote_done_before=$remote_before" >>"$art_dir/result.txt"
+echo "local_done_before=$local_before" >>"$art_dir/result.txt"
+echo "force_local_used_before=$force_before" >>"$art_dir/result.txt"
+
+cpu_smoke_rc=0
+cpu_smoke_timeout_s=${WVM_GUEST_CPU_SMOKE_TIMEOUT_S:-30}
+if [[ "${WVM_S6_BACKEND}" == "require-kvm" ]]; then
+    cpu_smoke_timeout_s=${WVM_GUEST_CPU_SMOKE_TIMEOUT_S:-90}
+fi
+# s23g: require-kvm uses dual-yes by default (LAPIC bounce + preempt drain).
+# Set WVM_GUEST_CPU_SMOKE_LIGHT=1 to force the old light busy-loop fallback.
+# require-tcg always dual-yes (historical G9 load for remote_done delta).
+if [[ "${WVM_S6_BACKEND}" == "require-kvm" && "${WVM_GUEST_CPU_SMOKE_LIGHT:-0}" == "1" ]]; then
+    # Quote $i so host does not expand; guest sh sees the loop variable.
+    cpu_smoke_cmd='sh -c '"'"'i=0; while [ "$i" -lt 200000 ]; do i=$((i+1)); done; echo cpu-smoke-ok; free; grep -c ^processor /proc/cpuinfo'"'"''
+else
+    # s23g6: pin one yes per vCPU when taskset exists so AP has real work
+    # for concurrent remote MAIN (not hard-coded remote_done N=2).
+    cpu_smoke_cmd='sh -c "if command -v taskset >/dev/null 2>&1; then taskset -c 0 yes >/dev/null & taskset -c 1 yes >/dev/null & else yes >/dev/null & yes >/dev/null & fi; sleep 10; kill %1 %2 2>/dev/null; echo cpu-smoke-ok; free; cat /proc/cpuinfo | grep -c ^processor"'
+fi
+timeout "${cpu_smoke_timeout_s}s" sshpass -p 'gocubsgo' ssh \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR \
     -o ConnectTimeout=5 \
     -p "$ssh_port" cirros@127.0.0.1 \
-    'sh -c "yes >/dev/null & yes >/dev/null & sleep 8; kill %1 %2 2>/dev/null; echo cpu-smoke-ok; free; cat /proc/cpuinfo | grep -c ^processor"' \
-    >"$art_dir/guest_cpu_smoke.txt" 2>&1 || true
+    "$cpu_smoke_cmd" \
+    >"$art_dir/guest_cpu_smoke.txt" 2>&1 || cpu_smoke_rc=$?
 cat "$art_dir/guest_cpu_smoke.txt" | tee -a "$art_dir/smoke.log" || true
+if [[ "$cpu_smoke_rc" -ne 0 ]] || ! grep -q 'cpu-smoke-ok' "$art_dir/guest_cpu_smoke.txt"; then
+    log "ERROR: guest CPU smoke failed rc=$cpu_smoke_rc"
+    echo "guest_cpu_smoke=FAIL rc=$cpu_smoke_rc" >>"$art_dir/result.txt"
+    echo 'OVERALL=FAIL_guest_cpu_smoke' >>"$art_dir/result.txt"
+    cat "$art_dir/result.txt" | tee -a "$art_dir/smoke.log"
+    exit 1
+fi
+echo 'guest_cpu_smoke=PASS' >>"$art_dir/result.txt"
+
+# G9: after load, require remote_done delta (not READY/region_add banner).
+# Concurrent spin hold may still pin the AP local for up to ~90s after arm;
+# poll briefly so attribution is not a pure race with hold expiry.
+remote_after=$remote_before
+local_after=$local_before
+force_after=$force_before
+stats_after=""
+g9_wait_s="${WVM_GUEST_G9_REMOTE_WAIT_S:-45}"
+g9_deadline=$((SECONDS + g9_wait_s))
+while true; do
+    sleep 1
+    stats_after=$(grep -E '\[WVM-TCG-STATS\]|\[WVM-REMOTE\]' "$frontend_log" 2>/dev/null | tail -n 80 || true)
+    remote_after=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
+        | sed -n 's/.*remote_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+    local_after=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
+        | sed -n 's/.*local_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+    force_after=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
+        | sed -n 's/.*force_local_used=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+    remote_delta=$((remote_after - remote_before))
+    if [[ "$remote_delta" -gt 0 ]]; then
+        log "G9 remote_done advanced delta=$remote_delta (waited)"
+        break
+    fi
+    if (( SECONDS >= g9_deadline )); then
+        log "G9 remote wait ${g9_wait_s}s exhausted delta=0"
+        break
+    fi
+done
+printf '%s\n' "$stats_after" >"$art_dir/stats_after.txt"
+local_delta=$((local_after - local_before))
+force_delta=$((force_after - force_before))
+echo "remote_done_after=$remote_after" >>"$art_dir/result.txt"
+echo "local_done_after=$local_after" >>"$art_dir/result.txt"
+echo "force_local_used_after=$force_after" >>"$art_dir/result.txt"
+echo "remote_done_delta=$remote_delta" >>"$art_dir/result.txt"
+echo "local_done_delta=$local_delta" >>"$art_dir/result.txt"
+echo "force_local_used_delta=$force_delta" >>"$art_dir/result.txt"
+
+{
+    echo "=== G9 attribution (not boot banner) ==="
+    echo "remote_done $remote_before -> $remote_after delta=$remote_delta"
+    echo "local_done  $local_before -> $local_after delta=$local_delta"
+    echo "force_local $force_before -> $force_after delta=$force_delta"
+    echo "=== recent WVM-TCG-STATS / WVM-REMOTE ==="
+    printf '%s\n' "$stats_after"
+    echo "=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ==="
+    grep -E 'dirty commit|resync-merge|PUSH_BARRIER_ACK|wavevm_user_mem.*commit|slave TCG slice dirty flush|TYPED_MEM_COMMIT|handoff dirty flush pages=' \
+        "$frontend_log" "$create_tmpdir/agent.log" 2>/dev/null | head -n 80 || true
+    echo "=== WVM-REMOTE (vcpu only; NOT mem evidence) ==="
+    grep -E '\[WVM-REMOTE\]' "$frontend_log" 2>/dev/null | head -n 20 || true
+} >"$art_dir/remote_evidence.txt"
 
 remote_vcpu=0
 remote_mem=0
-{
-    echo "=== frontend wavevm signals ==="
-    grep -E 'WVM-REMOTE|VCPU_RUN|region_add|WaveVM|TCG|fault|COMMIT|dirty|IPC|PROXY' \
-        "$frontend_log" 2>/dev/null | head -n 120 || true
-    echo "=== agent/executor signals ==="
-    grep -E 'TCG PROXY|VCPU|handoff|dirty|COMMIT|fault|READY|Spawning|ack|PAGE_PUSH' \
-        "$create_tmpdir/agent.log" 2>/dev/null | head -n 120 || true
-} >"$art_dir/remote_evidence.txt"
-
-if grep -qE 'TCG PROXY|local executor READY with live TCG helpers|Spawning .* QEMU-TCG|KVM Hardware Acceleration Active|KVM FAST PATH' \
-    "$create_tmpdir/agent.log"; then
+# Require post-login remote completion growth for designated remote path.
+if [[ "$remote_delta" -gt 0 ]]; then
     remote_vcpu=1
+elif [[ "${WVM_S6_BACKEND}" == "require-kvm" && "$remote_before" -gt 0 ]]; then
+    # require-kvm: boot-time remote_done>0 still proves remote KVM path (§7)
+    # when smoke delta is 0 (e.g. light fallback or drain-local dominated).
+    remote_vcpu=1
+    log "G9 require-kvm: accept remote_done_before=$remote_before (smoke delta=0)"
 fi
-if grep -qE 'WVM-REMOTE|VCPU_RUN|wavevm_user_mem|dirty|COMMIT|region_add|WaveVM' \
-    "$frontend_log" "$create_tmpdir/agent.log" 2>/dev/null; then
+# Memory: REAL dirty/commit/resync/fence only — never WVM-REMOTE vCPU dispatch,
+# never SHM coherent / WVM-TCG-STATS alone (xiaolang M9 mis-attribution).
+mem_hits=$(grep -E 'dirty commit|resync-merge|PUSH_BARRIER_ACK|wavevm_user_mem.*commit|slave TCG slice dirty flush pages=[1-9]|TYPED_MEM_COMMIT|handoff dirty flush pages=[1-9]|tcg_dirty_self_emit' \
+    "$art_dir/remote_evidence.txt" "$frontend_log" "$create_tmpdir/agent.log" \
+    "$create_tmpdir"/*.log "$art_dir"/*.log 2>/dev/null | head -n 40 || true)
+printf '%s\n' "$mem_hits" >"$art_dir/remote_mem_hits.txt"
+if [[ -n "$mem_hits" ]]; then
     remote_mem=1
 fi
-if grep -qE '\[WaveVM\] region_add|WaveVM-User|user mem|WVM-REMOTE|IPC VCPU|vcpu_run' \
-    "$frontend_log" 2>/dev/null; then
+# Also accept numeric commit counters if instrumentation printed them.
+if grep -qE 'remote_mem_commit_count=[1-9]|dirty_commit_pages=[1-9]|completed_commit_version=0x[1-9a-fA-F]' \
+    "$art_dir/result.txt" "$frontend_log" "$create_tmpdir/agent.log" 2>/dev/null; then
     remote_mem=1
-    remote_vcpu=1
 fi
 
 echo "remote_vcpu_evidence=$remote_vcpu" >>"$art_dir/result.txt"
 echo "remote_mem_evidence=$remote_mem" >>"$art_dir/result.txt"
 cp -a "$create_tmpdir/agent.log" "$art_dir/agent.log" 2>/dev/null || true
 cp -a "$art_dir/remote_evidence.txt" "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
+cp -a "$art_dir/stats_before.txt" "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
+cp -a "$art_dir/stats_after.txt" "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
 
 if [[ "$remote_vcpu" != "1" || "$remote_mem" != "1" ]]; then
-    log "ERROR: remote vCPU/memory evidence incomplete (vcpu=$remote_vcpu mem=$remote_mem)"
+    log "ERROR: G9 remote attribution incomplete (vcpu=$remote_vcpu mem=$remote_mem delta=$remote_delta)"
     cat "$art_dir/remote_evidence.txt" | tee -a "$art_dir/smoke.log" || true
-    echo 'OVERALL=PARTIAL_login_ssh_without_remote_evidence' >>"$art_dir/result.txt"
+    echo 'OVERALL=FAIL_g9_remote_attribution' >>"$art_dir/result.txt"
+    cat "$art_dir/result.txt" | tee -a "$art_dir/smoke.log"
     exit 1
 fi
 
-echo 'OVERALL=PASS' >>"$art_dir/result.txt"
-log "GUEST SMOKE PASS art=$art_dir"
+log "G9 remote attribution PASS delta_remote=$remote_delta delta_local=$local_delta"
+# §8.1 acceptance item 2: optionally wait for named hard-cap/cooldown events
+# (arm already present as NEED-LOCAL / SPIN-LOCAL). Default off.
+if [[ "${WVM_GUEST_WAIT_81_EVENTS:-0}" == "1" ]]; then
+    wait81_s="${WVM_GUEST_WAIT_81_EVENTS_S:-150}"
+    log "§8.1 wait up to ${wait81_s}s for hard_cap_expiry (+ cooldown_suppress if spin)"
+    deadline81=$((SECONDS + wait81_s))
+    got_cap=0
+    got_cd=0
+    while (( SECONDS < deadline81 )); do
+        if grep -q 'event=hard_cap_expiry' "$frontend_log" 2>/dev/null; then
+            got_cap=1
+        fi
+        if grep -qE 'event=cooldown_suppress|event=renew' "$frontend_log" 2>/dev/null; then
+            got_cd=1
+        fi
+        if [[ "$got_cap" == "1" ]]; then
+            log "§8.1 hard_cap_expiry observed (renew/cooldown_suppress=$got_cd)"
+            break
+        fi
+        sleep 2
+    done
+    {
+        echo "section=8.1_acceptance_item_2"
+        echo "wait_s=$wait81_s"
+        echo "hard_cap_expiry=$got_cap"
+        echo "renew_or_cooldown_suppress=$got_cd"
+        echo "--- events ---"
+        grep -E '\[WVM-TCG-(NEED-LOCAL|SPIN-LOCAL|FORCE-LOCAL)\]' "$frontend_log" 2>/dev/null \
+            | grep -E 'arm force_local|hold_ms=|event=' || true
+    } >"$art_dir/force_local_81_events.txt"
+    cp -a "$art_dir/force_local_81_events.txt" "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
+    if [[ "$got_cap" != "1" ]]; then
+        log "WARN: §8.1 hard_cap_expiry not observed within ${wait81_s}s (pack still written)"
+    fi
+fi
+# OVERALL written only after STOP/cleanup below (G9).
 
 # §7 STOP evidence: Cirros path historically KEEP_RUNNING=1 + process kill only.
 # When WVM_GUEST_REQUIRE_STOP=1 (default), call STOP_VM while ctl/agent still up
@@ -412,10 +560,36 @@ if [[ "${WVM_GUEST_REQUIRE_STOP:-1}" == "1" ]]; then
         exit 1
     fi
     if [[ ! -x "$create_tmpdir/submit_stop_vm" ]]; then
-        log "ERROR: submit_stop_vm missing under $create_tmpdir"
-        echo 'guest_stop=MISSING_binary' >>"$art_dir/result.txt"
-        cat "$art_dir/result.txt" | tee -a "$art_dir/smoke.log"
-        exit 1
+        # Fractal KEEP historically omitted this binary; build on demand (same as s6_finish).
+        log "submit_stop_vm missing — building under $create_tmpdir"
+        gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
+            -I"$repo_root/common_include" \
+            "$repo_root/common_include/wavevm_sha256.c" \
+            "$repo_root/common_include/wavevm_canonical.c" \
+            "$repo_root/common_include/wavevm_identity.c" \
+            "$repo_root/common_include/wavevm_runtime_names.c" \
+            "$repo_root/common_include/wavevm_manifest.c" \
+            "$repo_root/common_include/wavevm_lifecycle.c" \
+            "$repo_root/common_include/wavevm_control.c" \
+            "$repo_root/common_include/wavevm_capability.c" \
+            "$repo_root/common_include/wavevm_admission.c" \
+            "$repo_root/common_include/wavevm_cluster.c" \
+            "$repo_root/common_include/wavevm_reservation_runtime.c" \
+            "$repo_root/common_include/wavevm_fault_engine.c" \
+            "$repo_root/common_include/wavevm_coordinator.c" \
+            "$repo_root/common_include/wavevm_envelope.c" \
+            "$repo_root/common_include/wavevm_membership_controller.c" \
+            "$repo_root/common_include/wavevm_membership_control.c" \
+            "$repo_root/common_include/wavevm_control_transport.c" \
+            "$repo_root/common_include/wavevm_runtime_profile.c" \
+            "$repo_root/tests/control-plane/submit_stop_vm.c" \
+            -pthread -o "$create_tmpdir/submit_stop_vm"
+        if [[ ! -x "$create_tmpdir/submit_stop_vm" ]]; then
+            log "ERROR: submit_stop_vm build failed under $create_tmpdir"
+            echo 'guest_stop=MISSING_binary' >>"$art_dir/result.txt"
+            cat "$art_dir/result.txt" | tee -a "$art_dir/smoke.log"
+            exit 1
+        fi
     fi
     stop_out=$("$create_tmpdir/submit_stop_vm" "$create_tmpdir/ctl.sock" \
         "$vm_id" "$vm_inc" "$manifest_gen" 2>&1) || true
@@ -430,11 +604,25 @@ if [[ "${WVM_GUEST_REQUIRE_STOP:-1}" == "1" ]]; then
     fi
     echo 'guest_stop=PASS' >>"$art_dir/result.txt"
     log "STOP_VM PASS"
+    # Honesty: create/s6_finish may have written REQUIRE_STOP=0 cleanup.ok while
+    # Cirros KEEP ran; overwrite with the real STOP acceptance evidence.
+    {
+        echo "cleanup_ok=1"
+        echo "stop=$stop_out"
+        echo "vm_id=$vm_id"
+        echo "honesty=REQUIRE_STOP=1_full_STOP_acceptance"
+    } >"$art_dir/cleanup.ok"
+    if [[ -n "${WVM_S6_EVIDENCE_DIR:-}" ]]; then
+        cp -a "$art_dir/cleanup.ok" "$WVM_S6_EVIDENCE_DIR/cleanup.ok" 2>/dev/null || true
+    fi
 else
     echo 'REQUIRE_STOP=0' >>"$art_dir/result.txt"
     echo 'guest_stop=SKIPPED_keep' >>"$art_dir/result.txt"
     log "REQUIRE_STOP=0 — Cirros KEEP path; STOP not required this run"
 fi
 
+# G9: unified result only after STOP/cleanup — never leave early OVERALL=PASS.
+echo 'OVERALL=PASS' >>"$art_dir/result.txt"
+log "GUEST SMOKE PASS art=$art_dir"
 cat "$art_dir/result.txt" | tee -a "$art_dir/smoke.log"
 exit 0

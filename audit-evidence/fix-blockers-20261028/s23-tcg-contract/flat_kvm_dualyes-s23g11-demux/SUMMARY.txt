@@ -1,0 +1,20 @@
+s23g11 KVM dual-yes demux — FAIL (boot hang / Ack not RX'd on V30)
+=================================================================
+tip: fdae2c158 dirty
+runtime: wavevm_node_runtime @18:50 with vcpu_reply_pending demux (s23g10 patch)
+ko: prior insmod Wavelet Mode A
+
+Result: FAIL — guest serial frozen at initramfs (27824 bytes); qemu thread stuck in wvm_ioctl;
+module refcnt held by in-flight REMOTE_RUN.
+
+Evidence:
+- FE inject OK: mapped=1 vnode=1 gw=127.0.0.1:45781
+- Hybrid ran vcpu and [Slave Ack] ret=4436 errno=0 dst=127.0.0.1:45781 exit=8 (KVM_EXIT_SHUTDOWN)
+- ZERO [RX VCPU_EXIT] with src_port=g_slave_forward_port (45784); demux never armed
+- External EXIT probes to LOCAL_PORT ARE received (from_local=0) — V30 RX alive
+- Same-process UDP hairpin works in isolation; Hybrid→V30 EXIT still absent from recvmmsg
+  (no CRC Mismatch log; no UdpRcvbufErrors). Root cause of lost hairpin still open.
+- Demux alone insufficient until EXIT from Hybrid reaches from_local_slave path.
+
+Next: s23g12 Hybrid dual-send VCPU_EXIT also to gateway :9000 (Mode A kernel waiter).
+MINIMUM_COMPLETE=NOT_CLAIMED

@@ -1,0 +1,24 @@
+=== backend/topology snippets ===
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v256-i1-g1-n801-57f9148cb5759d4b': No such file or directory
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v256-i1-g1-n801-57f9148cb5759d4b': No such file or directory
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 8, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:28115
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-57f9148cb5759d4b (Size: 16 MB)
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v257-i1-g1-n801-fa375008e83a347a': No such file or directory
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v257-i1-g1-n801-fa375008e83a347a': No such file or directory
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 9, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 8, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:28164
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[System] Initializing SHM: /wavevm_ram_wvm-v257-i1-g1-n801-fa375008e83a347a (Size: 16 MB)
+=== child runtime logs (names) ===
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-256-1-1.manifest
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest.route
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-256-1-1.manifest.route
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/runtime/vm-257-1-1.manifest

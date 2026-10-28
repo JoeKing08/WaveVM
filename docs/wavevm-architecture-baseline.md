@@ -62,10 +62,14 @@ The project has two acceptance horizons:
 
 **Minimum usable system:** a manifest-bound VM can run with isolated local
 resources and identity, use either TCG or KVM, use flat or fractal routing, and
-share a physical host with other Mode B VMs. Mode A is usable for multiple VMs
-only after explicit per-VM kernel contexts and teardown isolation pass. The
-minimum system also includes basic node/gateway join, compute cordon, safe
-drain, and gateway replacement through acknowledged route snapshots.
+share a physical host with other Mode B VMs. For multi-vCPU TCG, the Minimum
+includes the usable distributed concurrent multi-vCPU contract in Section 16
+(concurrency as the main path; Section 15 bounded local fallback only as
+exceptional coverage — not full upstream QEMU MTTCG performance). Mode A is
+usable for multiple VMs only after explicit per-VM kernel contexts and teardown
+isolation pass. The minimum system also includes basic node/gateway join,
+compute cordon, safe drain, and gateway replacement through acknowledged route
+snapshots.
 
 **Extended hardening:** coordinator high availability, automatic migration or
 resharding, transparent recovery after loss of required compute state, full
@@ -1098,9 +1102,35 @@ ABIs without choosing contradictory alternatives.
   `legacy_cluster_epoch` reset; in V1 it is quarantined until all
   route/cache/operation retirement acknowledgements complete and the next
   incarnation is checked.
+- **Minimum multi-vCPU TCG 应然 (usable distributed concurrent TCG / MTTCG
+  contract):** V1 same-host coherent-SHM TCG MUST provide a usable distributed
+  multi-vCPU concurrent execution contract. Concurrent BSP-local + AP-remote
+  (and multi-remote) progress is the **main normal path**. Guest-visible
+  multi-vCPU progress for ≥2 vCPUs under that path is a Minimum requirement,
+  not an optional optimization. The Section 15 bounded local synchronous
+  fallback (named `force_local` in `docs/specs/vcpu-handoff.md` §8.1) is
+  **only** an exceptional, per-vCPU, wall-clock-bounded correctness path for
+  windows that need true multi-vCPU interleaving (stop_machine / text_poke /
+  softlock-class IPI) or NEED_LOCAL device-authority bounce. It MUST NOT be
+  the normal execution mode, MUST NOT permanently serialize all vCPUs, and
+  MUST NOT dominate remote concurrent slice accounting under ordinary guest
+  progress. Trigger, per-vCPU scope, wall-clock bounds, renew/cooldown,
+  device-bounce coupling, configuration knobs, and Minimum acceptance shape
+  live in `docs/specs/vcpu-handoff.md` §8.1. This Minimum contract is **not**
+  a requirement for full upstream QEMU in-process MTTCG performance,
+  scheduling optimization, or helper-thread MTTCG parity. Fault injection,
+  coordinator HA, live migration, automatic resharding, transparent recovery,
+  and a full pluggable fault engine remain Extended and are not Minimum gates
+  for this contract.
 
 The following remain future design work rather than V1 alternatives:
 
+- Full upstream QEMU in-process / cross-process TCG MTTCG performance and
+  helper-thread MTTCG (or equivalent barriers) that removes the need for a
+  Section 15 bounded local synchronous fallback on the concurrent SHM path
+  for stop_machine / text_poke / softlock-class IPI windows. Usable
+  distributed multi-vCPU concurrent TCG under the Minimum contract above is
+  required now; that full MTTCG optimization is deferred.
 - Cross-backend KVM-to-TCG or TCG-to-KVM vCPU handoff.
 - Live migration of the QEMU frontend or dynamic replanning of a running VM.
 - Automatic resharding of an active VM when a compute node joins or leaves.

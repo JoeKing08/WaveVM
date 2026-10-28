@@ -41,6 +41,7 @@ struct wvm_resource_vm {
 struct wvm_resource_plan {
     struct wvm_resource_node *nodes;
     uint32_t node_capacity;
+    /* Legacy dense table: slot == legacy vm_id < WVM_MAX_VMS. Not for u32 IDs. */
     struct wvm_resource_vm vms[WVM_MAX_VMS];
     uint8_t vm_present[WVM_MAX_VMS];
     uint32_t node_count;

@@ -1,0 +1,7 @@
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=8
+local_done_before=0
+force_local_used_before=0
+guest_cpu_smoke=FAIL rc=255
+OVERALL=FAIL_guest_cpu_smoke

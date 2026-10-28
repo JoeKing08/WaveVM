@@ -239,7 +239,8 @@ note=N4/R3: SKIP is not full dataplane PASS"
     if [[ "$s6_require_stop" != "1" ]]; then
         s6_write_evidence_file "cleanup.ok" "cleanup_ok=1
 note=stop_not_required
-honesty=REQUIRE_STOP=0_not_full_STOP_acceptance"
+honesty=REQUIRE_STOP=0_stop_not_required_this_cell
+warn=do_not_treat_as_full_STOP_acceptance"
         : >"${s6_evidence_dir:-$tmpdir}/cleanup.manifest"
         s6_finish_rc=0
         return 0
@@ -393,7 +394,8 @@ vm_id=$vm_id"
     s6_write_evidence_file "cleanup.ok" "cleanup_ok=1
 stop=$stop_out
 retired_shm=${pre_shm[*]}
-vm_id=$vm_id"
+vm_id=$vm_id
+honesty=REQUIRE_STOP=1_full_STOP_acceptance"
     if [[ -n "${WVM_S6_STOP_TAG:-}" && -n "${s6_evidence_dir:-}" ]]; then
         s6_write_evidence_file "cleanup.ok.${WVM_S6_STOP_TAG}" "cleanup_ok=1
 stop=$stop_out

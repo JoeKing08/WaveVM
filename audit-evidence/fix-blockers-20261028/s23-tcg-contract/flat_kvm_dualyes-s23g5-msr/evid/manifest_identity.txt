@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.7WyIMU/runtime/vm-256-1-1.manifest
+0162898965fbe3215d5ba762a31a0da59889f2a8fcb55efc58bd32151be0ad2f  /tmp/wavevm-create-vm-single.7WyIMU/runtime/vm-256-1-1.manifest
+d92c6d5a0b246c5772f80d531f4e8f6f21adca52c2f2dd5e344ef84915beeb80  /tmp/wavevm-create-vm-single.7WyIMU/runtime/vm-256-1-1.manifest.dispatch
+70e49db53df40e89af54f13f4eaeb7e564567df658f31e586ab4176b516eeb59  /tmp/wavevm-create-vm-single.7WyIMU/runtime/vm-256-1-1.manifest.route

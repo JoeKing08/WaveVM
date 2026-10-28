@@ -249,6 +249,29 @@ static int g_ram_mb = 1024;
 static uint64_t g_slave_ram_size = 1024UL * 1024 * 1024;
 static int g_base_id = 0;
 static uint32_t g_slave_vm_id = 0;
+
+/* G1: echo FULL_VMID identity so master RX can recover u32 vm_id.
+ * s23g13: callers pass req AFTER ntoh_header() (host-order epoch/slave_id/
+ * target_id/req_id). Re-encode epoch to wire (network) order here. */
+static void wvm_ack_copy_assoc(struct wvm_header *ack,
+                               const struct wvm_header *req)
+{
+    if (!ack || !req)
+        return;
+    if (req->flags & WVM_FLAG_FULL_VMID) {
+        ack->flags = (uint8_t)(ack->flags | WVM_FLAG_FULL_VMID);
+        ack->epoch = htonl(req->epoch); /* req host-order → wire */
+    }
+}
+
+/* G1: nonzero vm_id always FULL_VMID; never 8-bit pack for production VMs. */
+static void wvm_slave_pack_src(struct wvm_header *hdr)
+{
+    if (!hdr)
+        return;
+    (void)wvm_header_pack_src(hdr, g_slave_vm_id, (uint32_t)g_base_id);
+}
+
 #define VCPU_EXIT_CACHE_SIZE 4096
 #define VCPU_EXIT_CACHE_MAX_PACKET (sizeof(struct wvm_header) + sizeof(struct wvm_ipc_cpu_run_ack))
 
@@ -671,6 +694,14 @@ static int vcpu_exit_cache_begin(int fd, struct sockaddr_in *client,
             memcpy(replay, e->data, len);
             pthread_mutex_unlock(&g_vcpu_exit_cache_lock);
             robust_sendto(fd, replay, len, client);
+            if (client && ntohs(client->sin_port) != 9000) {
+                struct sockaddr_in gw9000 = {
+                    .sin_family = AF_INET,
+                    .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+                    .sin_port = htons(9000)
+                };
+                robust_sendto(fd, replay, len, &gw9000);
+            }
             return 1;
         }
         pthread_mutex_unlock(&g_vcpu_exit_cache_lock);
@@ -1378,7 +1409,7 @@ static void emergency_send_dirty_page(uint64_t gpa, const uint8_t *hva) {
     wh->magic = htonl(WVM_MAGIC);
     wh->msg_type = htons(MSG_MEM_WRITE);
     wh->payload_len = htons(8 + 4096);
-    wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+    wvm_slave_pack_src(wh);
     wh->target_id = htonl(WVM_NODE_AUTO_ROUTE);
     wh->req_id = 0;
     wh->qos_level = 0;
@@ -1482,7 +1513,7 @@ void* dirty_sync_sender_thread(void* arg) {
         wh->magic = htonl(WVM_MAGIC);
         wh->msg_type = htons(MSG_MEM_WRITE);
         wh->payload_len = htons(8 + 4096);
-        wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+        wvm_slave_pack_src(wh);
         wh->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记，防止 Master vm_id 过滤误杀
         wh->req_id = 0;
         wh->qos_level = 0;
@@ -2255,18 +2286,18 @@ typed_ack_ready:
         }
         return -EPROTO;
     }
-    if (local_ack.status == WVM_CPU_RUN_STATUS_MEMORY_FAILURE) {
-        typed_handoff_result_from_request(
-            request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, result);
-        result->error_gpa = local_ack.error_gpa;
-        return 0;
-    }
-    if (local_ack.status != 0) {
+    if (local_ack.status != 0 &&
+        local_ack.status != WVM_CPU_RUN_STATUS_MEMORY_FAILURE) {
         typed_handoff_result_from_request(
             request, WVM_VCPU_HANDOFF_RESULT_EXECUTOR_FAILURE, result);
         return 0;
     }
 
+    /*
+     * s23g2: MEMORY_FAILURE must still carry the post-run CPU context when
+     * the local executor filled it. Stripping context here forced FE into
+     * zeroed-ACK import / silent drop and hung dual-yes under KVM.
+     */
     legacy_context = request->backend == WVM_VCPU_BACKEND_TCG
                          ? (const void *)&local_ack.ctx.tcg
                          : (const void *)&local_ack.ctx.kvm;
@@ -2277,10 +2308,16 @@ typed_ack_ready:
             error_len) != 0) {
         return -EPROTO;
     }
-    typed_handoff_result_from_request(request, WVM_VCPU_HANDOFF_RESULT_SUCCESS,
-                                      result);
+    if (local_ack.status == WVM_CPU_RUN_STATUS_MEMORY_FAILURE) {
+        typed_handoff_result_from_request(
+            request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, result);
+        result->error_gpa = local_ack.error_gpa;
+    } else {
+        typed_handoff_result_from_request(request, WVM_VCPU_HANDOFF_RESULT_SUCCESS,
+                                          result);
+        result->produced_memory_fence_id = fence_id;
+    }
     result->exit_class = typed_exit_class_from_legacy_ack(request, &local_ack);
-    result->produced_memory_fence_id = fence_id;
     result->context_valid_fields = request->context_valid_fields;
     result->context = result_context;
     result->context_bytes = encoded_context_bytes;
@@ -2337,8 +2374,9 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
-        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+        wvm_slave_pack_src(&ack_hdr);
+        ack_hdr.target_id = htonl(hdr->slave_id);  /* s23g13: hdr host-order after ntoh_header */
+        wvm_ack_copy_assoc(&ack_hdr, hdr);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         struct wvm_ipc_cpu_run_ack ack;
@@ -2365,6 +2403,15 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         fprintf(stderr, "[Slave FastAck] ret=%zd errno=%d mode=%u req=%llu dst=%s:%u\n",
                 sret, (sret < 0) ? errno : 0, req->mode_tcg,
                 (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
+        if (client && ntohs(client->sin_port) != 9000) {
+            struct sockaddr_in gw9000 = {
+                .sin_family = AF_INET,
+                .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+                .sin_port = htons(9000)
+            };
+            (void)sendto(sockfd, tx, sizeof(tx), 0,
+                         (struct sockaddr *)&gw9000, sizeof(gw9000));
+        }
         return;
     }
 
@@ -2378,8 +2425,9 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
-        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+        wvm_slave_pack_src(&ack_hdr);
+        ack_hdr.target_id = htonl(hdr->slave_id);  /* s23g13: hdr host-order after ntoh_header */
+        wvm_ack_copy_assoc(&ack_hdr, hdr);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         struct wvm_ipc_cpu_run_ack ack;
@@ -2406,6 +2454,15 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         fprintf(stderr, "[Slave ErrorAck] vcpu init failed ret=%zd errno=%d req=%llu dst=%s:%u\n",
                 sret, (sret < 0) ? errno : 0,
                 (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
+        if (client && ntohs(client->sin_port) != 9000) {
+            struct sockaddr_in gw9000 = {
+                .sin_family = AF_INET,
+                .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+                .sin_port = htons(9000)
+            };
+            (void)sendto(sockfd, tx, sizeof(tx), 0,
+                         (struct sockaddr *)&gw9000, sizeof(gw9000));
+        }
         return;
     }
     struct kvm_regs kregs; struct kvm_sregs ksregs;
@@ -2532,18 +2589,44 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     /* [V30 TSC 同步] 将 master 传来的 TSC 值注入 slave 本地 vCPU，
      * 确保 slave KVM_RUN 期间 guest 读到的 TSC 与 master 侧一致。 */
     if (!req->mode_tcg && req->ctx.kvm.tsc_valid) {
+        /* s23g5: GS_BASE/APIC_BASE/SYSCALL when msr_ext_valid set by FE */
         struct {
             struct kvm_msrs info;
-            struct kvm_msr_entry entries[3];
+            struct kvm_msr_entry entries[9];
         } msr_data;
+        int n = 3;
         memset(&msr_data, 0, sizeof(msr_data));
-        msr_data.info.nmsrs = 3;
         msr_data.entries[0].index = 0x10;       /* MSR_IA32_TSC */
         msr_data.entries[0].data  = req->ctx.kvm.tsc_value;
         msr_data.entries[1].index = 0x6e0;      /* MSR_IA32_TSCDEADLINE */
         msr_data.entries[1].data  = req->ctx.kvm.tsc_deadline;
         msr_data.entries[2].index = 0xC0000102;  /* MSR_KERNEL_GS_BASE */
         msr_data.entries[2].data  = req->ctx.kvm.kernel_gs_base;
+        if (req->ctx.kvm.msr_ext_valid & 0x1) {
+            msr_data.entries[n].index = 0xC0000101;
+            msr_data.entries[n].data  = req->ctx.kvm.gs_base;
+            n++;
+        }
+        if (req->ctx.kvm.msr_ext_valid & 0x2) {
+            msr_data.entries[n].index = 0x1b;
+            msr_data.entries[n].data  = req->ctx.kvm.apic_base;
+            n++;
+        }
+        if (req->ctx.kvm.msr_ext_valid & 0x4) {
+            msr_data.entries[n].index = 0xC0000081;
+            msr_data.entries[n].data  = req->ctx.kvm.star;
+            n++;
+            msr_data.entries[n].index = 0xC0000082;
+            msr_data.entries[n].data  = req->ctx.kvm.lstar;
+            n++;
+            msr_data.entries[n].index = 0xC0000083;
+            msr_data.entries[n].data  = req->ctx.kvm.cstar;
+            n++;
+            msr_data.entries[n].index = 0xC0000084;
+            msr_data.entries[n].data  = req->ctx.kvm.sfmask;
+            n++;
+        }
+        msr_data.info.nmsrs = n;
         ioctl(t_vcpu_fd, KVM_SET_MSRS, &msr_data);
     }
 
@@ -2560,9 +2643,23 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     if (!req->mode_tcg && wvm_kvm_page_cache_global_active()) {
         char cache_error[256] = {0};
 
-        if (g_wvm_device_ram_mapping ||
-            wvm_kvm_memory_slice_global_begin(
-                &memory_slice, cache_error, sizeof(cache_error)) != 0) {
+        /*
+         * s23g2: SHM-backed guest RAM (!g_wvm_device_ram_mapping) is already
+         * coherent with FE. The typed page-cache fence fails on GPAs dirtied
+         * outside the execution snapshot; vcpu_service then maps
+         * MEMORY_FAILURE → status=-EFAULT with a *zeroed* ACK (no CPU ctx),
+         * which FE must not import. Skip the typed slice under SHM so remote
+         * KVM ACKs carry real state (dual-yes hang fix).
+         */
+        if (!g_wvm_device_ram_mapping) {
+            static int shm_fence_dbg;
+            if (shm_fence_dbg++ < 8) {
+                fprintf(stderr,
+                        "[KVM cache] SHM coherent — skip typed memory "
+                        "slice fence\n");
+            }
+        } else if (wvm_kvm_memory_slice_global_begin(
+                       &memory_slice, cache_error, sizeof(cache_error)) != 0) {
             memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
             if (cache_error[0] != '\0') {
                 fprintf(stderr,
@@ -2727,42 +2824,53 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
                     fprintf(stderr, "\n");
                     lapic_dbg++;
                 }
+                /*
+                 * No in-kernel irqchip on slave: identity/status READs stay
+                 * local to avoid ICR-poll thrash. WRITES (timer/LVT/ICR/TPR/
+                 * EOI/...) and non-identity READs bounce to FE as KVM_EXIT_MMIO
+                 * so the master's real LAPIC (KVM_SET_LAPIC) sees programming.
+                 * Dual-yes hang root: stubbing timer writes left remote AP
+                 * without ticks under sustained busy.
+                 */
                 if (!t_kvm_run->mmio.is_write) {
-                    /* Return proper values for critical LAPIC registers. */
                     uint32_t val = 0;
+                    int stub = 1;
                     switch (reg_off) {
-                    case 0x020: /* APIC ID (bits 31:24 = APIC ID in xAPIC) */
+                    case 0x020: /* APIC ID */
                         val = ((uint32_t)guest_vcpu_id) << 24;
                         break;
                     case 0x030: /* APIC Version */
-                        val = 0x50014; /* version 0x14, max LVT 5 */
+                        val = 0x50014;
                         break;
-                    case 0x0D0: /* Logical Destination Register */
+                    case 0x0D0: /* LDR */
                         val = (1U << (guest_vcpu_id & 7)) << 24;
                         break;
-                    case 0x0E0: /* Destination Format Register */
-                        val = 0xFFFFFFFFU; /* flat model */
+                    case 0x0E0: /* DFR */
+                        val = 0xFFFFFFFFU;
                         break;
-                    case 0x0F0: /* Spurious Interrupt Vector Register */
-                        val = 0x1FF; /* APIC enabled, vector 0xFF */
+                    case 0x0F0: /* SVR */
+                        val = 0x1FF;
                         break;
                     case 0x300: /* ICR low -- delivery status=idle */
                         val = 0;
                         break;
                     default:
-                        val = 0;
+                        stub = 0;
                         break;
                     }
-                    memcpy(t_kvm_run->mmio.data, &val, sizeof(val));
-                    if (t_kvm_run->mmio.len < 4)
-                        memset(t_kvm_run->mmio.data + t_kvm_run->mmio.len, 0,
-                               8 - t_kvm_run->mmio.len);
+                    if (stub) {
+                        memcpy(t_kvm_run->mmio.data, &val, sizeof(val));
+                        if (t_kvm_run->mmio.len < 4)
+                            memset(t_kvm_run->mmio.data + t_kvm_run->mmio.len, 0,
+                                   8 - t_kvm_run->mmio.len);
+                        if (t_kvm_alarm_fired) break;
+                        continue;
+                    }
+                    /* Non-identity read: fall through to FE bounce. */
+                    break;
                 }
-                /* Check alarm before re-entering KVM_RUN.  Guest may be in a
-                 * tight LAPIC polling loop (e.g. ICR delivery status) which
-                 * would generate infinite MMIO exits. */
-                if (t_kvm_alarm_fired) break;
-                continue; /* re-enter KVM_RUN */
+                /* LAPIC write: bounce to FE (do not stub). */
+                break;
             }
             if (wvm_vfio_intercept_mmio(
                     t_kvm_run->mmio.phys_addr,
@@ -2958,10 +3066,34 @@ kvm_run_done:
                         if (memory_slice &&
                             wvm_kvm_memory_slice_capture_dirty(
                                 memory_slice, gpa, &dirty, NULL, 0) != 0) {
-                            wvm_kvm_memory_slice_fail(
-                                memory_slice, gpa, NULL, 0);
-                            memory_fence_status =
-                                WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
+                            /*
+                             * s23g2: Page was dirtied during the KVM slice but
+                             * never admitted as CLEAN in the execution
+                             * snapshot (no typed clean base). Under
+                             * device-backed RAM that is a hard fence failure.
+                             * Under SHM-backed RAM the bytes are already
+                             * visible to FE via the shared mapping; failing
+                             * the whole handoff makes FE drop the ACK
+                             * (status=MEMORY_FAILURE) and re-dispatch the
+                             * same stale RIP forever — the KVM dual-yes hang.
+                             */
+                            if (g_wvm_device_ram_mapping) {
+                                wvm_kvm_memory_slice_fail(
+                                    memory_slice, gpa, NULL, 0);
+                                memory_fence_status =
+                                    WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
+                                continue;
+                            }
+                            {
+                                static int shm_skip_dbg;
+                                if (shm_skip_dbg++ < 30) {
+                                    fprintf(stderr,
+                                            "[KVM cache] SHM skip typed dirty "
+                                            "GPA=%#" PRIx64
+                                            " (no clean base; shared RAM)\n",
+                                            gpa);
+                                }
+                            }
                             continue;
                         }
                         task = malloc(sizeof(dirty_page_task_t));
@@ -3026,6 +3158,9 @@ kvm_run_done:
                 sizeof(cache_error)) != 0 ||
             !slice_success) {
             memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
+            if (error_gpa != 0) {
+                memory_error_gpa = error_gpa;
+            }
             fprintf(stderr,
                     "[KVM cache] slice commit failed GPA=%#" PRIx64
                     " reason=%s\n",
@@ -3062,12 +3197,14 @@ kvm_run_done:
     ack_hdr.msg_type = htons(MSG_VCPU_EXIT);       
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
     /* ACK must originate from this slave node and target the requester. */
-    ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-    ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+    wvm_slave_pack_src(&ack_hdr);
+    ack_hdr.target_id = htonl(hdr->slave_id);  /* s23g13: hdr host-order after ntoh_header */
+    wvm_ack_copy_assoc(&ack_hdr, hdr);
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
     ack->status = memory_fence_status;
+    ack->error_gpa = memory_error_gpa;
     ack->mode_tcg = req->mode_tcg;
     if (req->mode_tcg) {
         wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
@@ -3088,22 +3225,37 @@ kvm_run_done:
          * slave 执行期间 TSC 自然递增，master 需要这个更新后的值来
          * 保持 kvmclock 的单调性。 */
         {
+            /* s23g5: return GS_BASE/APIC_BASE/SYSCALL with TSC */
             struct {
                 struct kvm_msrs info;
-                struct kvm_msr_entry entries[3];
+                struct kvm_msr_entry entries[9];
             } msr_data;
             memset(&msr_data, 0, sizeof(msr_data));
-            msr_data.info.nmsrs = 3;
+            msr_data.info.nmsrs = 9;
             msr_data.entries[0].index = 0x10;       /* MSR_IA32_TSC */
             msr_data.entries[1].index = 0x6e0;      /* MSR_IA32_TSCDEADLINE */
             msr_data.entries[2].index = 0xC0000102;  /* MSR_KERNEL_GS_BASE */
+            msr_data.entries[3].index = 0xC0000101;  /* MSR_GS_BASE */
+            msr_data.entries[4].index = 0x1b;        /* IA32_APIC_BASE */
+            msr_data.entries[5].index = 0xC0000081;  /* STAR */
+            msr_data.entries[6].index = 0xC0000082;  /* LSTAR */
+            msr_data.entries[7].index = 0xC0000083;  /* CSTAR */
+            msr_data.entries[8].index = 0xC0000084;  /* SFMASK */
             if (ioctl(t_vcpu_fd, KVM_GET_MSRS, &msr_data) >= 0) {
                 ack_kctx->tsc_value = msr_data.entries[0].data;
                 ack_kctx->tsc_deadline = msr_data.entries[1].data;
                 ack_kctx->kernel_gs_base = msr_data.entries[2].data;
                 ack_kctx->tsc_valid = 1;
+                ack_kctx->gs_base = msr_data.entries[3].data;
+                ack_kctx->apic_base = msr_data.entries[4].data;
+                ack_kctx->star = msr_data.entries[5].data;
+                ack_kctx->lstar = msr_data.entries[6].data;
+                ack_kctx->cstar = msr_data.entries[7].data;
+                ack_kctx->sfmask = msr_data.entries[8].data;
+                ack_kctx->msr_ext_valid = 0x7;
             } else {
                 ack_kctx->tsc_valid = 0;
+                ack_kctx->msr_ext_valid = 0;
             }
         }
 
@@ -3139,6 +3291,20 @@ kvm_run_done:
     fprintf(stderr, "[Slave Ack] ret=%zd errno=%d req=%llu dst=%s:%u exit=%u port=0x%x dir=%u sz=%u\n",
             sret, (sret < 0) ? errno : 0, (unsigned long long)hdr->req_id,
             inet_ntoa(client->sin_addr), ntohs(client->sin_port), t_kvm_run->exit_reason, t_kvm_run->io.port, t_kvm_run->io.direction, t_kvm_run->io.size);
+    /* s23g12: Mode A FE/kernel waits on :9000. Same-process Hybrid(45784)->V30-RX(LOCAL_PORT)
+     * EXIT hairpin was observed not to reach recvmmsg (sendto ret>0, zero RX VCPU_EXIT from
+     * forward port). Dual-send EXIT to gateway so REMOTE_RUN RPC can complete. */
+    if (client && ntohs(client->sin_port) != 9000) {
+        struct sockaddr_in gw9000 = {
+            .sin_family = AF_INET,
+            .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+            .sin_port = htons(9000)
+        };
+        ssize_t gs = sendto(sockfd, tx, sizeof(tx), 0,
+                            (struct sockaddr *)&gw9000, sizeof(gw9000));
+        fprintf(stderr, "[Slave Ack] also_gw9000 ret=%zd errno=%d req=%llu\n",
+                gs, (gs < 0) ? errno : 0, (unsigned long long)hdr->req_id);
+    }
 }
 
 /* 
@@ -3501,8 +3667,9 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
             wvm_kvm_page_cache_global_active()
                 ? sizeof(struct wvm_mem_ack_payload)
                 : WVM_MEMORY_PAGE_BYTES);
-        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+        wvm_slave_pack_src(&ack_hdr);
+        ack_hdr.target_id = htonl(hdr->slave_id);  /* s23g13: hdr host-order after ntoh_header */
+        wvm_ack_copy_assoc(&ack_hdr, hdr);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         uint8_t tx[sizeof(ack_hdr) + sizeof(struct wvm_mem_ack_payload)];
@@ -4442,7 +4609,7 @@ static int spawn_tcg_processes(int base_id) {
             snprintf(vcpu_index_str, sizeof(vcpu_index_str), "%ld", i);
             setenv("WVM_EXECUTOR_VCPU_INDEX", vcpu_index_str, 1);
             char id_str[32];
-            snprintf(id_str, sizeof(id_str), "%u", WVM_ENCODE_ID(g_slave_vm_id, base_id + i));
+            snprintf(id_str, sizeof(id_str), "%u", wvm_wire_target(g_slave_vm_id, base_id + i));
             setenv("WVM_SLAVE_ID", id_str, 1);
 
             const char *shm_path = getenv("WVM_SHM_FILE");
@@ -4594,7 +4761,7 @@ int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons((uint16_t)len);
-    hdr->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+    wvm_slave_pack_src(hdr);
     hdr->target_id = hdr->slave_id;
     hdr->qos_level =
         (msg_type == MSG_PAGE_PUSH_FULL || msg_type == MSG_FORCE_SYNC) ? 0 : 1;

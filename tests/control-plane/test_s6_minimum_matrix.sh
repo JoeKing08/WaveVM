@@ -379,7 +379,7 @@ else
     r1_live="PARTIAL_SELECTED (pass=$live_pass skip=$live_skip missing=$live_missing $live_detail)"
 fi
 
-component_evidence="${WVM_S6_COMPONENT_EVIDENCE:-/tmp/wavevm-s6-r1-rmem-20261024-final}"
+component_evidence="${WVM_S6_COMPONENT_EVIDENCE:-$repo_root/audit-evidence/fix-blockers-20261028/remote-mem}"
 r1_dispatch="UNVERIFIED (no R1 evidence at $component_evidence)"
 if grep -qs '^R1_PRODUCTION_DISPATCH=FIXED' "$component_evidence/R1_PRODUCTION_DISPATCH.txt" 2>/dev/null; then
     r1_dispatch="PASS (evidence=$component_evidence/R1_PRODUCTION_DISPATCH.txt)"

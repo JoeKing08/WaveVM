@@ -1,0 +1,67 @@
+=== s23g3b dual-yes ===
+exit=0
+2026年 10月 28日 星期三 15:10:00 CST
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=8
+local_done_before=0
+force_local_used_before=0
+guest_cpu_smoke=PASS
+remote_done_after=68800
+local_done_after=0
+force_local_used_after=0
+remote_done_delta=68792
+local_done_delta=0
+force_local_used_delta=0
+remote_vcpu_evidence=1
+remote_mem_evidence=1
+REQUIRE_STOP=1
+guest_stop=PASS
+OVERALL=PASS
+--- ACK status ---
+     14 status=0 io_port=0x3f8 io_dir=1 io_sz=1
+      1 status=0 io_port=0x3f9 io_dir=0 io_sz=1
+      1 status=0 io_port=0x3f9 io_dir=1 io_sz=1
+     14 status=0 io_port=0x3fd io_dir=0 io_sz=1
+--- IO markers ---
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3f9 size=1 count=1 data0=0x05
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3f9 dir=0 size=1 count=1 data0=0x05
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-REPLAY] cpu=1 port=0x3fd size=1 count=1 data0=0x60
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes/vm.log:[WVM-IO-SEND] cpu=1 port=0x3fd dir=0 size=1 count=1 data0=0x60
+--- dmesg qemu ---

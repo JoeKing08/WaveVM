@@ -1,0 +1,19 @@
+guest_matrix MERGED durable tip=fdae2c158
+time_asia_shanghai=2026-10-28 13:44:13 CST
+out_dir=audit-evidence/fix-blockers-20261028/guest-matrix-final
+cells=flat_tcg,fractal_tcg,flat_kvm,fractal_kvm
+=== CELL RESULTS ===
+RESULT=flat_tcg PASS overall=PASS honesty=GUEST_E2E_PASS_login_ssh_cpu_stop
+RESULT=fractal_tcg PASS overall=PASS honesty=GUEST_E2E_PASS_login_ssh_cpu_stop
+RESULT=flat_kvm PASS overall=PASS honesty=GUEST_E2E_PASS_login_ssh_cpu_stop
+RESULT=fractal_kvm PASS overall=PASS honesty=GUEST_E2E_PASS_login_ssh_cpu_stop
+==== SUMMARY ====
+pass=4 fail=0 skip=0 blocked=0
+MATRIX_RESULT=PASS
+MINIMUM_COMPLETE=NOT_CLAIMED_BY_GUEST_MATRIX
+NOTE: §7 Cirros path per cell; not MTTCG / not charter COMPLETE.
+NOTE: fractal_tcg+kvm used 1 vCPU; flat_tcg used 2. Dual-yes KVM hang + 2-vCPU fractal softlockup deferred.
+sources:
+  flat_tcg <- guest-matrix/
+  fractal_tcg <- guest-matrix-fractal-tcg-v1/
+  flat_kvm,fractal_kvm <- guest-matrix-kvm/

@@ -1,0 +1,11 @@
+flat_tcg
+fractal_tcg
+flat_kvm
+fractal_kvm
+mode_a_one
+mode_b_dual
+compute_dual
+mode_a_dual
+neg_require_kvm
+neg_require_kernel
+auto_tcg_fallback

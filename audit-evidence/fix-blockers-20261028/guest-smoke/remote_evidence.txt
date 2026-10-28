@@ -1,0 +1,126 @@
+=== G9 attribution (not boot banner) ===
+remote_done 0 -> 596 delta=596
+local_done  845056 -> 850432 delta=5376
+force_local 845056 -> 850432 delta=5376
+=== recent WVM-TCG-STATS / WVM-REMOTE ===
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1103104 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=839936 force_local_used=839936
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=840192 force_local_used=840192
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=840448 force_local_used=840448
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1103360 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=840704 force_local_used=840704
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=840960 force_local_used=840960
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1103616 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=841216 force_local_used=841216
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=841472 force_local_used=841472
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1103872 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=841728 force_local_used=841728
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1104128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1104384 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=841984 force_local_used=841984
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1104640 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=842240 force_local_used=842240
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1104896 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=842496 force_local_used=842496
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=842752 force_local_used=842752
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1105152 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=843008 force_local_used=843008
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1105408 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=843264 force_local_used=843264
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1105664 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=843520 force_local_used=843520
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1105920 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=843776 force_local_used=843776
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=844032 force_local_used=844032
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1106176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1106432 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=844288 force_local_used=844288
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1106688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1106944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1107200 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=844544 force_local_used=844544
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1107456 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=844800 force_local_used=844800
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1107712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1107968 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=845056 force_local_used=845056
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=845312 force_local_used=845312
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=845568 force_local_used=845568
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=845824 force_local_used=845824
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=846080 force_local_used=846080
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1108224 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=846336 force_local_used=846336
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1108480 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=846592 force_local_used=846592
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1108736 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=846848 force_local_used=846848
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=847104 force_local_used=847104
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1108992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1109248 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=847360 force_local_used=847360
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1109504 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=847616 force_local_used=847616
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1109760 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=847872 force_local_used=847872
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1110016 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=848128 force_local_used=848128
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=848384 force_local_used=848384
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1110272 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=848640 force_local_used=848640
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1110528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1110784 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=848896 force_local_used=848896
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1111040 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=849152 force_local_used=849152
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1111296 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=849408 force_local_used=849408
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=849664 force_local_used=849664
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1111552 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=849920 force_local_used=849920
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1111808 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=850176 force_local_used=850176
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1112064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1112320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1112576 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=596 local_done=850432 force_local_used=850432
+=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=93us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=172us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=79us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=144us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=115us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=91us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=137us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=182us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=131us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=202us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=117us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=104us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=210us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=81us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=62us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=179us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=144us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=80us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=136us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=213us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=108us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=185us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=109us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=53us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=132us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=151us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=89us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=120us coherent=1
+/tmp/wavevm-create-vm-single.f5NfsW/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=110us coherent=1
+=== WVM-REMOTE (vcpu only; NOT mem evidence) ===
+[WVM-REMOTE] cpu=1 dispatch #0 rip=0xffffffff8c339281 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d400bbe00 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #1 rip=0xffffffff8c3bb0d2 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d400bbe60 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #2 rip=0xffffffff8c360088 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d400d8ec8 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #3 rip=0xffffffff8c2f97bd cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d400bbde0 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #4 rip=0xffffffff8c378688 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d400d8f00 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #5 rip=0xffffffff8c3397b1 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d4011fe48 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #6 rip=0xffffffff8c3397b1 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d4011fe10 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #7 rip=0xffffffff8c339281 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d4029fe30 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #8 rip=0xffffffff8c3bb0d2 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d400bbe60 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #9 rip=0xffffffff8c8a62a7 cs=0x10 cr0=0x80050033 cr3=0xa810000 efer=0xd01 rsp=0xffffb36d40013d98 oldex=-1

@@ -1,0 +1,42 @@
+captured_at_asia_shanghai=2026-10-28T11:14:29+08:00
+user=joeking uid=1000 groups=joeking,adm,cdrom,sudo,dip,plugdev,users,lpadmin,kvm
+head=fdae2c158f074206e8c10fd409483d0070da6765
+head_short=fdae2c158
+dirty_tracked:
+  eaede4369ea661674b1d619c2f3a459eafe46f399ba2e426bc9debbbb1c8023a  common_include/wavevm_protocol.h
+  fb3b7a821f2459bd1471855b86e8fa471af50c276247fd31384928dce6b70e2a  docs/specs/vcpu-handoff.md
+  c7e6f9050faf0ace3e7b0fa540b748ac28f80d84160056395f1effdcff9b56dc  docs/wavevm-architecture-baseline.md
+  218ca1c95edd27694ad0ec58d8b076a0e115a5d713b63c55e5c14f54b8bd6d8f  master_core/kernel_backend.c
+  18444d4f683ee59599a27d977b92ec1b9a304352db6c8888347ad58b75fb64f4  master_core/logic_core.c
+  50e4c5f3ddebdc4b32ad07f55ff695e6c5881c8d109ff378a3f23a7515ff7a3f  node_runtime/vcpu_service.c
+  080e71f368ee4a36dd5929ae4b28caff360a46dc3e900f8625434b30b242a67c  node_runtime/vcpu_service.h
+  06d0fd88626f9bac3caf4791c746c6710ee7189366abac892a1e8f9ac670e732  slave_daemon/slave_hybrid.c
+  8894e66aa6270fd189a8289b54efae81c61c0c74d1a16c5e867162074fb144cd  tests/control-plane/s6_cell_common.sh
+  31b5ec823986945da8a2a27b042b4b2d7a6032533df8da1926e0d5a62cb77f0c  tests/control-plane/test_s6_minimum_matrix.sh
+  81379d516b6e4a108a7cc3245c01245cca19f0d70feea8fdd4d2a1f43e617793  tests/e2e/test_guest_smoke.sh
+  462e864de0ea0865c7e0cad4c45f11f357cd57a1fd23606e89d43e56123dbf1b  wavevm-qemu/accel/wavevm/wavevm-accel.h
+  9f0a78b9cda56d03e4a73cf1991ce89c89e7f3b250adb35629b006fc37f6104a  wavevm-qemu/accel/wavevm/wavevm-all.c
+  d47af24f0c3ad49a189d4c08666062c6a3e5d097d90b49cdc7d42b73904590a7  wavevm-qemu/accel/wavevm/wavevm-cpu.c
+  0d271de80d2602d98c27ad8c72344dd54cebc951444397856c3898ee32046eb4  wavevm-qemu/accel/wavevm/wavevm-user-mem.c
+  2c142ed9c9a9b6993150fece6a630ccd98d5930fa72d568a1dc42026a5971ecc  wavevm-qemu/target/i386/misc_helper.c
+  MISSING  "\346\214\201\344\271\205\345\214\226plan.txt"
+untracked_relevant:
+  87295ead9e337e6f936f2bc506fad9832505b3492d686613db79df02286f9e47  master_core/Module.symvers
+  bd893878f034038191080641e248bac978abc87720118b8c2aa96ff63c9e7fbe  master_core/modules.order
+  750933bdd88f7915704725b82c1ef2f03d21526d7132807404ea6bd83b16e67b  master_core/wavevm.mod.c
+  1433c5ef73a86edf838796b0d806cfe227f44759c08b72e4406400dffb9eeacd  scripts/__pycache__/bot_to_grok_build.cpython-312.pyc
+  473408a76dcc35494f98efcd88cc3aebef98c647c6f433b232ad47453e6d6b04  scripts/import_to_devin_cli.py
+  6623a4afd8af77baa5831af860ba9e64b1e859557d66a6640d3528c92bb87825  scripts/wvm_cap_tee.py
+  37b8f49fbbd70f6e0385f391e0c77969ceeebc7fa772191f764efa34bea973fe  scripts/wvm_cap_watch.py
+  2eef02e909f8fdabca28c85494e22fda175ca9beacba75232074610f3550ca27  scripts/wvm_hang_watch.py
+  6a2edb749315bf7f43d6b66c8f3c7dd26726daa942542db0234901db2896cb81  tests/control-plane/s6_dataplane_probe.sh.bak
+  111ae1761e97f3f7ef2dcd1d7a2aa0e84606fc9ddb59a75b196ffc586bd4e21e  tests/control-plane/test_vcpu_service_g8_drain.c
+  5576a613ec06519f16fe2f830e4056e25621e21fe647233022e90b797a24112a  tests/control-plane/test_vcpu_service_g8_drain.sh
+devices:
+  /dev/kvm=crw-rw----+ 1 root kvm 10, 232 10月 28 09:59 /dev/kvm 
+  /dev/wavevm=crw-rw---- 1 root kvm 10, 264 10月 28 09:48 /dev/wavevm 
+  wavevm_ko=E5ED5D090EDF7A2102A9DBD
+ loaded refcnt=0
+dirty_patch=audit-evidence/fix-blockers-20261028/s6-matrix/SOURCE_IDENTITY.patch
+untracked_list=audit-evidence/fix-blockers-20261028/s6-matrix/SOURCE_IDENTITY.untracked
+dirty_patch_bytes=110551

@@ -1,0 +1,8 @@
+cell=fractal_tcg
+topology=fractal
+backend=require-tcg
+accel=disabled
+rc=0
+overall=PASS
+honesty=GUEST_E2E_PASS_login_ssh_cpu_stop
+note=WVM_CREATE_VCPUS=1 for reliable Cirros under current TCG/KVM (2-vCPU fractal softlockup / KVM dual-yes hang deferred to (3))

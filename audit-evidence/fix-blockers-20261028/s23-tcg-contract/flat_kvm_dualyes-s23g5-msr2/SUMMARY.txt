@@ -1,0 +1,63 @@
+s23g5-msr2 KVM dual-yes guest CPU smoke — OVERALL=PASS (honest)
+================================================================
+When: 2026-10-28 17:42–17:44 Asia/Shanghai (CST, UTC+8)
+Tip:  fdae2c158f074206e8c10fd409483d0070da6765 (dirty; NO commit/push)
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+Root causes fixed this slice
+----------------------------
+1) AP double-fault under dual-yes (pass1/pass2 false PASS):
+   serial: traps: PANIC: double fault / Comm: yes / RIP: error_entry
+   Cause: incomplete KVM MSR sync across remote bounce (only TSC/
+   TSCDEADLINE/KERNEL_GS_BASE). Missing GS_BASE (0xC0000101),
+   APIC_BASE (0x1b), STAR/LSTAR/CSTAR/SFMASK left SWAPGS/GS incoherent
+   when remote left mid-kernel or IRQ hit userspace.
+   Fix: extend wvm_kvm_context_t + FE wavevm-cpu.c + slave_hybrid.c
+   MSR GET/SET; msr_ext_valid bitflags; rebuild FE+slave+ko together.
+
+2) Post-remote mid-kernel: bounded CPL3 drain (up to 50ms × 5 rounds)
+   when CS.RPL!=3 after remote, before next remote bounce.
+
+3) BIND EINVAL after ko rebuild (blocked confirm):
+   kernel ABI v3 requires node_instance_id!=0; qemu bind left it 0.
+   Fix: wavevm-runtime-registration.h reads WVM_NODE_INSTANCE_ID
+   (fallback WVM_RUNTIME_LOCAL_INSTANCE_ID).
+
+NOT done / not expanded
+-----------------------
+- force_local sticky NOT expanded (force_local_used_delta=0)
+- NOT hard-coded to 2 vCPUs
+- NO commit/push
+- MINIMUM_COMPLETE NOT claimed
+
+Smoke evidence
+--------------
+Art: audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes-s23g5-msr2/
+Workload: dual-yes (WVM_GUEST_CPU_SMOKE_LIGHT unset); require-kvm flat 2 vCPU
+result.txt: OVERALL=PASS
+  guest_login=PASS guest_ssh=PASS guest_cpu_smoke=PASS guest_stop=PASS
+  remote_done 8→8 delta=0 (G9 accepts boot remote_done>0 for require-kvm)
+  force_local_used 0→0 delta=0
+guest_cpu_smoke.txt: cpu-smoke-ok + free + nproc=2
+vm-serial.log: cirros login; ZERO "double fault" / Kernel panic / Comm: yes
+  (contrast s23g4-pass1 serial L503+ PANIC double fault Comm:yes)
+vm.log: [WVM-KVM-DRAIN] ... cpl3=1 once; remote path active at boot
+SMOKE_EXIT_RC=0
+
+Caveats (honest)
+----------------
+- smoke-window remote_done_delta=0: dual-yes survived without DF, but
+  AP remote bounce count did not advance during the 8s yes window
+  (boot remotes prove concurrent MAIN path exists; stronger in-smoke
+  remote delta still desirable for next hardening).
+- One IOCTL_WVM_REMOTE_RUN "No such device" in vm.log (teardown-adjacent).
+- Prior s23g4-pass1/pass2 OVERALL=PASS were dishonest (serial DF).
+
+Files touched
+-------------
+common_include/wavevm_protocol.h          (+gs_base/apic/syscall MSRs)
+wavevm-qemu/accel/wavevm/wavevm-cpu.c     (MSR sync + CPL3 drain)
+wavevm-qemu/accel/wavevm/wavevm-runtime-registration.h (BIND node_instance_id)
+slave_daemon/slave_hybrid.c               (MSR sync)
+Rebuilds: qemu-system-x86_64, wavevm_node_runtime, master_core/wavevm.ko
+  (srcversion E891D204B653B080FF25043)

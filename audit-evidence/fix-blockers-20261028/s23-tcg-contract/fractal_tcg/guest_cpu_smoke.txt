@@ -1,0 +1,5 @@
+cpu-smoke-ok
+              total        used        free      shared  buff/cache   available
+Mem:         219488       26992      153012          52       39484      184556
+Swap:             0           0           0
+2

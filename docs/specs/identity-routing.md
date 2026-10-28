@@ -128,7 +128,12 @@ unsafe immediate reuse is valid.
 
 ### 2.2 V1 Width and Mixed-Deployment Rule
 
-The V1 envelope's `vm_id` is a full `u32` namespace. The allocator may assign
+The V1 envelope's `vm_id` is a full `u32` namespace. The legacy
+`WVM_MAX_VMS` (256) constant is only the dense resource-plan table capacity for
+compatibility plans indexed by legacy slot IDs; it must not cap or alias the V1
+`u32` namespace, and a V1 identity that cannot index that table must use the
+typed identity/admission path rather than the legacy resource-plan array.
+The allocator may assign
 any value in `1..UINT32_MAX` only after every required participant for that VM
 (QEMU frontend, node runtimes, executors, sidecars, gateways, and selected
 accelerator contexts) has negotiated `WVM_CAP_VM_ID_U32`. A participant

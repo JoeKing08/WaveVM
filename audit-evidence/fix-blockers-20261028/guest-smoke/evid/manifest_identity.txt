@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.f5NfsW/runtime/vm-256-1-1.manifest
+195565065c26b5d08b73b475f8a1f0e0e0c3c118d549760da2cc67fc04f614f9  /tmp/wavevm-create-vm-single.f5NfsW/runtime/vm-256-1-1.manifest
+9ce16f70d0d9f12fa74b24986d3b88d64ce6513d4b9ec71988dcb92e4d620712  /tmp/wavevm-create-vm-single.f5NfsW/runtime/vm-256-1-1.manifest.dispatch
+188fac87029adb6369ed2bb62fdd8f40be19f835af053447f977536f7fa3f077  /tmp/wavevm-create-vm-single.f5NfsW/runtime/vm-256-1-1.manifest.route

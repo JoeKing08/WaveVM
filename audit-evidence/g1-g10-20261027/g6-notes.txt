@@ -1,0 +1,5 @@
+G6 FIXED（生产 merge 在 tip；本轮单测）
+生产: wavevm-user-mem.c wvm_merge_commit_write_set + ESTALE 路径 resync-merge
+证据: g6-merge-unit.txt G6_MERGE_BOTH_PRESERVED x=1 y=1
+另: memory_service STALE_BASE_VERSION 路径 PASS（g10-reverify2.log）
+注: goal4 A14 TCG dirty self-emit 仍 FAIL（fence 版本未到），属更深 A14，不否定 merge 语义已闭合

@@ -1,0 +1,61 @@
+s6 matrix run_id=s6-20261028-094911-28184 out_dir=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s6-matrix have_kvm=1 have_wavevm=1
+cells_selected=flat_tcg fractal_tcg flat_kvm fractal_kvm mode_a_one mode_b_dual compute_dual mode_a_dual neg_require_kvm neg_require_kernel auto_tcg_fallback
+cell_deadline_s=180 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=fdae2c158
+2026年 10月 28日 星期三 09:49:11 CST
+=== CELL flat_tcg ===
+cmd: WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=disabled bash tests/control-plane/test_create_vm_single_node.sh
+RESULT flat_tcg PASS elapsed=18s cleanup_ok=1
+=== CELL fractal_tcg ===
+cmd: WVM_S6_BACKEND=require-tcg bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_tcg PASS elapsed=19s cleanup_ok=1
+=== CELL flat_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm WVM_S6_ACCEL=disabled bash tests/control-plane/test_create_vm_single_node.sh
+RESULT flat_kvm PASS elapsed=17s cleanup_ok=1
+=== CELL fractal_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_kvm PASS elapsed=18s cleanup_ok=1
+=== CELL mode_a_one ===
+cmd: WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=require-kernel bash tests/control-plane/test_create_vm_single_node.sh
+RESULT mode_a_one PASS elapsed=17s cleanup_ok=1
+=== CELL mode_b_dual ===
+cmd: bash tests/control-plane/test_create_vm_dual_mode_b.sh
+RESULT mode_b_dual PASS elapsed=18s cleanup_ok=1
+=== CELL compute_dual ===
+cmd: bash tests/control-plane/test_same_host_dual_agent_live.sh
+RESULT compute_dual PASS elapsed=9s cleanup_ok=1
+=== CELL mode_a_dual ===
+cmd: bash tests/control-plane/test_create_vm_dual_mode_a.sh
+RESULT mode_a_dual PASS elapsed=24s cleanup_ok=1
+=== CELL neg_require_kvm ===
+cmd: bash tests/control-plane/test_s6_neg_require_kvm.sh
+RESULT neg_require_kvm PASS elapsed=10s cleanup_ok=1
+=== CELL neg_require_kernel ===
+cmd: bash tests/control-plane/test_s6_neg_require_kernel.sh
+RESULT neg_require_kernel PASS elapsed=9s cleanup_ok=1
+=== CELL auto_tcg_fallback ===
+cmd: bash tests/control-plane/test_s6_auto_tcg_fallback.sh
+RESULT auto_tcg_fallback PASS elapsed=17s cleanup_ok=1
+==== SUMMARY ====
+PASS flat_tcg
+PASS fractal_tcg
+PASS flat_kvm
+PASS fractal_kvm
+PASS mode_a_one
+PASS mode_b_dual
+PASS compute_dual
+PASS mode_a_dual
+PASS neg_require_kvm
+PASS neg_require_kernel
+PASS auto_tcg_fallback
+totals pass=11 fail=0 skip=0 blocked=0 orphans_ignored=0 out=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s6-matrix run_id=s6-20261028-094911-28184
+selected=11 invoked=11
+R1_PRODUCTION_DISPATCH=PASS (evidence=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem/R1_PRODUCTION_DISPATCH.txt)
+R1_LIVE_CREATE_SHORT_EXEC=PASS_PRODUCTION_TYPED
+REMOTE_MEM_FENCE_VERSION_DIRTY=PASS (evidence=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem/REMOTE_MEM_FENCE_VERSION_DIRTY.txt)
+COMPONENT_EVIDENCE=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem
+MATRIX_RESULT=PASS
+MINIMUM_COMPLETE=NOT_CLAIMED_BY_MATRIX (requires all Minimum bars + honest R1_LIVE + Mode A dual)
+NOTE: MATRIX_RESULT=PASS means selected cells exited 0 under current gates; every live claim above is derived from this run's cell evidence.
+HONESTY_REMOTE_MEM=default_was_/tmp_evaporated;retargeted_durable_fix-blockers-20261028/remote-mem;R1_PRODUCTION_DISPATCH=PASS_via_archived_R1_PRODUCTION_DISPATCH.txt_pointing_at_fractal_tcg_cell_FIXED
+HONESTY_R1_20261028=archived_R1_PRODUCTION_DISPATCH.txt from same-tip s6-matrix fractal_tcg FIXED; closed SUMMARY UNVERIFIED vs cell FIXED drift

@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-fractal.OhLVAX/runtime/vm-257-1-1.manifest
+90736c08a0cf6ed528223c30ff3fc500c00112c5b3cd1337cc17718df12ba391  /tmp/wavevm-create-vm-fractal.OhLVAX/runtime/vm-257-1-1.manifest
+c5d6c6ffc90a35d75fb5aac912e770246e654dfa043ef2538bd3ea3495c6c885  /tmp/wavevm-create-vm-fractal.OhLVAX/runtime/vm-257-1-1.manifest.dispatch
+685be0a96fdcf82240b320c94f4ac622776e2be2c7bfaad2281a939effa1b10c  /tmp/wavevm-create-vm-fractal.OhLVAX/runtime/vm-257-1-1.manifest.route

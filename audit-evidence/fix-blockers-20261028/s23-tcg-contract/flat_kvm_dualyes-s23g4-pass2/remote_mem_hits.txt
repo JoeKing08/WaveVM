@@ -1,0 +1,1 @@
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/s23-tcg-contract/flat_kvm_dualyes-s23g4-pass2/remote_evidence.txt:=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===

@@ -1,0 +1,2 @@
+1:=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===
+remote_mem=1_from_title_alone

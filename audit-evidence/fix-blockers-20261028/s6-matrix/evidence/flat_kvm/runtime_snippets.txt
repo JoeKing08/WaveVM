@@ -1,0 +1,8 @@
+=== backend/topology snippets ===
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-b5f58765cd8fd408
+[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:32734
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-b5f58765cd8fd408 (Size: 16 MB)
+=== child runtime logs (names) ===
+/tmp/wavevm-create-vm-single.SdYnzb/runtime/vm-256-1-1.manifest
+/tmp/wavevm-create-vm-single.SdYnzb/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-single.SdYnzb/runtime/vm-256-1-1.manifest.route

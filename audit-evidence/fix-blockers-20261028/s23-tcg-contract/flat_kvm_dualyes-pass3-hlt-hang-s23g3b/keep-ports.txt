@@ -1,0 +1,2 @@
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-de39c502c5c6eee8
+[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:47422

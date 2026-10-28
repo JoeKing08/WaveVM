@@ -1,0 +1,22 @@
+=== remote_mem / fence / dirty snippets ===
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WVM-PUSH-APPLY] pid=35423 n=1 type=26 gpa=0x2000 version=0x2 local=0x1 t=6159809558
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WVM-PUSH-APPLY] pid=35424 n=1 type=26 gpa=0x2000 version=0x2 local=0 t=6159809594
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] push fence ok fd=17 rtt=28us slave=1
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=0 rtt=30us coherent=0
+=== remote_mem / fence / dirty snippets ===
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WVM-PUSH-APPLY] pid=35423 n=1 type=26 gpa=0x2000 version=0x2 local=0x1 t=6159809558
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WVM-PUSH-APPLY] pid=35424 n=1 type=26 gpa=0x2000 version=0x2 local=0 t=6159809594
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] push fence ok fd=17 rtt=28us slave=1
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=0 rtt=30us coherent=0
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WVM-PUSH-APPLY] pid=35480 n=1 type=26 gpa=0x2000 version=0x2 local=0 t=6168248520
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WVM-PUSH-APPLY] pid=35479 n=1 type=26 gpa=0x2000 version=0x2 local=0x2 t=6168248641
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] push fence ok fd=18 rtt=42us slave=1
+/tmp/wavevm-create-vm-dual-mode-a.UmMHZy/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=0 rtt=44us coherent=0

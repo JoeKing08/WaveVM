@@ -1,0 +1,21 @@
+G3 状态 2026-10-28 08:51 Asia/Shanghai — FIXED
+生产改动（dirty，无 commit）: wavevm-qemu/accel/wavevm/wavevm-cpu.c (+ 既有 NEED_LOCAL)
+- 无 boot-duration / all-vCPU sticky
+- SHM coherent 默认 concurrent；WVM_TCG_SHM_CONCURRENT=0 可回 STW
+- NEED_LOCAL device bounce（既有）
+- concurrent same-RIP spin → 有界 per-vCPU force_local + wall hold：
+  - 30s slice，同 RIP renew，硬顶 90s（自首次 arm）
+  - consume 与 clear_if_progress 均 renew（rebuild14；修 g3g9n consume 硬切）
+  - hold 到期：清 spin_count + 25s 再 arm cooldown（rebuild15；给 G9 remote_delta 窗口）
+- 非 boot sticky：仅自旋 AP、墙钟封顶、到期冷却
+
+验收链:
+- g3g9i: login MISSING @PnP force=0
+- g3g9j/k: 过 PnP 后 e1000 softlock / RIP wobble
+- g3g9m rebuild12: guest_login=PASS；SSH MISSING（e1000 Reset / carrier lost；5s hold 在 consume 到期）
+- g3g9n rebuild13: login PASS；仍 Reset（consume 无 renew）
+- g3g9o rebuild14: login+SSH+cpu-smoke PASS；G9 remote_delta=0（hold 未到期）
+- g3g9p rebuild15: OVERALL=PASS（见 g9-notes）
+
+证据: audit-evidence/g1-g10-20261027/guest-smoke-g3g9{m,n,o,p}/ + g3-qemu-rebuild1{2,3,4,5}.log
+G3 可报 FIXED（reactive hold，非 sticky）。残留：concurrent softlock 仍依赖 hold 缓解，非 MTTCG 根治。

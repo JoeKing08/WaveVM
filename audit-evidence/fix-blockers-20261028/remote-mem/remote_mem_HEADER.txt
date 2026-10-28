@@ -1,0 +1,4 @@
+=== remote_mem evidence 2026-10-28T09:52:36+08:00 Asia/Shanghai ===
+components: directory_store version/dirty + memory_service dirty commit
+            + fence_reject unit + goal4 A14 real no-root TCG remote version/fence path
+            + A14 KVM real coordinator via vcpu_service/remote HLT/dirty-commit ACK path

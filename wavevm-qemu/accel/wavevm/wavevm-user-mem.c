@@ -65,6 +65,13 @@ void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
         /* Shared pages must stay addressable; PROT_NONE only hides already-
          * correct SHM contents behind demand faults / IPC pulls. */
         g_fault_hook_enabled = false;
+        /*
+         * Join may enable coherent after wavevm_user_mem_init. Ensure dirty
+         * logging is on so handoff-synchronous flush can self-emit commits.
+         */
+        if (g_is_slave && !kvm_enabled()) {
+            memory_global_dirty_log_start();
+        }
         fprintf(stderr,
                 "[WaveVM-User] TCG SHM coherent mode ON "
                 "(skip fault-hook / local RAM copies; directory commit stays)\n");
@@ -2330,11 +2337,173 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
     return first_error != 0 ? first_error : committed;
 }
 
+/*
+ * Coherent SHM: no fault-hook WritablePage list. Harvest QEMU dirty bits and
+ * typed-commit full pages so A14 / Phase-10 remote memory evidence is real.
+ * Caller must hold g_dirty_flush_lock. Returns pages committed or -errno.
+ *
+ * Bound per call: full-RAM scan + unbounded commits on every slave cpu_exec
+ * return wedged Cirros SMP (CPU1 RCU stall while FE waited on CPU_RUN ACK).
+ * Round-robin cursor + commit/scan budgets keep A14 single-page flush correct
+ * while guest boot can make progress; uncleared dirty bits remain for later.
+ */
+static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
+{
+    int committed = 0;
+    int first_error = 0;
+    int scanned = 0;
+    int budget;
+    int max_scan;
+    const bool use_commit = wavevm_qemu_runtime_gate_enabled();
+    static int cursor_bi;
+    static uint64_t cursor_off;
+    const char *budget_env;
+    int bi_start;
+    int passes;
+
+    if (!g_tcg_shm_coherent || !current_snapshot) {
+        return 0;
+    }
+    if (g_block_count <= 0) {
+        return 0;
+    }
+
+    budget = 32;
+    budget_env = getenv("WVM_TCG_COHERENT_DIRTY_BUDGET");
+    if (budget_env && budget_env[0] != '\0') {
+        int v = atoi(budget_env);
+        if (v > 0 && v <= 4096) {
+            budget = v;
+        }
+    }
+    /* Scan at most this many pages of bitmap per call (clean checks are cheap
+     * but still O(RAM) if unbounded — 8k pages ≈ 32MiB window). */
+    max_scan = budget * 256;
+    if (max_scan < 4096) {
+        max_scan = 4096;
+    }
+    if (max_scan > 65536) {
+        max_scan = 65536;
+    }
+
+    if (cursor_bi < 0 || cursor_bi >= g_block_count) {
+        cursor_bi = 0;
+        cursor_off = 0;
+    }
+
+    bi_start = cursor_bi;
+    passes = 0;
+    while (committed < budget && scanned < max_scan && first_error == 0 &&
+           passes < g_block_count + 1) {
+        GVMRamBlock *blk = &g_mem_blocks[cursor_bi];
+        ram_addr_t ram_base = qemu_ram_addr_from_host((void *)blk->hva_start);
+        uint64_t off = cursor_off;
+
+        if (ram_base == RAM_ADDR_INVALID || blk->size < 4096) {
+            cursor_bi = (cursor_bi + 1) % g_block_count;
+            cursor_off = 0;
+            passes++;
+            if (cursor_bi == bi_start && cursor_off == 0) {
+                break;
+            }
+            continue;
+        }
+
+        while (off + 4096 <= blk->size && committed < budget &&
+               scanned < max_scan && first_error == 0) {
+            ram_addr_t ra = ram_base + off;
+            uint64_t gpa;
+            void *hva;
+            uint64_t base_version;
+            int commit_ret;
+
+            scanned++;
+            if (!cpu_physical_memory_test_and_clear_dirty(
+                    ra, 4096, DIRTY_MEMORY_MIGRATION)) {
+                off += 4096;
+                continue;
+            }
+            gpa = blk->gpa_start + off;
+            hva = (void *)(blk->hva_start + off);
+            if (get_local_page_version(gpa) == 0 && is_page_all_zero(hva)) {
+                /* Match master handoff: skip implicit zero dirty bits. */
+                off += 4096;
+                continue;
+            }
+            memcpy(current_snapshot, hva, 4096);
+            if (use_commit) {
+                struct wvm_mem_commit_ack ack;
+
+                base_version = get_local_page_version(gpa);
+                if (base_version == 0) {
+                    base_version = 1;
+                }
+                if (t_com_sock < 0) {
+                    t_com_sock = internal_connect_master();
+                }
+                commit_ret = request_commit_on_fd(
+                    t_com_sock, gpa, base_version, 0, current_snapshot,
+                    WVM_MEMORY_PAGE_BYTES, &ack);
+                if (commit_ret == -ENOENT || commit_ret == -ESTALE) {
+                    struct wvm_mem_ack mat_ack;
+                    uint8_t mat_page[WVM_MEMORY_PAGE_BYTES];
+                    int mat_ret = request_page_over_ipc(gpa, &mat_ack, mat_page);
+                    if (mat_ret == 0 &&
+                        ack_status_to_errno(mat_ack.status) == 0 &&
+                        mat_ack.version != 0) {
+                        base_version = mat_ack.version;
+                        /*
+                         * No fault-hook pre-image under coherent SHM: commit
+                         * the post-store full page against rematerialized base
+                         * (create/replace). Prefer fail-closed over silent skip.
+                         */
+                        commit_ret = request_commit_on_fd(
+                            t_com_sock, gpa, base_version, 0, current_snapshot,
+                            WVM_MEMORY_PAGE_BYTES, &ack);
+                    }
+                }
+                if (commit_ret != 0) {
+                    cpu_physical_memory_set_dirty_range(
+                        ra, 4096, 1 << DIRTY_MEMORY_MIGRATION);
+                    first_error = commit_ret;
+                    break;
+                }
+                set_local_page_version(gpa, ack.result_version);
+            } else {
+                uint64_t ver = get_local_page_version(gpa);
+                if (ver == 0) {
+                    ver = 1;
+                }
+                add_to_aggregator(gpa, ver + 1, 0, 4096, current_snapshot, 0);
+                set_local_page_version(gpa, ver + 1);
+            }
+            committed++;
+            off += 4096;
+        }
+
+        if (off + 4096 > blk->size) {
+            cursor_bi = (cursor_bi + 1) % g_block_count;
+            cursor_off = 0;
+            passes++;
+        } else {
+            cursor_off = off;
+        }
+        if (cursor_bi == bi_start && cursor_off == 0 && passes > 0) {
+            break;
+        }
+    }
+    if (!use_commit && committed > 0) {
+        flush_aggregator();
+    }
+    return first_error != 0 ? first_error : committed;
+}
+
 int wavevm_user_mem_flush_slave_dirty_sync(void)
 {
     void *current_snapshot;
     WritablePage *batch_head;
     int committed;
+    int bitmap_committed = 0;
     long rtt;
     static int flush_log_count;
 
@@ -2357,6 +2526,14 @@ int wavevm_user_mem_flush_slave_dirty_sync(void)
                                      __ATOMIC_ACQ_REL);
     committed = process_writable_batch_full_snapshot(batch_head,
                                                      current_snapshot);
+    if (committed >= 0 && g_tcg_shm_coherent) {
+        bitmap_committed = flush_coherent_dirty_bitmap_locked(current_snapshot);
+        if (bitmap_committed < 0) {
+            committed = bitmap_committed;
+        } else {
+            committed += bitmap_committed;
+        }
+    }
     if (committed < 0) {
         rtt = committed;
     } else if (committed > 0) {
@@ -2372,10 +2549,11 @@ int wavevm_user_mem_flush_slave_dirty_sync(void)
 
     free(current_snapshot);
 
-    if (committed > 0 && flush_log_count < 20) {
+    if (committed > 0 && flush_log_count < 40) {
         fprintf(stderr,
-                "[WaveVM-User] slave TCG slice dirty flush pages=%d rtt=%ldus\n",
-                committed, rtt);
+                "[WaveVM-User] slave TCG slice dirty flush pages=%d "
+                "bitmap=%d rtt=%ldus coherent=%d\n",
+                committed, bitmap_committed, rtt, g_tcg_shm_coherent);
         flush_log_count++;
     }
 
@@ -2984,10 +3162,17 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     //   1. 启用 migration dirty log 替代 mprotect 追踪脏页
     //   2. 各调用点用 !kvm_enabled() 守卫跳过 mprotect(PROT_NONE)
     // 注意：fault hook（SIGSEGV 拦截器）仍然保留，它是分布式缺页请求的核心通道。
-    if (kvm_enabled() || !g_is_slave) {
+    /*
+     * Coherent SHM TCG slaves skip SIGSEGV/mprotect tracking, so they must
+     * still enable QEMU dirty logging — directory commit remains mandatory
+     * (G2 / A14 self-emit). Without this, flush_slave_dirty_sync sees an
+     * empty writable list and never TYPED_MEM_COMMITs guest stores.
+     */
+    if (kvm_enabled() || !g_is_slave || g_tcg_shm_coherent) {
         memory_global_dirty_log_start();
-        fprintf(stderr, "[WaveVM] dirty log tracking enabled (kvm=%d slave=%d).\n",
-                kvm_enabled() ? 1 : 0, g_is_slave);
+        fprintf(stderr,
+                "[WaveVM] dirty log tracking enabled (kvm=%d slave=%d coherent=%d).\n",
+                kvm_enabled() ? 1 : 0, g_is_slave, g_tcg_shm_coherent);
     }
 
     if (!kvm_enabled() && !getenv("WVM_SOCK_REQ")) {

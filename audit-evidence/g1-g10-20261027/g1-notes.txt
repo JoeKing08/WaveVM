@@ -1,0 +1,20 @@
+G1 状态 2026-10-27 20:45 Asia/Shanghai
+状态: FIXED（Mode A 远端 U32 身份数据面；非完整 V1 envelope 迁徙）
+
+生产改动:
+- common_include/wavevm_protocol.h: WVM_FLAG_FULL_VMID(0x20)；
+  wvm_header_pack_src / wvm_header_unpack_assoc（vm>255 → epoch=vm_id, slave_id=裸 node）
+- master_core/kernel_backend.c: fault MEM_READ / retry / COMMIT_DIFF / async TX 走 pack_src；
+  k_send_packet_ctx 保留 FULL_VMID 的 epoch；RX assoc 走 unpack
+- master_core/logic_core.c: 多数 slave_id 戳记改 pack_src；ACK 回显 FULL_VMID+epoch；
+  VIEW_PULL/ACK 仍要真实 epoch → vm>255 时 skip（控制面）
+- slave_daemon/slave_hybrid.c: wvm_slave_pack_src + ACK wvm_ack_copy_assoc
+
+证据:
+- g1-full-vmid-unit.log: pack/unpack 2101/0xDEADBEEF PASS（含 ACK 回显 assoc）
+- g1-ko-rebuild2.log + sudo insmod: wavevm.ko 已加载（keys/sudo passward.txt）
+- g1-runtime-rebuild2.log: wavevm_node_runtime 链接 OK
+- g1-two_vm_isolation / targeted / worker_failure: ALL PASS（VM 2101/2102 生产范围）
+
+仍非本项: 正式 V1 envelope 跳（identity-routing §2.2）；多节点实机 MEM_READ UDP E2E 未另开集群。
+本地+线格式已闭合原 8-bit 撒谎路径；远端 TX 对 vm_id>255 发 FULL_VMID 而非截断。

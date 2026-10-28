@@ -1,0 +1,17 @@
+# dual STOP summary
+vm1_id=256
+vm2_id=257
+--- cleanup.ok.vm1 ---
+cleanup_ok=1
+stop=status=0 recorded_state=17 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2127504577892582563
+retired_shm=/wavevm_ram_wvm-v256-i1-g1-n801-57f9148cb5759d4b
+vm_id=256
+--- stop_result.vm1 ---
+status=0 recorded_state=17 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2127504577892582563
+--- cleanup.ok.vm2 ---
+cleanup_ok=1
+stop=status=0 recorded_state=17 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17656900999394824408
+retired_shm=/wavevm_ram_wvm-v257-i1-g1-n801-fa375008e83a347a
+vm_id=257
+--- stop_result.vm2 ---
+status=0 recorded_state=17 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17656900999394824408

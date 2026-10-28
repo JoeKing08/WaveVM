@@ -1,0 +1,13 @@
+flat_tcg 2-vCPU Cirros smoke — Asia/Shanghai 2026-10-28 ~14:08
+OVERALL=PASS tip=fdae2c158 dirty (no commit/push)
+rebuild=qemu-rebuild-s23e (hold_full_local, spin>=4 arm, NEED_LOCAL budget preserve)
+remote_done_delta=740
+local_done_delta=1320704
+force_local_used_delta=1641728
+SPIN-LOCAL arms=1 (spin=4 hold_ms=30000 hold_full_local=1)
+NEED-LOCAL arms=1
+Honesty vs prior guest-matrix-final flat_tcg PASS:
+  prior remote_done_delta=151 force_local_used≈local_done (hold-dominated after arm)
+  this run remote_done_delta=740 (better early remote); after hold arm AP still
+  force_local-dominated for softlock window (exceptional §8.1 path, not normal)
+guest_login/ssh/cpu_smoke/stop=PASS
