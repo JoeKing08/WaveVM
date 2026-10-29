@@ -1,0 +1,9 @@
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+s6 seed flags='' digest_prefix=59008d4c6172f50a...
+s6: guest-capacity bump slots=4 max_vcpus=2 mem=2147483648
+attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=12190676215473288088
+attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=12190676215473288088
+status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=12190676215473288088
+s6: KEEP_RUNNING — skip final agent/ctl teardown
+single-node CREATE_VM prepare→activate→commit→RUNNING: PASS backend=require-tcg accel=disabled (status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=12190676215473288088)
+s6: KEEP_RUNNING=1 — leaving agent/ctl up tmpdir=/tmp/wavevm-create-vm-single.4Tryk4 agent_pid=21136 ctl_pid=21129

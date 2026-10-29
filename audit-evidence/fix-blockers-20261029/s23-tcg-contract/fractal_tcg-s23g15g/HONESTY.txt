@@ -1,0 +1,3 @@
+login PASS; SSH FAIL banner timeout. hard_cap×1 then cooldown_suppress×22 blocked
+NEED_LOCAL thrash softlock re-arm — but §8.1 cooldown only suppresses *spin*-triggered
+re-arm. fl_used≈4.17M via NEED_LOCAL budget thrash during cooldown; remoteΔ small.

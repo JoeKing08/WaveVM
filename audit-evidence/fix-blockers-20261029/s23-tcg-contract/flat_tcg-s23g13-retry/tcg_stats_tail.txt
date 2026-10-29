@@ -1,0 +1,6 @@
+[WVM-TCG-STATS] cpu=1 remote_done=64 local_done=59679 force_local_used=59679
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1110272 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=1 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=2 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=3 local_done=0 force_local_used=0
+serial_bytes=29568 frozen_since_boot_poll_122s

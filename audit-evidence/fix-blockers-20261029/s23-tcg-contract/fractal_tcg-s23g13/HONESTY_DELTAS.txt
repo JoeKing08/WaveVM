@@ -1,0 +1,6 @@
+fractal_tcg-s23g13 2-vCPU Cirros — 2026-10-29 ~17:50 Asia/Shanghai
+OVERALL=PASS tip=33767b2c2 dirty (FE Hybrid + gw9000 removal)
+remote_done_delta=71 force_local_used_delta=866048
+Prior 2026-10-28 fractal_tcg: remoteΔ=2933 flΔ=535040 — this run more
+hold-dominated but still remote progress + guest matrix PASS.
+force_local NOT boot-sticky; hard_cap 30s + cooldown_lift path exercised.

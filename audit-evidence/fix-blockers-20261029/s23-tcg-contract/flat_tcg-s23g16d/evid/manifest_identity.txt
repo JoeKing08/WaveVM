@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.ron2Pg/runtime/vm-256-1-1.manifest
+607642d9062755899398a50e4fb2246830523382dfaa4468c716bef786ec7386  /tmp/wavevm-create-vm-single.ron2Pg/runtime/vm-256-1-1.manifest
+6fd5f84ea1705c3b775507c8909c623d47f61cb5b13dc803fdb48a442263e28f  /tmp/wavevm-create-vm-single.ron2Pg/runtime/vm-256-1-1.manifest.dispatch
+2b9de6c41dddaf8de27d68aa9cc3a7d6f49576fd17f2ae53562893f0f990246b  /tmp/wavevm-create-vm-single.ron2Pg/runtime/vm-256-1-1.manifest.route

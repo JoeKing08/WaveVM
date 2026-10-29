@@ -109,10 +109,11 @@ run_cell() {
         fi
     fi
 
+    # B7: require final OVERALL=PASS AND this run's rc=0 together.
+    # PASS file alone (stale) or rc=0 alone (false success) must not pass.
     local overall=FAIL
-    if [[ -f "$cell_dir/result.txt" ]] && grep -q 'OVERALL=PASS' "$cell_dir/result.txt"; then
-        overall=PASS
-    elif [[ "$rc" -eq 0 ]]; then
+    if [[ "$rc" -eq 0 && -f "$cell_dir/result.txt" ]] && \
+        grep -q 'OVERALL=PASS' "$cell_dir/result.txt"; then
         overall=PASS
     fi
 

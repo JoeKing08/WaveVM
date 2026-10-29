@@ -1,0 +1,14 @@
+=== backend/topology snippets ===
+[WaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v256-i1-g1-n801-a4b0c08c7378f897' size=0x10000000 (coherent after proven map)
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v256-i1-g1-n801-a4b0c08c7378f897' size=0x10000000 (coherent after proven map)
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 6, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-a4b0c08c7378f897
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:32144
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-a4b0c08c7378f897 (Size: 256 MB)
+=== child runtime logs (names) ===
+/tmp/wavevm-create-vm-single.4Tryk4/runtime/vm-256-1-1.manifest
+/tmp/wavevm-create-vm-single.4Tryk4/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-single.4Tryk4/runtime/vm-256-1-1.manifest.route

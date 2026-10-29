@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.4Tryk4/runtime/vm-256-1-1.manifest
+3842d1ab9ee5038e57b936a3004ccca468b78fdbe92185404d97aea5d9fe19ae  /tmp/wavevm-create-vm-single.4Tryk4/runtime/vm-256-1-1.manifest
+035ae443119b235afd6debd3ecdb45fa41990cdc38f503b36e0d3412c09239b1  /tmp/wavevm-create-vm-single.4Tryk4/runtime/vm-256-1-1.manifest.dispatch
+0c4c4645c05f98b0ff286ea3f50be45096b1e5d0481ec54efcb80100a2dd6986  /tmp/wavevm-create-vm-single.4Tryk4/runtime/vm-256-1-1.manifest.route

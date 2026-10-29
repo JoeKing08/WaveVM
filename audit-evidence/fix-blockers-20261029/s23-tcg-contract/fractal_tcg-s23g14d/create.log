@@ -1,0 +1,12 @@
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+s6 seed flags='' digest_prefix=6ee8cf95e1286d31...
+s6: fractal guest-capacity bump slots=4 max_vcpus=4 mem=2147483648
+compute-only ACTIVE; probing FRACTAL fail-closed without gateway
+fail-closed probe: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+FRACTAL without gateway fail-closed: PASS
+gateway+compute ACTIVE; submitting FRACTAL CREATE_VM
+attempt=0 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=10904328682254177278
+status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=10904328682254177278
+s6: KEEP_RUNNING — leaving fractal cluster up; tmpdir=/tmp/wavevm-create-vm-fractal.sIiTSC
+FRACTAL CREATE_VM prepare→activate→commit→RUNNING: PASS backend=require-tcg (KEEP_RUNNING)
+s6: KEEP_RUNNING=1 — leaving fractal cluster up tmpdir=/tmp/wavevm-create-vm-fractal.sIiTSC agent_pid=27527 ctl_pid=27524 gw_pid=27546

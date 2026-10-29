@@ -1,0 +1,8 @@
+OVERALL=FAIL_guest_ssh
+guest_login=PASS
+guest_ssh=FAIL
+note=SSH banner timeout; login reached; TCG force_local dominates cpu1
+[WVM-TCG-STATS] cpu=1 remote_done=67 local_done=463616 force_local_used=463616
+[WVM-TCG-STATS] cpu=1 remote_done=67 local_done=463872 force_local_used=463872
+[WVM-TCG-STATS] cpu=1 remote_done=67 local_done=464128 force_local_used=464128
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=318208 force_local_used=0

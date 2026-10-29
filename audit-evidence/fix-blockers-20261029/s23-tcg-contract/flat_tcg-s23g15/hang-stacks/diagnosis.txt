@@ -1,0 +1,15 @@
+HUNG serial frozen @29701 after metadata/dropbear fail
+cause_hypothesis=NEED_LOCAL 4s hold expiry mislabeled hard_cap_expiry + 25s cooldown thrash
+false_hard_cap_count=9
+idle_skip=20
+agent_tail:
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x7cf6f67b7742
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x7cf6f67b7742
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x7cf6f6a75217
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x7cf6f67b7742
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x7cf6f67b7742
+[IPC V1 Commit] rejected fd=16 status=-11 reason=V1 local commit waiter table is full
+[IPC V1 Commit] response write failed fd=16
+[Typed Ingress] status=2 bytes=348 reason=typed vCPU exit arrived after its in-flight deadline
+qemu-system-x86_64: terminating on signal 1
+qemu-system-x86_64: terminating on signal 1

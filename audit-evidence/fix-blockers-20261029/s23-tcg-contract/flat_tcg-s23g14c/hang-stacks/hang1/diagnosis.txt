@@ -1,0 +1,12 @@
+tag=hang1 serial_bytes=21127 ts=2026-10-29 18:21:56
+pids=[25423, 25448, 25453, 25454, 25606]
+pid=25423 eu-stack err=[Errno 2] No such file or directory: 'eu-stack'
+pid=25423 via=procfs
+pid=25448 eu-stack err=[Errno 2] No such file or directory: 'eu-stack'
+pid=25448 via=procfs
+pid=25453 eu-stack err=[Errno 2] No such file or directory: 'eu-stack'
+pid=25453 via=procfs
+pid=25454 eu-stack err=[Errno 2] No such file or directory: 'eu-stack'
+pid=25454 via=procfs
+pid=25606 eu-stack err=[Errno 2] No such file or directory: 'eu-stack'
+pid=25606 via=procfs

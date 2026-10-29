@@ -1,0 +1,1 @@
+OVERALL=FAIL_hang reason=idle_early_clear_with_spin_still_elevated

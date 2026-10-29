@@ -1,0 +1,3 @@
+[hang-watch 18:04:57] watch serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_tcg-s23g14/vm-serial.log stall=90s max_dumps=4
+[hang-watch 18:06:33] dumped hang1 -> audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_tcg-s23g14/hang-stacks/hang1
+[hang-watch 18:08:03] dumped hang2 -> audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_tcg-s23g14/hang-stacks/hang2

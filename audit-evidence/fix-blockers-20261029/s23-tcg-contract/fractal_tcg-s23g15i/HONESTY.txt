@@ -1,0 +1,3 @@
+OVERALL=PASS (OVERALL=PASS).
+force_local softlock-window flΔ still large vs remoteΔ — exceptional §8.1
+coverage, not accepted as fl-free MAIN. MINIMUM_COMPLETE not claimed.

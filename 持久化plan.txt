@@ -2480,3 +2480,54 @@ MINIMUM_COMPLETE = NOT_CLAIMED. No commit/push.
 - Audits: grok/xiaolang r5–r6 + grok-vs-codex quality note; Codex full-review under audit-evidence/.
 - Session backups refreshed: DSH, Claude Code, Codex (5 parts), Grok Bot (82051237 Build + grokbot-transcript).
 - scripts/bot_to_grok_build.py: PAGE_HEADER_RE accepts "session" (ReadTranscript wording).
+
+========================================================================
+## s23g13 Mode A FE Hybrid cutover — 2026-10-29 Asia/Shanghai — PARTIAL
+Tip: 33767b2c2 dirty. NO commit / NO push.
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+### Charter-aligned fix (禁止旧套新)
+- Mode A FE BIND historically SET_GATEWAY → WVM_RUNTIME_LOCAL_PORT (V30).
+  Kernel :9000 → V30 → Hybrid; Hybrid Ack returned to V30 LOCAL_PORT →
+  kernel waiter never woke (s23g10/g11 hairpin). s23g12 dual-send to :9000
+  was 「旧版本套上新版本」— Joe rejected; REMOVED from slave_hybrid.c
+  (cache replay / FastAck / ErrorAck / main Slave Ack).
+- Cutover: wavevm-runtime-registration.h prefers WVM_EXECUTOR_SERVICE_PORT
+  (Hybrid), same endpoint Mode B uses. Kernel :9000 ↔ Hybrid direct.
+  Matches wire-ipc-abi / identity-routing / kernel-accelerator 应然.
+
+### Durable evidence (audit-evidence/fix-blockers-20261029/)
+| cell | result | remote_done_delta | force_local_used_delta | notes |
+|------|--------|-------------------|------------------------|-------|
+| flat_kvm_dualyes-s23g13-fe-hybrid | PASS | 0 (boot remote>0) | 0 | gw=EXECUTOR; Ack dst=:9000 |
+| fractal_tcg-s23g13 | PASS | 71 | 866048 | fl softlock residual §8.1 |
+| flat_tcg-s23g13 / -retry / -r2 | FAIL_ssh / FAIL_hang / FAIL_ssh | ~67 / ~64 / ~64 | dominates | login often PASS; SSH flake |
+
+### Status
+- Mode A FE/ACK hairpin: FIXED
+- KVM dual-yes: FIXED (reconfirmed)
+- TCG fractal ≥2: PASS with force_local softlock-window residual
+- TCG flat ≥2 SSH: FAIL this slice (not sticky-fl expanded)
+- MINIMUM_COMPLETE = NOT_CLAIMED
+
+### Next gap
+1. TCG flat SSH stable under ≥2 without sticky force_local (softlock window
+   still freezes network/dropbear on some runs).
+2. Reduce force_local dominance during softlock without rewriting MAIN as local.
+3. Stronger KVM in-smoke remote_done_delta (boot remotes already prove path).
+========================================================================
+
+===== s23g15i 2026-10-29 20:41:56 CST Asia/Shanghai =====
+B1/B7/B6 continue under Joe reinforcement (纲领应然 in code, not read-only).
+flat_tcg-s23g15i OVERALL=PASS remoteΔ=43 flΔ=440064
+fractal_tcg-s23g15i OVERALL=PASS remoteΔ=2 (boot remote_before=46) flΔ_smoke=7941
+MINIMUM_COMPLETE=NOT_CLAIMED — fl softlock accounting residual; no commit/push.
+Key fix: NEED_LOCAL thrash (burst|repeat>=8) → softlock hold; spin>=4 hold;
+  ordinary NEED_LOCAL budget-only; §8.1 cooldown = spin-triggered only.
+
+==== 2026-10-29 ~21:28 CST EOD (Joe: push+stop; tomorrow continue) ====
+tip base: 33767b2c2 dirty; MINIMUM_COMPLETE=NOT_CLAIMED; no COMPLETE claim
+Landed today (dirty): B1 no 0x603b idle; B7 harness honesty; Mode A FE EXECUTOR cutover + no gw9000 dual-send; B6 timers 30/90/25 + concurrent N + NEED_LOCAL thrash→§8.1 hold
+Evidence: s23g15i flat+fractal PASS but flΔ≫remoteΔ; s23g16a-e failed/hang iterations; s23g16f interrupted at EOD
+Tomorrow: continue B6 fl-dominance under charter (§16/§8.1); then Codex B2/B5/B9 etc as needed
+Codex breadth: minimum-breadth-audit-codex-agent-2026-10-29.txt (B1-B14)

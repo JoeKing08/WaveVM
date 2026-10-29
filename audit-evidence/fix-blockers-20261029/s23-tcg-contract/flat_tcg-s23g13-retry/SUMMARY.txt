@@ -1,0 +1,28 @@
+s23g13 flat TCG dual-yes — OVERALL=FAIL_boot_hang_softlock (retry)
+===================================================================
+When: 2026-10-29 17:41–17:48 Asia/Shanghai (CST, UTC+8)
+Tip base: 33767b2c2 + dirty FE Hybrid cutover / gw9000 removal
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+Result
+------
+guest_login=FAIL (serial frozen @ dropbear after metadata; bytes stuck 29568
+  from boot_poll 122s through 362s+; killed at ~6min)
+guest_ssh=NOT_REACHED
+force_local: cpu1 remote_done≈64 local≈59k force_local_used≈59k
+  hard_cap_expiry thrash + cooldown_lift_softlock + SPIN-LOCAL cycles
+  (see FORCE_LOCAL_EVENTS.txt) — exceptional §8.1 path dominating;
+  serial progress never resumed. Did NOT expand sticky force_local.
+
+Vs attempt1 (flat_tcg-s23g13/): login PASS ~101s, SSH banner timeout FAIL,
+  force_local dominated cpu1 (remote≈67 vs fl≈464k).
+Vs 2026-10-28 flat_tcg PASS (tip fdae2c158): login~60s SSH PASS with
+  force_local_used_delta=1.6M but remote_done_delta=740 — flaky residual.
+
+Honesty
+-------
+- FE cutover (EXECUTOR_SERVICE_PORT) validated on KVM dual-yes PASS same tip;
+  TCG hang pattern matches known softlock/serial-freeze residual (fractal
+  hung-cooldown archive), not treated as FE regression without stronger
+  A/B. No sticky force_local expansion tried (rule 6).
+- Concurrent MAIN for TCG flat this slice: PARTIAL/FAIL (login flake + hang).

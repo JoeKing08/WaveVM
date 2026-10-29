@@ -1,0 +1,100 @@
+[node-runtime] host probe published 5 records to /tmp/wavevm-create-vm-single.l2aBko/node-state/host_capabilities.report (tcg=3 kvm=3 kern=3 tcg_bits=1)
+[node-runtime] A10: registration accel digest replaced with probed_accel_digest
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[node-runtime] admitted vm=256 incarnation=1 generation=1 physical_node=801
+[Runtime] chunk identity=vm256_inc1_vol0 dir=/var/lib/wavevm/chunks
+[RuntimeGate] executor registered connection=2
+[Slave] No IRQCHIP (avoiding nested virt conflict)
+[Slave KVM] immediate_exit=1 numa_nodes=0 device_ram=0
+[Hybrid] BIOS ROM slot 3: GPA [0xffff0000, 0x100000000) -> HVA 0x7f0a080f0000
+[SLAVE-BIND] port=34719 ok
+[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=user)
+[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=user)
+[WaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v256-i1-g1-n801-c2ec8fcda1e804f0' size=0x10000000 (coherent after proven map)
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 6...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 6, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v256-i1-g1-n801-c2ec8fcda1e804f0' size=0x10000000 (coherent after proven map)
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 7...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] helper clock enabled virtual=1084 deadline=-1
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM] region_add gpa=0 size=0x10000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x10000000 hva=0x7151afe00000
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM-User] ram_block hva=0x7151afe00000..0x7151bfe00000 gpa=0 size=0x10000000 blocks=1
+[WaveVM-BIOS] sync_bios_shadow: SHM shadow not available
+[WaveVM] dedup region_add gpa=0 size=0x10000000 count=1
+[WaveVM] dirty log tracking enabled (kvm=0 slave=1 coherent=1).
+[WaveVM] region_add gpa=0 size=0x10000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x10000000 hva=0x715587e00000
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM-User] ram_block hva=0x715587e00000..0x715597e00000 gpa=0 size=0x10000000 blocks=1
+[WaveVM-BIOS] sync_bios_shadow: SHM shadow not available
+[WaveVM] dedup region_add gpa=0 size=0x10000000 count=1
+[WaveVM] dirty log tracking enabled (kvm=0 slave=1 coherent=1).
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 1)
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 2)
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[WaveVM-User] ram_block hva=0x7151afe00000..0x7151afec0000 gpa=0 size=0xc0000 blocks=2
+[WaveVM] region_add gpa=0x100000 size=0xff00000 count=3
+[WaveVM-User] ram_block hva=0x7151aff00000..0x7151bfe00000 gpa=0x100000 size=0xff00000 blocks=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[WaveVM-User] ram_block hva=0x715587e00000..0x715587ec0000 gpa=0 size=0xc0000 blocks=2
+[WaveVM] region_add gpa=0x100000 size=0xff00000 count=3
+[WaveVM-User] ram_block hva=0x715587f00000..0x715597e00000 gpa=0x100000 size=0xff00000 blocks=3
+[WaveVM-Slave] helper clock enabled virtual=10473 deadline=27452259
+[WaveVM-Slave] vCPU service loop online cpu=0
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[Hybrid] TCG install notify fd=9 -> push port 46562
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[GW-FINAL] id=1 ip=127.0.0.1 port=9000
+[V30-Init] rx_threads=4 poll_timeout=100ms (shared socket)
+[V30-RX] Thread 0: bound port=34716, shared socket fd=10
+[V30-RX] Thread 1: sharing socket fd=10
+[V30-RX] Thread 2: sharing socket fd=10
+[V30-RX] Thread 3: sharing socket fd=10
+[GW-SET] id=1 ip=127.0.0.1 port=34716
+[GW-SET] id=1 ip=127.0.0.1 port=34716
+[GW-SET] id=1 ip=127.0.0.1 port=34716
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=34719, Cores=2, RAM=256 MB, BaseID=1, VM=256
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-c2ec8fcda1e804f0
+[Hybrid] KVM Hardware Acceleration Active (RAM: 256 MB).
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:34719
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 801, VM: 256)
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 256 MB >= Reservation 268435456 bytes.
+[Init] Identity Mapped: PhysID 801 -> VirtualID 1 (Primary)
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-c2ec8fcda1e804f0 (Size: 256 MB)
+[+] Memory Ready at 0x7f09b7ffc000 (attached executor backing store)
+[System] Control Socket: /tmp/wvm_user_wvm-v256-i1-g1-n801-c2ec8fcda1e804f0.sock
+[+] WaveVM V29 Node Ready. Waiting for QEMU...
+[System] runtime readiness published; listening for QEMU
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok

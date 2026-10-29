@@ -1,0 +1,752 @@
+[node-runtime] host probe published 5 records to /tmp/wavevm-create-vm-single.BeIeNA/node-state/host_capabilities.report (tcg=3 kvm=3 kern=3 tcg_bits=1)
+[node-runtime] A10: registration accel digest replaced with probed_accel_digest
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[node-runtime] admitted vm=256 incarnation=1 generation=1 physical_node=801
+[Runtime] chunk identity=vm256_inc1_vol0 dir=/var/lib/wavevm/chunks
+[RuntimeGate] executor registered connection=2
+[Slave] No IRQCHIP (avoiding nested virt conflict)
+[Slave KVM] immediate_exit=1 numa_nodes=0 device_ram=0
+[Hybrid] BIOS ROM slot 3: GPA [0xffff0000, 0x100000000) -> HVA 0x7c88000f0000
+[SLAVE-BIND] port=46784 ok
+[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=user)
+[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=user)
+[WaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v256-i1-g1-n801-9a19a402ac7623fd' size=0x10000000 (coherent after proven map)
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 6...
+[WaveVM-SHM] slave will attempt JOIN SHM '/wavevm_ram_wvm-v256-i1-g1-n801-9a19a402ac7623fd' size=0x10000000 (coherent after proven map)
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 7...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 6, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] helper clock enabled virtual=2000 deadline=-1
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM-Slave] helper clock enabled virtual=1204 deadline=-1
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM] region_add gpa=0 size=0x10000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x10000000 hva=0x7ac253e00000
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM-User] ram_block hva=0x7ac253e00000..0x7ac263e00000 gpa=0 size=0x10000000 blocks=1
+[WaveVM-BIOS] sync_bios_shadow: SHM shadow not available
+[WaveVM] region_add gpa=0 size=0x10000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x10000000 hva=0x784a0da00000
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM] dedup region_add gpa=0 size=0x10000000 count=1
+[WaveVM] dirty log tracking enabled (kvm=0 slave=1 coherent=1).
+[WaveVM-User] ram_block hva=0x784a0da00000..0x784a1da00000 gpa=0 size=0x10000000 blocks=1
+[WaveVM-BIOS] sync_bios_shadow: SHM shadow not available
+[WaveVM] dedup region_add gpa=0 size=0x10000000 count=1
+[WaveVM] dirty log tracking enabled (kvm=0 slave=1 coherent=1).
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 2)
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 1)
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[WaveVM-User] ram_block hva=0x784a0da00000..0x784a0dac0000 gpa=0 size=0xc0000 blocks=2
+[WaveVM] region_add gpa=0x100000 size=0xff00000 count=3
+[WaveVM-User] ram_block hva=0x784a0db00000..0x784a1da00000 gpa=0x100000 size=0xff00000 blocks=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[WaveVM-User] ram_block hva=0x7ac253e00000..0x7ac253ec0000 gpa=0 size=0xc0000 blocks=2
+[WaveVM] region_add gpa=0x100000 size=0xff00000 count=3
+[WaveVM-User] ram_block hva=0x7ac253f00000..0x7ac263e00000 gpa=0x100000 size=0xff00000 blocks=3
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[Hybrid] TCG install notify fd=9 -> push port 32290
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[GW-FINAL] id=1 ip=127.0.0.1 port=9000
+[V30-Init] rx_threads=4 poll_timeout=100ms (shared socket)
+[V30-RX] Thread 0: bound port=46781, shared socket fd=10
+[V30-RX] Thread 1: sharing socket fd=10
+[V30-RX] Thread 2: sharing socket fd=10
+[V30-RX] Thread 3: sharing socket fd=10
+[GW-SET] id=1 ip=127.0.0.1 port=46781
+[GW-SET] id=1 ip=127.0.0.1 port=46781
+[GW-SET] id=1 ip=127.0.0.1 port=46781
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=46784, Cores=2, RAM=256 MB, BaseID=1, VM=256
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-9a19a402ac7623fd
+[Hybrid] KVM Hardware Acceleration Active (RAM: 256 MB).
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:46784
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 801, VM: 256)
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 256 MB >= Reservation 268435456 bytes.
+[Init] Identity Mapped: PhysID 801 -> VirtualID 1 (Primary)
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-9a19a402ac7623fd (Size: 256 MB)
+[+] Memory Ready at 0x7c87afffc000 (attached executor backing store)
+[System] Control Socket: /tmp/wvm_user_wvm-v256-i1-g1-n801-9a19a402ac7623fd.sock
+[+] WaveVM V29 Node Ready. Waiting for QEMU...
+[System] runtime readiness published; listening for QEMU
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[IPC] client connected fd=12
+[IPC] fd=12 registered against runtime connection=3
+[IPC] fd=12 registered as sync role=2
+[IPC] client connected fd=13
+[IPC] fd=13 registered against runtime connection=4
+[IPC] fd=13 registered as sync role=2
+[IPC] client connected fd=14
+[IPC] fd=14 registered against runtime connection=5
+[IPC] fd=14 registered as sync role=2
+[IPC] client connected fd=15
+[IPC] fd=15 registered against runtime connection=6
+[IPC] fd=15 registered as async push client count=1
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x1d01de821 guest=0x145827fc1 offset=0xffffffff756497a0
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b000bbe00 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b000bbe00
+[WVM-TCG-NEED-LOCAL] slave device-authority hooks installed
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=0 rip=0xffffffff82939281 rsp=0xffff9f3b000bbe00 rdi=0xffffffff84daea88 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=0 cpu=0 now=2534800128 deadline=98356 apic_next=2536596090 apic_expiry=2536596090 timer=2536596090 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000bbe00 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b000bbe20 q2=0xffffffff82868806 q3=0x1
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=0 gen=1 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff829bb0d2 rsp=0xffff9f3b000bbe60 ret=0 q0=0xffffffff829bb181 q1=0x282 q2=0x1ffffff00000000 q3=0xffff91c6cf123360
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=0 ret=65536 rip=0xffffffff82939281->0xffffffff829bb0d2 rsp=0xffff9f3b000bbe00->0xffff9f3b000bbe60 rflags=0x2->0x97 rdi=0xffffffff84a3a2a0 rax=0x1d lock=0x3/lr=0 ex=-1 halted=0 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=0 cpu=0 now=2535476478 deadline=0 apic_next=2536596090 apic_expiry=2536596090 timer=2536596090 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=0
+[IPC] client connected fd=16
+[IPC] fd=16 registered against runtime connection=7
+[IPC] fd=16 registered as sync role=2
+[WVM-PUSH-APPLY] pid=38699 n=1 type=26 gpa=0 version=0x2 local=0 t=10600782410
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38700 n=1 type=26 gpa=0 version=0x2 local=0 t=10600782481
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38700 n=2 type=26 gpa=0x1000 version=0x2 local=0 t=10600782660
+[WVM-PUSH-APPLY] pid=38699 n=2 type=26 gpa=0x1000 version=0x2 local=0 t=10600782674
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38700 n=3 type=26 gpa=0x2000 version=0x2 local=0 t=10600782772
+[WVM-PUSH-APPLY] pid=38699 n=3 type=26 gpa=0x2000 version=0x2 local=0 t=10600782781
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38699 n=4 type=26 gpa=0x3000 version=0x2 local=0 t=10600782866
+[WVM-PUSH-APPLY] pid=38700 n=4 type=26 gpa=0x3000 version=0x2 local=0 t=10600782866
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38700 n=5 type=26 gpa=0x6000 version=0x2 local=0 t=10600782948
+[WVM-PUSH-APPLY] pid=38699 n=5 type=26 gpa=0x6000 version=0x2 local=0 t=10600782960
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38699 n=6 type=26 gpa=0x7000 version=0x2 local=0 t=10600783029
+[WVM-PUSH-APPLY] pid=38700 n=6 type=26 gpa=0x7000 version=0x2 local=0 t=10600783039
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38700 n=7 type=26 gpa=0x8000 version=0x2 local=0 t=10600783167
+[WVM-PUSH-APPLY] pid=38699 n=7 type=26 gpa=0x8000 version=0x2 local=0 t=10600783173
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38700 n=8 type=26 gpa=0x9000 version=0x2 local=0x2 t=10600783267
+[WVM-PUSH-APPLY] pid=38699 n=8 type=26 gpa=0x9000 version=0x2 local=0 t=10600783279
+[WVM-PUSH-APPLY] pid=38700 n=9 type=26 gpa=0xa000 version=0x2 local=0 t=10600783312
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38699 n=9 type=26 gpa=0xa000 version=0x2 local=0 t=10600783316
+[WVM-PUSH-APPLY] pid=38700 n=10 type=26 gpa=0xb000 version=0x2 local=0 t=10600783372
+[WVM-PUSH-APPLY] pid=38699 n=10 type=26 gpa=0xb000 version=0x2 local=0 t=10600783372
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38700 n=11 type=26 gpa=0xc000 version=0x2 local=0 t=10600783430
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[WVM-PUSH-APPLY] pid=38699 n=11 type=26 gpa=0xc000 version=0x2 local=0 t=10600783447
+[WVM-PUSH-APPLY] pid=38700 n=12 type=26 gpa=0xd000 version=0x2 local=0 t=10600783496
+[WVM-PUSH-APPLY] pid=38699 n=12 type=26 gpa=0xd000 version=0x2 local=0 t=10600783499
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[PUSH-BARRIER] send cookie=1 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=1 done=1
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=95us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=97us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x1d0e05b10 offset=0xffffffff756497a0 guest=0x14644dc02
+[WaveVM-Slave] TCG ack eip=0xffffffff829bb0d2 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff829bb0d2 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x1d1642306 guest=0x146923c39 offset=0xffffffff752e1933
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff829bb0d2 rsp=0xffff9f3b000bbe60 rflags=0x97 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff829bb0d2 env_rsp=0xffff9f3b000bbe60
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=1 rip=0xffffffff829bb0d2 rsp=0xffff9f3b000bbe60 rdi=0xffffffff84a3a2a0 rax=0x1d lock=0x3/lr=0 rflags=0x97 int=0x2 read=0 bytes=c3cccccccc660f1f8400000000000f1f
+[WaveVM-TIMER] phase=pre seq=1 cpu=0 now=2541702191 deadline=60623 apic_next=2541763067 apic_expiry=2541763067 timer=2541763067 pending=1 initial=249997 lvt=0x200ec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff829bb0d2 rsp=0xffff9f3b000bbe60 ret=0 q0=0xffffffff829bb181 q1=0x282 q2=0x1ffffff00000000 q3=0xffff91c6cf123360
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=1 gen=3 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff828e8418 rsp=0xffff9f3b000bbee0 ret=0 q0=0xffff9f3b000bbf08 q1=0xffffffff828f265b q2=0xffffffff828f2630 q3=0xffff91c6c128d680
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=1 ret=65536 rip=0xffffffff829bb0d2->0xffffffff828e8418 rsp=0xffff9f3b000bbe60->0xffff9f3b000bbee0 rflags=0x97->0x202 rdi=0xffff91c6cf123368 rax=0xffff91c6c12cdf00 lock=0/lr=0 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=1 cpu=0 now=2544300655 deadline=1462272 apic_next=2545763035 apic_expiry=2545763035 timer=2545763035 pending=1 initial=249997 lvt=0x200ec irr=236 int=0x2 halted=0
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[Hybrid] local-helper push type=26 len=4112 cores=2 sent=2 fd=8
+[PUSH-BARRIER] send cookie=2 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=2 done=2
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=291us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=296us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x1d2826d02 offset=0xffffffff752e1933 guest=0x147b07617
+[WaveVM-Slave] TCG ack eip=0xffffffff828e8418 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff829397b1 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x1e398919b guest=0x1588e3d72 offset=0xffffffff74f5abd7
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff829397b1 rsp=0xffff9f3b0012fe10 rflags=0x6 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff829397b1 env_rsp=0xffff9f3b0012fe10
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=2 rip=0xffffffff829397b1 rsp=0xffff9f3b0012fe10 rdi=0xffffffff84606080 rax=0x1ff lock=0x100/lr=0 rflags=0x6 int=0x0 read=0 bytes=8b033d0001000075f589c8f00fb11374
+[WaveVM-TIMER] phase=pre seq=2 cpu=0 now=2641138699 deadline=1829444 apic_next=2642968366 apic_expiry=2642968366 timer=2642968366 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff829397b1 rsp=0xffff9f3b0012fe10 ret=0 q0=0xffff9f3b0012fe78 q1=0xffff91c6c1834740 q2=0xffff9f3b0012fe30 q3=0xffffffff835b6cf8
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=2 gen=5 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff829091da rsp=0xffff9f3b0009bef0 ret=0 q0=0x19460 q1=0x97 q2=0xffff9f3b0009bf18 q3=0xffffffff829093d0
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=2 ret=65536 rip=0xffffffff829397b1->0xffffffff829091da rsp=0xffff9f3b0012fe10->0xffff9f3b0009bef0 rflags=0x6->0x246 rdi=0xffff91c6cf1319f0 rax=0x4000 lock=0xc144d258/lr=0 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=2 cpu=0 now=2643861806 deadline=887659 apic_next=2646968334 apic_expiry=2646968334 timer=2646968334 pending=1 initial=249997 lvt=0x200ec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=3 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=3 done=3
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=109us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=112us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x1e49ae582 offset=0xffffffff74f5abd7 guest=0x159907e17
+[WaveVM-Slave] TCG ack eip=0xffffffff829091da cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x1e5de08d5 guest=0x15a772cc3 offset=0xffffffff749923ee
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b0009be48 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b0009be48
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=3 rip=0xffffffff82939281 rsp=0xffff9f3b0009be48 rdi=0xffff91c6cf130b80 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=3 cpu=0 now=2653519575 deadline=0 apic_next=2652943672 apic_expiry=2652943672 timer=2652943672 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b0009be48 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b0009be70 q2=0xffffffff828fbb77 q3=0xffff91c6cf130b80
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=3 gen=7 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b00013ac0 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b00013ae8 q2=0xffffffff828fbb77 q3=0xffff91c6cf030b80
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=3 ret=65536 rip=0xffffffff82939281->0xffffffff82939281 rsp=0xffff9f3b0009be48->0xffff9f3b00013ac0 rflags=0x2->0x2 rdi=0xffff91c6cf030b80 rax=0x1 lock=0x1/lr=0 ex=-1 halted=0 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=3 cpu=0 now=2654273082 deadline=0 apic_next=2652943672 apic_expiry=2652943672 timer=2652943672 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=0
+[PUSH-BARRIER] send cookie=4 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=4 done=4
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=126us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=129us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x1e6954501 offset=0xffffffff749923ee guest=0x15b2e5779
+[WaveVM-Slave] TCG ack eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x1e6e18a50 guest=0x15b3eaafb offset=0xffffffff745d20ab
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b00013ac0 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b00013ac0
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=4 rip=0xffffffff82939281 rsp=0xffff9f3b00013ac0 rdi=0xffff91c6cf030b80 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x2 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=4 cpu=0 now=2659100260 deadline=3125215 apic_next=2662225646 apic_expiry=2662225646 timer=2662225646 pending=1 initial=249997 lvt=0x200ec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b00013ac0 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b00013ae8 q2=0xffffffff828fbb77 q3=0xffff91c6cf030b80
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=4 gen=9 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=4 ret=65537 rip=0xffffffff82939281->0xffffffff835b603b rsp=0xffff9f3b00013ac0->0xffff9f3b0009be78 rflags=0x2->0x202 rdi=0x54 rax=0xffffffff835b5f30 lock=0/lr=-1 ex=-1 halted=1 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=4 cpu=0 now=2661154680 deadline=1070635 apic_next=2662225646 apic_expiry=2662225646 timer=2662225646 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=1
+[PUSH-BARRIER] send cookie=5 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=5 done=5
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=76us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=77us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x1e7bd0829 offset=0xffffffff745d20ab guest=0x15c1a1a96
+[WaveVM-Slave] TCG ack eip=0xffffffff835b603b cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=1 exit=65537
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff829bb0d2 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x20a849428 guest=0x17eb1554f offset=0xffffffff742cc127
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff829bb0d2 rsp=0xffff9f3b000bbe60 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff829bb0d2 env_rsp=0xffff9f3b000bbe60
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=5 rip=0xffffffff829bb0d2 rsp=0xffff9f3b000bbe60 rdi=0xffffffff84a3a2a0 rax=0x3db lock=0x3/lr=0 rflags=0x2 int=0x0 read=0 bytes=c3cccccccc660f1f8400000000000f1f
+[WaveVM-TIMER] phase=pre seq=5 cpu=0 now=2853703758 deadline=1554183 apic_next=2855258234 apic_expiry=2855258234 timer=2855258234 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff829bb0d2 rsp=0xffff9f3b000bbe60 ret=0 q0=0xffffffff829bb181 q1=0x282 q2=0xffffff00000000 q3=0xffff91c6cf123360
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=5 gen=11 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=5 ret=65537 rip=0xffffffff829bb0d2->0xffffffff835b603b rsp=0xffff9f3b000bbe60->0xffff9f3b0009be78 rflags=0x2->0x206 rdi=0x3de rax=0xffffffff835b5f30 lock=0/lr=-1 ex=-1 halted=1 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=5 cpu=0 now=2854335780 deadline=922311 apic_next=2855258234 apic_expiry=2855258234 timer=2855258234 pending=1 initial=249997 lvt=0x200ec irr=-1 int=0x0 halted=1
+[PUSH-BARRIER] send cookie=6 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=6 done=6
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=113us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=116us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x20b21f774 offset=0xffffffff742cc127 guest=0x17f4ea693
+[WaveVM-Slave] TCG ack eip=0xffffffff835b603b cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=1 exit=65537
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x30b65ef93 guest=0x27f51fe16 offset=0xffffffff73ec0e83
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b000535e0 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b000535e0
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=6 rip=0xffffffff82939281 rsp=0xffff9f3b000535e0 rdi=0xffffffff85010f10 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=6 cpu=0 now=4256591526 deadline=1145712 apic_next=4257737399 apic_expiry=4257737399 timer=4257737399 pending=1 initial=235574 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000535e0 ret=0 q0=0xffffffff835b6a6d q1=0x4 q2=0xffff9f3b00053630 q3=0xffffffff83034333
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=6 gen=13 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82b6ec66 rsp=0xffff9f3b00053920 ret=0 q0=0 q1=0xffffd7f8400acec0 q2=0xcc0 q3=0xffff9f3b00053960
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=6 ret=65536 rip=0xffffffff82939281->0xffffffff82b6ec66 rsp=0xffff9f3b000535e0->0xffff9f3b00053920 rflags=0x2->0x246 rdi=0 rax=0xffff91c6c1252f80 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=6 cpu=0 now=4262382702 deadline=2666110 apic_next=4257737399 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=235574 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=7 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=7 done=7
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=500us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=504us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x30d01ed50 offset=0xffffffff73ec0e83 guest=0x280edf043
+[WaveVM-Slave] TCG ack eip=0xffffffff82b6ec66 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x32d68c1e8 guest=0x2a1190db2 offset=0xffffffff73b04bca
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b000d8e28 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b000d8e28
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=7 rip=0xffffffff82939281 rsp=0xffff9f3b000d8e28 rdi=0xffff91c6cf130b80 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=7 cpu=0 now=4442318149 deadline=14968904 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=209514 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000d8e28 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b000d8e50 q2=0xffffffff828fbb77 q3=0xffff91c6cf130b80
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=7 gen=15 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82e5c68e rsp=0xffff9f3b00053c00 ret=0 q0=0 q1=0xffff9f3b00053bf0 q2=0 q3=0xffff91c6c25f9c00
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=7 ret=65536 rip=0xffffffff82939281->0xffffffff82e5c68e rsp=0xffff9f3b000d8e28->0xffff9f3b00053c00 rflags=0x2->0x287 rdi=0x1898 rax=0x1 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=7 cpu=0 now=4449980385 deadline=7307316 apic_next=4446826890 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=249996 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=8 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=8 done=8
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=102us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=104us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x32f6d9202 offset=0xffffffff73b04bca guest=0x2a31dc562
+[WaveVM-Slave] TCG ack eip=0xffffffff82e5c68e cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x331873ca1 guest=0x2a4f7a0c3 offset=0xffffffff73706422
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b000abe40 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b000abe40
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=8 rip=0xffffffff82939281 rsp=0xffff9f3b000abe40 rdi=0xffff91c6cf130b80 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=8 cpu=0 now=4464913482 deadline=847036 apic_next=4465760824 apic_expiry=4465760824 timer=4465760824 pending=1 initial=204263 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000abe40 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b000abe68 q2=0xffffffff828fbb77 q3=0xffff91c6cf130b80
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=8 gen=17 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82bb2ae5 rsp=0xffff9f3b00053bb0 ret=0 q0=0x101f0 q1=0xffffffff846816a0 q2=0xffff9f3b00053c30 q3=0xffffffff82bb5cc8
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=8 ret=65536 rip=0xffffffff82939281->0xffffffff82bb2ae5 rsp=0xffff9f3b000abe40->0xffff9f3b00053bb0 rflags=0x2->0x246 rdi=0x64762ab5 rax=0x8000000000000000 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=8 cpu=0 now=4465870546 deadline=18879863 apic_next=4465760824 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=204263 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=9 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=9 done=9
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=102us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=106us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x3324c8d01 offset=0xffffffff73706422 guest=0x2a5bcdbeb
+[WaveVM-Slave] TCG ack eip=0xffffffff82bb2ae5 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82937959 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x33d09eb71 guest=0x2b043d9ed offset=0xffffffff7339ee7c
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82937959 rsp=0xffff9f3b0013fd88 rflags=0x246 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82937959 env_rsp=0xffff9f3b0013fd88
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=9 rip=0xffffffff82937959 rsp=0xffff9f3b0013fd88 rdi=0 rax=0 lock=0/lr=-1 rflags=0x246 int=0x0 read=0 bytes=498b004883e0f84839c674a141bc0100
+[WaveVM-TIMER] phase=pre seq=9 cpu=0 now=4527701273 deadline=1965478 apic_next=4529667048 apic_expiry=4529667048 timer=4529667048 pending=1 initial=184588 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82937959 rsp=0xffff9f3b0013fd88 ret=0 q0=0xffff91c6c27a304c q1=0xffff9f3b0013fe10 q2=0xffffffff835b22a4 q3=0x282
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=9 gen=19 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82937959 rsp=0xffff9f3b0013fd88 ret=0 q0=0xffff91c6c27a304c q1=0xffff9f3b0013fe10 q2=0xffffffff835b22a4 q3=0x282
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=9 ret=65536 rip=0xffffffff82937959->0xffffffff82937959 rsp=0xffff9f3b0013fd88->0xffff9f3b0013fd88 rflags=0x246->0x246 rdi=0 rax=0 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=9 cpu=0 now=4527806112 deadline=1860830 apic_next=4529667048 apic_expiry=4529667048 timer=4529667048 pending=1 initial=184588 lvt=0xec irr=-1 int=0x0 halted=0
+[PUSH-BARRIER] send cookie=10 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=10 done=10
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=133us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=140us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x33d928ddf offset=0xffffffff7339ee7c guest=0x2b0cc5783
+[WaveVM-Slave] TCG ack eip=0xffffffff82937959 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82ea62a7 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x35c9b6c33 guest=0x2cf8ee38e offset=0xffffffff72f3775b
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fc30 rflags=0x97 cr0=0x80050033 cr3=0x3c68000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b0013fc30
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=10 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fc30 rdi=0x2cf8e717c rax=0x2cf8ec594 lock=0/lr=-1 rflags=0x97 int=0x0 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=10 cpu=0 now=4700947677 deadline=1012664 apic_next=4701961141 apic_expiry=4701961141 timer=4701961141 pending=1 initial=236970 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fc30 ret=0 q0=0xffff9f3b0013fc40 q1=0xffffffff82ea6233 q2=0xffff9f3b0013fc60 q3=0xffffffff8312ea3e
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=10 gen=21 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82e54235 rsp=0xffff9f3b0013fc38 ret=0 q0=0xffffffff8312c702 q1=0xffff9f3b0013fc60 q2=0xffffffff8312ea52 q3=0xffff91c6c27d0000
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=10 ret=65552 rip=0xffffffff82ea62a7->0xffffffff82e54235 rsp=0xffff9f3b0013fc30->0xffff9f3b0013fc38 rflags=0x97->0x6 rdi=0x10177 rax=0xffffffff8312c6f0 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=10 cpu=0 now=4701090831 deadline=870215 apic_next=4701961141 apic_expiry=4701961141 timer=4701961141 pending=1 initial=236970 lvt=0xec irr=-1 int=0x0 halted=0
+[PUSH-BARRIER] send cookie=11 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=11 done=11
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=132us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=135us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x35d8bd6cc offset=0xffffffff72f3775b guest=0x2d07f3695
+[WaveVM-Slave] TCG ack eip=0xffffffff82e54235 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x0 halted=0 exit=65552
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82893830 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x35e7ff336 guest=0x2d1363be9 offset=0xffffffff72b648b3
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82893830 rsp=0xffff9f3b000d8ed0 rflags=0x2 cr0=0x80050033 cr3=0x3c68000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82893830 env_rsp=0xffff9f3b000d8ed0
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=11 rip=0xffffffff82893830 rsp=0xffff9f3b000d8ed0 rdi=0xffffffff84662020 rax=0x10000 lock=0x828938e0/lr=0 rflags=0x2 int=0x0 read=0 bytes=488b0dc927d7014889ca48c1ea2089d0
+[WaveVM-TIMER] phase=pre seq=11 cpu=0 now=4710413202 deadline=21500817 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=236970 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82893830 rsp=0xffff9f3b000d8ed0 ret=0 q0=0xffff9f3b000d8ee0 q1=0xffffffff828938fc q2=0xffff9f3b000d8f10 q3=0xffffffff82976b76
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=11 gen=23 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa80 ret=0 q0=0xffff9f3b0013fa90 q1=0xffffffff82ea6233 q2=0xffff9f3b0013fab8 q3=0xffffffff8312ee3a
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=11 ret=65536 rip=0xffffffff82893830->0xffffffff82ea62a7 rsp=0xffff9f3b000d8ed0->0xffff9f3b0013fa80 rflags=0x2->0x93 rdi=0x2d18b0bf5 rax=0x2d18b4637 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=11 cpu=0 now=4712185375 deadline=1723534 apic_next=4713909348 apic_expiry=4713909348 timer=4713909348 pending=1 initial=212233 lvt=0xec irr=-1 int=0x0 halted=0
+[PUSH-BARRIER] send cookie=12 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=12 done=12
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=116us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=119us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x35f4c38d7 offset=0xffffffff72b648b3 guest=0x2d2027852
+[WaveVM-Slave] TCG ack eip=0xffffffff82ea62a7 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x0 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82ea62a7 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x35fb327f4 guest=0x2d21314b8 offset=0xffffffff725fecc4
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa80 rflags=0x93 cr0=0x80050033 cr3=0x3c68000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b0013fa80
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=12 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa80 rdi=0x2d18b0bf5 rax=0x2d18b4637 lock=0/lr=-1 rflags=0x93 int=0x2 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=12 cpu=0 now=4716994788 deadline=14919452 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa80 ret=0 q0=0xffff9f3b0013fa90 q1=0xffffffff82ea6233 q2=0xffff9f3b0013fab8 q3=0xffffffff8312ee3a
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=12 gen=25 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82e54235 rsp=0xffff9f3b0013fa88 ret=0 q0=0xffffffff8312c702 q1=0xffff9f3b0013fab8 q2=0xffffffff8312ee4d q3=0xffff91c6c27d1f30
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=12 ret=65552 rip=0xffffffff82ea62a7->0xffffffff82e54235 rsp=0xffff9f3b0013fa80->0xffff9f3b0013fa88 rflags=0x93->0x6 rdi=0x10177 rax=0xffffffff8312c6f0 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=0
+[WaveVM-TIMER] phase=post seq=12 cpu=0 now=4717036785 deadline=14877976 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=13 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=13 done=13
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=115us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=117us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x3602d2b8d offset=0xffffffff725fecc4 guest=0x2d28d0b23
+[WaveVM-Slave] TCG ack eip=0xffffffff82e54235 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=65552
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82ea62a7 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x3608bb47a guest=0x2d2a05a15 offset=0xffffffff7214a59b
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa80 rflags=0x87 cr0=0x80050033 cr3=0x3c68000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b0013fa80
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=13 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa80 rdi=0x2d29fa623 rax=0x2d29fa691 lock=0/lr=-1 rflags=0x87 int=0x2 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=13 cpu=0 now=4721623618 deadline=10290687 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa80 ret=0 q0=0xffff9f3b0013fa90 q1=0xffffffff82ea6233 q2=0xffff9f3b0013fab8 q3=0xffffffff8312ee8b
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=13 gen=27 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82e54235 rsp=0xffff9f3b0013fa88 ret=0 q0=0xffffffff8312c702 q1=0xffff9f3b0013fab8 q2=0xffffffff8312ee9e q3=0xffff91c6c27d1f30
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=13 ret=65552 rip=0xffffffff82ea62a7->0xffffffff82e54235 rsp=0xffff9f3b0013fa80->0xffff9f3b0013fa88 rflags=0x87->0x6 rdi=0x10177 rax=0xffffffff8312c6f0 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=0
+[WaveVM-TIMER] phase=post seq=13 cpu=0 now=4721667552 deadline=10247196 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=14 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=14 done=14
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=75us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=77us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x3610ff9ea offset=0xffffffff7214a59b guest=0x2d324910f
+[WaveVM-Slave] TCG ack eip=0xffffffff82e54235 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=65552
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82ea62a7 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x361567016 guest=0x2d341ac97 offset=0xffffffff71eb3c81
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa78 rflags=0x83 cr0=0x80050033 cr3=0x3c68000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b0013fa78
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=14 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa78 rdi=0x2d340b799 rax=0x2d340f7c7 lock=0/lr=-1 rflags=0x83 int=0x2 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=14 cpu=0 now=4725929591 deadline=5984745 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa78 ret=0 q0=0xffff9f3b0013fa88 q1=0xffffffff82ea6233 q2=0xffff9f3b0013fab8 q3=0xffffffff8312ec44
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=14 gen=29 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82e54235 rsp=0xffff9f3b0013fa80 ret=0 q0=0xffffffff8312c702 q1=0xffff9f3b0013fab8 q2=0xffffffff8312ec57 q3=0xffff91c6c27d1f30
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=14 ret=65552 rip=0xffffffff82ea62a7->0xffffffff82e54235 rsp=0xffff9f3b0013fa78->0xffff9f3b0013fa80 rflags=0x83->0x6 rdi=0x10177 rax=0xffffffff8312c6f0 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=0
+[WaveVM-TIMER] phase=post seq=14 cpu=0 now=4725965513 deadline=5949237 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=15 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=15 done=15
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=165us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=167us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x361ff7be2 offset=0xffffffff71eb3c81 guest=0x2d3eaa9ff
+[WaveVM-Slave] TCG ack eip=0xffffffff82e54235 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=65552
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82ea62a7 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0
+[WVM-TCG-TSC] phase=import cpu=0 local=0x3623c838c guest=0x2d3fb5166 offset=0xffffffff71becdda
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa78 rflags=0x97 cr0=0x80050033 cr3=0x3c68000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b0013fa78
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=15 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa78 rdi=0x2d3fa522c rax=0x2d3fa9160 lock=0/lr=-1 rflags=0x97 int=0x2 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=15 cpu=0 now=4730846102 deadline=1068087 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b0013fa78 ret=0 q0=0xffff9f3b0013fa88 q1=0xffffffff82ea6233 q2=0xffff9f3b0013fab8 q3=0xffffffff8312ed3c
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=15 gen=31 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82e54235 rsp=0xffff9f3b0013fa80 ret=0 q0=0xffffffff8312c702 q1=0xffff9f3b0013fab8 q2=0xffffffff8312ed4f q3=0xffff91c6c27d1f30
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=15 ret=65552 rip=0xffffffff82ea62a7->0xffffffff82e54235 rsp=0xffff9f3b0013fa78->0xffff9f3b0013fa80 rflags=0x97->0x6 rdi=0x10177 rax=0xffffffff8312c6f0 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=0
+[WaveVM-TIMER] phase=post seq=15 cpu=0 now=4730892465 deadline=1022277 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=16 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=16 done=16
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=91us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=93us coherent=1
+[WVM-TCG-TSC] phase=export cpu=0 local=0x362dca210 offset=0xffffffff71becdda guest=0x2d49b6382
+[WaveVM-Slave] TCG ack eip=0xffffffff82e54235 cs=0x10 cr0=0x80050033 cr3=0x3c68000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=65552
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82ea62a7 cs=0x10 cr0=0x80050033 cr3=0x3e48000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 rflags=0x83 cr0=0x80050033 cr3=0x3e48000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b000f7d68
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=16 rip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 rdi=0x18ee682d47 rax=0x18ee693755 lock=0/lr=-1 rflags=0x83 int=0x0 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=16 cpu=0 now=35634848075 deadline=3084028 apic_next=35637932766 apic_expiry=35637932766 timer=35637932766 pending=1 initial=217618 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 ret=0 q0=0xffff9f3b000f7d78 q1=0xffffffff82ea6233 q2=0xffff9f3b000f7db8 q3=0xffffffffc02f4326
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=16 gen=33 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffffc02f432e rsp=0xffff9f3b000f7d88 ret=0 q0=0xffff9f3b000f7e06 q1=0x15 q2=0xffff91c6c3ea8e08 q3=0x246
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=16 ret=65552 rip=0xffffffff82ea62a7->0xffffffffc02f432e rsp=0xffff9f3b000f7d68->0xffff9f3b000f7d88 rflags=0x83->0x82 rdi=0x18ee682d47 rax=0xffff9f3b00580020 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=16 cpu=0 now=35635034287 deadline=2898411 apic_next=35637932766 apic_expiry=35637932766 timer=35637932766 pending=1 initial=217618 lvt=0xec irr=-1 int=0x0 halted=0
+[PUSH-BARRIER] send cookie=17 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=17 done=17
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=95us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=98us coherent=1
+[WaveVM-Slave] TCG ack eip=0xffffffffc02f432e cs=0x10 cr0=0x80050033 cr3=0x3e48000 efer=0xd01 oldex=-1 int=0x0 halted=0 exit=65552
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x2c54000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b000c3e40 rflags=0x2 cr0=0x80050033 cr3=0x2c54000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b000c3e40
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=17 rip=0xffffffff82939281 rsp=0xffff9f3b000c3e40 rdi=0xffff91c6cf130b80 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=17 cpu=0 now=36858691199 deadline=2974026 apic_next=36861665563 apic_expiry=36861665563 timer=36861665563 pending=1 initial=213020 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000c3e40 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b000c3e68 q2=0xffffffff828fbb77 q3=0xffff91c6cf130b80
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=17 gen=35 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff833b38d7 rsp=0xffff9f3b005afd78 ret=0 q0=0xffff91c6c23f4d00 q1=0xffff91c6c2c0b480 q2=0 q3=0xffff91c6c13053e0
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=17 ret=65536 rip=0xffffffff82939281->0xffffffff833b38d7 rsp=0xffff9f3b000c3e40->0xffff9f3b005afd78 rflags=0x2->0x246 rdi=0xffff91c6c2c0b6b0 rax=0 lock=0xff/lr=0 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=17 cpu=0 now=36862399913 deadline=874486 apic_next=36861665563 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=213020 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=18 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=18 done=18
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=120us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=122us coherent=1
+[WaveVM-Slave] TCG ack eip=0xffffffff833b38d7 cs=0x10 cr0=0x80050033 cr3=0x2c54000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=4294967295
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x2c54000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b0007be20 rflags=0x2 cr0=0x80050033 cr3=0x2c54000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b0007be20
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=18 rip=0xffffffff82939281 rsp=0xffff9f3b0007be20 rdi=0xffff91c6cf130b80 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=18 cpu=0 now=36877352430 deadline=390745 apic_next=36877743454 apic_expiry=36877743454 timer=36877743454 pending=1 initial=164818 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b0007be20 ret=0 q0=0xffffffff835b6bf2 q1=0xffff9f3b0007be48 q2=0xffffffff828fbb77 q3=0xffff91c6cf130b80
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=18 gen=37 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=18 ret=65537 rip=0xffffffff82939281->0xffffffff835b603b rsp=0xffff9f3b0007be20->0xffff9f3b0009be78 rflags=0x2->0x206 rdi=0x2612 rax=0xffffffff835b5f30 lock=0/lr=-1 ex=-1 halted=1 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=18 cpu=0 now=36877909404 deadline=0 apic_next=36877743454 apic_expiry=36877743454 timer=36877743454 pending=1 initial=164818 lvt=0xec irr=-1 int=0x0 halted=1
+[PUSH-BARRIER] send cookie=19 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=19 done=19
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=96us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=108us coherent=1
+[WaveVM-Slave] TCG ack eip=0xffffffff835b603b cs=0x10 cr0=0x80050033 cr3=0x2c54000 efer=0xd01 oldex=-1 int=0x0 halted=1 exit=65537
+[IPC CPU_RUN RX] fd=14 vcpu=1 mode=1 pending=0
+[IPC CPU_RUN RX] fd=14 drain done vcpu=1 pending=0
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=1
+[WaveVM-Slave] TCG req eip=0xffffffff82939281 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x0 halted=0
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82939281 rsp=0xffff9f3b0007be08 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82939281 env_rsp=0xffff9f3b0007be08
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=19 rip=0xffffffff82939281 rsp=0xffff9f3b0007be08 rdi=0xffffffff8477fe00 rax=0x1 lock=0/lr=0 rflags=0x2 int=0x0 read=0 bytes=ebe9554889e5e8d4fdffff5dc3cccccc
+[WaveVM-TIMER] phase=pre seq=19 cpu=0 now=36910084403 deadline=3518186 apic_next=36913602878 apic_expiry=36913602878 timer=36913602878 pending=1 initial=231692 lvt=0xec irr=-1 int=0x0 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b0007be08 ret=0 q0=0xffffffff835b6a6d q1=0x1 q2=0xffff9f3b0007be68 q3=0xffffffff8295e0f6
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=19 gen=39 exit=0 int=0x0 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82880050 rsp=0xffff9f3b0009bd00 ret=0 q0=0xffff9f3b0009bd38 q1=0xffffffff82984d6a q2=0xffffffff82976b76 q3=0x1
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=19 ret=65536 rip=0xffffffff82939281->0xffffffff82880050 rsp=0xffff9f3b0007be08->0xffff9f3b0009bd00 rflags=0x2->0x2 rdi=0x380 rax=0xffffffff8288a820 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=19 cpu=0 now=36911544668 deadline=6655140 apic_next=36911520231 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=62 lvt=0xec irr=236 int=0x2 halted=0
+[PUSH-BARRIER] send cookie=20 fd=15 clients=1
+[PUSH-BARRIER-ACK] cookie=20 done=20
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=153us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=155us coherent=1
+[WaveVM-Slave] TCG ack eip=0xffffffff82880050 cs=0x10 cr0=0x80050033 cr3=0x7c10000 efer=0xd01 oldex=-1 int=0x2 halted=0 exit=4294967295
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82880050 rsp=0xffff9f3b0009bd00 rflags=0x2 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82880050 env_rsp=0xffff9f3b0009bd00
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=20 rip=0xffffffff82880050 rsp=0xffff9f3b0009bd00 rdi=0x380 rax=0xffffffff8288a820 lock=0/lr=-1 rflags=0x2 int=0x2 read=0 bytes=31c05dc3cccccccc0f1f840000000000
+[WaveVM-TIMER] phase=pre seq=20 cpu=0 now=36916902367 deadline=1296598 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=62 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82880050 rsp=0xffff9f3b0009bd00 ret=0 q0=0xffff9f3b0009bd38 q1=0xffffffff82984d6a q2=0xffffffff82976b76 q3=0x1
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=20 gen=41 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e8fbf57
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffffc02f261e rsp=0xffff9f3b000f7e00 ret=0 q0=0xffffffff84a37040 q1=0x2496bb05ba5a1000 q2=0xffff91c6c3ea8000 q3=0xffff91c6c3ea9228
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=20 ret=65552 rip=0xffffffff82880050->0xffffffffc02f261e rsp=0xffff9f3b0009bd00->0xffff9f3b000f7e00 rflags=0x2->0x86 rdi=0xffff91c6c3ea8b9c rax=0xffff9f3b00584000 lock=0x1/lr=0 ex=-1 halted=0 exit=0 int=0x0 icount_high=0
+[WaveVM-TIMER] phase=post seq=20 cpu=0 now=36922918583 deadline=1494979 apic_next=36924413820 apic_expiry=36924413820 timer=36924413820 pending=1 initial=151718 lvt=0xec irr=-1 int=0x0 halted=0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=76us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=80us coherent=1
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 rflags=0x97 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b000f7d68
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=21 rip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 rdi=0x19da148947 rax=0x19da14cb1b lock=0/lr=-1 rflags=0x97 int=0x2 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=21 cpu=0 now=36928012082 deadline=17649967 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=151718 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 ret=0 q0=0xffff9f3b000f7d78 q1=0xffffffff82ea6233 q2=0xffff9f3b000f7db8 q3=0xffffffffc02f4326
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=21 gen=43 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffffc02f432e rsp=0xffff9f3b000f7d88 ret=0 q0=0xffff9f3b000f7e06 q1=0xa q2=0xffff91c6c3ea8e08 q3=0x246
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=21 ret=65552 rip=0xffffffff82ea62a7->0xffffffffc02f432e rsp=0xffff9f3b000f7d68->0xffff9f3b000f7d88 rflags=0x97->0x82 rdi=0x19da148947 rax=0xffff9f3b00580020 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=0
+[WaveVM-TIMER] phase=post seq=21 cpu=0 now=36928033416 deadline=17629130 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=151718 lvt=0xec irr=236 int=0x2 halted=0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=133us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=136us coherent=1
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 rflags=0x93 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82ea62a7 env_rsp=0xffff9f3b000f7d68
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=22 rip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 rdi=0x19dabc71e3 rax=0x19dabcb1d7 lock=0/lr=-1 rflags=0x93 int=0x2 read=0 bytes=658b35ba32177d4139f075204189f00f
+[WaveVM-TIMER] phase=pre seq=22 cpu=0 now=36932688359 deadline=12973764 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=151718 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 ret=0 q0=0xffff9f3b000f7d78 q1=0xffffffff82ea6233 q2=0xffff9f3b000f7db8 q3=0xffffffffc02f4326
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=22 gen=45 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffffc02f432e rsp=0xffff9f3b000f7d88 ret=0 q0=0xffff9f3b000f7e06 q1=0x15 q2=0xffff91c6c3ea8e08 q3=0x246
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=22 ret=65552 rip=0xffffffff82ea62a7->0xffffffffc02f432e rsp=0xffff9f3b000f7d68->0xffff9f3b000f7d88 rflags=0x93->0x82 rdi=0x19dabc71e3 rax=0xffff9f3b00580020 lock=0/lr=-1 ex=-1 halted=0 exit=0 int=0x2 icount_high=0
+[WaveVM-TIMER] phase=post seq=22 cpu=0 now=36932711072 deadline=12951460 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=151718 lvt=0xec irr=236 int=0x2 halted=0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=90us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=92us coherent=1
+[WVM-TCG-IMPORT] pid=38700 cpu=0 eip=0xffffffff82910b9f rsp=0xffff9f3b000c3c70 rflags=0x87 cr0=0x80050033 cr3=0x7c10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff82910b9f env_rsp=0xffff9f3b000c3c70
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=50000 req_budget=0 shm=1
+[WaveVM-Slave] TCG ip cpu=0 seq=23 rip=0xffffffff82910b9f rsp=0xffff9f3b000c3c70 rdi=0xa099ec513 rax=0xffff91c6cf130b80 lock=0/lr=-1 rflags=0x87 int=0x2 read=0 bytes=498b8748010000498b97400100004889
+[WaveVM-TIMER] phase=pre seq=23 cpu=0 now=36940809101 deadline=4853027 apic_next=0 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=212233 lvt=0xec irr=236 int=0x2 halted=0
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82910b9f rsp=0xffff9f3b000c3c70 ret=0 q0=0xffff91c6cf130b80 q1=0xffff91c6cf130b80 q2=0xffff91c6cf130b80 q3=0x1
+[WaveVM-Slave] cpu_exec pre cpu=0 seq=23 gen=47 exit=0 int=0x2 icount_high=0 ex=-1
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff828c2390 rsp=0xffff9f3b005bfc10 ret=0 q0=0xffffffff828c2c04 q1=0xffff91c6c1842d00 q2=0xffff91c6c1846400 q3=0xffff91c600000700
+[WaveVM-Slave] cpu_exec leave cpu=0 seq=23 ret=65536 rip=0xffffffff82910b9f->0xffffffff828c2390 rsp=0xffff9f3b000c3c70->0xffff9f3b005bfc10 rflags=0x87->0x283 rdi=0xffff91c6c4372f80 rax=0xffff91c6c1842d00 lock=0x2/lr=0 ex=-1 halted=0 exit=0 int=0x2 icount_high=65535
+[WaveVM-TIMER] phase=post seq=23 cpu=0 now=36949525036 deadline=23600160 apic_next=36944701713 apic_expiry=-1 timer=18446744073709551615 pending=0 initial=151718 lvt=0xec irr=236 int=0x2 halted=0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=323us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=326us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82893830 rsp=0xffff9f3b000d8f40 ret=0 q0=0xffff9f3b000d8f50 q1=0xffffffff828938fc q2=0xffff9f3b000d8f80 q3=0xffffffff82976b76
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=88us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=91us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82893830 rsp=0xffff9f3b000d8f70 ret=0 q0=0xffff9f3b000d8f80 q1=0xffffffff828938fc q2=0xffff9f3b000d8fb0 q3=0xffffffff82976b76
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=85us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=89us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82893830 rsp=0xffff9f3b000d8f80 ret=0 q0=0xffff9f3b000d8f90 q1=0xffffffff828938fc q2=0xffff9f3b000d8fc0 q3=0xffffffff82976b76
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=74us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=77us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82893830 rsp=0xffff9f3b000d8f10 ret=0 q0=0xffff9f3b000d8f20 q1=0xffffffff828938fc q2=0xffff9f3b000d8f70 q3=0xffffffff829785de
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=154us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=161us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82893830 rsp=0xffff9f3b000d8f10 ret=0 q0=0xffff9f3b000d8f20 q1=0xffffffff828938fc q2=0xffff9f3b000d8f70 q3=0xffffffff829785de
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=81us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=84us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000d8e50 ret=0 q0=0xffffffff835b6a6d q1=0xffff91c6cf12e350 q2=0xffff9f3b000d8ea8 q3=0xffffffff830349e4
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000d8e50 ret=0 q0=0xffffffff835b6a6d q1=0xffff91c6cf12e350 q2=0xffff9f3b000d8ea8 q3=0xffffffff830349e4
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=90us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=92us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82939281 rsp=0xffff9f3b000d8e50 ret=0 q0=0xffffffff835b6a6d q1=0xffff91c6cf12e350 q2=0xffff9f3b000d8ea8 q3=0xffffffff830349e4
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffff835b603b rsp=0xffff9f3b0009be78 ret=0 q0=0xffffffff835b5f3e q1=0xffff9f3b0009be90 q2=0xffffffff8284ba45 q3=0xffff9f3b0009bea0
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=75us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=77us coherent=1
+[WVM-TCG-STACK] phase=slave-pre-exec cpu=0 rip=0xffffffff82ea62a7 rsp=0xffff9f3b000f7d68 ret=0 q0=0xffff9f3b000f7d78 q1=0xffffffff82ea6233 q2=0xffff9f3b000f7db8 q3=0xffffffffc02f4326
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0xffffffffc02f432e rsp=0xffff9f3b000f7d88 ret=0 q0=0xffff9f3b000f7e06 q1=0x15 q2=0xffff91c6c3ea8e08 q3=0x246
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=139us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=142us coherent=1
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1ea0b908
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=77us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=79us coherent=1
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=229us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=234us coherent=1
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=133us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=140us coherent=1
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=121us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=127us coherent=1
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=38us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=40us coherent=1
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=110us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=112us coherent=1
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=75us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=78us coherent=1
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[IPC FENCE] push-barrier done br=0 helpers=0 hr=0 fd=16
+[WaveVM-User] push fence ok fd=15 rtt=94us slave=1
+[WaveVM-User] slave TCG slice dirty flush pages=32 bitmap=32 rtt=97us coherent=1
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1eb27088
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[WVM-TCG-STACK] phase=slave-post-exec cpu=0 rip=0x7f930b6559f1 rsp=0x7ffe6c6b9cb8 ret=0 q0=0x4452f1 q1=0x8cf190 q2=0x8cf1a8 q3=0x48c1e0
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7d88c2
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1eb27088
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1ec8eafe
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1
+[WVM-TCG-NEED-LOCAL] slave cpu=0 rip-restore retaddr=0x784a1e7aa4e1

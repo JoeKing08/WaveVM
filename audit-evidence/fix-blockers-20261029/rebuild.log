@@ -1,0 +1,192 @@
+=== node_runtime 2026年 10月 29日 星期四 17:29:57 CST ===
+make: 进入目录“/workspaces/WaveVM/node_runtime”
+cc -Wall -O2 -msse4.2 -std=gnu11 -D_DEFAULT_SOURCE -I../common_include -pthread -c ../slave_daemon/slave_hybrid.c -o slave_hybrid.o
+../slave_daemon/slave_hybrid.c: In function ‘init_kvm_global’:
+../slave_daemon/slave_hybrid.c:1098:25: warning: ignoring return value of ‘ftruncate’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1098 |                         ftruncate(fd, nodes[i].size);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../slave_daemon/slave_hybrid.c:1137:21: warning: ignoring return value of ‘ftruncate’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1137 |                     ftruncate(shm_fd, g_slave_ram_size);
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../slave_daemon/slave_hybrid.c: At top level:
+../slave_daemon/slave_hybrid.c:591:12: warning: ‘get_chunk_fd_safe’ defined but not used [-Wunused-function]
+  591 | static int get_chunk_fd_safe(uint64_t chunk_id) {
+      |            ^~~~~~~~~~~~~~~~~
+make: 离开目录“/workspaces/WaveVM/node_runtime”
+make: 进入目录“/workspaces/WaveVM/node_runtime”
+cc -Wall -O2 -msse4.2 -std=gnu11 -D_DEFAULT_SOURCE -I../common_include -pthread -o ../wavevm_node_runtime main.o admission_main.o master_logic.o master_user.o master_main.o slave_hybrid.o slave_vfio.o resources.o sha256.o canonical.o identity.o runtime_names.o manifest.o lifecycle.o runtime_gate.o runtime_dispatch.o executor_abi.o executor_session.o envelope.o memory.o vcpu_handoff.o vcpu_handoff_cache.o x86_context.o local_memory.o route_runtime.o executor_bridge.o vcpu_coordinator.o vcpu_service.o memory_service.o ingress.o directory_store.o kvm_page_cache.o kvm_execution_fetch.o control.o route_delivery.o runtime_delivery.o membership_control.o membership_controller.o reservation_runtime.o admission_stage.o admission_receiver.o route_control.o control_transport.o control_owner.o tls_control_connector.o admission_node_service.o admission_slot_registry.o admission_runtime_agent.o host_probe.o capability.o block_chunk_store.o block_wire.o block_service.o block_client.o -pthread -lssl -lcrypto
+make: 离开目录“/workspaces/WaveVM/node_runtime”
+NODE_RC=0
+=== qemu wavevm 2026年 10月 29日 星期四 17:29:58 CST ===
+ninja: Entering directory `wavevm-qemu/build'
+[1/8] Generating qemu-version.h with a meson_exe.py custom command
+[2/5] Compiling C object libqemu-x86_64-softmmu.fa.p/accel_wavevm_wavevm-user-mem.c.o
+../accel/wavevm/wavevm-user-mem.c:61:6: warning: no previous prototype for ‘wavevm_user_mem_set_tcg_shm_coherent’ [-Wmissing-prototypes]
+   61 | void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:81:5: warning: no previous prototype for ‘wavevm_user_mem_tcg_shm_coherent’ [-Wmissing-prototypes]
+   81 | int wavevm_user_mem_tcg_shm_coherent(void)
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:188:6: warning: no previous prototype for ‘wavevm_register_ram_block’ [-Wmissing-prototypes]
+  188 | void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:414:6: warning: no previous prototype for ‘wvm_apply_remote_push’ [-Wmissing-prototypes]
+  414 | void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
+      |      ^~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:1025:6: warning: no previous prototype for ‘wavevm_sync_bios_shadow’ [-Wmissing-prototypes]
+ 1025 | void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva)
+      |      ^~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:1064:6: warning: no previous prototype for ‘wvm_set_ttl_interval’ [-Wmissing-prototypes]
+ 1064 | void wvm_set_ttl_interval(int ms) {
+      |      ^~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:1068:6: warning: no previous prototype for ‘wvm_register_volatile_ram’ [-Wmissing-prototypes]
+ 1068 | void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) {
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:1728:6: warning: no previous prototype for ‘wavevm_user_mem_finish_handoff_dirty’ [-Wmissing-prototypes]
+ 1728 | void wavevm_user_mem_finish_handoff_dirty(WVMHandoffDirtyJournal *journal,
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:1752:5: warning: no previous prototype for ‘wavevm_user_mem_flush_dirty_to_ipc’ [-Wmissing-prototypes]
+ 1752 | int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:1942:10: warning: no previous prototype for ‘wavevm_user_mem_debug_read_u64’ [-Wmissing-prototypes]
+ 1942 | uint64_t wavevm_user_mem_debug_read_u64(uint64_t gpa, uint64_t offset, int *ok)
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:2501:5: warning: no previous prototype for ‘wavevm_user_mem_flush_slave_dirty_sync’ [-Wmissing-prototypes]
+ 2501 | int wavevm_user_mem_flush_slave_dirty_sync(void)
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:2681:6: warning: no previous prototype for ‘wvm_set_client_sync_mode’ [-Wmissing-prototypes]
+ 2681 | void wvm_set_client_sync_mode(int batch_size, int auto_tune) {
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:2828:5: warning: no previous prototype for ‘wavevm_user_mem_ipc_push_fence’ [-Wmissing-prototypes]
+ 2828 | int wavevm_user_mem_ipc_push_fence(int ipc_fd, uint64_t timeout_us)
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:3133:6: warning: no previous prototype for ‘wavevm_user_mem_init’ [-Wmissing-prototypes]
+ 3133 | void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
+      |      ^~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c: In function ‘wavevm_user_mem_init’:
+../accel/wavevm/wavevm-user-mem.c:3192:12: warning: unused variable ‘num_pages’ [-Wunused-variable]
+ 3192 |     size_t num_pages = ram_size / 4096;
+      |            ^~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c: At top level:
+../accel/wavevm/wavevm-user-mem.c:1281:12: warning: ‘commit_page_over_ipc’ declared ‘static’ but never defined [-Wunused-function]
+ 1281 | static int commit_page_over_ipc(uint64_t gpa, const void *data, uint64_t version);
+      |            ^~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c: In function ‘wavevm_register_ram_block’:
+../accel/wavevm/wavevm-user-mem.c:236:13: warning: ignoring return value of ‘write’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  236 |             write(STDERR_FILENO, msg, (size_t)n);
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c: In function ‘request_page_sync’:
+../accel/wavevm/wavevm-user-mem.c:1227:13: warning: ignoring return value of ‘write’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1227 |             write(STDERR_FILENO, msg, (size_t)n);
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c: In function ‘sigsegv_handler’:
+../accel/wavevm/wavevm-user-mem.c:1519:15: warning: ignoring return value of ‘write’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1519 |         (void)write(STDERR_FILENO, hit, sizeof(hit) - 1);
+      |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:1525:15: warning: ignoring return value of ‘write’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1525 |         (void)write(STDERR_FILENO, pass, sizeof(pass) - 1);
+      |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c: In function ‘start_fault_worker’:
+../accel/wavevm/wavevm-user-mem.c:1442:15: warning: ignoring return value of ‘write’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1442 |         (void)write(g_fault_wake_fd, &one, sizeof(one));
+      |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c: At top level:
+../accel/wavevm/wavevm-user-mem.c:1546:13: warning: ‘send_commit_diff_dual_mode’ defined but not used [-Wunused-function]
+ 1546 | static void send_commit_diff_dual_mode(uint64_t gpa, uint16_t offset, uint16_t size, void *data) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:299:13: warning: ‘send_push_packet’ defined but not used [-Wunused-function]
+  299 | static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_t size, uint8_t flags) {
+      |             ^~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-user-mem.c:49:25: warning: ‘t_net_buf’ defined but not used [-Wunused-variable]
+   49 | static __thread uint8_t t_net_buf[WVM_MAX_PACKET_SIZE];
+      |                         ^~~~~~~~~
+[3/5] Compiling C object libqemu-x86_64-softmmu.fa.p/accel_wavevm_wavevm-cpu.c.o
+../accel/wavevm/wavevm-cpu.c:52: warning: "MAX_VCPUS" redefined
+   52 | #define MAX_VCPUS 64
+      | 
+In file included from ../accel/wavevm/../../../common_include/wavevm_protocol.h:18,
+                 from ../accel/wavevm/wavevm-cpu.c:20:
+../accel/wavevm/../../../common_include/wavevm_config.h:74: note: this is the location of the previous definition
+   74 | #define MAX_VCPUS 4096
+      | 
+../accel/wavevm/wavevm-cpu.c: In function ‘wavevm_init_tcg_region_once’:
+../accel/wavevm/wavevm-cpu.c:1121:17: warning: nested extern declaration of ‘mttcg_enabled’ [-Wnested-externs]
+ 1121 |     extern bool mttcg_enabled;
+      |                 ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1121:17: warning: redundant redeclaration of ‘mttcg_enabled’ [-Wredundant-decls]
+In file included from ../target/i386/cpu-qom.h:23,
+                 from ../target/i386/cpu.h:24,
+                 from ../accel/wavevm/wavevm-cpu.c:4:
+/workspaces/WaveVM/wavevm-qemu/include/hw/core/cpu.h:498:13: note: previous declaration of ‘mttcg_enabled’ with type ‘_Bool’
+  498 | extern bool mttcg_enabled;
+      |             ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1122:17: warning: nested extern declaration of ‘parallel_cpus’ [-Wnested-externs]
+ 1122 |     extern bool parallel_cpus;
+      |                 ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c: In function ‘wavevm_cpu_thread_fn’:
+../accel/wavevm/wavevm-cpu.c:3152:16: warning: unused variable ‘bsp_cant_run_count’ [-Wunused-variable]
+ 3152 |     static int bsp_cant_run_count = 0;
+      |                ^~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c: At top level:
+../accel/wavevm/wavevm-cpu.c:3660:6: warning: no previous prototype for ‘wavevm_start_vcpu_thread’ [-Wmissing-prototypes]
+ 3660 | void wavevm_start_vcpu_thread(CPUState *cpu) {
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1329:13: warning: ‘wavevm_handle_io’ defined but not used [-Wunused-function]
+ 1329 | static void wavevm_handle_io(CPUState *cpu) {
+      |             ^~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1206:13: warning: ‘wavevm_valid_io_exit’ defined but not used [-Wunused-function]
+ 1206 | static bool wavevm_valid_io_exit(const struct kvm_run *run)
+      |             ^~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1169:13: warning: ‘wavevm_tcg_kick_runnable_local_peers’ defined but not used [-Wunused-function]
+ 1169 | static void wavevm_tcg_kick_runnable_local_peers(CPUState *owner)
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:45:13: warning: ‘wvm_halt_wake_nop_handler’ defined but not used [-Wunused-function]
+   45 | static void wvm_halt_wake_nop_handler(int sig) { (void)sig; }
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~
+[4/5] Compiling C object libqemu-x86_64-softmmu.fa.p/accel_wavevm_wavevm-all.c.o
+../accel/wavevm/wavevm-all.c: In function ‘wavevm_executor_session_thread’:
+../accel/wavevm/wavevm-all.c:1090:42: warning: pointer targets in passing argument 4 of ‘wvm_executor_session_encode’ differ in signedness [-Wpointer-sign]
+ 1090 |                     error_payload_bytes, error_response, sizeof(error_response),
+      |                                          ^~~~~~~~~~~~~~
+      |                                          |
+      |                                          char *
+In file included from ../accel/wavevm/wavevm-all.c:39:
+../accel/wavevm/../../../common_include/wavevm_executor_session.h:22:14: note: expected ‘uint8_t *’ {aka ‘unsigned char *’} but argument is of type ‘char *’
+   22 |     uint8_t *output, size_t output_capacity, size_t *output_bytes,
+      |     ~~~~~~~~~^~~~~~
+../accel/wavevm/wavevm-all.c: At top level:
+../accel/wavevm/wavevm-all.c:1128:6: warning: no previous prototype for ‘wavevm_slave_vcpu_loop’ [-Wmissing-prototypes]
+ 1128 | void wavevm_slave_vcpu_loop(CPUState *cpu)
+      |      ^~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:1501:6: warning: no previous prototype for ‘wavevm_apply_split_hint’ [-Wmissing-prototypes]
+ 1501 | void wavevm_apply_split_hint(int split)
+      |      ^~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c: In function ‘wavevm_region_add’:
+../accel/wavevm/wavevm-all.c:2272:25: warning: nested extern declaration of ‘wavevm_register_ram_block’ [-Wnested-externs]
+ 2272 |             extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2272:25: warning: redundant redeclaration of ‘wavevm_register_ram_block’ [-Wredundant-decls]
+../accel/wavevm/wavevm-all.c:60:13: note: previous declaration of ‘wavevm_register_ram_block’ with type ‘void(void *, uint64_t,  uint64_t)’ {aka ‘void(void *, long unsigned int,  long unsigned int)’}
+   60 | extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2292:25: warning: nested extern declaration of ‘wavevm_sync_bios_shadow’ [-Wnested-externs]
+ 2292 |             extern void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c: At top level:
+../accel/wavevm/wavevm-all.c:2601:5: warning: no previous prototype for ‘wvm_send_rpc_sync’ [-Wmissing-prototypes]
+ 2601 | int wvm_send_rpc_sync(uint16_t msg_type, void *payload, size_t len) {
+      |     ^~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2685:5: warning: no previous prototype for ‘wvm_send_typed_block_request’ [-Wmissing-prototypes]
+ 2685 | int wvm_send_typed_block_request(uint64_t lba_512, void *buf, uint32_t sector_count,
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2831:5: warning: no previous prototype for ‘wvm_send_ipc_block_io’ [-Wmissing-prototypes]
+ 2831 | int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
+      |     ^~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2473:13: warning: ‘wavevm_get_ttl’ defined but not used [-Wunused-function]
+ 2473 | static void wavevm_get_ttl(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp) {
+      |             ^~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2468:13: warning: ‘wavevm_set_ttl’ defined but not used [-Wunused-function]
+ 2468 | static void wavevm_set_ttl(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp) {
+      |             ^~~~~~~~~~~~~~
+[5/5] Linking target qemu-system-x86_64
+QEMU_RC=0

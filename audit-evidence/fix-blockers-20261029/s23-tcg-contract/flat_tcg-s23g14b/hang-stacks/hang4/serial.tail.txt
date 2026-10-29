@@ -1,0 +1,129 @@
+8] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI EDR HPX-Type3]
+[    2.177647] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended PCI configuration space under this bridge.
+[    2.182364] acpiphp: Slot [2] registered
+[    2.182617] acpiphp: Slot [3] registered
+[    2.182739] acpiphp: Slot [4] registered
+[    2.182871] acpiphp: Slot [5] registered
+[    2.182970] acpiphp: Slot [6] registered
+[    2.183107] acpiphp: Slot [7] registered
+[    2.183210] acpiphp: Slot [8] registered
+[    2.183311] acpiphp: Slot [9] registered
+[    2.183413] acpiphp: Slot [10] registered
+[    2.183517] acpiphp: Slot [11] registered
+[    2.183644] acpiphp: Slot [12] registered
+[    2.183767] acpiphp: Slot [13] registered
+[    2.183878] acpiphp: Slot [14] registered
+[    2.183985] acpiphp: Slot [15] registered
+[    2.184168] acpiphp: Slot [16] registered
+[    2.184273] acpiphp: Slot [17] registered
+[    2.184373] acpiphp: Slot [18] registered
+[    2.184492] acpiphp: Slot [19] registered
+[    2.184598] acpiphp: Slot [20] registered
+[    2.184704] acpiphp: Slot [21] registered
+[    2.184806] acpiphp: Slot [22] registered
+[    2.184923] acpiphp: Slot [23] registered
+[    2.185023] acpiphp: Slot [24] registered
+[    2.185124] acpiphp: Slot [25] registered
+[    2.185240] acpiphp: Slot [26] registered
+[    2.185342] acpiphp: Slot [27] registered
+[    2.185441] acpiphp: Slot [28] registered
+[    2.185540] acpiphp: Slot [29] registered
+[    2.185657] acpiphp: Slot [30] registered
+[    2.185769] acpiphp: Slot [31] registered
+[    2.186039] PCI host bridge to bus 0000:00
+[    2.186431] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    2.186537] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    2.186697] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    2.186762] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    2.186863] pci_bus 0000:00: root bus resource [mem 0x10000000-0xfebfffff window]
+[    2.186943] pci_bus 0000:00: root bus resource [mem 0x100000000-0x17fffffff window]
+[    2.188220] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000
+[    2.191696] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100
+[    2.192451] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180
+[    2.194534] pci 0000:00:01.1: reg 0x20: [io  0xc0c0-0xc0cf]
+[    2.195248] pci 0000:00:01.1: legacy IDE quirk: reg 0x10: [io  0x01f0-0x01f7]
+[    2.195372] pci 0000:00:01.1: legacy IDE quirk: reg 0x14: [io  0x03f6]
+[    2.195448] pci 0000:00:01.1: legacy IDE quirk: reg 0x18: [io  0x0170-0x0177]
+[    2.195519] pci 0000:00:01.1: legacy IDE quirk: reg 0x1c: [io  0x0376]
+[    2.196325] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000
+[    2.196610] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    2.196701] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    2.198069] pci 0000:00:02.0: [8086:100e] type 00 class 0x020000
+[    2.198775] pci 0000:00:02.0: reg 0x10: [mem 0xfebc0000-0xfebdffff]
+[    2.199478] pci 0000:00:02.0: reg 0x14: [io  0xc080-0xc0bf]
+[    2.201634] pci 0000:00:02.0: reg 0x30: [mem 0xfeb80000-0xfebbffff pref]
+[    2.203004] pci 0000:00:03.0: [1af4:1001] type 00 class 0x010000
+[    2.203990] pci 0000:00:03.0: reg 0x10: [io  0xc000-0xc07f]
+[    2.205928] pci 0000:00:03.0: reg 0x14: [mem 0xfebe0000-0xfebe0fff]
+[    2.207541] pci 0000:00:03.0: reg 0x20: [mem 0xfebfc000-0xfebfffff 64bit pref]
+[    2.211998] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    2.213651] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    2.214342] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    2.215022] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    2.215326] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    2.217914] iommu: Default domain type: Translated 
+[    2.217914] iommu: DMA domain TLB invalidation policy: lazy mode 
+[    2.222293] SCSI subsystem initialized
+[    2.225871] vgaarb: loaded
+[    2.226443] ACPI: bus type USB registered
+[    2.226655] usbcore: registered new interface driver usbfs
+[    2.226841] usbcore: registered new interface driver hub
+[    2.226958] usbcore: registered new device driver usb
+[    2.227229] pps_core: LinuxPPS API ver. 1 registered
+[    2.227286] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    2.227410] PTP clock support registered
+[    2.229940] EDAC MC: Ver: 3.0.0
+[    2.236730] NetLabel: Initializing
+[    2.236847] NetLabel:  domain hash size = 128
+[    2.236898] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    2.237457] NetLabel:  unlabeled traffic allowed by default
+[    2.238034] PCI: Using ACPI for IRQ routing
+[    2.239677] hpet: 3 channels of 0 reserved for per-cpu timers
+[    2.240072] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    2.240187] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    2.246543] clocksource: Switched to clocksource hpet
+[    2.327613] VFS: Disk quotas dquot_6.6.0
+[    2.330631] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    2.335795] AppArmor: AppArmor Filesystem Enabled
+[    2.337527] pnp: PnP ACPI init
+[    2.352781] pnp: PnP ACPI: found 6 devices
+[    2.423753] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    2.436023] NET: Registered PF_INET protocol family
+[    2.437680] IP idents hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    2.449940] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 4096 bytes, linear)
+[    2.450390] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    2.450506] TCP established hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    2.450702] TCP bind hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    2.450874] TCP: Hash tables configured (established 2048 bind 2048)
+[    2.452915] MPTCP token hash table entries: 256 (order: 0, 6144 bytes, linear)
+[    2.453157] UDP hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    2.453335] UDP-Lite hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    2.454447] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    2.454715] NET: Registered PF_XDP protocol family
+[    2.455534] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    2.455926] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    2.455989] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    2.456088] pci_bus 0000:00: resource 7 [mem 0x10000000-0xfebfffff window]
+[    2.456152] pci_bus 0000:00: resource 8 [mem 0x100000000-0x17fffffff window]
+[    2.458477] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    2.458722] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    2.458876] pci 0000:00:01.0: Activating ISA DMA hang workarounds
+[    2.459033] PCI: CLS 0 bytes, default 64
+[    2.470507] Initialise system trusted keyrings
+[    2.471597] Key type blacklist registered
+[    4.149426] workingset: timestamp_bits=36 max_order=16 bucket_order=0
+[    4.161485] zbud: loaded
+[    4.169719] Trying to unpack rootfs image as initramfs...
+[    4.171542] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    4.450793] Freeing initrd memory: 8744K
+[    4.461229] fuse: init (API version 7.34)
+[    4.563485] integrity: Platform Keyring initialized
+[    4.586494] Key type asymmetric registered
+[    4.586719] Asymmetric key parser 'x509' registered
+[    4.589718] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 243)
+[    4.593182] io scheduler mq-deadline registered
+[    4.614970] shpchp: Standard Hot Plug PCI Controller Driver version: 0.4
+[    4.623140] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    4.627015] ACPI: button: Power Button [PWRF]
+[    4.810704] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[    4.828127] Serial: 8250/16550 driver, 32 ports, IRQ sharing enabled

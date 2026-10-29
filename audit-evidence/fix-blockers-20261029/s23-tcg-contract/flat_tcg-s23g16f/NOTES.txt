@@ -1,0 +1,10 @@
+s23g16f (Asia/Shanghai)
+Goal: remote MAIN vs fl dominance after 15i/16e.
+Code vs §8.1/§16:
+- spin wall-hold gate raised 4→8 (medium spin = budget-only; high spin = 30s/90s/25s hold)
+- mid-hold early_clear_progress when RIP progress decays spin<4 and vCPU not idle
+  (NOT idle-clear; 16a/b hung on that)
+- NL thrash→softlock_hold unchanged (RCU/device; allowed during cooldown)
+- G9 harness: per-cpu last-sample sum (16e false FAIL was last-line=cpu0)
+NO MINIMUM_COMPLETE claim; no commit/push.
+HUNG: early_clear_progress at 1.2s + cooldown → initramfs freeze. Reverted early_clear in 16g.

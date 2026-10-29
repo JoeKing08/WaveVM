@@ -1,0 +1,77 @@
+[node-runtime] host probe published 5 records to /tmp/wavevm-create-vm-single.kwG4yK/node-state/host_capabilities.report (tcg=3 kvm=3 kern=3 tcg_bits=1)
+[node-runtime] A10: registration accel digest replaced with probed_accel_digest
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[node-runtime] admitted vm=256 incarnation=1 generation=1 physical_node=801
+[Runtime] chunk identity=vm256_inc1_vol0 dir=/var/lib/wavevm/chunks
+[RuntimeGate] executor registered connection=2
+[Slave] No IRQCHIP (avoiding nested virt conflict)
+[Slave KVM] immediate_exit=1 numa_nodes=0 device_ram=0
+[Hybrid] BIOS ROM slot 3: GPA [0xffff0000, 0x100000000) -> HVA 0x7447f00f0000
+[SLAVE-BIND] port=35646 ok
+[GW-FINAL] id=1 ip=127.0.0.1 port=9000
+[V30-Init] rx_threads=4 poll_timeout=100ms (shared socket)
+[V30-RX] Thread 0: bound port=35643, shared socket fd=8
+[V30-RX] Thread 1: sharing socket fd=8
+[V30-RX] Thread 2: sharing socket fd=8
+[V30-RX] Thread 3: sharing socket fd=8
+[GW-SET] id=1 ip=127.0.0.1 port=35643
+[GW-SET] id=1 ip=127.0.0.1 port=35643
+[GW-SET] id=1 ip=127.0.0.1 port=35643
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=35646, Cores=2, RAM=256 MB, BaseID=1, VM=256
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-8d5696efa157ae69
+[Hybrid] KVM Hardware Acceleration Active (RAM: 256 MB).
+[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:35646
+[SenderThread] KVM Dirty Page Sender is running.
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 801, VM: 256)
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 256 MB >= Reservation 268435456 bytes.
+[Init] Identity Mapped: PhysID 801 -> VirtualID 1 (Primary)
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-8d5696efa157ae69 (Size: 256 MB)
+[+] Memory Ready at 0x7447a17ff000 (attached executor backing store)
+[System] Control Socket: /tmp/wvm_user_wvm-v256-i1-g1-n801-8d5696efa157ae69.sock
+[+] WaveVM V29 Node Ready. Waiting for QEMU...
+[System] runtime readiness published; listening for QEMU
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[SLAVE-RX] src=127.0.0.1:9000 len=4436 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:9000 len=4436 type=5
+[VCPU-RUN] mode=0 vcpu=1 req=4295229440 src=127.0.0.1:9000 target=16777216 slave=0
+[Slave VCPU Init] enter vm=5 kvm=4 req_vcpu=1
+[Slave VCPU Init] guest_vcpu=1 fd=11 run=0x74480cf91000
+[Hybrid] WARN: BIOS ROM area empty and no bios.bin found!
+[DBG-MP] KVM_SET_MP_STATE(RUNNABLE) ret=0 errno=0 vcpu_fd=11
+[DBG-SET] SET sr=0 rr=0 | VERIFY rip=0xffffffff8daa62bb cs_base=0x0 cs_sel=0x10 rflags=0x46
+[KVM cache] SHM coherent — skip typed memory slice fence
+[DBG-RAW] req=4295229440 rip=0xffffffff8daa62bb rax=0xc55224ac rdx=0x5 cs_base=0x0 cs_sel=0x10 exit=0
+[DBG-REGS] req=4295229440 rip=0xffffffff8daa62bb cs_base=0x0 cs_sel=0x10 rflags=0x46 rax=0xc55224ac exit=0 io_port=0x0 io_dir=0 io_sz=0
+[DBG-EXIT] ret=0 exit=8 rip_after=?  io_port=0x0 io_dir=0 io_sz=0 alarm=0
+[DBG-SHUTDOWN] req=4295229440 -- triple fault!
+[DBG-SHUTDOWN] after: rip=0xffffffff8daa62bb rsp=0xffffa71c8024f948 rflags=0x10046
+[DBG-SHUTDOWN] after: cs=0x10/0x0 ds=0x0 ss=0x18
+[DBG-SHUTDOWN] after: cr0=0x80050033 cr3=0x353e000 cr4=0x6e0 efer=0xd01
+[DBG-SHUTDOWN] after: idt_base=0xfffffe0000000000 idt_limit=0xfff gdt_base=0xfffffe000003c000 gdt_limit=0x7f
+[DBG-SHUTDOWN] input: rip=0xffffffff8daa62bb rsp=0xffffa71c8024f948 rflags=0x46 exit=0
+[DBG-SHUTDOWN] input: cs=0x10/0x0 ds=0x0 ss=0x18
+[DBG-SHUTDOWN] input: cr0=0x80050033 cr3=0x353e000 cr4=0x6e0 efer=0xd01
+[DBG-SHUTDOWN] input: idt_base=0xfffffe0000000000 idt_limit=0xfff gdt_base=0xfffffe000003c000 gdt_limit=0x7f
+[DBG-SHUTDOWN] bios@0xFFFF0=00000000 bios@0xF0000=00000000
+[DBG-ACK] req=4295229440 rip=0xffffffff8daa62bb cs_base=0x0 cs_sel=0x10 rflags=0x10046 exit=8
+[Slave Ack] ret=4436 errno=0 req=4295229440 dst=127.0.0.1:9000 exit=8 port=0x0 dir=0 sz=0

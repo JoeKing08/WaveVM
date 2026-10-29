@@ -1,0 +1,2 @@
+[WVM-REMOTE] cpu=1 dispatch #0 rip=0xffffffff8daa62bb cs=0x10 cr0=0x80050033 cr3=0x353e000 efer=0xd01 rsp=0xffffa71c8024f948
+[WVM-TCG-STATS] cpu=1 remote_done=1 local_done=0 force_local_used=0

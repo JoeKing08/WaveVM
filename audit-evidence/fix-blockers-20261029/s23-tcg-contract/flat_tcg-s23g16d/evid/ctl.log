@@ -1,0 +1,18 @@
+wvm_ctl: mid-flight admission recovery scan complete
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_ctl: queued after-membership hook type=0x101
+wvm_ctl: flushing after-membership hook type=0x101 pending_was=1
+wvm_ctl: admission submit type=0x701 peer=801:802 port=46091 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=801:802 port=46091 rc=0 err=no resumable enrollment for member
+wvm_ctl: cluster enrollment after REGISTER reached ACTIVE
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x401 peer=801:802 port=46091 rc=0 err=
+wvm_ctl: admission submit type=0x201 peer=801:802 port=46091 rc=0 err=
+wvm_ctl: admission submit type=0x301 peer=801:802 port=46091 rc=0 err=
+wvm_ctl: admission submit type=0x202 peer=801:802 port=46091 rc=0 err=
+wvm_ctl: admission submit type=0x302 peer=801:802 port=46091 rc=0 err=
+wvm_ctl: admission submit type=0x402 peer=801:802 port=46091 rc=0 err=
+wvm_ctl: admission submit type=0x305 peer=801:802 port=46091 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=46091 rc=0 err=

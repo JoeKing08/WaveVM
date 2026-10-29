@@ -1,0 +1,49 @@
+s23g13 KVM dual-yes FE Hybrid cutover — OVERALL=PASS (honest)
+================================================================
+When: 2026-10-29 17:30–17:33 Asia/Shanghai (CST, UTC+8)
+Tip base: 33767b2c2 on origin/main
+Dirty (NO commit/push): 
+  - wavevm-qemu/accel/wavevm/wavevm-runtime-registration.h
+  - slave_daemon/slave_hybrid.c
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+Root cause fixed this slice
+----------------------------
+Mode A FE BIND historically preferred WVM_RUNTIME_LOCAL_PORT (V30 sidecar)
+as SET_GATEWAY. Kernel :9000 REMOTE_RUN → V30 → Hybrid replaced the UDP
+client with LOCAL_PORT; Hybrid Ack returned to V30 and never woke the
+kernel waiter (hairpin loss; s23g10/g11 FAIL). s23g12 dual-send to :9000
+was 「旧版本套上新版本」and was refused/removed.
+
+Charter cutover (wire-ipc §7 / kernel-accelerator §5.2):
+  Mode A FE SET_GATEWAY → WVM_EXECUTOR_SERVICE_PORT (Hybrid), same endpoint
+  Mode B uses for local handoff. Kernel :9000 <-> Hybrid direct.
+  gw9000 dual-send REMOVED from all Slave Ack / FastAck / ErrorAck / cache
+  replay sites in slave_hybrid.c.
+
+Smoke evidence
+--------------
+Art: audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_kvm_dualyes-s23g13-fe-hybrid/
+Workload: dual-yes (LIGHT unset); require-kvm flat 2 vCPU; split=1
+result.txt: OVERALL=PASS
+  guest_login=PASS guest_ssh=PASS guest_cpu_smoke=PASS guest_stop=PASS
+  remote_done 1→1 delta=0 (G9 accepts boot remote_done>0 for require-kvm)
+  force_local_used 0→0 delta=0
+FE inject: gw=127.0.0.1:35646 == WVM_EXECUTOR_SERVICE_PORT (NOT LOCAL_PORT 35643)
+Slave Ack: dst=127.0.0.1:9000 (direct to kernel waiter); also_gw9000 count=0
+vm-serial: cirros login @~62s; ZERO double fault / Kernel panic
+SMOKE_EXIT_RC=0
+
+Honesty notes
+-------------
+- smoke-window remote_done_delta=0 (same caveat as s23g5-msr2); boot remotes
+  prove concurrent MAIN path; stronger in-smoke remote delta still desirable.
+- force_local not expanded; not hard-coded to 2 vCPUs.
+- V30 demux (s23g10) left in tree as general Mode B forward feature; it is
+  NOT the formal Mode A BIND fix.
+- MINIMUM still NOT claimed (TCG matrix + fuller remote delta remain).
+
+Files touched
+-------------
+wavevm-qemu/accel/wavevm/wavevm-runtime-registration.h  (prefer EXECUTOR port)
+slave_daemon/slave_hybrid.c                            (remove gw9000 dual-send)

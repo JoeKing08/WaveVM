@@ -1,0 +1,21 @@
+WaveVM Minimum closeout slice s23g13 — 2026-10-29 Asia/Shanghai
+================================================================
+Tip base: 33767b2c2 on origin/main
+Dirty (NO commit / NO push):
+  wavevm-qemu/accel/wavevm/wavevm-runtime-registration.h  (FE SET_GATEWAY → EXECUTOR)
+  slave_daemon/slave_hybrid.c                            (remove gw9000 dual-send)
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+| Residual | Status | Evidence |
+|----------|--------|----------|
+| Mode A FE BIND hairpin (V30→Hybrid Ack loss) | FIXED | flat_kvm_dualyes-s23g13-fe-hybrid/ (gw=EXECUTOR; Ack dst=:9000; also_gw9000=0) |
+| s23g12 gw9000 dual-send 「旧套新」 | REFUSED/REMOVED | slave_hybrid.c diff; charter cutover instead |
+| KVM dual-yes login/SSH/CPU/STOP | FIXED (reconfirm) | same art; OVERALL=PASS; fl_delta=0; remote_done_delta=0 (boot remotes prove path) |
+| VCPU_EXIT demux-as-formal Mode A fix | NOT used as formal | demux left as Mode B feature; cutover is formal |
+| TCG flat ≥2 concurrent MAIN | FAIL/PARTIAL | flat_tcg-s23g13 FAIL_ssh; -retry FAIL_hang; -r2 FAIL_ssh |
+| TCG fractal ≥2 concurrent MAIN | PASS (fl residual) | fractal_tcg-s23g13 OVERALL=PASS remoteΔ=71 flΔ=866048 |
+| force_local softlock dominance | PARTIAL residual | §8.1 exceptional; NOT sticky-expanded; still dominates softlock windows |
+
+Honesty: do not claim MINIMUM_COMPLETE — flat TCG SSH matrix cell fails this
+slice; force_local still dominates softlock accounting; KVM smoke-window
+remote_done_delta=0 remains a known caveat.

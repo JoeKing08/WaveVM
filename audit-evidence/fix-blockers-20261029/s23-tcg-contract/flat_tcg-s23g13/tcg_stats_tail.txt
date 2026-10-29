@@ -1,0 +1,3 @@
+[WVM-TCG-STATS] cpu=1 remote_done=67 local_done=463616 force_local_used=463616
+[WVM-TCG-STATS] cpu=1 remote_done=67 local_done=463872 force_local_used=463872
+[WVM-TCG-STATS] cpu=1 remote_done=67 local_done=464128 force_local_used=464128

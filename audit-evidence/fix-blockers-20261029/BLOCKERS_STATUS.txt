@@ -1,0 +1,16 @@
+tip=33767b2c2 (dirty: FE Hybrid cutover + gw9000 removal)
+time_asia_shanghai=2026-10-29 ~18:00 CST
+MINIMUM_COMPLETE=NOT_CLAIMED
+no_commit_push=YES
+
+| Blocker | Status | Evidence |
+|---------|--------|----------|
+| Mode A FE→V30 hairpin / boot hang ack | FIXED | s23-tcg-contract/flat_kvm_dualyes-s23g13-fe-hybrid/ |
+| gw9000 dual-send 旧套新 | REMOVED | slave_hybrid.c |
+| KVM dual-yes MSR / guest smoke | FIXED | s23g5-msr2 + s23g13-fe-hybrid reconfirm |
+| TCG fractal ≥2 concurrent | PASS (fl residual) | fractal_tcg-s23g13/ |
+| TCG flat ≥2 SSH | FAIL | flat_tcg-s23g13* |
+| force_local softlock dominate | PARTIAL | §8.1; not sticky-expanded |
+| demux-as-Mode-A-formal | NOT formal | cutover is formal; demux Mode B keep |
+
+ready_for_re_audit=YES_with_honesty_notes

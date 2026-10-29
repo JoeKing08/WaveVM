@@ -1,0 +1,29 @@
+s23g14b flat TCG — OVERALL=FAIL_boot_hang_softlock
+====================================================
+When: 2026-10-29 18:09–18:18 Asia/Shanghai (CST, UTC+8)
+Tip base: 33767b2c2 + dirty (s23g13 FE Hybrid + s23g14/s23g14b idle-clear)
+
+result: FAIL_boot_hang_softlock
+  serial frozen @19974 bytes (Serial 8250 init); never reached cirros login
+  hang-watch: 4 dumps; FE threads in unix_stream_data_wait / poll
+  cpu1: remote_done frozen@32 after hold window; local_done≈50095
+         force_local_used≈50095 during hold (fl==local while hold active)
+  idle_clear_hold logs: 0; hard_cap logs: 0; [WVM-TCG-FORCE-LOCAL] events: 0
+
+Root cause (this attempt)
+-------------------------
+s23g14b added silent hold-clear in clear_force_local_if_progress on
+wavevm_tcg_ack_is_idle_not_softlock (halted | EXCP_HLT | low16==0x603b).
+After hold_full_local=1 on real softlock RIP ...f38c, a transient local
+EXCP_HLT cleared the hold with NO log (clear_if_progress idle path).
+Remote resumed mid-softlock → quantum never ACKed → FE unix_stream_data_wait
+deadlock. Premature idle-clear REGRESSED vs s23g13 (which often reached login).
+
+Did NOT expand sticky force_local. Did NOT reopen dual-send/demux Mode A.
+
+Next (s23g14c)
+--------------
+Split predicates: skip-arm on idle (halted|HLT|603b) stays; hold-CLEAR only
+on Cirros idle leaf low16==0x603b or hard_cap — never on transient EXCP_HLT
+alone (§8.1: RIP wobble / transient idle MUST NOT clear softlock hold early).
+Log clear_if_progress idle clears. Resmoke flat.

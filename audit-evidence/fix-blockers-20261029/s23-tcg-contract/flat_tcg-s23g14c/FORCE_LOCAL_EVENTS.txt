@@ -1,0 +1,22 @@
+[WVM-TCG-FORCE-LOCAL] event=idle_skip_arm cpu=1 rip=0xffffffffa57b603b leaf=1 halted=1 excp=-1
+[WVM-TCG-FORCE-LOCAL] event=idle_skip_arm cpu=1 rip=0xffffffffa57b603b leaf=1 halted=1 excp=-1
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa54a1abf arm force_local=128 repeat=1 hold=0
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-FORCE-LOCAL] event=idle_clear_hold cpu=1 rip=0xffffffffa57b603b via=clear_if_progress_leaf soft_land_ticks=64
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-FORCE-LOCAL] event=idle_clear_hold cpu=1 rip=0xffffffffa57b603b via=clear_if_progress_leaf soft_land_ticks=64
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa53fa782 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa53fa782 arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=idle_clear_hold cpu=1 rip=0xffffffffa57b603b via=clear_if_progress_leaf soft_land_ticks=64
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa53f9a5b arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa4a43821 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa521f37e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa51119f0 arm force_local=128 repeat=1 hold=0

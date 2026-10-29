@@ -1413,6 +1413,22 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
         if (local_is_tcg && exec_ret == WVM_TCG_EXCP_NEED_LOCAL) {
             cpu->exception_index = WVM_TCG_EXCP_NEED_LOCAL;
         }
+        /*
+         * Architecture idle (§8.1 / baseline §2): quantum kick may preempt
+         * before HLT commits (halted=0). If guest PC is the HLT opcode,
+         * export halted/HLT so FE idle classification is image-agnostic.
+         * Do not invent guest-specific RIP constants.
+         */
+        if (local_is_tcg && req.mode_tcg &&
+            exec_ret != WVM_TCG_EXCP_NEED_LOCAL && !cpu->halted) {
+            X86CPU *x86_idle = X86_CPU(cpu);
+            uint8_t op = 0;
+            if (cpu_memory_rw_debug(cpu, x86_idle->env.eip, &op, 1, 0) == 0 &&
+                op == 0xf4) {
+                cpu->halted = 1;
+                cpu->exception_index = EXCP_HLT;
+            }
+        }
 
         memset(&ack, 0, sizeof(ack));
         wavevm_slave_export_ctx(cpu, &req, &ack, local_is_tcg);

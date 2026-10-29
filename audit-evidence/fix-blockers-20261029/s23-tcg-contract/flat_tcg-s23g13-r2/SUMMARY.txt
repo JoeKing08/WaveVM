@@ -1,0 +1,10 @@
+s23g13 flat TCG r2 — OVERALL=FAIL_guest_ssh
+=============================================
+When: 2026-10-29 17:50–17:58 Asia/Shanghai
+Tip: 33767b2c2 + dirty FE Hybrid cutover / gw9000 removal
+guest_login=PASS (~122s) guest_ssh=FAIL (banner timeout 300s)
+cpu1 remote_done≈64 local≈93k force_local_used≈93k (stalled during SSH window)
+Third flat attempt this slice (attempt1 FAIL_ssh, retry FAIL_boot_hang).
+Did NOT expand sticky force_local. Fractal same tip PASS — flat SSH flake/
+softlock residual, not treated as FE cutover regression without A/B revert.
+MINIMUM_COMPLETE=NOT_CLAIMED

@@ -1,0 +1,5 @@
+s23g16g (Asia/Shanghai)
+After 16f hung: removed mid-hold early_clear_progress (violated §8.1 RIP-wobble rule).
+Keep: spin wall-hold gate >=8 (budget at 4..7); NL thrash softlock_hold; G9 per-cpu sum.
+Clear only at slice expiry / renew refusal / hard_cap (+25s cooldown).
+HUNG after hold_expiry; cooldown_suppress x22; spin>=8 under-covered. Revert hold gate to >=4 for 16h.

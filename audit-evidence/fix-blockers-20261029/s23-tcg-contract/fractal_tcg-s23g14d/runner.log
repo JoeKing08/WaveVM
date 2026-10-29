@@ -1,0 +1,20 @@
+2026年 10月 29日 星期四 18:29:42 CST
+fix=s23g14d fractal TCG cheap reconfirm after flat PASS
+[guest-smoke 18:29:42] art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g14d qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=67108864 file_limit=104857600
+[guest-smoke 18:29:42] CREATE_VM via test_create_vm_fractal.sh topology=fractal backend=require-tcg (production + live helpers)
+[guest-smoke 18:29:53] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-fractal.sIiTSC agent=27527 ctl=27524
+[guest-smoke 18:29:53] CREATE backend=require-tcg accel=disabled
+[guest-smoke 18:29:53] live wavevm-accel QEMU processes≈2
+[guest-smoke 18:29:53] manifest=/tmp/wavevm-create-vm-fractal.sIiTSC/runtime/vm-257-1-1.manifest node_instance=802 child=27596
+[guest-smoke 18:29:53] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 18:29:53] log_cap_bytes=67108864 file_limit_bytes=104857600
+[guest-smoke 18:29:56] frontend_pid=27673 serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g14d/vm-serial.log
+[guest-smoke 18:29:56] waiting up to 900s for 'cirros login:'
+[guest-smoke 18:30:46] boot poll 64s serial_bytes=28802
+[guest-smoke 18:31:46] boot poll 124s serial_bytes=33148
+[guest-smoke 18:32:16] guest reached cirros login
+[guest-smoke 18:32:16] waiting up to 300s for SSH login
+[guest-smoke 18:37:21] ERROR: guest SSH failed
+Connection timed out during banner exchange
+SMOKE_EXIT_RC=1
+2026年 10月 29日 星期四 18:37:21 CST

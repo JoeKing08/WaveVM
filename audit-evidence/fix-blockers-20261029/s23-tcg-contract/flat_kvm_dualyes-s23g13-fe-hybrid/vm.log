@@ -1,0 +1,930 @@
+[KVM-MEM] listener_register kml=0x56098713d0e0 as=0x5609612a4e00 as_id=0 nr_slots=32764
+[WaveVM] KVM bootstrap OK (mode=kernel), keep wavevm vCPU control (kvm_enabled=1)
+[WaveVM-QEMU] KERNEL MODE: Connecting to /dev/wavevm...
+[WaveVM-QEMU] FE compute routes injected: split=1 vcpus=2 mapped=1 vnode=1 gw=127.0.0.1:35646
+[KVM-MEM] region_add cb mr=kvm-apic-msi gpa=0xfee00000 size=0x100000
+[WaveVM] region_add gpa=0 size=0x10000000 count=1
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0x10000000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0x10000000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0x10000000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xfffc0000 size=0x40000
+[KVM-MEM] region_add mr=pc.bios gpa=0xfffc0000 size=0x40000 offset_as=0xfffc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=1 as_id=0 new=1 gpa=0xfffc0000 size=0x40000 hva=0x7a51fd200000 flags=0x2 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0 size=0x10000000
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=0 gpa=0 size=0 hva=0x7a51dfe00000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0xc0000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0xc0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0xc0000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] region_add mr=pc.rom gpa=0xc0000 size=0x20000 offset_as=0xc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=1 gpa=0xc0000 size=0x20000 hva=0x7a51fd000000 flags=0x2 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x20000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=1 gpa=0xe0000 size=0x20000 hva=0x7a51fd220000 flags=0x2 old_flags=0
+[WaveVM] region_add gpa=0x100000 size=0xff00000 count=3
+[KVM-MEM] region_add cb mr=pc.ram gpa=0x100000 size=0xff00000
+[KVM-MEM] region_add mr=pc.ram gpa=0x100000 size=0xff00000 offset_as=0x100000 offset_mr=0x100000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=1 gpa=0x100000 size=0xff00000 hva=0x7a51dff00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=kvm-ioapic gpa=0xfec00000 size=0x1000
+[KVM-MEM] region_add cb mr=hpet gpa=0xfed00000 size=0x400
+[KVM-MEM] listener_register kml=0x56096129da00 as=0x56096129d9a0 as_id=1 nr_slots=32764
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0xc0000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0xc0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0xc0000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] region_add mr=pc.rom gpa=0xc0000 size=0x20000 offset_as=0xc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=1 gpa=0xc0000 size=0x20000 hva=0x7a51fd000000 flags=0x2 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x20000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=65538 as_id=1 new=1 gpa=0xe0000 size=0x20000 hva=0x7a51fd220000 flags=0x2 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0x100000 size=0xff00000
+[KVM-MEM] region_add mr=pc.ram gpa=0x100000 size=0xff00000 offset_as=0x100000 offset_mr=0x100000
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=1 gpa=0x100000 size=0xff00000 hva=0x7a51dff00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=kvm-ioapic gpa=0xfec00000 size=0x1000
+[KVM-MEM] region_add cb mr=hpet gpa=0xfed00000 size=0x400
+[KVM-MEM] region_add cb mr=kvm-apic-msi gpa=0xfee00000 size=0x100000
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xfffc0000 size=0x40000
+[KVM-MEM] region_add mr=pc.bios gpa=0xfffc0000 size=0x40000 offset_as=0xfffc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=65540 as_id=1 new=1 gpa=0xfffc0000 size=0x40000 hva=0x7a51fd200000 flags=0x2 old_flags=0
+[BSP-DBG] cpu=0 iter=0 halted=0 stop=0 exit_req=1 run->exit=0
+[WVM-MP] cpu=1 mp_ret=0 mp_state=1 sipi_done=0
+[WVM-POLL] cpu=1 halted mp_state=1 (waiting for RUNNABLE)
+[BSP-DBG] cpu=0 iter=0 ret=65536 rip=0xfff0 cs=0xf000/0xffff0000 rfl=0x2 rax=0x0 halted=0
+[BSP-DBG] cpu=0 iter=1 halted=0 stop=0 exit_req=0 run->exit=0
+[KVM-IO] cpu=0 port=0x71 dir=0 sz=1 cnt=1 total_io=1 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x92 dir=0 sz=1 cnt=1 total_io=2 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x92 dir=1 sz=1 cnt=1 total_io=3 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=4 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=5 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=6 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=7 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=8 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=9 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=10 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=11 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=12 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=13 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=14 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=15 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=16 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=17 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=18 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=19 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=20 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=21 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=22 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=23 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=24 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=25 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=26 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=27 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=28 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=29 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=30 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=31 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=32 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=33 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=34 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=35 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=36 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=37 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=38 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=39 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=40 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=41 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=42 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=43 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=44 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=45 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=46 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=47 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=48 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=49 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=50 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=51 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=52 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=53 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=54 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=55 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=56 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=57 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=58 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=59 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=60 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=61 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=62 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=63 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=64 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=65 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=66 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=67 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=68 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=69 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=70 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=71 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=72 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=73 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=74 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=75 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=76 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=77 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=78 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=79 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=80 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=81 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=82 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=83 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=84 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=85 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=86 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=87 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=88 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=89 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=90 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=91 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=92 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=93 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=94 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=95 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=96 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=97 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=98 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=99 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=100 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=101 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=102 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=103 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=104 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=105 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=106 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=107 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=108 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=109 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=110 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=111 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=112 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=113 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=114 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=115 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=116 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=117 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=118 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=119 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=120 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=121 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=122 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=123 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=124 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=125 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=126 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=127 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=128 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=129 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=130 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=131 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=132 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=133 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=134 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=135 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=136 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=137 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=138 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=139 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=140 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=141 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=142 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=143 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=144 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=145 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=146 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=147 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=148 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=149 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=150 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=151 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=152 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=153 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=154 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=155 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=156 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=157 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=158 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=159 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=160 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=161 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=162 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=163 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=164 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=165 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=166 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=167 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=168 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=169 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=170 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=171 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=172 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=173 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=174 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=175 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=176 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=177 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=178 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=179 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=180 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=181 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=1 sz=1 cnt=1 total_io=182 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=183 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=184 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=185 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=186 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=187 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfd dir=0 sz=1 cnt=1 total_io=188 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=189 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=190 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=191 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=192 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=193 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=1 sz=4 cnt=1 total_io=194 mmio=0 other=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0 size=0xc0000
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=0 gpa=0 size=0 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=0 gpa=0xc0000 size=0 hva=0x7a51fd000000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=0 gpa=0xe0000 size=0 hva=0x7a51fd220000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.ram gpa=0x100000 size=0xff00000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=0 gpa=0x100000 size=0 hva=0x7a51dff00000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0 size=0xd0000 count=4
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0xd0000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0xd0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0xd0000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xd0000 size=0x10000
+[KVM-MEM] region_add mr=pc.rom gpa=0xd0000 size=0x10000 offset_as=0xd0000 offset_mr=0x10000
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=1 gpa=0xd0000 size=0x10000 hva=0x7a51fd010000 flags=0x2 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x10000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=1 gpa=0xe0000 size=0x10000 hva=0x7a51fd220000 flags=0x2 old_flags=0
+[WaveVM] region_add gpa=0xf0000 size=0xff10000 count=5
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xf0000 size=0xff10000
+[KVM-MEM] region_add mr=pc.ram gpa=0xf0000 size=0xff10000 offset_as=0xf0000 offset_mr=0xf0000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=1 gpa=0xf0000 size=0xff10000 hva=0x7a51dfef0000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0 size=0xc0000
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=0 gpa=0 size=0 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=0 gpa=0xc0000 size=0 hva=0x7a51fd000000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] set_user_memory slot=65538 as_id=1 new=0 gpa=0xe0000 size=0 hva=0x7a51fd220000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.ram gpa=0x100000 size=0xff00000
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=0 gpa=0x100000 size=0 hva=0x7a51dff00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0xd0000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0xd0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0xd0000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xd0000 size=0x10000
+[KVM-MEM] region_add mr=pc.rom gpa=0xd0000 size=0x10000 offset_as=0xd0000 offset_mr=0x10000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=1 gpa=0xd0000 size=0x10000 hva=0x7a51fd010000 flags=0x2 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x10000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=65538 as_id=1 new=1 gpa=0xe0000 size=0x10000 hva=0x7a51fd220000 flags=0x2 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xf0000 size=0xff10000
+[KVM-MEM] region_add mr=pc.ram gpa=0xf0000 size=0xff10000 offset_as=0xf0000 offset_mr=0xf0000
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=1 gpa=0xf0000 size=0xff10000 hva=0x7a51dfef0000 flags=0 old_flags=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=195 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=1 sz=4 cnt=1 total_io=196 mmio=0 other=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0 size=0xd0000
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=0 gpa=0 size=0 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xd0000 size=0x10000
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=0 gpa=0xd0000 size=0 hva=0x7a51fd010000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=0 gpa=0xe0000 size=0 hva=0x7a51fd220000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.ram gpa=0xf0000 size=0xff10000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=0 gpa=0xf0000 size=0 hva=0x7a51dfef0000 flags=0 old_flags=0
+[WaveVM] dedup region_add gpa=0 size=0x10000000 count=5
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0x10000000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0x10000000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0x10000000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0 size=0xd0000
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=0 gpa=0 size=0 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xd0000 size=0x10000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=0 gpa=0xd0000 size=0 hva=0x7a51fd010000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] set_user_memory slot=65538 as_id=1 new=0 gpa=0xe0000 size=0 hva=0x7a51fd220000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=pc.ram gpa=0xf0000 size=0xff10000
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=0 gpa=0xf0000 size=0 hva=0x7a51dfef0000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0x10000000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0x10000000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0x10000000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[WVM-MP] cpu=1 mp_ret=0 mp_state=1 sipi_done=0
+[WVM-POLL] cpu=1 halted mp_state=1 (waiting for RUNNABLE)
+[KVM-IO] cpu=0 port=0x71 dir=1 sz=1 cnt=1 total_io=197 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x402 dir=0 sz=1 cnt=1 total_io=198 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=199 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=200 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=201 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=202 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=203 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=204 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=205 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=206 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x510 dir=1 sz=2 cnt=1 total_io=207 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x511 dir=0 sz=1 cnt=1 total_io=208 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x511 dir=0 sz=1 cnt=1 total_io=209 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x511 dir=0 sz=1 cnt=1 total_io=210 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x511 dir=0 sz=1 cnt=1 total_io=211 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x510 dir=1 sz=2 cnt=1 total_io=212 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x511 dir=0 sz=1 cnt=4 total_io=213 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=214 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=215 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=216 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=217 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=218 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=219 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=220 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x510 dir=1 sz=2 cnt=1 total_io=221 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=222 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=223 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=224 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=225 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=226 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=227 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=228 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=229 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=230 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=231 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=232 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=233 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=234 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=235 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=236 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=237 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=238 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=239 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=240 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=241 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x71 dir=0 sz=1 cnt=1 total_io=242 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x71 dir=0 sz=1 cnt=1 total_io=243 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x71 dir=0 sz=1 cnt=1 total_io=244 mmio=0 other=0
+[KVM-IO] cpu=0 port=0x518 dir=1 sz=4 cnt=1 total_io=245 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xd dir=1 sz=1 cnt=1 total_io=246 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xda dir=1 sz=1 cnt=1 total_io=247 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xd6 dir=1 sz=1 cnt=1 total_io=248 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xd4 dir=1 sz=1 cnt=1 total_io=249 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=250 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=0 sz=4 cnt=1 total_io=251 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=252 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=253 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=254 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=255 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=256 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=257 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=258 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=259 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=260 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=261 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=262 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=263 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=264 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=265 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=266 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=267 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=268 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=269 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=270 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=271 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=272 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=273 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=274 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=275 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=276 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=277 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=278 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=279 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=280 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=281 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=282 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=283 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=284 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=285 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=286 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=287 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=288 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=289 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=290 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=291 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=292 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=293 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=294 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=295 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=296 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=297 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=298 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=299 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=300 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=301 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=302 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=303 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=304 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=305 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=306 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=307 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=308 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=309 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=310 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=311 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=312 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=313 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=314 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=315 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=316 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=317 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=318 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=319 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=320 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=321 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=322 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=323 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=324 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=325 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=326 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=327 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=328 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=329 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=330 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=331 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=332 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=333 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=334 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=335 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=336 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=337 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=338 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=339 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=340 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=341 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=342 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=343 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=344 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=345 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=346 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=347 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=348 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=349 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=350 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=351 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=352 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=353 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=354 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=355 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=356 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=357 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=358 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=359 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=360 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=361 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=362 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=363 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=364 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=365 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=366 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=367 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=368 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=369 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=370 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=371 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=372 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=373 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=374 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=375 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=376 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=377 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=378 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=379 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=380 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=381 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=382 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=383 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=384 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=385 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=386 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=387 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=388 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=2 cnt=1 total_io=389 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=390 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=391 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=392 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=393 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=394 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=395 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=396 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=397 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=398 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=399 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=400 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=401 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=402 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=403 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=404 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=405 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=406 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=407 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=408 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=409 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=410 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=411 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=412 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=413 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=414 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=415 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=416 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=417 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=418 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=419 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=420 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=421 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=422 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=423 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=424 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=425 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=426 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=427 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=428 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=429 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=430 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=431 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=432 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=433 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=434 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=435 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=436 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=437 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=438 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=439 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=440 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=441 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=442 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=443 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=444 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=445 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=446 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=447 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=448 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=449 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=450 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=451 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=452 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=453 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=454 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=455 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=456 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=457 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=458 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=459 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=460 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=461 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=462 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=463 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=464 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=465 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=466 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=467 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=468 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=469 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=470 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=471 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=472 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=473 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=474 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=475 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=476 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=477 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=478 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=479 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=480 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=481 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=482 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=483 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=484 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfe dir=0 sz=1 cnt=1 total_io=485 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=486 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=487 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=488 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=489 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=490 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=491 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=492 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=493 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=494 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=2 cnt=1 total_io=495 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=496 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=497 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=498 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcfc dir=0 sz=4 cnt=1 total_io=499 mmio=0 other=0
+[KVM-IO] cpu=0 port=0xcf8 dir=1 sz=4 cnt=1 total_io=500 mmio=0 other=0
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[WVM-MP] cpu=1 mp_ret=0 mp_state=1 sipi_done=0
+[WVM-POLL] cpu=1 halted mp_state=1 (waiting for RUNNABLE)
+[WVM-MP] cpu=1 mp_ret=0 mp_state=0 sipi_done=0
+[WVM-SIPI-LOCAL] cpu=1 first RUNNABLE — signaling local trampoline run
+[WVM-SIPI] cpu=1 doing LOCAL kvm_cpu_exec for SIPI trampoline
+[WVM-SIPI] cpu=1 phase1 ret=65536 halted=0 kvm_mp=0
+[WVM-SIPI] cpu=1 phase2 entering kvm_cpu_exec with 2s timer
+[KVM-MEM] region_add cb mr=e1000.rom gpa=0xfeb80000 size=0x40000
+[KVM-MEM] region_add mr=e1000.rom gpa=0xfeb80000 size=0x40000 offset_as=0xfeb80000 offset_mr=0
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=1 gpa=0xfeb80000 size=0x40000 hva=0x7a51fce00000 flags=0x2 old_flags=0
+[KVM-MEM] region_add cb mr=e1000.rom gpa=0xfeb80000 size=0x40000
+[KVM-MEM] region_add mr=e1000.rom gpa=0xfeb80000 size=0x40000 offset_as=0xfeb80000 offset_mr=0
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=1 gpa=0xfeb80000 size=0x40000 hva=0x7a51fce00000 flags=0x2 old_flags=0
+[KVM-MEM] region_del cb mr=e1000.rom gpa=0xfeb80000 size=0x40000
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=0 gpa=0xfeb80000 size=0 hva=0x7a51fce00000 flags=0 old_flags=0x2
+[KVM-MEM] region_del cb mr=e1000.rom gpa=0xfeb80000 size=0x40000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=0 gpa=0xfeb80000 size=0 hva=0x7a51fce00000 flags=0 old_flags=0x2
+[WVM-SIPI] cpu=1 phase2 ret=65536 halted=0 kvm_mp=3
+[WVM-SIPI] cpu=1 KVM HALTED, parking AP
+[WVM-MP] cpu=1 mp_ret=0 mp_state=3 sipi_done=1
+[OS-SIPI] cpu=1 entering kvm_cpu_exec for OS SIPI (mp=3)
+[OS-SIPI] cpu=1 kvm_cpu_exec ret=65536 halted=0 mp=3
+[OS-SIPI] cpu=1 OS trampoline done, AP parked (HALTED). Ready for remote dispatch.
+[WVM-MP] cpu=1 mp_ret=0 mp_state=3 sipi_done=1
+[WVM-HALT-WAKE] cpu=1 entering kvm_cpu_exec (1s timer) mp_in=3
+[WVM-HALT-WAKE] cpu=1 ret=65536 mp=3 halted=0 irq=0x0 has_work=0
+[WVM-MP] cpu=1 mp_ret=0 mp_state=3 sipi_done=1
+[WVM-HALT-WAKE] cpu=1 entering kvm_cpu_exec (1s timer) mp_in=3
+[KVM-MEM] region_del cb mr=pc.ram gpa=0 size=0x10000000
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=0 gpa=0 size=0 hva=0x7a51dfe00000 flags=0 old_flags=0
+[WaveVM] dedup region_add gpa=0 size=0xc0000 count=5
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0xc0000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0xc0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0xc0000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0xc0000 size=0x1000 count=6
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc0000 size=0x1000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc0000 size=0x1000 offset_as=0xc0000 offset_mr=0xc0000
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=1 gpa=0xc0000 size=0x1000 hva=0x7a51dfec0000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0xc1000 size=0x3000 count=7
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc1000 size=0x3000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc1000 size=0x3000 offset_as=0xc1000 offset_mr=0xc1000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=1 gpa=0xc1000 size=0x3000 hva=0x7a51dfec1000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0xc4000 size=0xc000 count=8
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc4000 size=0xc000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc4000 size=0xc000 offset_as=0xc4000 offset_mr=0xc4000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=1 gpa=0xc4000 size=0xc000 hva=0x7a51dfec4000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0xd0000 size=0x20000 count=9
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xd0000 size=0x20000
+[KVM-MEM] region_add mr=pc.ram gpa=0xd0000 size=0x20000 offset_as=0xd0000 offset_mr=0xd0000
+[KVM-MEM] set_user_memory slot=5 as_id=0 new=1 gpa=0xd0000 size=0x20000 hva=0x7a51dfed0000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0xf0000 size=0x10000 count=10
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xf0000 size=0x10000
+[KVM-MEM] region_add mr=pc.ram gpa=0xf0000 size=0x10000 offset_as=0xf0000 offset_mr=0xf0000
+[KVM-MEM] set_user_memory slot=6 as_id=0 new=1 gpa=0xf0000 size=0x10000 hva=0x7a51dfef0000 flags=0 old_flags=0
+[WaveVM] dedup region_add gpa=0x100000 size=0xff00000 count=10
+[KVM-MEM] region_add cb mr=pc.ram gpa=0x100000 size=0xff00000
+[KVM-MEM] region_add mr=pc.ram gpa=0x100000 size=0xff00000 offset_as=0x100000 offset_mr=0x100000
+[KVM-MEM] set_user_memory slot=7 as_id=0 new=1 gpa=0x100000 size=0xff00000 hva=0x7a51dff00000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0 size=0x10000000
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=0 gpa=0 size=0 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0 size=0xc0000
+[KVM-MEM] region_add mr=pc.ram gpa=0 size=0xc0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0xc0000 hva=0x7a51dfe00000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc0000 size=0x1000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc0000 size=0x1000 offset_as=0xc0000 offset_mr=0xc0000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=1 gpa=0xc0000 size=0x1000 hva=0x7a51dfec0000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc1000 size=0x3000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc1000 size=0x3000 offset_as=0xc1000 offset_mr=0xc1000
+[KVM-MEM] set_user_memory slot=65538 as_id=1 new=1 gpa=0xc1000 size=0x3000 hva=0x7a51dfec1000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc4000 size=0xc000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc4000 size=0xc000 offset_as=0xc4000 offset_mr=0xc4000
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=1 gpa=0xc4000 size=0xc000 hva=0x7a51dfec4000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xd0000 size=0x20000
+[KVM-MEM] region_add mr=pc.ram gpa=0xd0000 size=0x20000 offset_as=0xd0000 offset_mr=0xd0000
+[KVM-MEM] set_user_memory slot=65541 as_id=1 new=1 gpa=0xd0000 size=0x20000 hva=0x7a51dfed0000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xf0000 size=0x10000
+[KVM-MEM] region_add mr=pc.ram gpa=0xf0000 size=0x10000 offset_as=0xf0000 offset_mr=0xf0000
+[KVM-MEM] set_user_memory slot=65542 as_id=1 new=1 gpa=0xf0000 size=0x10000 hva=0x7a51dfef0000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0x100000 size=0xff00000
+[KVM-MEM] region_add mr=pc.ram gpa=0x100000 size=0xff00000 offset_as=0x100000 offset_mr=0x100000
+[KVM-MEM] set_user_memory slot=65543 as_id=1 new=1 gpa=0x100000 size=0xff00000 hva=0x7a51dff00000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0xc4000 size=0xc000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=0 gpa=0xc4000 size=0 hva=0x7a51dfec4000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0xd0000 size=0x20000
+[KVM-MEM] set_user_memory slot=5 as_id=0 new=0 gpa=0xd0000 size=0 hva=0x7a51dfed0000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0xc4000 size=0x24000 count=11
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc4000 size=0x24000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc4000 size=0x24000 offset_as=0xc4000 offset_mr=0xc4000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=1 gpa=0xc4000 size=0x24000 hva=0x7a51dfec4000 flags=0 old_flags=0
+[WaveVM] region_add gpa=0xe8000 size=0x8000 count=12
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xe8000 size=0x8000
+[KVM-MEM] region_add mr=pc.ram gpa=0xe8000 size=0x8000 offset_as=0xe8000 offset_mr=0xe8000
+[KVM-MEM] set_user_memory slot=5 as_id=0 new=1 gpa=0xe8000 size=0x8000 hva=0x7a51dfee8000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0xc4000 size=0xc000
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=0 gpa=0xc4000 size=0 hva=0x7a51dfec4000 flags=0 old_flags=0
+[KVM-MEM] region_del cb mr=pc.ram gpa=0xd0000 size=0x20000
+[KVM-MEM] set_user_memory slot=65541 as_id=1 new=0 gpa=0xd0000 size=0 hva=0x7a51dfed0000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xc4000 size=0x24000
+[KVM-MEM] region_add mr=pc.ram gpa=0xc4000 size=0x24000 offset_as=0xc4000 offset_mr=0xc4000
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=1 gpa=0xc4000 size=0x24000 hva=0x7a51dfec4000 flags=0 old_flags=0
+[KVM-MEM] region_add cb mr=pc.ram gpa=0xe8000 size=0x8000
+[KVM-MEM] region_add mr=pc.ram gpa=0xe8000 size=0x8000 offset_as=0xe8000 offset_mr=0xe8000
+[KVM-MEM] set_user_memory slot=65541 as_id=1 new=1 gpa=0xe8000 size=0x8000 hva=0x7a51dfee8000 flags=0 old_flags=0
+[KVM-IO] cpu=0 port=0xb2 dir=0 sz=1 cnt=1 total_io=10000 mmio=502 other=0
+[KVM-IO] cpu=0 port=0x3f8 dir=1 sz=1 cnt=1 total_io=20000 mmio=789 other=0
+[KVM-IO] cpu=0 port=0x3f8 dir=1 sz=1 cnt=1 total_io=30000 mmio=789 other=0
+[KVM-IO] cpu=0 port=0x3fd dir=0 sz=1 cnt=1 total_io=40000 mmio=825 other=0
+[KVM-IO] cpu=0 port=0x3f8 dir=1 sz=1 cnt=1 total_io=50000 mmio=827 other=0
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[WVM-HALT-WAKE] cpu=1 ret=65536 mp=3 halted=0 irq=0x0 has_work=0
+[WVM-MP] cpu=1 mp_ret=0 mp_state=3 sipi_done=1
+[WVM-HALT-WAKE] cpu=1 entering kvm_cpu_exec (1s timer) mp_in=3
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_del cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_del cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x30
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-IO] cpu=0 port=0x3f8 dir=1 sz=1 cnt=1 total_io=60000 mmio=1231 other=0
+[KVM-IO] cpu=0 port=0x3fd dir=0 sz=1 cnt=1 total_io=70000 mmio=1241 other=0
+[KVM-IO] cpu=1 port=0x3fd dir=0 sz=1 cnt=1 total_io=80000 mmio=1245 other=0
+[WVM-HALT-WAKE] cpu=1 ret=65536 mp=0 halted=0 irq=0x0 has_work=0
+[WVM-REMOTE] cpu=1 dispatch #0 rip=0xffffffff8daa62bb cs=0x10 cr0=0x80050033 cr3=0x353e000 efer=0xd01 rsp=0xffffa71c8024f948
+[WVM-DBG] cpu=1 kvm_enabled=1 vcpu_sock=-1 split=1
+[WVM-DBG] kernel path cpu=1 target=4294967295 mode_tcg=0 rip=0xffffffff8daa62bb
+[WVM-TCG-STATS] cpu=1 remote_done=1 local_done=0 force_local_used=0
+[WVM-KVM-DRAIN] cpu=1 bounded local kvm_cpu_exec after preempt/hlt cpl3=1
+[KVM-IO] cpu=0 port=0x3d4 dir=1 sz=2 cnt=1 total_io=90000 mmio=9970 other=0
+qemu-system-x86_64: terminating on signal 15 from pid 12187 (bash)
+[BSP-DBG] cpu=0 iter=1 ret=65536 rip=0xffffffff8e1b603b cs=0x10/0x0 rfl=0x202 rax=0xffffffff8e1b5f30 halted=0

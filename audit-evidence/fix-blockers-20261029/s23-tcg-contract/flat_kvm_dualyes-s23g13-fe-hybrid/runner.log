@@ -1,0 +1,73 @@
+2026年 10月 29日 星期四 17:30:54 CST
+rebuild=runtime+qemu@17:30 tip=33767b2c2+s23g13-fe-hybrid-cutover
+fix=s23g13 Mode A FE SET_GATEWAY -> EXECUTOR_SERVICE_PORT; gw9000 dual-send REMOVED
+ko_reloaded=17:30 MINIMUM_COMPLETE=NOT_CLAIMED
+[guest-smoke 17:30:54] art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_kvm_dualyes-s23g13-fe-hybrid qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=67108864 file_limit=104857600
+[guest-smoke 17:30:54] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-kvm (production + live helpers)
+[guest-smoke 17:31:03] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.kwG4yK agent=12476 ctl=12469
+[guest-smoke 17:31:03] CREATE backend=require-kvm accel=disabled
+[guest-smoke 17:31:03] live wavevm-accel QEMU processes≈0
+[guest-smoke 17:31:03] NOTE: no TCG helper QEMU (expected for some require-kvm layouts); continuing
+wavevm_node_run,12476 agent --state-dir /tmp/wavevm-create-vm-single.kwG4yK/node-state --runtime-dir/tmp/wavevm-cr
+  |-wavevm_node_run,12515 child --parent-pid 12476 --manifest/tmp/wavevm-create-vm-single.kwG4yK/runtime/vm-256-1-1.ma
+  |   |-{wavevm_node_run},12516
+  |   |-{wavevm_node_run},12517
+  |   |-{wavevm_node_run},12518
+  |   |-{wavevm_node_run},12519
+  |   |-{wavevm_node_run},12520
+  |   |-{wavevm_node_run},12521
+  |   |-{wavevm_node_run},12522
+  |   |-{wavevm_node_run},12523
+  |   |-{wavevm_node_run},12524
+  |   |-{wavevm_node_run},12525
+  |   |-{wavevm_node_run},12526
+  |   |-{wavevm_node_run},12527
+  |   |-{wavevm_node_run},12528
+  |   |-{wavevm_node_run},12529
+  |   |-{wavevm_node_run},12530
+  |   |-{wavevm_node_run},12531
+  |   |-{wavevm_node_run},12532
+  |   |-{wavevm_node_run},12533
+  |   |-{wavevm_node_run},12534
+  |   `-{wavevm_node_run},12535
+  `-{wavevm_node_run},12479
+[guest-smoke 17:31:03] manifest=/tmp/wavevm-create-vm-single.kwG4yK/runtime/vm-256-1-1.manifest node_instance=802 child=12515
+[guest-smoke 17:31:03] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 17:31:03] log_cap_bytes=67108864 file_limit_bytes=104857600
+[guest-smoke 17:31:06] frontend_pid=12650 serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_kvm_dualyes-s23g13-fe-hybrid/vm-serial.log
+[guest-smoke 17:31:06] waiting up to 900s for 'cirros login:'
+[guest-smoke 17:31:56] boot poll 62s serial_bytes=32375
+[guest-smoke 17:31:56] guest reached cirros login
+[guest-smoke 17:31:56] waiting up to 180s for SSH login
+[guest-smoke 17:31:56] guest SSH PASS: wavevm-guest-ssh-ok
+cpu-smoke-ok
+              total        used        free      shared  buff/cache   available
+Mem:         219484       27172      152720          52       39592      184376
+Swap:             0           0           0
+2
+[guest-smoke 17:32:51] G9 remote wait 45s exhausted delta=0
+[guest-smoke 17:32:51] G9 require-kvm: accept remote_done_before=1 (smoke delta=0)
+[guest-smoke 17:32:51] G9 remote attribution PASS delta_remote=0 delta_local=0
+[guest-smoke 17:32:51] REQUIRE_STOP=1 — stop Cirros FE then submit STOP_VM
+status=0 recorded_state=17 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14560925345531908553
+[guest-smoke 17:32:57] STOP_VM PASS
+[guest-smoke 17:32:57] GUEST SMOKE PASS art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_kvm_dualyes-s23g13-fe-hybrid
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=1
+local_done_before=0
+force_local_used_before=0
+guest_cpu_smoke=PASS
+remote_done_after=1
+local_done_after=0
+force_local_used_after=0
+remote_done_delta=0
+local_done_delta=0
+force_local_used_delta=0
+remote_vcpu_evidence=1
+remote_mem_evidence=1
+REQUIRE_STOP=1
+guest_stop=PASS
+OVERALL=PASS
+SMOKE_EXIT_RC=0
+2026年 10月 29日 星期四 17:35:39 CST

@@ -1,0 +1,41 @@
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffb30a1abf arm force_local=128 repeat=1 hold=0
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb2ca62a7 spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffb30a1abf arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 rip=0xffffffffb2ca62a7 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffb2c54235 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffb2c54235 arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017c61e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-FORCE-LOCAL] event=cooldown_lift_softlock cpu=1 spin=4 cleared_remaining_ms=8841
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb33b603b spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb33b603b spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb33b603b spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb33b603b spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb33b603b spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffffb33b603b slice_ms=8000 remaining_cap_ms=21999 armed_age_ms=8000
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffffb33b603b slice_ms=8000 remaining_cap_ms=13945 armed_age_ms=16054
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffffb33b603b slice_ms=8000 remaining_cap_ms=5753 armed_age_ms=24246
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017cebc arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc017e32e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb278f38c spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb278f38c spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb278f38c spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb278f38c spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffb278f38c spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0x7fb1f6d82c0f slice_ms=8000 remaining_cap_ms=21997 armed_age_ms=8002
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffffb33b603b slice_ms=8000 remaining_cap_ms=13832 armed_age_ms=16167

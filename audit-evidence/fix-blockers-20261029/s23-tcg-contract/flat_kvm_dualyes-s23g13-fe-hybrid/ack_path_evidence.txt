@@ -1,0 +1,15 @@
+=== FE inject (vm.log) ===
+[WaveVM-QEMU] KERNEL MODE: Connecting to /dev/wavevm...
+[WaveVM-QEMU] FE compute routes injected: split=1 vcpus=2 mapped=1 vnode=1 gw=127.0.0.1:35646
+=== launch.env ports ===
+export WVM_EXECUTOR_SERVICE_PORT='35646'
+export WVM_RUNTIME_LOCAL_PORT='35643'
+=== Slave Ack samples (kernel :9000 direct) ===
+=== also_gw9000 count (must be 0) ===
+0
+=== serial DF/panic ===
+NONE
+=== Slave Ack observed live during smoke (before STOP cleaned runtime logs) ===
+[Slave Ack] ret=4436 errno=0 req=4295229440 dst=127.0.0.1:9000 exit=8 port=0x0 dir=0 sz=0
+Note: dst=:9000 proves kernel waiter path (not V30 LOCAL_PORT hairpin).
+also_gw9000 absent (cutover removed dual-send).

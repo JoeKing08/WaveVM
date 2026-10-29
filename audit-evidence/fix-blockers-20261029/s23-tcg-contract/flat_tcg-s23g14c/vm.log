@@ -1,0 +1,1627 @@
+[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=user)
+qemu-system-x86_64: -accel wavevm,split=1,mode=user: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] region_add gpa=0 size=0x10000000 count=1
+[WaveVM-SHM] guest RAM attached gpa=0 size=0x10000000 hva=0x70ff1a200000
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM-User] ram_block hva=0x70ff1a200000..0x70ff2a200000 gpa=0 size=0x10000000 blocks=1
+[WaveVM-BIOS] sync_bios_shadow: SHM shadow not available
+[WaveVM] dedup region_add gpa=0 size=0x10000000 count=1
+[WaveVM] dirty log tracking enabled (kvm=0 slave=0 coherent=1).
+[WaveVM-User] volatile RAM range registered [0xc0000, 0x100000)
+[WaveVM-User] master async push listener active fd=12
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[WaveVM-User] ram_block hva=0x70ff1a200000..0x70ff1a2c0000 gpa=0 size=0xc0000 blocks=2
+[WaveVM] region_add gpa=0x100000 size=0xff00000 count=3
+[WaveVM-User] ram_block hva=0x70ff1a300000..0x70ff2a200000 gpa=0x100000 size=0xff00000 blocks=3
+[WaveVM] region_add gpa=0 size=0xd0000 count=4
+[WaveVM-User] ram_block hva=0x70ff1a200000..0x70ff1a2d0000 gpa=0 size=0xd0000 blocks=4
+[WaveVM-BIOS] synced BIOS shadow GPA [0xc0000, 0xd0000) -> SHM offset 0xc0000 (65536 bytes)
+[WaveVM] region_add gpa=0xf0000 size=0xff10000 count=5
+[WaveVM-User] ram_block hva=0x70ff1a2f0000..0x70ff2a200000 gpa=0xf0000 size=0xff10000 blocks=5
+[WaveVM-BIOS] synced BIOS shadow GPA [0xf0000, 0x100000) -> SHM offset 0xf0000 (65536 bytes)
+[WaveVM] dedup region_add gpa=0 size=0x10000000 count=5
+[WVM-TCG-SIPI] cpu=1 SIPI pending, calling do_cpu_sipi (sipi_vector from APIC)
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1 force_local_used=0
+[WVM-TCG-SIPI] cpu=1 after SIPI: cs=0x1000 cs.base=0x10000 eip=0x0 cr0=0x60000010
+[WVM-TCG-SIPI] cpu=1 running BIOS trampoline locally
+[WVM-TCG-LOCAL] cpu=0 n=0 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=1 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=2 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=3 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=4 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=5 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=6 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=7 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=8 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=9 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=10 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=11 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=12 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=13 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=14 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=15 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=16 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=17 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=18 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=19 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=20 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=21 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=22 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=23 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=24 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=25 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=26 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=27 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=28 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=29 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x2 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-SIPI] cpu=1 iter=1 tr=65537 eip=0xfd120 halted=1 intreq=0x0
+[WVM-TCG-SIPI] cpu=1 trampoline HLTed after 1 iters
+[WVM-TCG-SIPI] cpu=1 BIOS trampoline done, AP parked
+[WVM-TCG-LOCAL] cpu=0 n=30 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=31 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=32 ret=65536 rip=0xed120 cs=0x8 cr0=0x11 rdi=0x1f0 rax=0x0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=33 ret=65536 rip=0xed120 cs=0x8 cr0=0x11 rdi=0x170 rax=0x0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=34 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=35 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=36 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=37 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=38 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=39 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=40 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=41 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=42 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=43 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=44 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=45 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=46 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=47 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=48 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=49 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=50 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=51 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=52 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=53 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=54 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=55 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=56 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=57 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=58 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=59 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=60 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=61 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=62 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=63 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=64 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=65 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=66 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=67 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=68 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=69 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=70 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=71 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=72 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=73 ret=65536 rip=0xed120 cs=0x8 cr0=0x11 rdi=0xffa5dc0 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=74 ret=65536 rip=0xed120 cs=0x8 cr0=0x11 rdi=0x0 rax=0x0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=75 ret=65536 rip=0xed120 cs=0x8 cr0=0x11 rdi=0x12 rax=0x0 lock=0xff54f000/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=76 ret=65536 rip=0xed120 cs=0x8 cr0=0x11 rdi=0x170 rax=0x0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=77 ret=65536 rip=0xed120 cs=0x8 cr0=0x11 rdi=0xffa5dc0 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=78 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=79 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WaveVM] dedup region_add gpa=0 size=0xc0000 count=5
+[WaveVM] region_add gpa=0xc0000 size=0x10000 count=6
+[WaveVM-User] ram_block hva=0x70ff1a2c0000..0x70ff1a2d0000 gpa=0xc0000 size=0x10000 blocks=6
+[WaveVM-BIOS] synced BIOS shadow GPA [0xc0000, 0xd0000) -> SHM offset 0xc0000 (65536 bytes)
+[WaveVM] region_add gpa=0xd0000 size=0x20000 count=7
+[WaveVM-User] ram_block hva=0x70ff1a2d0000..0x70ff1a2f0000 gpa=0xd0000 size=0x20000 blocks=7
+[WaveVM-BIOS] synced BIOS shadow GPA [0xd0000, 0xf0000) -> SHM offset 0xd0000 (131072 bytes)
+[WaveVM] region_add gpa=0xf0000 size=0x10000 count=8
+[WaveVM-User] ram_block hva=0x70ff1a2f0000..0x70ff1a300000 gpa=0xf0000 size=0x10000 blocks=8
+[WaveVM-BIOS] synced BIOS shadow GPA [0xf0000, 0x100000) -> SHM offset 0xf0000 (65536 bytes)
+[WaveVM] dedup region_add gpa=0x100000 size=0xff00000 count=8
+[WaveVM] region_add gpa=0xc0000 size=0x28000 count=9
+[WaveVM-User] ram_block hva=0x70ff1a2c0000..0x70ff1a2e8000 gpa=0xc0000 size=0x28000 blocks=9
+[WaveVM-BIOS] synced BIOS shadow GPA [0xc0000, 0xe8000) -> SHM offset 0xc0000 (163840 bytes)
+[WaveVM] region_add gpa=0xe8000 size=0x8000 count=10
+[WaveVM-User] ram_block hva=0x70ff1a2e8000..0x70ff1a2f0000 gpa=0xe8000 size=0x8000 blocks=10
+[WaveVM-BIOS] synced BIOS shadow GPA [0xe8000, 0xf0000) -> SHM offset 0xe8000 (32768 bytes)
+[WVM-TCG-LOCAL] cpu=0 n=200 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=256 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=400 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=512 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=600 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=768 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=800 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=1000 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1024 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=1200 ret=65536 rip=0x7cd8 cs=0xf000 cr0=0x10 rdi=0xeb684 rax=0xb5 lock=0x70000/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1280 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=1400 ret=65536 rip=0x7cd8 cs=0xf000 cr0=0x10 rdi=0xeb684 rax=0xb5 lock=0x70000/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1536 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=1600 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1792 force_local_used=0
+[WVM-TCG-LOCAL] cpu=0 n=1800 ret=65536 rip=0xf7cf2 cs=0x8 cr0=0x11 rdi=0x0 rax=0xb5 lock=0xf000ff53/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=5120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=5376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=5632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=5888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=6144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=6400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=6656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=6912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=7168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=7424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=7680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=7936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=8192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=8448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=8704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=8960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=9216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=9472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=9728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=9984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=10240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=10496 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=10752 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=11008 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=11264 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=11520 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=11776 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=12032 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=12288 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=12544 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=12800 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=13056 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=13312 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=13568 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=13824 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=14080 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=14336 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=14592 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=14848 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=15104 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=15360 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=15616 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=15872 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=16128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=16384 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=16640 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=16896 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=17152 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=17408 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=17664 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=17920 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=18176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=18432 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=18688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=18944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=19200 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=19456 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=19712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=19968 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=20224 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=20480 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=20736 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=20992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=21248 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=21504 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=21760 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=22016 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=22272 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=22528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=22784 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=23040 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=23296 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=23552 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=23808 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=24064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=24320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=24576 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=24832 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=25088 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=25344 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=25600 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=25856 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=26112 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=26368 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=26624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=26880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=27136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=27392 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=27648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=27904 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=28160 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=28416 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=28672 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=28928 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=29184 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=29440 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=29696 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=29952 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=30208 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=30464 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=30720 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=30976 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=31232 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=31488 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=31744 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=32000 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=32256 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=32512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=32768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=42240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=42496 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=42752 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=43008 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=43264 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=43520 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=43776 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=44032 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=44288 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=44544 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=44800 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=45056 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=45312 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=45568 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=45824 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=46080 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=46336 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=46592 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=46848 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=47104 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=47360 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=47616 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=47872 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=48128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=48384 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=48640 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=48896 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=49152 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=49408 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=49664 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=49920 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=50176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=50432 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=50688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=50944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=51200 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=51456 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=51712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=51968 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=52224 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=52480 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=52736 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=52992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=53248 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=53504 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=53760 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=54016 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=54272 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=54528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=54784 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=55040 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=55296 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=55552 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=55808 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=56064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=56320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=56576 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=56832 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=57088 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=57344 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=57600 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=57856 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=58112 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=58368 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=58624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=58880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=59136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=59392 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=59648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=59904 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=60160 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=60416 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=60672 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=60928 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=61184 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=61440 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=61696 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=61952 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=62208 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=62464 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=62720 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=62976 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=63232 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=63488 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=63744 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=64000 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=64256 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=64512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=64768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=65024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=65280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=65536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=65792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=66048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=66304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=66560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=66816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=67072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=67328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=67584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=67840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=68096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=68352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=68608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=68864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=69120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=69376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=69632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=69888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=70144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=70400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=70656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=70912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=71168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=71424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=71680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=71936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=72192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=72448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=72704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=72960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=73216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=73472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=73728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=73984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=74240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=74496 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=74752 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=75008 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=75264 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=75520 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=75776 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=76032 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=76288 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=76544 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=76800 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=77056 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=77312 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=77568 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=77824 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=78080 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=78336 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=78592 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=78848 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=79104 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=79360 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=79616 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=79872 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=80128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=80384 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=80640 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=80896 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=81152 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=81408 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=81664 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=81920 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=82176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=82432 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=82688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=82944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=83200 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=83456 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=83712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=83968 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=84224 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=84480 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=84736 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=84992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=85248 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=85504 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=85760 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=86016 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=86272 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=86528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=86784 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=87040 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=87296 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=87552 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=87808 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=88064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=88320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=88576 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=88832 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=89088 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=89344 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=89600 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=89856 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=90112 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=90368 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=90624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=90880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=91136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=91392 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=91648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=91904 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=92160 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=92416 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=92672 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=92928 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=93184 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=93440 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=93696 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=93952 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=94208 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=94464 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=94720 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=94976 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=95232 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=95488 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=95744 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=96000 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=96256 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=96512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=96768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=97024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=97280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=97536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=97792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=98048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=98304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=98560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=98816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=99072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=99328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=99584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=99840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=100096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=100352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=100608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=100864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=101120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=101376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=101632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=101888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=102144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=102400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=102656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=102912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=103168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=103424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=103680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=103936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=104192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=104448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=104704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=104960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=105216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=105472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=105728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=105984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=106240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=106496 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=106752 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=107008 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=107264 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=107520 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=107776 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=108032 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=108288 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=108544 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=108800 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=109056 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=109312 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=109568 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=109824 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=110080 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=110336 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=110592 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=110848 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=111104 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=111360 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=111616 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=111872 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=112128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=112384 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=112640 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=112896 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=113152 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=113408 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=113664 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=113920 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=114176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=114432 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=114688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=114944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=115200 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=115456 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=115712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=115968 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=116224 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=116480 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=116736 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=116992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=117248 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=117504 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=117760 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=118016 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=118272 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=118528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=118784 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=119040 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=119296 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=119552 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=119808 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=120064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=120320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=120576 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=120832 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=121088 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=121344 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=121600 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=121856 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=122112 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=122368 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=122624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=122880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=123136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=123392 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=123648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=123904 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=124160 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=124416 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=124672 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=124928 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=125184 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=125440 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=125696 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=125952 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=126208 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=126464 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=126720 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=126976 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=127232 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=127488 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=127744 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=128000 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=128256 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=128512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=128768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=129024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=129280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=129536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=129792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=130048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=130304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=130560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=130816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=131072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=131328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=131584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=131840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=132096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=132352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=132608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=132864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=133120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=133376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=133632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=133888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=134144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=134400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=134656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=134912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=135168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=135424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=135680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=135936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=136192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=136448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=136704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=136960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=137216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=137472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=137728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=137984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=138240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=138496 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=138752 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=139008 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=139264 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=139520 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=139776 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=140032 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=140288 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=140544 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=140800 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=141056 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=141312 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=141568 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=141824 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=142080 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=142336 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=142592 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=142848 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=143104 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=143360 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=143616 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=143872 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=144128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=144384 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=144640 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=144896 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=145152 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=145408 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=145664 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=145920 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=146176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=146432 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=146688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=146944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=147200 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=147456 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=147712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=147968 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=148224 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=148480 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=148736 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=148992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=149248 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=149504 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=149760 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=150016 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=150272 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=150528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=150784 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=151040 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=151296 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=151552 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=151808 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=152064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=152320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=152576 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=152832 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=153088 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=153344 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=153600 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=153856 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=154112 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=154368 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=154624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=154880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=155136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=155392 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=155648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=155904 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=156160 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=156416 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=156672 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=156928 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=157184 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=157440 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=157696 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=157952 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=158208 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=158464 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=158720 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=158976 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=159232 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=159488 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=159744 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=160000 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=160256 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=160512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=160768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=161024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=161280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=161536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=161792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=162048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=162304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=162560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=162816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=163072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=163328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=163584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=163840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=164096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=164352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=164608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=164864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=165120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=165376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=165632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=165888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=166144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=166400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=166656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=166912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=167168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=167424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=167680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=167936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=168192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=168448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=168704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=168960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=169216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=169472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=169728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=169984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=170240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=170496 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=170752 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=171008 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=171264 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=171520 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=171776 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=172032 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=172288 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=172544 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=172800 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=173056 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=173312 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=173568 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=173824 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=174080 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=174336 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=174592 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=174848 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=175104 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=175360 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=175616 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=175872 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=176128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=176384 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=176640 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=176896 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=177152 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=177408 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=177664 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=177920 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=178176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=178432 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=178688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=178944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=179200 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=179456 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=179712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=179968 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=180224 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=180480 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=180736 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=180992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=181248 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=181504 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=181760 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=182016 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=182272 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=182528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=182784 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=183040 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=183296 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=183552 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=183808 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=184064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=184320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=184576 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=184832 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=185088 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=185344 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=185600 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=185856 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=186112 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=186368 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=186624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=186880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=187136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=187392 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=187648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=187904 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=188160 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=188416 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=188672 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=188928 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=189184 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=189440 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=189696 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=189952 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=190208 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=190464 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=190720 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=190976 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=191232 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=191488 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=191744 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=192000 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=192256 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=192512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=192768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=193024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=193280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=193536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=193792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=194048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=194304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=194560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=194816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=195072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=195328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=195584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=195840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=196096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=196352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=196608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=196864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=197120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=197376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=197632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=197888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=198144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=198400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=198656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=198912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=199168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=199424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=199680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=199936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=200192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=200448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=200704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=200960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=201216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=201472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=201728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=201984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=202240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=202496 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=202752 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=203008 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=203264 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=203520 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=203776 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=204032 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=204288 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=204544 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=204800 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=205056 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=205312 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=205568 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=205824 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=206080 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=206336 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=206592 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=206848 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=207104 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=207360 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=207616 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=207872 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=208128 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=208384 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=208640 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=208896 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=209152 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=209408 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=209664 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=209920 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=210176 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=210432 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=210688 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=210944 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=211200 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=211456 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=211712 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=211968 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=212224 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=212480 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=212736 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=212992 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=213248 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=213504 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=213760 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=214016 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=214272 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=214528 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=214784 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=215040 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=215296 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=215552 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=215808 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=216064 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=216320 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=216576 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=216832 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=217088 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=217344 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=217600 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=217856 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=218112 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=218368 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=218624 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=218880 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=219136 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=219392 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=219648 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=219904 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=220160 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=220416 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=220672 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=220928 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=221184 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=221440 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=221696 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=221952 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=222208 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=222464 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=222720 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=222976 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=223232 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=223488 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=223744 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=224000 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=224256 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=224512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=224768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=225024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=225280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=225536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=225792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=226048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=226304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=226560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=226816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=227072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=227328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=227584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=227840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=228096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=228352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=228608 force_local_used=0
+[WVM-TCG-SIPI] cpu=1 OS SIPI pending
+[WVM-TCG-SIPI] cpu=1 running OS trampoline locally
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=228864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=229120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=229376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=229632 force_local_used=0
+[WVM-TCG-SIPI] cpu=1 OS trampoline done after 1 iters tr=65537 rip=0xffffffffa57b603b cs=0x10 cr0=0x80050033 efer=0xd01 rsp=0xffffc24cc009be78 intreq=0x0 hflags=0x40c2b0 hflags2=0x1 mp=0
+[WVM-TCG-SIPI] cpu=1 OS trampoline done, ready for remote dispatch
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=229888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=230144 force_local_used=0
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=5 interrupts=4 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=2 interrupts=1 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=230400 force_local_used=0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=1 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-WAKE] cpu=1 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffffa57b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-REMOTE] cpu=1 dispatch #0 rip=0xffffffffa4bbb0d2 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc00bbe60 oldex=-1
+[WVM-DBG] cpu=1 kvm_enabled=0 vcpu_sock=16 split=1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x150d08097 offset=0 guest=0x150d07969
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=0
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa4bbb0d2 rsp=0xffffc24cc00bbe60 ret=0 q0=0xffffffffa4bbb181 q1=0x282 q2=0xffffff00000000 q3=0xffff9e7e0f123360
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-APPLY] pid=25606 n=1 type=26 gpa=0 version=0x2 local=0 t=4091618042
+[WVM-PUSH-APPLY] pid=25606 n=2 type=26 gpa=0x1000 version=0x2 local=0 t=4091618294
+[WVM-PUSH-APPLY] pid=25606 n=3 type=26 gpa=0x2000 version=0x2 local=0 t=4091618368
+[WVM-PUSH-APPLY] pid=25606 n=4 type=26 gpa=0x3000 version=0x2 local=0 t=4091618447
+[WVM-PUSH-APPLY] pid=25606 n=5 type=26 gpa=0x6000 version=0x2 local=0 t=4091618541
+[WVM-PUSH-APPLY] pid=25606 n=6 type=26 gpa=0x7000 version=0x2 local=0 t=4091618690
+[WVM-PUSH-APPLY] pid=25606 n=7 type=26 gpa=0x8000 version=0x2 local=0 t=4091618795
+[WVM-PUSH-APPLY] pid=25606 n=8 type=26 gpa=0x9000 version=0x2 local=0 t=4091618884
+[WVM-PUSH-APPLY] pid=25606 n=9 type=26 gpa=0xa000 version=0x2 local=0 t=4091618981
+[WVM-PUSH-APPLY] pid=25606 n=10 type=26 gpa=0xb000 version=0x2 local=0 t=4091619081
+[WVM-PUSH-APPLY] pid=25606 n=11 type=26 gpa=0xc000 version=0x2 local=0 t=4091619184
+[WVM-PUSH-APPLY] pid=25606 n=12 type=26 gpa=0xd000 version=0x2 local=0 t=4091619262
+[WVM-PUSH-BARRIER] rx cookie=1
+[WVM-PUSH-BARRIER] ack cookie=1
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78
+[WVM-TCG-TSC] phase=import cpu=1 local=0x152aae06e guest=0x1523149a1 offset=0xffffffffff866933
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa57b603b rsp=0xffffc24cc009be78 rflags=0x206 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa57b603b env_rsp=0xffffc24cc009be78
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-FORCE-LOCAL] event=idle_skip_arm cpu=1 rip=0xffffffffa57b603b leaf=1 halted=1 excp=-1
+[WVM-TCG-STATS] cpu=1 remote_done=1 local_done=0 force_local_used=0
+[WVM-WAKE] cpu=1 woken by interrupt (irq=0x12)
+[WVM-REMOTE] cpu=1 dispatch #1 rip=0xffffffffa4b78688 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc00d8f00 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x153380596 offset=0xffffffffff866933 guest=0x152be69f3
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=0
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa4b78688 rsp=0xffffc24cc00d8f00 ret=0 q0=0xffff9e7e012c97c0 q1=0xffff9e7e0f122df8 q2=0xffff9e7e0f122db8 q3=0
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=2
+[WVM-PUSH-BARRIER] ack cookie=2
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78
+[WVM-TCG-TSC] phase=import cpu=1 local=0x1541cf641 guest=0x15374e6d8 offset=0xffffffffff57f097
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa57b603b rsp=0xffffc24cc009be78 rflags=0x202 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa57b603b env_rsp=0xffffc24cc009be78
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa57b603b rsp=0xffffc24cc009be78 ret=0 q0=0xffffffffa57b5f3e q1=0xffffc24cc009be90 q2=0xffffffffa4a4ba45 q3=0xffffc24cc009bea0
+[WVM-TCG-FORCE-LOCAL] event=idle_skip_arm cpu=1 rip=0xffffffffa57b603b leaf=1 halted=1 excp=-1
+[WVM-TCG-STATS] cpu=1 remote_done=2 local_done=0 force_local_used=0
+[WVM-WAKE] cpu=1 woken by interrupt (irq=0x12)
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=230656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=230912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=231168 force_local_used=0
+[WVM-REMOTE] cpu=1 dispatch #2 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x247fd6f29 offset=0xffffffffff57f097 guest=0x247555718
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=0
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=3
+[WVM-PUSH-BARRIER] ack cookie=3
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa54a1abf rsp=0xffffc24cc0013db8
+[WVM-TCG-TSC] phase=import cpu=1 local=0x248ce3060 guest=0x247f2ec84 offset=0xffffffffff24bc24
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa54a1abf rsp=0xffffc24cc0013db8 rflags=0x216 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa54a1abf env_rsp=0xffffc24cc0013db8
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa54a1abf arm force_local=128 repeat=1 hold=0
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa54a1abf rsp=0xffffc24cc0013db8 ret=0 q0=0xffffc24cc0013de0 q1=0xffffffffa6d12f70 q2=0 q3=0xffffffffa6d12f30
+[WVM-TCG-STATS] cpu=1 remote_done=3 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=3 local_done=1 force_local_used=1
+[WVM-TCG-LOCAL] cpu=1 n=0 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24880ebf8 rax=0x2488128ec lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-REMOTE] cpu=1 dispatch #3 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x2495d5858 offset=0xffffffffff24bc24 guest=0x24882111a
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=1
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=4
+[WVM-PUSH-BARRIER] ack cookie=4
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x24a00805a guest=0x248fc9b2a offset=0xfffffffffefc1ad0
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x283 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-STATS] cpu=1 remote_done=4 local_done=1 force_local_used=1
+[WVM-REMOTE] cpu=1 dispatch #4 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x24a7d8bcc offset=0xfffffffffefc1ad0 guest=0x24979a2de
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=1
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=5
+[WVM-PUSH-BARRIER] ack cookie=5
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x24b3b5eb5 guest=0x24a132ac2 offset=0xfffffffffed7cc0d
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x297 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-STATS] cpu=1 remote_done=5 local_done=1 force_local_used=1
+[WVM-REMOTE] cpu=1 dispatch #5 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x24baec6f5 offset=0xfffffffffed7cc0d guest=0x24a868fa6
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=2
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=6
+[WVM-PUSH-BARRIER] ack cookie=6
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x24c85dbed guest=0x24b345980 offset=0xfffffffffeae7d93
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x293 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-STATS] cpu=1 remote_done=6 local_done=1 force_local_used=1
+[WVM-REMOTE] cpu=1 dispatch #6 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x24d00a5dd offset=0xfffffffffeae7d93 guest=0x24baf200a
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=3
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=7
+[WVM-PUSH-BARRIER] ack cookie=7
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x24de175cf guest=0x24c68000e offset=0xfffffffffe868a3f
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x293 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=7 local_done=1 force_local_used=1
+[WVM-TCG-STATS] cpu=1 remote_done=7 local_done=2 force_local_used=2
+[WVM-TCG-LOCAL] cpu=1 n=1 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cea0c58 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=7 local_done=3 force_local_used=3
+[WVM-TCG-LOCAL] cpu=1 n=2 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceaadc4 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=7 local_done=4 force_local_used=4
+[WVM-TCG-LOCAL] cpu=1 n=3 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceaca34 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=4 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceae0d2 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=5 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceaf308 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=6 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceb0302 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=7 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceb12d8 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=8 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceb9090 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=9 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceba1ac lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=10 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cebb1a2 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=11 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cebc39c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=12 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cebd3e2 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=13 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cebe50a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=14 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cebf5c0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=15 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec05b0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=16 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec1594 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=17 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec2548 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=18 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec350a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=19 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec4462 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=20 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec543a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=21 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec64e4 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=22 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec7498 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=23 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec8442 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=24 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cec9452 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=25 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ceca426 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=26 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cecb3e6 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=27 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cecc390 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=28 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cecd316 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=29 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cece37c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=30 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24cecf32a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=31 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ced02c4 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=32 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24ce9d87e rax=0x24ced1282 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-REMOTE] cpu=1 dispatch #7 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x24e66c7df offset=0xfffffffffe868a3f guest=0x24ced4ef0
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=10000 spin=4
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=8
+[WVM-PUSH-BARRIER] ack cookie=8
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x24f1b604d guest=0x24d7e8d44 offset=0xfffffffffe632cf7
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x293 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=8 local_done=33 force_local_used=33
+[WVM-TCG-LOCAL] cpu=1 n=33 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df34fae lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=34 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df3eb5c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=35 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df403d4 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=36 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df4165c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=37 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df426ee lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=38 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df43716 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=39 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df446ee lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=40 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df456c8 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=41 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df466ca lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=42 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df4769a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=43 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df48660 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=44 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df49616 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=45 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df4a5da lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=46 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df4b5a2 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=47 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df4c544 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=48 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df4d53e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=49 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df52992 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=50 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df53b46 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=51 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df54b3e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=52 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df55b60 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=53 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df56b4e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=54 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df57b5e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=55 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df58b24 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=56 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df59ae8 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=57 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df5aa80 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=58 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df5baba lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=59 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df5cab4 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=60 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df5da98 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=61 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df5eaca lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=62 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df5faa0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=63 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df60a54 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=64 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24df318a2 rax=0x24df61a40 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-REMOTE] cpu=1 dispatch #8 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x24f93154f offset=0xfffffffffe632cf7 guest=0x24df63f12
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=10000 spin=5
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=9
+[WVM-PUSH-BARRIER] ack cookie=9
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x250635c7a guest=0x24e922042 offset=0xfffffffffe2ec3c8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x283 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=9 local_done=65 force_local_used=65
+[WVM-TCG-LOCAL] cpu=1 n=65 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3b07fa lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=66 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3baed2 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=67 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3bc6b6 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=68 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3bd918 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=69 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3be9be lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=70 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3bfa22 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=71 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c0ad0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=72 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c1ad0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=73 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c2ada lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=74 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c3ace lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=75 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c4a8a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=76 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c5a72 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=77 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c6a7e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=78 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c7a28 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=79 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x24f3ad4d0 rax=0x24f3c89c4 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-REMOTE] cpu=1 dispatch #9 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 cr3=0xdc10000 efer=0xd01 rsp=0xffffc24cc0013d98 oldex=-1
+[WVM-TCG-TSC] phase=export cpu=1 local=0x2510e756e offset=0xfffffffffe2ec3c8 guest=0x24f3d3450
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=10000 spin=6
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=10
+[WVM-PUSH-BARRIER] ack cookie=10
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x251d4fd6d guest=0x24fd8952a offset=0xfffffffffe0397bd
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x293 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=10 local_done=97 force_local_used=97
+[WVM-TCG-TSC] phase=export cpu=1 local=0x252897e59 offset=0xfffffffffe0397bd guest=0x2508d1294
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=10000 spin=7
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=11
+[WVM-PUSH-BARRIER] ack cookie=11
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98
+[WVM-TCG-TSC] phase=import cpu=1 local=0x25339bf95 guest=0x2510df149 offset=0xfffffffffdd431b4
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 rflags=0x283 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc0013d98
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc0013d98 ret=0 q0=0xffffc24cc0013da8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013db8 q3=0xffffffffa50a6255
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-STATS] cpu=1 remote_done=11 local_done=129 force_local_used=129
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=231424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=231680 force_local_used=0
+[WVM-TCG-LOCAL] cpu=1 n=200 ret=65536 rip=0xffffffffa4b8f38c cs=0x10 cr0=0x80050033 rdi=0xffff9e7e0105ffd8 rax=0x11 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-FORCE-LOCAL] event=idle_clear_hold cpu=1 rip=0xffffffffa57b603b via=clear_if_progress_leaf soft_land_ticks=64
+[WVM-TCG-TSC] phase=export cpu=1 local=0x26acea24b offset=0xfffffffffdd431b4 guest=0x268a2c941
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=0
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa4a93830 rsp=0xffffc24cc00d8f10 ret=0 q0=0xffffc24cc00d8f20 q1=0xffffffffa4a938fc q2=0xffffc24cc00d8f70 q3=0xffffffffa4b785de
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=12
+[WVM-PUSH-BARRIER] ack cookie=12
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa4a93830 rsp=0xffffc24cc00d8df8
+[WVM-TCG-TSC] phase=import cpu=1 local=0x26df1fdf7 guest=0x26b8d45b0 offset=0xfffffffffd9b47b9
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa4a93830 rsp=0xffffc24cc00d8df8 rflags=0x46 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa4a93830 env_rsp=0xffffc24cc00d8df8
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa4a93830 rsp=0xffffc24cc00d8df8 ret=0 q0=0xffffc24cc00d8e08 q1=0xffffffffa4a938fc q2=0xffffc24cc00d8e38 q3=0xffffffffa4b76b76
+[WVM-TCG-STATS] cpu=1 remote_done=12 local_done=239 force_local_used=239
+[WVM-TCG-TSC] phase=export cpu=1 local=0x26e2b7b41 offset=0xfffffffffd9b47b9 guest=0x26bc6b67e
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=1
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa4a93830 rsp=0xffffc24cc00d8df8 ret=0 q0=0xffffc24cc00d8e08 q1=0xffffffffa4a938fc q2=0xffffc24cc00d8e38 q3=0xffffffffa4b76b76
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=13
+[WVM-PUSH-BARRIER] ack cookie=13
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa4a93830 rsp=0xffffc24cc00d8ea0
+[WVM-TCG-TSC] phase=import cpu=1 local=0x26f53a150 guest=0x26cbc5ab2 offset=0xfffffffffd68b962
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa4a93830 rsp=0xffffc24cc00d8ea0 rflags=0x46 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa4a93830 env_rsp=0xffffc24cc00d8ea0
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa4a93830 rsp=0xffffc24cc00d8ea0 ret=0 q0=0xffffc24cc00d8eb0 q1=0xffffffffa4a938fc q2=0xffffc24cc00d8ee0 q3=0xffffffffa4b76b76
+[WVM-TCG-STATS] cpu=1 remote_done=13 local_done=239 force_local_used=239
+[WVM-TCG-TSC] phase=export cpu=1 local=0x26f5f9ab6 offset=0xfffffffffd68b962 guest=0x26cc84ed0
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=2
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa4a93830 rsp=0xffffc24cc00d8ea0 ret=0 q0=0xffffc24cc00d8eb0 q1=0xffffffffa4a938fc q2=0xffffc24cc00d8ee0 q3=0xffffffffa4b76b76
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=14
+[WVM-PUSH-BARRIER] ack cookie=14
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa57b68ff rsp=0xffffc24cc0013788
+[WVM-TCG-TSC] phase=import cpu=1 local=0x277e916a8 guest=0x275246705 offset=0xfffffffffd3b505d
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa57b68ff rsp=0xffffc24cc0013788 rflags=0x206 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b8/0x1 oldex=-1 env_eip=0xffffffffa57b68ff env_rsp=0xffffc24cc0013788
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa57b68ff rsp=0xffffc24cc0013788 ret=0 q0=0xffffc24cc0013798 q1=0xffffffffa512fa6e q2=0xffffc24cc00137c8 q3=0xffffffffa5183b11
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=239 force_local_used=239
+[WVM-TCG-TSC] phase=export cpu=1 local=0x277fcce9f offset=0xfffffffffd3b505d guest=0x27538122c
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=1
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa57b68ff rsp=0xffffc24cc0013788 ret=0 q0=0xffffc24cc0013798 q1=0xffffffffa512fa6e q2=0xffffc24cc00137c8 q3=0xffffffffa5183b11
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=15
+[WVM-PUSH-BARRIER] ack cookie=15
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa5188036 rsp=0xffffc24cc0013758
+[WVM-TCG-TSC] phase=import cpu=1 local=0x280feb319 guest=0x27e0f139f offset=0xfffffffffd106086
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa5188036 rsp=0xffffc24cc0013758 rflags=0x282 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa5188036 env_rsp=0xffffc24cc0013758
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa5188036 rsp=0xffffc24cc0013758 ret=0 q0=0xffffffffa5155c56 q1=0x1 q2=0x36 q3=0xffff9e7e025e1000
+[WVM-TCG-STATS] cpu=1 remote_done=15 local_done=239 force_local_used=239
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=231936 force_local_used=0
+[WVM-TCG-TSC] phase=export cpu=1 local=0x291ef4508 offset=0xfffffffffd106086 guest=0x28effa0c6
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=1
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=16
+[WVM-PUSH-BARRIER] ack cookie=16
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-TSC] phase=import cpu=1 local=0x292d577a5 guest=0x28fa984a5 offset=0xfffffffffcd40d00
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x87 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-STATS] cpu=1 remote_done=16 local_done=239 force_local_used=239
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=1
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=17
+[WVM-PUSH-BARRIER] ack cookie=17
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x93 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-STATS] cpu=1 remote_done=17 local_done=239 force_local_used=239
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=2
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=18
+[WVM-PUSH-BARRIER] ack cookie=18
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x93 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-STATS] cpu=1 remote_done=18 local_done=239 force_local_used=239
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=0 spin=3
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=19
+[WVM-PUSH-BARRIER] ack cookie=19
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x93 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=19 local_done=239 force_local_used=239
+[WVM-TCG-STATS] cpu=1 remote_done=19 local_done=256 force_local_used=256
+[WVM-TCG-HANDOFF] cpu=1 SHM-coherent skip flush/fence fd=16 slice_budget_us=10000 spin=4
+[WVM-TCG-CR3] cpu=1 cr3=0xdc10000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=20
+[WVM-PUSH-BARRIER] ack cookie=20
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x97 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=20 local_done=271 force_local_used=271
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x93 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=21 local_done=303 force_local_used=303
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x93 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 ret=0 q0=0xffffc24cc00136f8 q1=0xffffffffa50a6233 q2=0xffffc24cc0013748 q3=0xffffffffa5222843
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-STATS] cpu=1 remote_done=22 local_done=335 force_local_used=335
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa50a62a7 rsp=0xffffc24cc00136e8 rflags=0x97 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa50a62a7 env_rsp=0xffffc24cc00136e8
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffa50a62a7 spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=367 force_local_used=367
+[WVM-TCG-LOCAL] cpu=1 n=400 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x2946d2b4a lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=512 force_local_used=512
+[WVM-TCG-LOCAL] cpu=1 n=600 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x29473069c lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=768 force_local_used=768
+[WVM-TCG-LOCAL] cpu=1 n=800 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x29478b960 lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=1000 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x2947e6fc8 lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=1024 force_local_used=1024
+[WVM-TCG-LOCAL] cpu=1 n=1200 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x29484433a lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=1280 force_local_used=1280
+[WVM-TCG-LOCAL] cpu=1 n=1400 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x2948a54f0 lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=1536 force_local_used=1536
+[WVM-TCG-LOCAL] cpu=1 n=1600 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x294901c34 lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=1792 force_local_used=1792
+[WVM-TCG-LOCAL] cpu=1 n=1800 ret=65536 rip=0xffffffffa50a62a7 cs=0x10 cr0=0x80050033 rdi=0x2946bda4c rax=0x2949600e4 lock=0x0/lr=-1 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=2048 force_local_used=2048
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=2304 force_local_used=2304
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=2560 force_local_used=2560
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=2816 force_local_used=2816
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=3072 force_local_used=3072
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=3328 force_local_used=3328
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=3584 force_local_used=3584
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=3840 force_local_used=3840
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=4096 force_local_used=4096
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=4352 force_local_used=4352
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=4608 force_local_used=4608
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=4864 force_local_used=4864
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=5120 force_local_used=5120
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=5376 force_local_used=5376
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=5632 force_local_used=5632
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=5888 force_local_used=5888
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=6144 force_local_used=6144
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=6400 force_local_used=6400
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=6656 force_local_used=6656
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=6912 force_local_used=6912
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=7168 force_local_used=7168
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=7424 force_local_used=7424
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=7680 force_local_used=7680
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=7936 force_local_used=7936
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=8192 force_local_used=8192
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=8448 force_local_used=8448
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=8704 force_local_used=8704
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=8960 force_local_used=8960
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=9216 force_local_used=9216
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=9472 force_local_used=9472
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=9728 force_local_used=9728
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=9984 force_local_used=9984
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=10240 force_local_used=10240
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=10496 force_local_used=10496
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=10752 force_local_used=10752
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=11008 force_local_used=11008
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=11264 force_local_used=11264
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=11520 force_local_used=11520
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=11776 force_local_used=11776
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=12032 force_local_used=12032
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=12288 force_local_used=12288
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=12544 force_local_used=12544
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=12800 force_local_used=12800
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=13056 force_local_used=13056
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=13312 force_local_used=13312
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=13568 force_local_used=13568
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=13824 force_local_used=13824
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=14080 force_local_used=14080
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=14336 force_local_used=14336
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=14592 force_local_used=14592
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=14848 force_local_used=14848
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=15104 force_local_used=15104
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=15360 force_local_used=15360
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=15616 force_local_used=15616
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=15872 force_local_used=15872
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=16128 force_local_used=16128
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=16384 force_local_used=16384
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=16640 force_local_used=16640
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=16896 force_local_used=16896
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=17152 force_local_used=17152
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=17408 force_local_used=17408
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=17664 force_local_used=17664
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=17920 force_local_used=17920
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=18176 force_local_used=18176
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=232192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=232448 force_local_used=0
+[WVM-TCG-FORCE-LOCAL] event=idle_clear_hold cpu=1 rip=0xffffffffa57b603b via=clear_if_progress_leaf soft_land_ticks=64
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa505312f rsp=0xffffc24cc0013590
+[WVM-TCG-IMPORT] pid=25606 cpu=1 eip=0xffffffffa505312f rsp=0xffffc24cc0013590 rflags=0x82 cr0=0x80050033 cr3=0xdc10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffa505312f env_rsp=0xffffc24cc0013590
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0x1000 master_irr7=0x8001000 ack_irr7=0x1000 add_irr7=0x8000000 merged_irr7=0x8001000
+[WVM-TCG-STATS] cpu=1 remote_done=24 local_done=18297 force_local_used=18297
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa4db2d90 rsp=0xffffc24cc00dfd20
+[WVM-TCG-STATS] cpu=1 remote_done=25 local_done=18297 force_local_used=18297
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa4db191a rsp=0xffffc24cc0013ab8
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-STATS] cpu=1 remote_done=26 local_done=18297 force_local_used=18297
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=232704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=232960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=233216 force_local_used=0
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa53fa782 rsp=0xffffc24cc0013a50
+[WVM-TCG-LAPIC-MERGE] cpu=1 sent_irr7=0 master_irr7=0x1000 ack_irr7=0x1000 add_irr7=0x1000 merged_irr7=0x1000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa53fa782 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-STATS] cpu=1 remote_done=27 local_done=18297 force_local_used=18297
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa53fa782 rsp=0xffffc24cc0013a50
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa53fa782 arm force_local=128 repeat=2 hold=1
+[WVM-TCG-STATS] cpu=1 remote_done=28 local_done=18298 force_local_used=18298
+[WVM-TCG-FORCE-LOCAL] event=idle_clear_hold cpu=1 rip=0xffffffffa57b603b via=clear_if_progress_leaf soft_land_ticks=64
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa53f9a5b rsp=0xffffc24cc0013a78
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa53f9a5b arm force_local=128 repeat=1 hold=0
+[WVM-TCG-STATS] cpu=1 remote_done=29 local_done=18353 force_local_used=18353
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa4a43821 rsp=0xffffc24cc00139a0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa4a43821 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-STATS] cpu=1 remote_done=30 local_done=18354 force_local_used=18354
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=233472 force_local_used=0
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa521f37e rsp=0xffffc24cc0013898
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa521f37e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-STATS] cpu=1 remote_done=31 local_done=18355 force_local_used=18355
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffa51119f0 rsp=0xffffc24cc00138b8
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffa51119f0 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-STATS] cpu=1 remote_done=32 local_done=18356 force_local_used=18356
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=233728 force_local_used=0
+qemu-system-x86_64: terminating on signal 1
+[WVM-TCG-IPC] cpu=1 read ack failed fd=16 errno=11

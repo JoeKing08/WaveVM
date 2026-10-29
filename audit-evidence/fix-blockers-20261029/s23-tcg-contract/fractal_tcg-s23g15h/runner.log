@@ -1,0 +1,16 @@
+2026年 10月 29日 星期四 20:29:23 CST
+run=fractal_tcg-s23g15h NEED_LOCAL burst hold ignores spin cooldown (§8.1)
+tip=33767b2c2
+[guest-smoke 20:29:23] art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g15h qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=67108864 file_limit=104857600
+[guest-smoke 20:29:23] CREATE_VM via test_create_vm_fractal.sh topology=fractal backend=require-tcg (production + live helpers)
+[guest-smoke 20:29:33] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-fractal.sbrTPr agent=41743 ctl=41740
+[guest-smoke 20:29:33] CREATE backend=require-tcg accel=disabled
+[guest-smoke 20:29:33] live wavevm-accel QEMU processes≈2
+[guest-smoke 20:29:33] manifest=/tmp/wavevm-create-vm-fractal.sbrTPr/runtime/vm-257-1-1.manifest node_instance=802 child=41812
+[guest-smoke 20:29:33] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 20:29:33] log_cap_bytes=67108864 file_limit_bytes=104857600
+[guest-smoke 20:29:36] frontend_pid=41888 serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g15h/vm-serial.log
+[guest-smoke 20:29:36] waiting up to 900s for 'cirros login:'
+[guest-smoke 20:30:26] boot poll 63s serial_bytes=29305
+[guest-smoke 20:31:16] guest reached cirros login
+[guest-smoke 20:31:16] waiting up to 300s for SSH login

@@ -1,0 +1,9 @@
+OVERALL=FAIL_boot_hang_softlock
+guest_login=FAIL
+guest_ssh=FAIL
+guest_cpu_smoke=FAIL
+guest_stop=n/a
+serial_bytes_final=19974
+remote_done_cpu1=32
+force_local_used_cpu1≈50095
+MINIMUM_COMPLETE=NOT_CLAIMED

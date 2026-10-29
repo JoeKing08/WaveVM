@@ -1,0 +1,14 @@
+s23g14 flat TCG attempt1 — OVERALL=FAIL_boot_hang_softlock
+==========================================================
+When: 2026-10-29 ~18:04–18:08 Asia/Shanghai
+Patch: halted-only idle_clear in spin_backoff/consume/clear_if_progress
+guest_login=FAIL (serial ~26897 stuck at "Run /init" / initramfs up)
+Root cause observed:
+  - hold_full_local armed on non-idle 88b8f38c (OK)
+  - later remote ACKs at Cirros default_idle ...603b with halted=0
+    → idle_clear_hold never fired (halted-only guard miss)
+  - consume may have cleared via halted on local path (no log) then
+    remote re-entered and FE stuck unix_stream_data_wait; helpers poll
+  - force_local_used==local_done for cpu1; remote_done frozen@32
+Next: treat ...603b / EXCP_HLT as idle-not-softlock; never arm hold on
+idle RIP; on idle clear leave short tick budget (not wall hold).

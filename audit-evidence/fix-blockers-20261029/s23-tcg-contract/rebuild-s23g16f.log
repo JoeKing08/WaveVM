@@ -1,0 +1,45 @@
+[1/6] Generating qemu-version.h with a meson_exe.py custom command
+[2/3] Compiling C object libqemu-x86_64-softmmu.fa.p/accel_wavevm_wavevm-cpu.c.o
+../accel/wavevm/wavevm-cpu.c:52: warning: "MAX_VCPUS" redefined
+   52 | #define MAX_VCPUS 64
+      | 
+In file included from ../accel/wavevm/../../../common_include/wavevm_protocol.h:18,
+                 from ../accel/wavevm/wavevm-cpu.c:20:
+../accel/wavevm/../../../common_include/wavevm_config.h:74: note: this is the location of the previous definition
+   74 | #define MAX_VCPUS 4096
+      | 
+../accel/wavevm/wavevm-cpu.c: In function ‘wavevm_init_tcg_region_once’:
+../accel/wavevm/wavevm-cpu.c:1460:17: warning: nested extern declaration of ‘mttcg_enabled’ [-Wnested-externs]
+ 1460 |     extern bool mttcg_enabled;
+      |                 ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1460:17: warning: redundant redeclaration of ‘mttcg_enabled’ [-Wredundant-decls]
+In file included from ../target/i386/cpu-qom.h:23,
+                 from ../target/i386/cpu.h:24,
+                 from ../accel/wavevm/wavevm-cpu.c:4:
+/workspaces/WaveVM/wavevm-qemu/include/hw/core/cpu.h:498:13: note: previous declaration of ‘mttcg_enabled’ with type ‘_Bool’
+  498 | extern bool mttcg_enabled;
+      |             ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1461:17: warning: nested extern declaration of ‘parallel_cpus’ [-Wnested-externs]
+ 1461 |     extern bool parallel_cpus;
+      |                 ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c: In function ‘wavevm_cpu_thread_fn’:
+../accel/wavevm/wavevm-cpu.c:3505:16: warning: unused variable ‘bsp_cant_run_count’ [-Wunused-variable]
+ 3505 |     static int bsp_cant_run_count = 0;
+      |                ^~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c: At top level:
+../accel/wavevm/wavevm-cpu.c:4013:6: warning: no previous prototype for ‘wavevm_start_vcpu_thread’ [-Wmissing-prototypes]
+ 4013 | void wavevm_start_vcpu_thread(CPUState *cpu) {
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1668:13: warning: ‘wavevm_handle_io’ defined but not used [-Wunused-function]
+ 1668 | static void wavevm_handle_io(CPUState *cpu) {
+      |             ^~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1545:13: warning: ‘wavevm_valid_io_exit’ defined but not used [-Wunused-function]
+ 1545 | static bool wavevm_valid_io_exit(const struct kvm_run *run)
+      |             ^~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1508:13: warning: ‘wavevm_tcg_kick_runnable_local_peers’ defined but not used [-Wunused-function]
+ 1508 | static void wavevm_tcg_kick_runnable_local_peers(CPUState *owner)
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:45:13: warning: ‘wvm_halt_wake_nop_handler’ defined but not used [-Wunused-function]
+   45 | static void wvm_halt_wake_nop_handler(int sig) { (void)sig; }
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~
+[3/3] Linking target qemu-system-x86_64

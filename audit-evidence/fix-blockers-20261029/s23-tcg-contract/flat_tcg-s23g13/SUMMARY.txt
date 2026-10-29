@@ -1,0 +1,13 @@
+s23g13 flat TCG dual-yes — OVERALL=FAIL_guest_ssh (attempt 1)
+================================================================
+When: 2026-10-29 17:35–17:41 Asia/Shanghai (CST, UTC+8)
+Tip base: 33767b2c2 + dirty FE Hybrid cutover / gw9000 removal
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+result.txt: OVERALL=FAIL_guest_ssh
+  guest_login=PASS (~101s)
+  guest_ssh=FAIL (banner timeout 180s)
+  cpu1: remote_done=67 local≈464k force_local_used≈464k (force_local dominates)
+Honesty: same force_local-dominance residual as prior audits / smoke-81;
+  did NOT expand sticky force_local (§8.1 exceptional only). Retry hung
+  (flat_tcg-s23g13-retry FAIL_boot_hang_softlock).

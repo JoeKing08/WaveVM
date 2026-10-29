@@ -1,0 +1,40 @@
+WaveVM Minimum closeout slice s23g15i — 2026-10-29 20:41:56 CST Asia/Shanghai
+================================================================
+Tip base: 33767b2c2 on main
+Dirty (NO commit / NO push): see git status below
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+Docs re-check (relevant clauses, not full /docs):
+  B1 → baseline §2 / idle: architecture-observable (halted/EXCP_HLT/MP/HLT@PC);
+       Cirros 0x603b magic ABSENT from source+binary
+  B6 → baseline §16 + vcpu-handoff §8.1/§11: hold 30s / hard_cap 90s / cooldown 25s;
+       cooldown suppresses spin re-arm only; concurrent = per-vCPU remote N;
+       NEED_LOCAL ordinary = budget; thrash (burst>=8|repeat>=8) → softlock hold;
+       force_local MUST NOT dominate MAIN (residual: softlock-window flΔ still large)
+  B7 → acceptance honesty: smoke mem title not scanning remote_evidence.txt;
+       matrix PASS∧rc=0; remote_rpc_ok after status≥0 (prior landings)
+
+| Cell | OVERALL | remoteΔ | flΔ | Evidence |
+|------|---------|---------|-----|----------|
+| flat_tcg-s23g15i | PASS | 43 | 440064 | s23-tcg-contract/flat_tcg-s23g15i/ |
+| fractal_tcg-s23g15i | PASS | 2 (boot remote_done_before=46) | 7941 (before=436480) | s23-tcg-contract/fractal_tcg-s23g15i/ |
+| flat_tcg-s23g15e | PASS | 60 | 24064 | earlier binary (spin>=4 hold; no burst escalate) |
+
+Code landed this pass (wavevm-cpu.c):
+  - B1 idle: arch+HLT@PC (no 0x603b)
+  - B6 timers 30/90/25; cooldown_suppress (no lift); per-vCPU concurrent remotes
+  - NEED_LOCAL: budget-only ordinary; cross-RIP burst (5s quiet) OR same-RIP
+    repeat>=8 → §8.1 softlock wall hold; spin cooldown does NOT block NEED_LOCAL
+    thrash holds (§8.1 "spin-triggered" only)
+  - spin wall hold at elevated spin>=4 (was >=8; under-covered RCU stall)
+  - hold clear → equivalent_clear cooldown 25s
+  - B7 harness (prior): test_guest_smoke.sh / test_guest_minimum_matrix.sh
+
+Honesty residuals (block COMPLETE):
+  - force_local_used still dominates softlock-window slice accounting vs remoteΔ
+  - fractal CPU-smoke remoteΔ=2 is thin (boot remote path proven by before=46)
+  - no second independent flat/fractal matrix rerun this slice beyond 15i pair
+  - Mode A FE Hybrid intact from prior; storage B10–B14 skipped
+
+Refuse charter shortcuts: no guest-image magic, no old-shell wraps, no
+cooldown_lift, no sticky force_local expansion as MAIN.

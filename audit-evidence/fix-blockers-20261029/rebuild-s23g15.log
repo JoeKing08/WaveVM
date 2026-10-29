@@ -1,0 +1,101 @@
+START 2026年 10月 29日 星期四 19:39:44 CST
+tip=33767b2c2
+ninja: Entering directory `wavevm-qemu/build'
+[1/7] Generating qemu-version.h with a meson_exe.py custom command
+[2/4] Compiling C object libqemu-x86_64-softmmu.fa.p/accel_wavevm_wavevm-all.c.o
+../accel/wavevm/wavevm-all.c: In function ‘wavevm_executor_session_thread’:
+../accel/wavevm/wavevm-all.c:1090:42: warning: pointer targets in passing argument 4 of ‘wvm_executor_session_encode’ differ in signedness [-Wpointer-sign]
+ 1090 |                     error_payload_bytes, error_response, sizeof(error_response),
+      |                                          ^~~~~~~~~~~~~~
+      |                                          |
+      |                                          char *
+In file included from ../accel/wavevm/wavevm-all.c:39:
+../accel/wavevm/../../../common_include/wavevm_executor_session.h:22:14: note: expected ‘uint8_t *’ {aka ‘unsigned char *’} but argument is of type ‘char *’
+   22 |     uint8_t *output, size_t output_capacity, size_t *output_bytes,
+      |     ~~~~~~~~~^~~~~~
+../accel/wavevm/wavevm-all.c: At top level:
+../accel/wavevm/wavevm-all.c:1128:6: warning: no previous prototype for ‘wavevm_slave_vcpu_loop’ [-Wmissing-prototypes]
+ 1128 | void wavevm_slave_vcpu_loop(CPUState *cpu)
+      |      ^~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:1517:6: warning: no previous prototype for ‘wavevm_apply_split_hint’ [-Wmissing-prototypes]
+ 1517 | void wavevm_apply_split_hint(int split)
+      |      ^~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c: In function ‘wavevm_region_add’:
+../accel/wavevm/wavevm-all.c:2288:25: warning: nested extern declaration of ‘wavevm_register_ram_block’ [-Wnested-externs]
+ 2288 |             extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2288:25: warning: redundant redeclaration of ‘wavevm_register_ram_block’ [-Wredundant-decls]
+../accel/wavevm/wavevm-all.c:60:13: note: previous declaration of ‘wavevm_register_ram_block’ with type ‘void(void *, uint64_t,  uint64_t)’ {aka ‘void(void *, long unsigned int,  long unsigned int)’}
+   60 | extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2308:25: warning: nested extern declaration of ‘wavevm_sync_bios_shadow’ [-Wnested-externs]
+ 2308 |             extern void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c: At top level:
+../accel/wavevm/wavevm-all.c:2617:5: warning: no previous prototype for ‘wvm_send_rpc_sync’ [-Wmissing-prototypes]
+ 2617 | int wvm_send_rpc_sync(uint16_t msg_type, void *payload, size_t len) {
+      |     ^~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2701:5: warning: no previous prototype for ‘wvm_send_typed_block_request’ [-Wmissing-prototypes]
+ 2701 | int wvm_send_typed_block_request(uint64_t lba_512, void *buf, uint32_t sector_count,
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2847:5: warning: no previous prototype for ‘wvm_send_ipc_block_io’ [-Wmissing-prototypes]
+ 2847 | int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
+      |     ^~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2489:13: warning: ‘wavevm_get_ttl’ defined but not used [-Wunused-function]
+ 2489 | static void wavevm_get_ttl(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp) {
+      |             ^~~~~~~~~~~~~~
+../accel/wavevm/wavevm-all.c:2484:13: warning: ‘wavevm_set_ttl’ defined but not used [-Wunused-function]
+ 2484 | static void wavevm_set_ttl(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp) {
+      |             ^~~~~~~~~~~~~~
+[3/4] Compiling C object libqemu-x86_64-softmmu.fa.p/accel_wavevm_wavevm-cpu.c.o
+../accel/wavevm/wavevm-cpu.c:52: warning: "MAX_VCPUS" redefined
+   52 | #define MAX_VCPUS 64
+      | 
+In file included from ../accel/wavevm/../../../common_include/wavevm_protocol.h:18,
+                 from ../accel/wavevm/wavevm-cpu.c:20:
+../accel/wavevm/../../../common_include/wavevm_config.h:74: note: this is the location of the previous definition
+   74 | #define MAX_VCPUS 4096
+      | 
+../accel/wavevm/wavevm-cpu.c: In function ‘wavevm_init_tcg_region_once’:
+../accel/wavevm/wavevm-cpu.c:1266:17: warning: nested extern declaration of ‘mttcg_enabled’ [-Wnested-externs]
+ 1266 |     extern bool mttcg_enabled;
+      |                 ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1266:17: warning: redundant redeclaration of ‘mttcg_enabled’ [-Wredundant-decls]
+In file included from ../target/i386/cpu-qom.h:23,
+                 from ../target/i386/cpu.h:24,
+                 from ../accel/wavevm/wavevm-cpu.c:4:
+/workspaces/WaveVM/wavevm-qemu/include/hw/core/cpu.h:498:13: note: previous declaration of ‘mttcg_enabled’ with type ‘_Bool’
+  498 | extern bool mttcg_enabled;
+      |             ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1267:17: warning: nested extern declaration of ‘parallel_cpus’ [-Wnested-externs]
+ 1267 |     extern bool parallel_cpus;
+      |                 ^~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c: In function ‘wavevm_cpu_thread_fn’:
+../accel/wavevm/wavevm-cpu.c:3311:16: warning: unused variable ‘bsp_cant_run_count’ [-Wunused-variable]
+ 3311 |     static int bsp_cant_run_count = 0;
+      |                ^~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c: At top level:
+../accel/wavevm/wavevm-cpu.c:3819:6: warning: no previous prototype for ‘wavevm_start_vcpu_thread’ [-Wmissing-prototypes]
+ 3819 | void wavevm_start_vcpu_thread(CPUState *cpu) {
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1474:13: warning: ‘wavevm_handle_io’ defined but not used [-Wunused-function]
+ 1474 | static void wavevm_handle_io(CPUState *cpu) {
+      |             ^~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1351:13: warning: ‘wavevm_valid_io_exit’ defined but not used [-Wunused-function]
+ 1351 | static bool wavevm_valid_io_exit(const struct kvm_run *run)
+      |             ^~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:1314:13: warning: ‘wavevm_tcg_kick_runnable_local_peers’ defined but not used [-Wunused-function]
+ 1314 | static void wavevm_tcg_kick_runnable_local_peers(CPUState *owner)
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../accel/wavevm/wavevm-cpu.c:45:13: warning: ‘wvm_halt_wake_nop_handler’ defined but not used [-Wunused-function]
+   45 | static void wvm_halt_wake_nop_handler(int sig) { (void)sig; }
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~
+[4/4] Linking target qemu-system-x86_64
+NINJA_RC=0
+-rwxrwxr-x 1 joeking joeking 54257920 10月 29 19:39 wavevm-qemu/build/qemu-system-x86_64
+[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress cpu=%d spin=%d remaining_ms=%lld
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=%d hard_cap_ms=90000 cooldown_ms=25000
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=%d rip=%#llx hard_cap_ms=90000 cooldown_ms=25000
+cooldown_suppress_log
+cooldown_suppress_log.4
+DONE 2026年 10月 29日 星期四 19:39:48 CST

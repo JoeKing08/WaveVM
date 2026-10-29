@@ -1,0 +1,12 @@
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffafc1f37e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffafea1abf arm force_local=128 repeat=1 hold=0
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffafaa62a7 spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffafaa62a7 spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffafaa62a7 spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffafea1abf arm force_local=128 repeat=2 hold=1
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffaf58f38c spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffaf58f38c spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffaf58f38c spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffaf58f38c spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffffaf58f38c spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffafc1f37e arm force_local=128 repeat=1 hold=0

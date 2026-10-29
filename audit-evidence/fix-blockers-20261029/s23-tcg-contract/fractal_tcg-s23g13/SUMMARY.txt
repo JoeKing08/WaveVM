@@ -1,0 +1,21 @@
+s23g13 fractal TCG 2-vCPU — OVERALL=PASS (honest residual force_local)
+======================================================================
+When: 2026-10-29 17:48–17:50 Asia/Shanghai (CST, UTC+8)
+Tip base: 33767b2c2 + dirty FE Hybrid cutover / gw9000 removal
+MINIMUM_COMPLETE=NOT_CLAIMED
+
+result.txt: OVERALL=PASS
+  guest_login=PASS (~90s) guest_ssh=PASS guest_cpu_smoke=PASS guest_stop=PASS
+  remote_done_delta=71  local_done_delta=521984  force_local_used_delta=866048
+  remote_vcpu_evidence=1 remote_mem_evidence=1
+
+Honesty
+-------
+- Concurrent MAIN outside softlock: remote_done advanced (71) during smoke.
+- force_local still dominates softlock windows (§8.1 exceptional; NOT expanded
+  sticky this slice). Ratio worse than 2026-10-28 fractal (remoteΔ=2933 /
+  flΔ=535040) but acceptance shape met: login/SSH/CPU/STOP + remote progress.
+- FE SET_GATEWAY prefers WVM_EXECUTOR_SERVICE_PORT (charter cutover).
+- No 旧套新 gw9000 dual-send.
+
+Vs flat_tcg this slice: FAIL_guest_ssh + FAIL_boot_hang_softlock (flaky).

@@ -1,0 +1,19 @@
+[guest-smoke 20:11:16] art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g15e qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=67108864 file_limit=104857600
+[guest-smoke 20:11:16] CREATE_VM via test_create_vm_fractal.sh topology=fractal backend=require-tcg (production + live helpers)
+[guest-smoke 20:11:26] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-fractal.3WUcxv agent=39561 ctl=39558
+[guest-smoke 20:11:26] CREATE backend=require-tcg accel=disabled
+[guest-smoke 20:11:26] live wavevm-accel QEMU processes≈2
+[guest-smoke 20:11:26] manifest=/tmp/wavevm-create-vm-fractal.3WUcxv/runtime/vm-257-1-1.manifest node_instance=802 child=39630
+[guest-smoke 20:11:26] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 20:11:26] log_cap_bytes=67108864 file_limit_bytes=104857600
+[guest-smoke 20:11:29] frontend_pid=39706 serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g15e/vm-serial.log
+[guest-smoke 20:11:29] waiting up to 900s for 'cirros login:'
+[guest-smoke 20:12:19] boot poll 63s serial_bytes=29239
+[guest-smoke 20:13:20] boot poll 124s serial_bytes=36310
+[guest-smoke 20:14:20] boot poll 184s serial_bytes=46987
+[guest-smoke 20:15:20] boot poll 244s serial_bytes=46987
+[guest-smoke 20:16:20] boot poll 304s serial_bytes=47226
+[guest-smoke 20:17:20] boot poll 364s serial_bytes=47226
+[guest-smoke 20:18:20] boot poll 424s serial_bytes=47226
+[guest-smoke 20:19:20] boot poll 484s serial_bytes=47467
+[guest-smoke 20:20:20] boot poll 544s serial_bytes=47467

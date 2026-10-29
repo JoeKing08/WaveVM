@@ -1,0 +1,7 @@
+HUNG mid-boot: e1000 synchronize_irq softlock + RCU stall on AP.
+§8.1 hold cycle worked once (30s → renew → 90s hard_cap → 25s cooldown) then
+NEED_LOCAL thrash (budget-only) on wobbling device RIPs without spin re-arm
+(spin measures remote same-RIP; local budget slices do not climb spin).
+remote_done stuck ~64; flat_tcg-s23g15e PASS with same binary.
+Next: escalate NEED_LOCAL high-repeat thrash to softlock wall hold (guest-visible
+softlock/IPI need), still 30/90/25 + cooldown — not ordinary bounce sticky.

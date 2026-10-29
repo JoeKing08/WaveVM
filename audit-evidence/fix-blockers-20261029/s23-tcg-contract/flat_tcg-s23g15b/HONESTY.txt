@@ -1,0 +1,1 @@
+CPU_SMOKE_TIMEOUT=30 too short under softlock dual-yes; login+SSH PASS; hard_cap=0 hold_expiry=4 idle_skip=14

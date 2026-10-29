@@ -1,0 +1,4 @@
+login PASS; SSH still failing at poll time. Burst quiet window 500ms reset too
+aggressively (budget slices leave >500ms gaps → burst stuck at 1 while
+same-RIP repeat climbed to 7). softlock_hold only once. Fix: escalate on
+burst>=8 OR repeat>=8; quiet window 5s.

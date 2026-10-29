@@ -1,0 +1,4 @@
+cleanup_ok=1
+stop=status=0 recorded_state=17 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13045760378048179094
+vm_id=256
+honesty=REQUIRE_STOP=1_full_STOP_acceptance

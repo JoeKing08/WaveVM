@@ -353,17 +353,25 @@ fi
 log "guest SSH PASS: $(tr -d '\r' <"$art_dir/ssh_probe.txt")"
 echo 'guest_ssh=PASS' >>"$art_dir/result.txt"
 
+
+# Sum latest WVM-TCG-STATS sample per cpu_index (last-line-wins was wrong when
+# BSP local STATS outran AP — s23g16e reported remote_after=0 while cpu1=80).
+wvm_tcg_stats_sum() {
+    local field="$1" logf="$2"
+    # portable mawk: last sample per cpu_index, then sum (s23g16f)
+    { grep -E '\[WVM-TCG-STATS\]' "$logf" 2>/dev/null || true; } | \
+    sed -n "s/.*cpu=\([0-9][0-9]*\).*${field}=\([0-9][0-9]*\).*/\1 \2/p" | \
+    awk '{ last[$1] = $2 + 0 } END { s = 0; for (k in last) s += last[k]; print s + 0 }'
+}
+
 # G9: snapshot remote completion counters BEFORE controlled load.
 stats_before=$(grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null | tail -n 40 || true)
 printf '%s\n' "$stats_before" >"$art_dir/stats_before.txt"
 # s23g9: honest rpc_ok may leave zero STATS at SSH (HALT-WAKE no longer
 # inflates remote_done). grep miss must not abort under pipefail.
-remote_before=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
-    | sed -n 's/.*remote_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
-local_before=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
-    | sed -n 's/.*local_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
-force_before=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
-    | sed -n 's/.*force_local_used=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+remote_before=$(wvm_tcg_stats_sum remote_done "$frontend_log")
+local_before=$(wvm_tcg_stats_sum local_done "$frontend_log")
+force_before=$(wvm_tcg_stats_sum force_local_used "$frontend_log")
 echo "remote_done_before=$remote_before" >>"$art_dir/result.txt"
 echo "local_done_before=$local_before" >>"$art_dir/result.txt"
 echo "force_local_used_before=$force_before" >>"$art_dir/result.txt"
@@ -414,12 +422,9 @@ g9_deadline=$((SECONDS + g9_wait_s))
 while true; do
     sleep 1
     stats_after=$(grep -E '\[WVM-TCG-STATS\]|\[WVM-REMOTE\]' "$frontend_log" 2>/dev/null | tail -n 80 || true)
-    remote_after=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
-        | sed -n 's/.*remote_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
-    local_after=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
-        | sed -n 's/.*local_done=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
-    force_after=$( { grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null || true; } \
-        | sed -n 's/.*force_local_used=\([0-9][0-9]*\).*/\1/p' | awk '{s=$1} END{print s+0}')
+    remote_after=$(wvm_tcg_stats_sum remote_done "$frontend_log")
+    local_after=$(wvm_tcg_stats_sum local_done "$frontend_log")
+    force_after=$(wvm_tcg_stats_sum force_local_used "$frontend_log")
     remote_delta=$((remote_after - remote_before))
     if [[ "$remote_delta" -gt 0 ]]; then
         log "G9 remote_done advanced delta=$remote_delta (waited)"
@@ -447,7 +452,7 @@ echo "force_local_used_delta=$force_delta" >>"$art_dir/result.txt"
     echo "force_local $force_before -> $force_after delta=$force_delta"
     echo "=== recent WVM-TCG-STATS / WVM-REMOTE ==="
     printf '%s\n' "$stats_after"
-    echo "=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ==="
+    echo "=== memory / commit signals (authoritative; no vCPU-dispatch) ==="
     grep -E 'dirty commit|resync-merge|PUSH_BARRIER_ACK|wavevm_user_mem.*commit|slave TCG slice dirty flush|TYPED_MEM_COMMIT|handoff dirty flush pages=' \
         "$frontend_log" "$create_tmpdir/agent.log" 2>/dev/null | head -n 80 || true
     echo "=== WVM-REMOTE (vcpu only; NOT mem evidence) ==="
@@ -467,9 +472,11 @@ elif [[ "${WVM_S6_BACKEND}" == "require-kvm" && "$remote_before" -gt 0 ]]; then
 fi
 # Memory: REAL dirty/commit/resync/fence only — never WVM-REMOTE vCPU dispatch,
 # never SHM coherent / WVM-TCG-STATS alone (xiaolang M9 mis-attribution).
+# Scan runtime logs only — never remote_evidence.txt titles/banners (B7:
+# a section title containing "dirty commit" previously forced remote_mem=1).
 mem_hits=$(grep -E 'dirty commit|resync-merge|PUSH_BARRIER_ACK|wavevm_user_mem.*commit|slave TCG slice dirty flush pages=[1-9]|TYPED_MEM_COMMIT|handoff dirty flush pages=[1-9]|tcg_dirty_self_emit' \
-    "$art_dir/remote_evidence.txt" "$frontend_log" "$create_tmpdir/agent.log" \
-    "$create_tmpdir"/*.log "$art_dir"/*.log 2>/dev/null | head -n 40 || true)
+    "$frontend_log" "$create_tmpdir/agent.log" \
+    "$create_tmpdir"/*.log 2>/dev/null | head -n 40 || true)
 printf '%s\n' "$mem_hits" >"$art_dir/remote_mem_hits.txt"
 if [[ -n "$mem_hits" ]]; then
     remote_mem=1

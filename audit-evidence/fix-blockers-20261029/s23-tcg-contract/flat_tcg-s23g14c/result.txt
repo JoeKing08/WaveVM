@@ -1,0 +1,5 @@
+OVERALL=FAIL_boot_hang_softlock
+guest_login=FAIL
+serial_bytes_final=21127
+remote_done_cpu1=32
+MINIMUM_COMPLETE=NOT_CLAIMED

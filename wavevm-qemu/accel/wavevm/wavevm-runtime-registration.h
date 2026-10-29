@@ -244,7 +244,7 @@ static inline int wavevm_qemu_bind_kernel_context(int dev_fd)
  * remote_done only accumulates via HALT-WAKE false counts.
  *
  * Populate bare vnode routes for vCPUs >= split and the sidecar gateway
- * from launch.env (PRIMARY_DESTINATION_VNODE + RUNTIME_LOCAL_PORT).
+ * from launch.env (PRIMARY_DESTINATION_VNODE + EXECUTOR_SERVICE_PORT).
  * Returns 0 on success / nothing-to-do; negative -errno on ioctl failure.
  */
 static inline int wavevm_qemu_inject_fe_compute_routes(int dev_fd, int vcpus,
@@ -291,21 +291,31 @@ static inline int wavevm_qemu_inject_fe_compute_routes(int dev_fd, int vcpus,
         return -EINVAL;
     }
     vnode = (uint32_t)vnode_u;
-    /* Prefer data-plane port (V30-RX accepts MSG_VCPU_RUN); fall back to
-     * executor service port used by Hybrid KVM listen. */
-    if (wavevm_qemu_parse_u64_env("WVM_RUNTIME_LOCAL_PORT", &port_u) != 0 ||
+    /*
+     * Mode A FE BIND cutover (s23g13 / charter): point SET_GATEWAY at the
+     * Hybrid executor service port — same endpoint Mode B uses for local
+     * handoff. Kernel :9000 <-> Hybrid is the Mode A acceleration of that
+     * contract (wire-ipc §7 / kernel-accelerator §5.2).
+     *
+     * Do NOT prefer WVM_RUNTIME_LOCAL_PORT (V30 sidecar) here: that wraps
+     * Mode A REMOTE_RUN in the old Mode B forward shell (kernel->V30->Hybrid
+     * hairpin). Joe rejected 「旧版本套上新版本」; V30 demux cannot be the
+     * formal Mode A BIND fix. Fall back to LOCAL_PORT only if executor port
+     * is absent (exceptional).
+     */
+    if (wavevm_qemu_parse_u64_env("WVM_EXECUTOR_SERVICE_PORT", &port_u) != 0 ||
         port_u == 0 || port_u > 65535) {
-        if (wavevm_qemu_parse_u64_env("WVM_EXECUTOR_SERVICE_PORT",
+        if (wavevm_qemu_parse_u64_env("WVM_RUNTIME_LOCAL_PORT",
                                       &port_u) != 0 ||
             port_u == 0 || port_u > 65535) {
             fprintf(stderr,
-                    "[WaveVM-QEMU] FE compute routes: missing sidecar port "
-                    "(WVM_RUNTIME_LOCAL_PORT / WVM_EXECUTOR_SERVICE_PORT)\n");
+                    "[WaveVM-QEMU] FE compute routes: missing executor port "
+                    "(WVM_EXECUTOR_SERVICE_PORT / WVM_RUNTIME_LOCAL_PORT)\n");
             return -EINVAL;
         }
     }
     port_n = htons((uint16_t)port_u);
-    ip_n = htonl(0x7f000001u); /* 127.0.0.1 — same-host dual-yes sidecar */
+    ip_n = htonl(0x7f000001u); /* 127.0.0.1 — same-host executor endpoint */
 
     memset(&gw, 0, sizeof(gw));
     gw.gw_id = vnode; /* bare node_id index into gateway_table */

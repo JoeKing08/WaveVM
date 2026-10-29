@@ -1,0 +1,45 @@
+2026年 10月 29日 星期四 20:35:36 CST
+run=fractal_tcg-s23g15i burst|repeat>=8 softlock; quiet 5s
+[guest-smoke 20:35:36] art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g15i qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=67108864 file_limit=104857600
+[guest-smoke 20:35:36] CREATE_VM via test_create_vm_fractal.sh topology=fractal backend=require-tcg (production + live helpers)
+[guest-smoke 20:35:47] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-fractal.Cp2GES agent=42737 ctl=42734
+[guest-smoke 20:35:47] CREATE backend=require-tcg accel=disabled
+[guest-smoke 20:35:47] live wavevm-accel QEMU processes≈2
+[guest-smoke 20:35:47] manifest=/tmp/wavevm-create-vm-fractal.Cp2GES/runtime/vm-257-1-1.manifest node_instance=802 child=42806
+[guest-smoke 20:35:47] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 20:35:47] log_cap_bytes=67108864 file_limit_bytes=104857600
+[guest-smoke 20:35:50] frontend_pid=42883 serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g15i/vm-serial.log
+[guest-smoke 20:35:50] waiting up to 900s for 'cirros login:'
+[guest-smoke 20:36:40] boot poll 64s serial_bytes=29310
+[guest-smoke 20:36:50] guest reached cirros login
+[guest-smoke 20:36:50] waiting up to 300s for SSH login
+[guest-smoke 20:36:50] guest SSH PASS: wavevm-guest-ssh-ok
+cpu-smoke-ok
+              total        used        free      shared  buff/cache   available
+Mem:         219488       27284      152636          52       39568      184260
+Swap:             0           0           0
+2
+[guest-smoke 20:37:18] G9 remote_done advanced delta=2 (waited)
+[guest-smoke 20:37:18] G9 remote attribution PASS delta_remote=2 delta_local=7941
+[guest-smoke 20:37:18] REQUIRE_STOP=1 — stop Cirros FE then submit STOP_VM
+status=0 recorded_state=17 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=13333516664246327452
+[guest-smoke 20:37:20] STOP_VM PASS
+[guest-smoke 20:37:20] GUEST SMOKE PASS art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/fractal_tcg-s23g15i
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=46
+local_done_before=436480
+force_local_used_before=436480
+guest_cpu_smoke=PASS
+remote_done_after=48
+local_done_after=444421
+force_local_used_after=444421
+remote_done_delta=2
+local_done_delta=7941
+force_local_used_delta=7941
+remote_vcpu_evidence=1
+remote_mem_evidence=1
+REQUIRE_STOP=1
+guest_stop=PASS
+OVERALL=PASS
+smoke_exit=0

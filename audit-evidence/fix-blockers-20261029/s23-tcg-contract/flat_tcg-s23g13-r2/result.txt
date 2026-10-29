@@ -1,0 +1,4 @@
+OVERALL=FAIL_guest_ssh
+guest_login=PASS
+guest_ssh=FAIL
+note=SSH banner timeout 300s after login~122s; cpu1 remote_done≈64 force_local dominates

@@ -1,0 +1,22 @@
+[guest-smoke 19:50:27] art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_tcg-s23g15b qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=67108864 file_limit=104857600
+[guest-smoke 19:50:27] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-tcg (production + live helpers)
+[guest-smoke 19:50:37] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.YzCub3 agent=35312 ctl=35305
+[guest-smoke 19:50:37] CREATE backend=require-tcg accel=disabled
+[guest-smoke 19:50:37] live wavevm-accel QEMU processes≈2
+[guest-smoke 19:50:37] manifest=/tmp/wavevm-create-vm-single.YzCub3/runtime/vm-256-1-1.manifest node_instance=802 child=35337
+[guest-smoke 19:50:37] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 19:50:37] log_cap_bytes=67108864 file_limit_bytes=104857600
+[guest-smoke 19:50:40] frontend_pid=35483 serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_tcg-s23g15b/vm-serial.log
+[guest-smoke 19:50:40] waiting up to 900s for 'cirros login:'
+[guest-smoke 19:51:30] boot poll 63s serial_bytes=29231
+[guest-smoke 19:51:50] guest reached cirros login
+[guest-smoke 19:51:50] waiting up to 300s for SSH login
+[guest-smoke 19:51:50] guest SSH PASS: wavevm-guest-ssh-ok
+[guest-smoke 19:52:20] ERROR: guest CPU smoke failed rc=124
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=0
+local_done_before=566016
+force_local_used_before=0
+guest_cpu_smoke=FAIL rc=124
+OVERALL=FAIL_guest_cpu_smoke

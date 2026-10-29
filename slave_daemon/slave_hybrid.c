@@ -694,14 +694,6 @@ static int vcpu_exit_cache_begin(int fd, struct sockaddr_in *client,
             memcpy(replay, e->data, len);
             pthread_mutex_unlock(&g_vcpu_exit_cache_lock);
             robust_sendto(fd, replay, len, client);
-            if (client && ntohs(client->sin_port) != 9000) {
-                struct sockaddr_in gw9000 = {
-                    .sin_family = AF_INET,
-                    .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-                    .sin_port = htons(9000)
-                };
-                robust_sendto(fd, replay, len, &gw9000);
-            }
             return 1;
         }
         pthread_mutex_unlock(&g_vcpu_exit_cache_lock);
@@ -2403,15 +2395,6 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         fprintf(stderr, "[Slave FastAck] ret=%zd errno=%d mode=%u req=%llu dst=%s:%u\n",
                 sret, (sret < 0) ? errno : 0, req->mode_tcg,
                 (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
-        if (client && ntohs(client->sin_port) != 9000) {
-            struct sockaddr_in gw9000 = {
-                .sin_family = AF_INET,
-                .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-                .sin_port = htons(9000)
-            };
-            (void)sendto(sockfd, tx, sizeof(tx), 0,
-                         (struct sockaddr *)&gw9000, sizeof(gw9000));
-        }
         return;
     }
 
@@ -2454,15 +2437,6 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         fprintf(stderr, "[Slave ErrorAck] vcpu init failed ret=%zd errno=%d req=%llu dst=%s:%u\n",
                 sret, (sret < 0) ? errno : 0,
                 (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
-        if (client && ntohs(client->sin_port) != 9000) {
-            struct sockaddr_in gw9000 = {
-                .sin_family = AF_INET,
-                .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-                .sin_port = htons(9000)
-            };
-            (void)sendto(sockfd, tx, sizeof(tx), 0,
-                         (struct sockaddr *)&gw9000, sizeof(gw9000));
-        }
         return;
     }
     struct kvm_regs kregs; struct kvm_sregs ksregs;
@@ -3291,20 +3265,6 @@ kvm_run_done:
     fprintf(stderr, "[Slave Ack] ret=%zd errno=%d req=%llu dst=%s:%u exit=%u port=0x%x dir=%u sz=%u\n",
             sret, (sret < 0) ? errno : 0, (unsigned long long)hdr->req_id,
             inet_ntoa(client->sin_addr), ntohs(client->sin_port), t_kvm_run->exit_reason, t_kvm_run->io.port, t_kvm_run->io.direction, t_kvm_run->io.size);
-    /* s23g12: Mode A FE/kernel waits on :9000. Same-process Hybrid(45784)->V30-RX(LOCAL_PORT)
-     * EXIT hairpin was observed not to reach recvmmsg (sendto ret>0, zero RX VCPU_EXIT from
-     * forward port). Dual-send EXIT to gateway so REMOTE_RUN RPC can complete. */
-    if (client && ntohs(client->sin_port) != 9000) {
-        struct sockaddr_in gw9000 = {
-            .sin_family = AF_INET,
-            .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
-            .sin_port = htons(9000)
-        };
-        ssize_t gs = sendto(sockfd, tx, sizeof(tx), 0,
-                            (struct sockaddr *)&gw9000, sizeof(gw9000));
-        fprintf(stderr, "[Slave Ack] also_gw9000 ret=%zd errno=%d req=%llu\n",
-                gs, (gs < 0) ? errno : 0, (unsigned long long)hdr->req_id);
-    }
 }
 
 /* 

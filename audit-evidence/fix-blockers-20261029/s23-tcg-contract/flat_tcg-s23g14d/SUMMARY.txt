@@ -1,0 +1,37 @@
+s23g14d flat TCG — OVERALL=PASS (honest residual force_local dominance)
+=======================================================================
+When: 2026-10-29 18:24–18:26 Asia/Shanghai (CST, UTC+8)
+Tip base: 33767b2c2 + dirty (s23g13 FE Hybrid + s23g14d idle skip-arm /
+          hold ends only hard_cap / refused renew on idle leaf)
+
+result.txt: OVERALL=PASS
+  guest_login=PASS (~101s) guest_ssh=PASS guest_cpu_smoke=PASS guest_stop=PASS
+  remote_done_delta=83  local_done_delta=2755584  force_local_used_delta=3478272
+  remote_vcpu_evidence=1 remote_mem_evidence=1
+  §8.1 hard_cap_expiry observed; idle_skip_arm on ...603b (no hold arm on idle)
+
+Fix (s23g14d)
+-------------
+Root cause of s23g14/b/c boot hangs: premature hold-CLEAR on idle/HLT/603b
+during softlock↔idle oscillation → remote resumed mid-softlock → FE
+unix_stream_data_wait deadlock (serial freeze ~19–21KB).
+Policy now:
+  - skip-arm on idle (halted|HLT|603b): never *arm* hold_full on Cirros idle
+  - hold-CLEAR: only hard_cap / slice-expiry without renew
+  - renew refuses halted + Cirros idle leaf (bounded end, not sticky idle)
+Did NOT expand sticky force_local. Did NOT reopen dual-send/demux Mode A.
+
+Honesty
+-------
+- Concurrent MAIN outside softlock: remote_done advanced (83) during smoke.
+- force_local still dominates softlock windows (flΔ≈3.5M ≫ remoteΔ=83).
+  §8.1 exceptional residual — NOT expanded sticky this slice.
+- Guest serial shows one NMI softlockup dump ~guest 129s; SSH/CPU still PASS.
+- MINIMUM_COMPLETE=NOT_CLAIMED (fl dominance residual; same honesty bar as
+  fractal_tcg-s23g13).
+
+Vs prior this slice
+-------------------
+- s23g13 flat: FAIL_ssh / FAIL_boot_hang (flake)
+- s23g14/b/c: FAIL_boot_hang (idle-clear regression)
+- s23g14d: PASS login+SSH+CPU+STOP

@@ -1,0 +1,6 @@
+s23g16h (Asia/Shanghai)
+Shape: restore 16e softlock (spin>=4 wall hold, no early-clear, NL thrash hold,
+renew with progress-decay at slice boundary, 30s/90s/25s) + G9 per-cpu sum harness.
+16f/16g: early_clear and spin>=8 both hung — under-covered softlock.
+Expect: guest PASS; honest remoteΔ; fl still high from hold micro-slices.
+NO MINIMUM_COMPLETE claim.

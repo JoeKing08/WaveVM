@@ -1,0 +1,15 @@
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=60
+local_done_before=87552
+force_local_used_before=87552
+guest_cpu_smoke=PASS
+remote_done_after=0
+local_done_after=1794304
+force_local_used_after=0
+remote_done_delta=-60
+local_done_delta=1706752
+force_local_used_delta=-87552
+remote_vcpu_evidence=0
+remote_mem_evidence=1
+OVERALL=FAIL_g9_remote_attribution

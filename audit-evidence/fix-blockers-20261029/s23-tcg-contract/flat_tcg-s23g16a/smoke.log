@@ -1,0 +1,13 @@
+[guest-smoke 20:45:25] art=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_tcg-s23g16a qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=67108864 file_limit=104857600
+[guest-smoke 20:45:25] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-tcg (production + live helpers)
+[guest-smoke 20:45:35] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.s1t5P8 agent=45290 ctl=45283
+[guest-smoke 20:45:35] CREATE backend=require-tcg accel=disabled
+[guest-smoke 20:45:35] live wavevm-accel QEMU processes≈2
+[guest-smoke 20:45:35] manifest=/tmp/wavevm-create-vm-single.s1t5P8/runtime/vm-256-1-1.manifest node_instance=802 child=45315
+[guest-smoke 20:45:35] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 20:45:35] log_cap_bytes=67108864 file_limit_bytes=104857600
+[guest-smoke 20:45:38] frontend_pid=45461 serial=audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_tcg-s23g16a/vm-serial.log
+[guest-smoke 20:45:38] waiting up to 900s for 'cirros login:'
+[guest-smoke 20:46:28] boot poll 63s serial_bytes=26988
+[guest-smoke 20:47:28] boot poll 123s serial_bytes=26988
+[guest-smoke 20:48:28] boot poll 183s serial_bytes=26988

@@ -1,0 +1,17 @@
+s23g14c flat TCG — OVERALL=FAIL_boot_hang_softlock
+===================================================
+When: 2026-10-29 18:20–18:23 Asia/Shanghai (CST, UTC+8)
+Tip: 33767b2c2 + dirty s23g14c (leaf-only hold-clear)
+
+result: FAIL_boot_hang_softlock
+  serial frozen @21127 (past s23g14b's 19974; still pre-login; i8042)
+  FE unix_stream_data_wait; remote_done frozen@32; fl≈local during hold
+  idle_skip_arm on ...603b worked (no new hold arm on idle)
+  idle_clear_hold via=clear_if_progress_leaf fired 3× — guest softlock↔idle
+  oscillation; clearing on genuine 603b still re-exposed remote softlock → IPC hang
+
+Lesson: hold-CLEAR on idle leaf is still too early for flat boot. End hold only
+at slice expiry without renew (hard_cap), refusing renew on idle leaf. Keep
+skip-arm so 603b never *arms* hold (fl-dominance fix without early clear).
+
+Did NOT expand sticky force_local. No dual-send/demux reopen.

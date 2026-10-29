@@ -1,0 +1,6 @@
+OVERALL=FAIL_boot_hang_softlock
+guest_login=FAIL
+guest_ssh=FAIL
+note=serial stalled ~26KB at initramfs /init; cpu1 remote_done stuck@32 after hold on 88b8f38c then idle 603b ACKs; FE unix_stream_data_wait; idle_clear_hold=0 (halted=0 on 603b ACKs)
+remote_done_last=32
+force_local_used_last=569604

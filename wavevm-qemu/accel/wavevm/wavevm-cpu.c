@@ -335,7 +335,9 @@ static QemuMutex g_wavevm_tcg_slice_lock;
 static QemuCond g_wavevm_tcg_slice_cond;
 static int g_wavevm_tcg_local_active;
 static bool g_wavevm_tcg_remote_pending;
-static bool g_wavevm_tcg_remote_active;
+static bool g_wavevm_tcg_remote_active; /* STW: any remote; concurrent derives */
+static bool g_wavevm_tcg_remote_vcpu_active[MAX_VCPUS];
+static int g_wavevm_tcg_remote_active_count;
 static bool g_wavevm_tcg_local_handoff;
 /* Under STW: after remote same-RIP spin, require this many additional local
  * slice completions before remote may reclaim (attach23: 30x ...8a62a7 ACK
@@ -365,7 +367,14 @@ static int64_t g_wavevm_tcg_spin_arm_cooldown_until_ns[MAX_VCPUS];
 /* During hold: allow 1 remote probe every N local forced slices so concurrent
  * remote_done keeps advancing (Minimum: force_local must not dominate). */
 static uint32_t g_wavevm_tcg_force_local_hold_ticks[MAX_VCPUS];
+/* Mid-hold RIP progress vs same-RIP (for §8.1 early clear when softlock ends). */
+static uint32_t g_wavevm_tcg_force_local_hold_progress[MAX_VCPUS];
+static uint32_t g_wavevm_tcg_force_local_hold_same_rip[MAX_VCPUS];
+static uint64_t g_wavevm_tcg_force_local_hold_last_rip[MAX_VCPUS];
 static int g_wavevm_tcg_need_local_repeat[MAX_VCPUS];
+/* Cross-RIP NEED_LOCAL thrash burst (resets after 500ms quiet). Softlock signal. */
+static int g_wavevm_tcg_need_local_burst[MAX_VCPUS];
+static int64_t g_wavevm_tcg_need_local_burst_ns[MAX_VCPUS];
 static uint64_t g_wavevm_tcg_need_local_last_rip[MAX_VCPUS];
 #ifndef WVM_TCG_FORCE_LOCAL_DUTY_N
 #define WVM_TCG_FORCE_LOCAL_DUTY_N 6
@@ -408,6 +417,11 @@ static void wavevm_tcg_note_local_done(CPUState *cpu)
 }
 
 static bool wavevm_tcg_prefer_active(void);
+static bool wavevm_tcg_vcpu_is_idle_not_softlock(CPUState *cpu,
+                                                 uint64_t rip,
+                                                 uint32_t exit_reason,
+                                                 uint32_t halted,
+                                                 uint32_t mp_state);
 
 static bool wavevm_tcg_has_runnable_local_peer(CPUState *owner);
 static bool wavevm_tcg_has_local_peer(CPUState *owner);
@@ -430,26 +444,39 @@ static void wavevm_tcg_clear_force_local_if_progress(CPUState *cpu)
     CPUX86State *env;
     int64_t now;
     /* Concurrent spin hold: 30s slice, renew while same RIP, hard cap 90s. */
-    const int64_t hold_slice_ns = 8000000000LL;  /* s23g6: was 30s */
-    const int64_t hold_max_ns = 30000000000LL; /* s23g6: was 90s */
+    const int64_t hold_slice_ns = 30000000000LL; /* §8.1 hold slice 30s; renew-on-stuck-only ≤90s hard_cap */
+    const int64_t hold_max_ns = 90000000000LL; /* §8.1 hard cap 90s */
 
     now = wavevm_tcg_mono_ns();
     /* Expire concurrent wall-clock hold; RIP wobble must not clear it early. */
     if (g_wavevm_tcg_force_local_hold[ci]) {
+        /* s23g14d: no immediate idle/leaf hold-clear (s23g14c oscillation). */
         if (g_wavevm_tcg_force_local_hold_until_ns[ci] != 0 &&
             now >= g_wavevm_tcg_force_local_hold_until_ns[ci]) {
             env = &X86_CPU(cpu)->env;
             rip = env->eip;
             /*
-             * g3g9m: 5s hold reached login but e1000 Reset @guest~63s once
-             * hold expired mid-softlock (remote_spin_backoff only runs on
-             * remote ACK, so hold was not renewed while AP was local).
-             * Renew while still on the armed RIP (or spin still elevated),
-             * capped from first arm — not a boot-duration sticky.
+             * Renew while still softlocked, capped from first arm.
+             * Never renew while architecture-idle (halted/HLT/MP/HLT-insn);
+             * that ends the episode via hard_cap (bounded), not sticky idle.
              */
+            /* Decay stale spin by mid-hold RIP progress so renew can end
+             * once softlock eases (avoids hard_cap pin → fl dominance). */
+            if (g_wavevm_tcg_force_local_hold_progress[ci] >= 32) {
+                int decay_n = (int)(g_wavevm_tcg_force_local_hold_progress[ci] / 32);
+                if (decay_n > g_wavevm_tcg_spin_count[ci]) {
+                    decay_n = g_wavevm_tcg_spin_count[ci];
+                }
+                g_wavevm_tcg_spin_count[ci] -= decay_n;
+                g_wavevm_tcg_force_local_hold_progress[ci] = 0;
+            }
             if (g_wavevm_tcg_force_local_hold_armed_ns[ci] != 0 &&
                 (now - g_wavevm_tcg_force_local_hold_armed_ns[ci]) < hold_max_ns &&
+                !wavevm_tcg_vcpu_is_idle_not_softlock(
+                    cpu, rip, 0, cpu->halted ? 1u : 0u,
+                    X86_CPU(cpu)->env.mp_state) &&
                 (rip == g_wavevm_tcg_force_local_rip[ci] ||
+                 g_wavevm_tcg_force_local_hold_same_rip[ci] >= 4096 ||
                  g_wavevm_tcg_spin_count[ci] >= 4)) {
                 int64_t renew = now + hold_slice_ns;
                 int64_t cap = g_wavevm_tcg_force_local_hold_armed_ns[ci] +
@@ -461,7 +488,7 @@ static void wavevm_tcg_clear_force_local_if_progress(CPUState *cpu)
                     g_wavevm_tcg_force_local_hold_until_ns[ci] = renew;
                     fprintf(stderr,
                             "[WVM-TCG-FORCE-LOCAL] event=renew cpu=%d rip=%#llx "
-                            "slice_ms=8000 remaining_cap_ms=%lld "
+                            "slice_ms=30000 remaining_cap_ms=%lld "
                             "armed_age_ms=%lld\n",
                             cpu->cpu_index, (unsigned long long)rip,
                             (long long)((cap - now) / 1000000LL),
@@ -471,22 +498,49 @@ static void wavevm_tcg_clear_force_local_if_progress(CPUState *cpu)
                     return;
                 }
             }
-            g_wavevm_tcg_force_local_hold[ci] = false;
-            g_wavevm_tcg_force_local_hold_until_ns[ci] = 0;
-            g_wavevm_tcg_force_local_hold_armed_ns[ci] = 0;
-            g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
-            g_wavevm_tcg_need_local_repeat[ci] = 0;
-            g_wavevm_tcg_need_local_last_rip[ci] = 0;
-            g_wavevm_tcg_force_local[ci] = 0;
-            g_wavevm_tcg_force_local_rip[ci] = 0;
-            /* Prevent immediate re-arm so G9 can observe remote_done delta. */
-            g_wavevm_tcg_spin_count[ci] = 0;
-            g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] =
-                now + 12000000000LL; /* s23g6: was 25s */
-            fprintf(stderr,
-                    "[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=%d "
-                    "rip=%#llx hard_cap_ms=30000 cooldown_ms=12000\n",
-                    cpu->cpu_index, (unsigned long long)rip);
+            {
+                int64_t armed_age = 0;
+                bool true_hard_cap = false;
+                if (g_wavevm_tcg_force_local_hold_armed_ns[ci] != 0) {
+                    armed_age = now - g_wavevm_tcg_force_local_hold_armed_ns[ci];
+                    true_hard_cap = (armed_age >= hold_max_ns);
+                }
+                g_wavevm_tcg_force_local_hold[ci] = false;
+                g_wavevm_tcg_force_local_hold_until_ns[ci] = 0;
+                g_wavevm_tcg_force_local_hold_armed_ns[ci] = 0;
+                g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
+                g_wavevm_tcg_force_local_hold_progress[ci] = 0;
+                g_wavevm_tcg_force_local_hold_same_rip[ci] = 0;
+                g_wavevm_tcg_force_local_hold_last_rip[ci] = 0;
+                g_wavevm_tcg_need_local_repeat[ci] = 0;
+                g_wavevm_tcg_need_local_last_rip[ci] = 0;
+                g_wavevm_tcg_force_local[ci] = 0;
+                g_wavevm_tcg_force_local_rip[ci] = 0;
+                g_wavevm_tcg_spin_count[ci] = 0;
+                g_wavevm_tcg_need_local_burst[ci] = 0;
+                /*
+                 * §8.1: after hard-cap expiry *or equivalent clear* of a
+                 * softlock wall-hold, start 25s re-arm cooldown so remote
+                 * MAIN resumes. (NEED_LOCAL no longer creates wall-holds.)
+                 */
+                g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] =
+                    now + 25000000000LL;
+                if (true_hard_cap) {
+                    fprintf(stderr,
+                            "[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry "
+                            "cpu=%d rip=%#llx hard_cap_ms=90000 "
+                            "cooldown_ms=25000 armed_age_ms=%lld\n",
+                            cpu->cpu_index, (unsigned long long)rip,
+                            (long long)(armed_age / 1000000LL));
+                } else {
+                    fprintf(stderr,
+                            "[WVM-TCG-FORCE-LOCAL] event=hold_expiry "
+                            "cpu=%d rip=%#llx armed_age_ms=%lld "
+                            "cooldown_ms=25000 reason=equivalent_clear\n",
+                            cpu->cpu_index, (unsigned long long)rip,
+                            (long long)(armed_age / 1000000LL));
+                }
+            }
         }
         return;
     }
@@ -543,21 +597,49 @@ static void wavevm_tcg_arm_need_local(CPUState *cpu, uint64_t rip)
     }
     g_wavevm_tcg_force_local_rip[ci] = rip;
     /*
-     * Repeated NEED_LOCAL on the same RIP means device-bounce thrash: escalate
-     * to a short wall hold (still duty-cycled; still bounded by 90s cap).
+     * §8.1: ordinary NEED_LOCAL / device-bounce = bounded local *budget*
+     * that clears on RIP progress. Softlock holds (30s/90s/25s) come from
+     * elevated spin — and from cross-RIP device thrash burst (>=8 within
+     * 500ms), a guest-visible softlock/IPI-class signal (e1000
+     * synchronize_irq / RCU stall). Exact-RIP repeat alone misses wobbling
+     * device helpers. Escalation respects hard-cap cooldown suppress.
      */
-    if (g_wavevm_tcg_need_local_repeat[ci] >= 2) {
+    {
+        int64_t now_burst = wavevm_tcg_mono_ns();
+        /* 5s quiet — budget-local slices often leave >500ms gaps. */
+        if (g_wavevm_tcg_need_local_burst_ns[ci] != 0 &&
+            (now_burst - g_wavevm_tcg_need_local_burst_ns[ci]) > 5000000000LL) {
+            g_wavevm_tcg_need_local_burst[ci] = 0;
+        }
+        g_wavevm_tcg_need_local_burst[ci]++;
+        g_wavevm_tcg_need_local_burst_ns[ci] = now_burst;
+    }
+    /*
+     * Softlock-hold escalate on cross-RIP burst OR same-RIP repeat.
+     * §8.1 cooldown suppresses *spin*-triggered re-arm only. NEED_LOCAL
+     * thrash softlock holds remain available during cooldown so device /
+     * RCU softlock can recover (s23g16d: suppressing them caused RCU
+     * stall after equivalent_clear). Still bounded by 30s/90s hard cap.
+     * Budget-only NEED_LOCAL bounce still runs below the thrash gate.
+     */
+    if ((g_wavevm_tcg_need_local_burst[ci] >= 8 ||
+         g_wavevm_tcg_need_local_repeat[ci] >= 8) &&
+        !wavevm_tcg_force_local_disabled()) {
         int64_t now_arm = wavevm_tcg_mono_ns();
-        int64_t hold_until = now_arm + 4000000000LL; /* s23g6: was 10s */
-        const int64_t hold_max_ns = 30000000000LL; /* s23g6: was 90s */
+        int64_t hold_until = now_arm + 30000000000LL; /* §8.1 hold slice 30s; renew-on-stuck-only ≤90s hard_cap */
+        const int64_t hold_max_ns = 90000000000LL;
         if (!g_wavevm_tcg_force_local_hold[ci] ||
             g_wavevm_tcg_force_local_hold_armed_ns[ci] == 0) {
             g_wavevm_tcg_force_local_hold_armed_ns[ci] = now_arm;
             g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
+            g_wavevm_tcg_force_local_hold_progress[ci] = 0;
+            g_wavevm_tcg_force_local_hold_same_rip[ci] = 0;
+            g_wavevm_tcg_force_local_hold_last_rip[ci] = 0;
         }
         g_wavevm_tcg_force_local_hold[ci] = true;
         {
-            int64_t cap = g_wavevm_tcg_force_local_hold_armed_ns[ci] + hold_max_ns;
+            int64_t cap = g_wavevm_tcg_force_local_hold_armed_ns[ci] +
+                          hold_max_ns;
             if (hold_until > cap) {
                 hold_until = cap;
             }
@@ -565,15 +647,23 @@ static void wavevm_tcg_arm_need_local(CPUState *cpu, uint64_t rip)
         if (hold_until > g_wavevm_tcg_force_local_hold_until_ns[ci]) {
             g_wavevm_tcg_force_local_hold_until_ns[ci] = hold_until;
         }
-    }
-    if (log_count++ < 64) {
+        if (log_count++ < 64) {
+            fprintf(stderr,
+                    "[WVM-TCG-NEED-LOCAL] event=softlock_hold "
+                    "cpu=%d rip=%#llx burst=%d repeat=%d hold_ms=30000 "
+                    "hold_full_local=1\n",
+                    cpu->cpu_index, (unsigned long long)rip,
+                    g_wavevm_tcg_need_local_burst[ci],
+                    g_wavevm_tcg_need_local_repeat[ci]);
+        }
+    } else if (log_count++ < 64) {
         fprintf(stderr,
                 "[WVM-TCG-NEED-LOCAL] cpu=%d rip=%#llx arm force_local=%d "
-                "repeat=%d hold=%d\n",
+                "repeat=%d burst=%d (budget-only)\n",
                 cpu->cpu_index, (unsigned long long)rip,
                 g_wavevm_tcg_force_local[ci],
                 g_wavevm_tcg_need_local_repeat[ci],
-                g_wavevm_tcg_force_local_hold[ci] ? 1 : 0);
+                g_wavevm_tcg_need_local_burst[ci]);
     }
 }
 
@@ -652,33 +742,76 @@ static bool wavevm_tcg_consume_force_local(CPUState *cpu)
     divert = (cpu->cpu_index >= g_wvm_local_split);
     if (g_wavevm_tcg_force_local_hold[ci]) {
         int64_t now = wavevm_tcg_mono_ns();
-        const int64_t hold_slice_ns = 8000000000LL;  /* s23g6: was 30s */
-        const int64_t hold_max_ns = 30000000000LL; /* s23g6: was 90s */
+        const int64_t hold_slice_ns = 30000000000LL; /* §8.1 hold slice 30s; renew-on-stuck-only ≤90s hard_cap */
+        const int64_t hold_max_ns = 90000000000LL; /* §8.1 hard cap 90s */
+        /*
+         * No immediate idle clear. Keep hold for slice; renew only while
+         * still softlocked (not architecture-idle); else hard_cap.
+         * Bounded §8.1 exceptional coverage.
+         */
         if (g_wavevm_tcg_force_local_hold_until_ns[ci] == 0 ||
             now < g_wavevm_tcg_force_local_hold_until_ns[ci]) {
             /*
              * Exceptional softlock hold (§8.1): stay fully local for the
-             * bounded window. Duty-cycle remote probes during an active
-             * softlock re-break IPI/sync (PASS evidence: one 30s hold →
-             * boot; duty mid-hold → virtio freeze). Remote resumes after
-             * hard_cap/cooldown — concurrency remains the normal path.
+             * bounded slice. Mid-hold remote duty re-broke virtio; mid-hold
+             * idle early-clear (s23g16a/b) falsely cleared live softlock
+             * (idle@HLT while spin still elevated) and hung boot.
+             * Clear happens at slice expiry / renew decision / hard_cap
+             * (below). Renew only while locally stuck (armed RIP / same_rip streak),
+             * not stale spin_count. NL softlock_hold respects cooldown
+             * after equivalent_clear so remote MAIN can resume.
              */
             g_wavevm_tcg_force_local_hold_ticks[ci]++;
+            {
+                CPUX86State *env_h = &X86_CPU(cpu)->env;
+                uint64_t rip_h = env_h->eip;
+                if (g_wavevm_tcg_force_local_hold_last_rip[ci] == 0) {
+                    g_wavevm_tcg_force_local_hold_last_rip[ci] = rip_h;
+                }
+                if (rip_h != g_wavevm_tcg_force_local_hold_last_rip[ci]) {
+                    g_wavevm_tcg_force_local_hold_progress[ci]++;
+                    g_wavevm_tcg_force_local_hold_same_rip[ci] = 0;
+                    g_wavevm_tcg_force_local_hold_last_rip[ci] = rip_h;
+                } else {
+                    g_wavevm_tcg_force_local_hold_same_rip[ci]++;
+                }
+                /*
+                 * §8.1: RIP wobble MUST NOT clear while spin elevated.
+                 * Mid-hold early_clear_progress (s23g16f) falsely cleared a
+                 * live softlock at armed_age≈1.2s via progress→spin decay,
+                 * then cooldown suppressed re-arm → hung initramfs. Clear
+                 * only at slice expiry / renew refusal / hard_cap.
+                 * Progress trackers remain for renew-time spin decay only.
+                 */
+            }
             if (divert) {
                 g_wavevm_tcg_force_local_used[ci]++;
             }
             return true;
-        }
-        /*
-         * Same renew as clear_if_progress: consume is the hot path while AP
-         * is local, so it must renew or 30s hard-drops mid-softlock (g3g9n).
-         */
-        {
+        } else {
+            /*
+             * Slice expired: renew while still softlock, else hard_cap.
+             * Never renew while architecture-idle (halted/HLT/MP/HLT-insn).
+             */
             CPUX86State *env = &X86_CPU(cpu)->env;
             uint64_t rip = env->eip;
+            /* Decay stale spin by mid-hold RIP progress so renew can end
+             * once softlock eases (avoids hard_cap pin → fl dominance). */
+            if (g_wavevm_tcg_force_local_hold_progress[ci] >= 32) {
+                int decay_n = (int)(g_wavevm_tcg_force_local_hold_progress[ci] / 32);
+                if (decay_n > g_wavevm_tcg_spin_count[ci]) {
+                    decay_n = g_wavevm_tcg_spin_count[ci];
+                }
+                g_wavevm_tcg_spin_count[ci] -= decay_n;
+                g_wavevm_tcg_force_local_hold_progress[ci] = 0;
+            }
             if (g_wavevm_tcg_force_local_hold_armed_ns[ci] != 0 &&
                 (now - g_wavevm_tcg_force_local_hold_armed_ns[ci]) < hold_max_ns &&
+                !wavevm_tcg_vcpu_is_idle_not_softlock(
+                    cpu, rip, 0, cpu->halted ? 1u : 0u,
+                    X86_CPU(cpu)->env.mp_state) &&
                 (rip == g_wavevm_tcg_force_local_rip[ci] ||
+                 g_wavevm_tcg_force_local_hold_same_rip[ci] >= 4096 ||
                  g_wavevm_tcg_spin_count[ci] >= 4)) {
                 int64_t renew = now + hold_slice_ns;
                 int64_t cap = g_wavevm_tcg_force_local_hold_armed_ns[ci] +
@@ -694,32 +827,58 @@ static bool wavevm_tcg_consume_force_local(CPUState *cpu)
                     }
                     fprintf(stderr,
                             "[WVM-TCG-FORCE-LOCAL] event=renew cpu=%d rip=%#llx "
-                            "slice_ms=8000 remaining_cap_ms=%lld "
-                            "armed_age_ms=%lld\n",
+                            "slice_ms=30000 remaining_cap_ms=%lld "
+                            "armed_age_ms=%lld same_rip=%u progress=%u\n",
                             cpu->cpu_index, (unsigned long long)rip,
                             (long long)((cap - now) / 1000000LL),
                             (long long)((now -
                                 g_wavevm_tcg_force_local_hold_armed_ns[ci]) /
-                                1000000LL));
+                                1000000LL),
+                            g_wavevm_tcg_force_local_hold_same_rip[ci],
+                            g_wavevm_tcg_force_local_hold_progress[ci]);
                     return true;
                 }
             }
+            {
+                int64_t armed_age = 0;
+                bool true_hard_cap = false;
+                if (g_wavevm_tcg_force_local_hold_armed_ns[ci] != 0) {
+                    armed_age = now - g_wavevm_tcg_force_local_hold_armed_ns[ci];
+                    true_hard_cap = (armed_age >= hold_max_ns);
+                }
+                g_wavevm_tcg_force_local_hold[ci] = false;
+                g_wavevm_tcg_force_local_hold_until_ns[ci] = 0;
+                g_wavevm_tcg_force_local_hold_armed_ns[ci] = 0;
+                g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
+                g_wavevm_tcg_force_local_hold_progress[ci] = 0;
+                g_wavevm_tcg_force_local_hold_same_rip[ci] = 0;
+                g_wavevm_tcg_force_local_hold_last_rip[ci] = 0;
+                g_wavevm_tcg_need_local_repeat[ci] = 0;
+                g_wavevm_tcg_need_local_last_rip[ci] = 0;
+                g_wavevm_tcg_force_local[ci] = 0;
+                g_wavevm_tcg_force_local_rip[ci] = 0;
+                g_wavevm_tcg_spin_count[ci] = 0;
+                g_wavevm_tcg_need_local_burst[ci] = 0;
+                /* §8.1: hard-cap or equivalent wall-hold clear → 25s cooldown. */
+                g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] =
+                    now + 25000000000LL;
+                if (true_hard_cap) {
+                    fprintf(stderr,
+                            "[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry "
+                            "cpu=%d hard_cap_ms=90000 cooldown_ms=25000 "
+                            "armed_age_ms=%lld\n",
+                            cpu->cpu_index,
+                            (long long)(armed_age / 1000000LL));
+                } else {
+                    fprintf(stderr,
+                            "[WVM-TCG-FORCE-LOCAL] event=hold_expiry "
+                            "cpu=%d armed_age_ms=%lld "
+                            "cooldown_ms=25000 reason=equivalent_clear\n",
+                            cpu->cpu_index,
+                            (long long)(armed_age / 1000000LL));
+                }
+            }
         }
-        g_wavevm_tcg_force_local_hold[ci] = false;
-        g_wavevm_tcg_force_local_hold_until_ns[ci] = 0;
-        g_wavevm_tcg_force_local_hold_armed_ns[ci] = 0;
-        g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
-        g_wavevm_tcg_need_local_repeat[ci] = 0;
-        g_wavevm_tcg_need_local_last_rip[ci] = 0;
-        g_wavevm_tcg_force_local[ci] = 0;
-        g_wavevm_tcg_force_local_rip[ci] = 0;
-        g_wavevm_tcg_spin_count[ci] = 0;
-        g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] =
-            now + 12000000000LL; /* s23g6: was 25s */
-        fprintf(stderr,
-                "[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=%d "
-                "hard_cap_ms=30000 cooldown_ms=12000\n",
-                cpu->cpu_index);
     }
     if (g_wavevm_tcg_force_local[ci] <= 0) {
         return false;
@@ -747,9 +906,8 @@ static void wavevm_tcg_local_slice_enter(void)
 {
     qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
     /*
-     * Default (incl. SHM-coherent join): stop-the-world around remote slices.
-     * Only WVM_TCG_SHM_CONCURRENT=1 allows BSP to keep running during remote AP
-     * (experimental; see attach18 Cirros corruption under concurrent SHM).
+     * §8.1 / baseline §16: coherent SHM defaults to concurrent MAIN.
+     * WVM_TCG_SHM_CONCURRENT=0 selects stop-the-world (wait for remotes here).
      */
     if (!wavevm_tcg_shm_allow_concurrent()) {
         while (g_wavevm_tcg_remote_pending || g_wavevm_tcg_remote_active) {
@@ -802,12 +960,17 @@ static void wavevm_tcg_remote_slice_enter(CPUState *owner)
     qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
     if (wavevm_tcg_shm_allow_concurrent()) {
         /*
-         * Experimental: SHM-visible RAM + concurrent BSP while remote AP runs.
-         * Default path falls through to stop-the-world below.
+         * §8.1 / baseline §16: concurrent MAIN allows arbitrary-N independent
+         * remote vCPUs together (not a single global remote_active lock).
+         * Per-vCPU ownership exclusion only: wait if THIS vCPU already remote.
+         * 2 vCPU is acceptance threshold, not an implementation ceiling.
          */
-        while (g_wavevm_tcg_remote_active) {
+        int ci = owner->cpu_index < MAX_VCPUS ? owner->cpu_index : 0;
+        while (g_wavevm_tcg_remote_vcpu_active[ci]) {
             qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
         }
+        g_wavevm_tcg_remote_vcpu_active[ci] = true;
+        g_wavevm_tcg_remote_active_count++;
         g_wavevm_tcg_remote_active = true;
         g_wavevm_tcg_remote_pending = false;
         g_wavevm_tcg_local_handoff = false;
@@ -882,9 +1045,32 @@ static void wavevm_tcg_remote_slice_enter(CPUState *owner)
 static void wavevm_tcg_remote_slice_leave(CPUState *owner)
 {
     bool handoff_local;
+    int ci = owner->cpu_index < MAX_VCPUS ? owner->cpu_index : 0;
 
     qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
-    g_wavevm_tcg_remote_active = false;
+    if (g_wavevm_tcg_remote_vcpu_active[ci]) {
+        g_wavevm_tcg_remote_vcpu_active[ci] = false;
+        if (g_wavevm_tcg_remote_active_count > 0) {
+            g_wavevm_tcg_remote_active_count--;
+        }
+    } else if (g_wavevm_tcg_remote_active &&
+               g_wavevm_tcg_remote_active_count == 0) {
+        /* STW path used bool without per-vCPU bit */
+        ;
+    }
+    if (g_wavevm_tcg_remote_active_count <= 0) {
+        g_wavevm_tcg_remote_active_count = 0;
+        g_wavevm_tcg_remote_active = false;
+    } else {
+        g_wavevm_tcg_remote_active = true;
+    }
+    /* STW enter still sets remote_active without per-vCPU bit — clear bool
+     * when leaving if no concurrent remotes remain. */
+    if (!wavevm_tcg_shm_allow_concurrent()) {
+        g_wavevm_tcg_remote_active = false;
+        g_wavevm_tcg_remote_active_count = 0;
+        g_wavevm_tcg_remote_vcpu_active[ci] = false;
+    }
     handoff_local = wavevm_tcg_has_runnable_local_peer(owner);
     g_wavevm_tcg_local_handoff = handoff_local;
     qemu_cond_broadcast(&g_wavevm_tcg_slice_cond);
@@ -908,7 +1094,66 @@ static void wavevm_tcg_remote_slice_leave(CPUState *owner)
  * spin (HLT/idle drains). Lower threshold, stronger budget, MONOTONIC floor;
  * when peer !runnable kick/clear HLT instead of dropping prefer.
  */
-static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip)
+
+/*
+ * §8.1 / baseline §2: idle vs softlock uses architecture-observable state only.
+ * Guest-image RIP constants (e.g. Cirros ...603b) MUST NOT classify idle.
+ * Same RIP may bound spin diagnostics; it does not name an image leaf.
+ *
+ * skip-arm (not softlock): halted | EXCP_HLT/HALTED exit | MP wait/halt |
+ * guest PC at HLT opcode. Prevents arming hold_full on idle (fl-dominance).
+ * hold-CLEAR: never immediate on idle/HLT. Softlock↔idle oscillation used to
+ * clear hold early then re-enter softlock → IPC hang. Hold ends at slice
+ * expiry without renew → hard_cap. Renew MUST refuse architecture-idle.
+ */
+static bool wavevm_tcg_guest_pc_is_hlt(CPUState *cpu, uint64_t rip)
+{
+    uint8_t op = 0;
+
+    if (rip == 0 || cpu == NULL) {
+        return false;
+    }
+    /* x86 HLT opcode — architecture decode, not an image-specific address. */
+    if (cpu_memory_rw_debug(cpu, (target_ulong)rip, &op, 1, 0) != 0) {
+        return false;
+    }
+    return op == 0xf4;
+}
+
+static bool wavevm_tcg_vcpu_is_idle_not_softlock(CPUState *cpu,
+                                                 uint64_t rip,
+                                                 uint32_t exit_reason,
+                                                 uint32_t halted,
+                                                 uint32_t mp_state)
+{
+    if (halted) {
+        return true;
+    }
+    if (exit_reason == EXCP_HLT || exit_reason == EXCP_HALTED) {
+        return true;
+    }
+    /* cpu->exception_index is cleared on ACK import; keep as local fallback. */
+    if (cpu != NULL &&
+        (cpu->exception_index == EXCP_HLT ||
+         cpu->exception_index == EXCP_HALTED)) {
+        return true;
+    }
+    if (mp_state == KVM_MP_STATE_HALTED ||
+        mp_state == KVM_MP_STATE_UNINITIALIZED ||
+        mp_state == KVM_MP_STATE_INIT_RECEIVED ||
+        mp_state == KVM_MP_STATE_SIPI_RECEIVED) {
+        return true;
+    }
+    if (wavevm_tcg_guest_pc_is_hlt(cpu, rip)) {
+        return true;
+    }
+    return false;
+}
+
+static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip,
+                                            uint32_t ack_exit_reason,
+                                            uint32_t ack_halted,
+                                            uint32_t ack_mp_state)
 {
     static uint64_t last_eip[MAX_VCPUS];
     static unsigned concurrent_force_log;
@@ -920,6 +1165,40 @@ static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip)
     bool concurrent = wavevm_tcg_shm_allow_concurrent();
 
     if (ack_eip == 0) {
+        return;
+    }
+    /*
+     * §8.1: idle/HLT same-RIP is NOT softlock. Remote quantum may end before
+     * HLT commits (halted=0); classify via ACK exit/MP/HLT-at-PC — never a
+     * guest-image RIP constant. Arming hold_full on idle dominated fl / SSH.
+     * NEED_LOCAL clears halted before this runs — device bounce unchanged.
+     */
+    if (wavevm_tcg_vcpu_is_idle_not_softlock(cpu, ack_eip, ack_exit_reason,
+                                             ack_halted, ack_mp_state)) {
+        static unsigned idle_skip_log;
+        bool had_hold = g_wavevm_tcg_force_local_hold[ci];
+        bool at_hlt = wavevm_tcg_guest_pc_is_hlt(cpu, ack_eip);
+        /*
+         * Always skip softlock *arm* on idle ACK. Never clear an active
+         * wall-hold here (softlock↔idle oscillation → IPC hang when hold
+         * dropped early). Hold ends at hard_cap / refused renew.
+         */
+        if (!had_hold) {
+            g_wavevm_tcg_force_local[ci] = 0;
+            g_wavevm_tcg_force_local_rip[ci] = 0;
+        }
+        if (idle_skip_log++ < 48) {
+            fprintf(stderr,
+                    "[WVM-TCG-FORCE-LOCAL] event=idle_skip_arm cpu=%d "
+                    "rip=%#llx exit=%u halted=%u mp=%u at_hlt=%d "
+                    "had_hold=%d\n",
+                    cpu->cpu_index, (unsigned long long)ack_eip,
+                    (unsigned)ack_exit_reason, (unsigned)ack_halted,
+                    (unsigned)ack_mp_state, at_hlt ? 1 : 0,
+                    had_hold ? 1 : 0);
+        }
+        spin_count[ci] = 0;
+        last_eip[ci] = ack_eip;
         return;
     }
     if (ack_eip == last_eip[ci]) {
@@ -961,30 +1240,40 @@ static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip)
          * (30s/90s/25s) only at high spin — exceptional softlock coverage.
          */
         /*
-         * Cooldown after hard_cap exists so a recovered guest can show remote
-         * progress (G9). It must NOT suppress re-arm while the AP is still
-         * softlocked (same-RIP spin>=4). Fractal hung evidence: hard_cap →
-         * cooldown_suppress spin=4..24 with serial frozen at network/metadata.
+         * §8.1: after hard_cap, re-arm cooldown (25s) MUST suppress spin
+         * re-arm so remote MAIN can resume. force_local must not dominate.
          */
         if (!wavevm_tcg_force_local_disabled() && spin_count[ci] >= 4) {
             int64_t now_arm = wavevm_tcg_mono_ns();
+            /*
+             * §8.1: after hard_cap the cooldown suppress gate MUST hold.
+             * Do not lift/clear cooldown on elevated spin (that bypassed the
+             * contract and redefined MAIN as force_local).
+             */
             if (g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] != 0 &&
                 now_arm < g_wavevm_tcg_spin_arm_cooldown_until_ns[ci]) {
-                static int cooldown_lift_log;
-                int64_t left = g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] - now_arm;
-                g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] = 0;
-                if (cooldown_lift_log++ < 32) {
+                static int cooldown_suppress_log;
+                if (cooldown_suppress_log++ < 32) {
                     fprintf(stderr,
-                            "[WVM-TCG-FORCE-LOCAL] event=cooldown_lift_softlock "
-                            "cpu=%d spin=%d cleared_remaining_ms=%lld\n",
+                            "[WVM-TCG-FORCE-LOCAL] event=cooldown_suppress "
+                            "cpu=%d spin=%d remaining_ms=%lld\n",
                             cpu->cpu_index, spin_count[ci],
-                            (long long)(left / 1000000LL));
+                            (long long)((g_wavevm_tcg_spin_arm_cooldown_until_ns[ci]
+                                         - now_arm) / 1000000LL));
                 }
-            }
-            {
-            /* s23g: medium spin (>=4) → short RIP-cleared budget only.
-             * Wall hold (30s/90s/25s) only at high spin (>=8) — matches §8.1
-             * comment and reduces force_local softlock-window dominance. */
+                /* keep spin count for diagnostics; do not arm during cooldown */
+            } else {
+
+            /*
+             * §8.1: elevated spin (>=4) arms bounded wall hold (30s/90s/25s).
+             * Budgets alone under-cover softlock when spin stays 4..7 (RCU/IPI
+             * windows) — s23g16g hung after hold_expiry under gate>=8 +
+             * cooldown_suppress with only budget coverage. s23g16f early_clear
+             * and s23g16a idle-clear both forbidden (§8.1 RIP-wobble rule).
+             * Clear only at slice expiry / renew refusal / hard_cap.
+             * fl dominance from micro-slice accounting during honest holds is
+             * a known MINIMUM_COMPLETE blocker; do not game counters.
+             */
             int force = 32;
             if (spin_count[ci] >= 8) {
                 force = 64;
@@ -994,18 +1283,26 @@ static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip)
             }
             g_wavevm_tcg_force_local[ci] = force;
             g_wavevm_tcg_force_local_rip[ci] = ack_eip;
-            if (spin_count[ci] >= 8) {
+            if (spin_count[ci] >= 4 &&
+                !wavevm_tcg_vcpu_is_idle_not_softlock(cpu, ack_eip,
+                                                     ack_exit_reason,
+                                                     ack_halted,
+                                                     ack_mp_state)) {
                 /*
                  * Exceptional softlock hold (§8.1): full-local for bounded slice.
-                 * Mid-hold remote duty re-broke virtio (flat hung evidence);
-                 * concurrency resumes after hard_cap/cooldown when spin clears.
+                 * Mid-hold remote duty re-broke virtio; mid-hold early-clear
+                 * hung boot. Concurrency resumes after hard_cap/cooldown.
+                 * Never wall-hold architecture-idle (halted/HLT/MP/HLT-insn).
                  */
-                int64_t hold_until = now_arm + 8000000000LL; /* s23g6: was 30s */
-                const int64_t hold_max_ns = 30000000000LL; /* s23g6: was 90s */
+                int64_t hold_until = now_arm + 30000000000LL; /* §8.1 hold slice 30s; renew-on-stuck-only ≤90s hard_cap */
+                const int64_t hold_max_ns = 90000000000LL; /* §8.1 hard cap 90s */
                 if (!g_wavevm_tcg_force_local_hold[ci] ||
                     g_wavevm_tcg_force_local_hold_armed_ns[ci] == 0) {
                     g_wavevm_tcg_force_local_hold_armed_ns[ci] = now_arm;
                     g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
+                    g_wavevm_tcg_force_local_hold_progress[ci] = 0;
+                    g_wavevm_tcg_force_local_hold_same_rip[ci] = 0;
+                    g_wavevm_tcg_force_local_hold_last_rip[ci] = 0;
                 }
                 g_wavevm_tcg_force_local_hold[ci] = true;
                 {
@@ -1021,7 +1318,7 @@ static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip)
                 if (concurrent_force_log++ < 64) {
                     fprintf(stderr,
                             "[WVM-TCG-SPIN-LOCAL] concurrent cpu=%d rip=%#llx "
-                            "spin=%d arm force_local=%d hold_ms=8000 "
+                            "spin=%d arm force_local=%d hold_ms=30000 "
                             "hold_full_local=1\n",
                             cpu->cpu_index, (unsigned long long)ack_eip,
                             spin_count[ci], force);
@@ -2186,12 +2483,23 @@ static void wavevm_remote_exec(CPUState *cpu) {
             }
             return;
         }
-        if (cpu->cpu_index < MAX_VCPUS) {
-            g_wavevm_remote_rpc_ok[cpu->cpu_index] = true;
-        }
 
         // 4. Read the explicit Mode A ioctl response container.
         ack = remote_run.ack;
+        /* B7: validate negative ACK before remote_rpc_ok. */
+        if (ack.status < 0) {
+            static int ioctl_neg_dbg;
+            if (ioctl_neg_dbg++ < 32) {
+                fprintf(stderr,
+                        "[WVM-DBG] IOCTL_WVM_REMOTE_RUN neg ack cpu=%d "
+                        "status=%d\n",
+                        cpu->cpu_index, ack.status);
+            }
+            return;
+        }
+        if (cpu->cpu_index < MAX_VCPUS) {
+            g_wavevm_remote_rpc_ok[cpu->cpu_index] = true;
+        }
 
         if (ack.mode_tcg) {
             wavevm_tcg_import_remote_ack(cpu, &ack.ctx.tcg, &sent_tcg,
@@ -2653,10 +2961,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
         }
         return;
     }
-    /* s23g6: socket CPU_RUN round-trip completed — count as remote RPC. */
-    if (cpu->cpu_index < MAX_VCPUS) {
-        g_wavevm_remote_rpc_ok[cpu->cpu_index] = true;
-    }
+    /* B7: do not mark remote_rpc_ok until negative ACK state is rejected. */
     if (ack.status < 0) {
         int sync_ret = 0;
         if (ack.error_gpa != 0) {
@@ -2703,6 +3008,9 @@ static void wavevm_remote_exec(CPUState *cpu) {
             }
         }
         /* fall through to deserialize + exit handling */
+    } else if (cpu->cpu_index < MAX_VCPUS) {
+        /* B7: positive ACK only — negative state must not count as remote OK. */
+        g_wavevm_remote_rpc_ok[cpu->cpu_index] = true;
     }
     if (req.mode_tcg) {
         wavevm_user_mem_finish_handoff_dirty(dirty_journal, 1);
@@ -2733,7 +3041,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
             wavevm_tcg_remote_slice_leave(cpu);
             tcg_slice_active = false;
             wavevm_tcg_remote_spin_backoff(cpu,
-                                          (uint64_t)ack.ctx.tcg.eip);
+                                          (uint64_t)ack.ctx.tcg.eip,
+                                          ack.ctx.tcg.exit_reason,
+                                          ack.ctx.tcg.halted,
+                                          ack.ctx.tcg.mp_state);
         }
     } else {
         if (tcg_slice_active) {

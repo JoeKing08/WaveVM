@@ -1,0 +1,1 @@
+audit-evidence/fix-blockers-20261029/s23-tcg-contract/flat_kvm_dualyes-s23g13-fe-hybrid/remote_evidence.txt:=== memory / dirty commit signals (authoritative; no vCPU-dispatch) ===

@@ -1,0 +1,23 @@
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff9ae1f37e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff9b0a1abf arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff9b0a1abf arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc02c332e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc02c332e arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc02c332e arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc02bc3a3 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-FORCE-LOCAL] event=cooldown_lift_softlock cpu=1 spin=4 cleared_remaining_ms=10170
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffff9b3b603b spin=4 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffff9b3b603b spin=5 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffff9b3b603b spin=6 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffff9b3b603b spin=7 arm force_local=32 hold_full_local=0 (short budget only)
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=1 rip=0xffffffff9b3b603b spin=8 arm force_local=64 hold_ms=8000 hold_full_local=1
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffff9b3b603b slice_ms=8000 remaining_cap_ms=21795 armed_age_ms=8204
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffff9a6847a5 slice_ms=8000 remaining_cap_ms=13795 armed_age_ms=16204
+[WVM-TCG-FORCE-LOCAL] event=renew cpu=1 rip=0xffffffff9a6847a5 slice_ms=8000 remaining_cap_ms=5791 armed_age_ms=24208
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 rip=0xffffffff9a6847a5 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc02bf3c3 arm force_local=128 repeat=1 hold=0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffc02bf3c3 arm force_local=128 repeat=2 hold=1
+[WVM-TCG-FORCE-LOCAL] event=hard_cap_expiry cpu=1 hard_cap_ms=30000 cooldown_ms=12000
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffff9ac54235 arm force_local=128 repeat=1 hold=0
