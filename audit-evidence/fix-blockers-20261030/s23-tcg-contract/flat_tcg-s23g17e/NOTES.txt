@@ -1,0 +1,21 @@
+s23g17e (Asia/Shanghai) — OVERALL=FAIL_guest_ssh
+B6 knife: restore tip mid-hold extend (NL+spin), keep 17d renew=!idle under
+hard_cap, hard_cap-only cooldown. Goal was recover PASS like s23g15i; flΔ vs
+remoteΔ honest — FIXED only if fl does not dominate. NO MINIMUM_COMPLETE.
+
+RESULT (2026-10-30 ~10:55 CST):
+- guest_login=PASS; guest_ssh=MISSING (banner timeout after carrier lost)
+- renew=0 extend=0 expiry=3 (equivalent_clear@~30s×3) — tip extend NEVER fired
+- e1000 watchdog → Reset adapter → dhcpcd carrier lost @ guest ~98s
+- last STATS: cpu1 remote_done=52 force_local_used=462592 (fl≫remote);
+  cpu0 remote=0 fl=0
+- B6 status: open/FAIL (not PARTIAL — no PASS). Tip-extend alone did not
+  improve vs 17d (17d had SSH PASS); do NOT greenwash as FIXED.
+
+Vs 17d: 17d SSH PASS + cpu_smoke FAIL rc=124; fl≈11.8M remote≈26.
+17e extend path inert this run; SSH flake/regress under same renew policy.
+
+Next knife s23g17f: revert tip extend→no_extend; keep renew=!idle + hard_cap
+cooldown; NEW — mid-hold architecture-idle skips divert (remote MAIN allowed
+without clearing hold). Attacks idle-burn fl waste; softlock (!idle) stays
+full-local. Distinct from mid-hold duty (broke virtio) and early-clear (hung).

@@ -1,0 +1,9 @@
+s23g17a (Asia/Shanghai)
+Goal: shrink force_local softlock-window dominance vs remote MAIN (§16/§8.1).
+Code (wavevm-cpu.c, dirty, no commit):
+- renew stuck-only (armed RIP | same_rip>=4096); drop bare spin>=4 renew
+- no mid-hold hold_until extend from spin/NL thrash (first_arm only)
+- §8.1 cooldown 25s only on hard_cap; equivalent_clear cooldown_ms=0
+- mid-hold still hold_full_local (duty re-broke virtio; early_clear hung 16a/f)
+NO MINIMUM_COMPLETE claim.
+FAIL guest_ssh=MISSING after login; stuck-only renew under-covered e1000

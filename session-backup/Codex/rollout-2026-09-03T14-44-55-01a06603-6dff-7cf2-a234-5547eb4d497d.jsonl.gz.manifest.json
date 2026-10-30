@@ -7,5 +7,5 @@
   "part_prefix": "rollout-2026-09-03T14-44-55-01a06603-6dff-7cf2-a234-5547eb4d497d.jsonl.gz.",
   "part_size_bytes": 47185920,
   "restore": "cat rollout-2026-09-03T14-44-55-01a06603-6dff-7cf2-a234-5547eb4d497d.jsonl.gz.[0-9][0-9][0-9] > rollout-2026-09-03T14-44-55-01a06603-6dff-7cf2-a234-5547eb4d497d.jsonl.gz",
-  "sha256": "32f4775377da707ed2ce4b35faeea635c0f7667de8e95405f86ce1e0ee670352"
+  "sha256": "2cd40960b921db737eec63bb663894979f4c0f530561d3064059a63c90340866"
 }

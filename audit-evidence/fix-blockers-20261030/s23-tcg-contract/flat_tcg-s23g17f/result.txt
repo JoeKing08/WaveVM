@@ -1,0 +1,6 @@
+guest_login=MISSING
+OVERALL=FAIL_hang_initramfs
+serial_stuck_bytes=27472
+note=copying initramfs to /dev/vda1; hold_idle_remote at rip ...603b broke virtio-class mid-hold remote
+idle_remote_log_cap=64 softlock_hold=3 renew=0 expiry=0
+last_cpu1 remote=32 fl=319814

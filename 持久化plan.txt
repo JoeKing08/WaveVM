@@ -2531,3 +2531,40 @@ Landed today (dirty): B1 no 0x603b idle; B7 harness honesty; Mode A FE EXECUTOR 
 Evidence: s23g15i flat+fractal PASS but flΔ≫remoteΔ; s23g16a-e failed/hang iterations; s23g16f interrupted at EOD
 Tomorrow: continue B6 fl-dominance under charter (§16/§8.1); then Codex B2/B5/B9 etc as needed
 Codex breadth: minimum-breadth-audit-codex-agent-2026-10-29.txt (B1-B14)
+
+========================================================================
+## s23g17e FAIL + s23g17f knife — 2026-10-30 ~10:57 Asia/Shanghai
+tip base: b0f360e697536ab63a9e6a40080256d0dabcfcbd dirty (wavevm-cpu.c)
+MINIMUM_COMPLETE=NOT_CLAIMED; no commit/push
+
+### s23g17e (tip mid-hold extend restored)
+- OVERALL=FAIL_guest_ssh; login PASS; renew=0 extend=0 expiry=3
+- e1000 watchdog/carrier lost; last cpu1 fl=462592 remote=52 (fl≫remote)
+- tip extend never fired; do NOT claim FIXED/PARTIAL from tip-extend alone
+- evidence: audit-evidence/fix-blockers-20261030/s23-tcg-contract/flat_tcg-s23g17e/
+
+### s23g17f (launched)
+- no_extend (revert 17e); renew=!idle; hard_cap-only cooldown
+- NEW hold_idle_remote: architecture-idle mid-hold skips divert, hold kept
+- evidence target: .../flat_tcg-s23g17f/
+- B6: FIXED only if PASS and fl does not dominate; else PARTIAL/open
+========================================================================
+
+### s23g17f FAIL_hang_initramfs (killed 11:04 CST)
+- hold_idle_remote divert_skip @...603b → virtio hang mid initramfs copy
+- lesson: any mid-hold remote (duty or idle-skip) breaks virtio-class
+- evidence: .../flat_tcg-s23g17f/
+
+### s23g17g (launched ~11:05 CST)
+- revert idle-skip; full-local hold; no_extend; renew=!idle
+- experimental hard_cap 45s (charter V1=90s) to bound fl episode
+- evidence: .../flat_tcg-s23g17g/
+
+### s23g17g FAIL_guest_cpu_smoke (killed ~11:11 CST)
+- SSH PASS; fl_before=467658 remote=27; cpu_smoke FAIL rc=124; hard_cap 45s insufficient
+- evidence: .../flat_tcg-s23g17g/
+
+### s23g17h (launched ~11:12 CST)
+- tip mid-hold extend + renew=!idle + hard_cap 90s (charter); no mid-hold remote
+- expect PASS+fl≫remote → PARTIAL not FIXED
+- evidence: .../flat_tcg-s23g17h/

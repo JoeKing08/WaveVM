@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.atioFA/runtime/vm-256-1-1.manifest
+e5471e1a5bea67068babbe115d6a97f26c9ab5fcda1850bcd9c3fd2fda842d93  /tmp/wavevm-create-vm-single.atioFA/runtime/vm-256-1-1.manifest
+d0a0590f097a776f993f17525f679b483633670786a251714185bfab07b14ee8  /tmp/wavevm-create-vm-single.atioFA/runtime/vm-256-1-1.manifest.dispatch
+c772732c169d4af62d05a7b4aea7ba5aa112514c6779f41a75fc436b64092b00  /tmp/wavevm-create-vm-single.atioFA/runtime/vm-256-1-1.manifest.route

@@ -1,0 +1,17 @@
+s23g17h (Asia/Shanghai) — OVERALL=PASS — B6 PARTIAL (not FIXED)
+Knife: tip mid-hold extend + renew=!idle + hard_cap 90s + hard_cap-only cooldown.
+No mid-hold remote (17f lesson).
+
+RESULT (~11:14 CST):
+- login/SSH/cpu_smoke/STOP all PASS; smoke_exit=0
+- remote_done_before=36 force_local_used_before=2292736 (fl≫remote ~63k:1)
+- smoke window: remoteΔ=12 flΔ=7971 (fl still > remote in-window)
+- B6: PARTIAL — functional PASS recovered like s23g15i, but force_local still
+  dominates vs remote MAIN under softlock. Do NOT claim FIXED or MINIMUM_COMPLETE.
+- Tip-extend alone is coverage, not fl-dominance fix (honest PARTIAL).
+
+Prior knives same day:
+- 17a/b/c: SSH FAIL; 17d: SSH PASS smoke FAIL fl≃11.8M; 17e: SSH FAIL tip-extend inert
+- 17f: idle-skip divert hung virtio; 17g: hard_cap 45s SSH PASS smoke FAIL
+
+Next: fractal_tcg-s23g17h for ≥2-node confirmation; still PARTIAL if fl dominates.

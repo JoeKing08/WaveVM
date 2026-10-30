@@ -1,0 +1,6 @@
+s23g17c (Asia/Shanghai)
+17b: renew=0 → equivalent_clear@30s → e1000 watchdog/carrier lost → SSH MISSING.
+Fix: renew on softlock_persist (armed RIP|same_rip|spin>=4|NL burst/repeat>=8);
+NO progress→spin decay at renew (§8.1 RIP wobble). Keep no_extend + hard_cap-only cooldown.
+Expect: SSH may PASS; flΔ likely still ≫ remoteΔ → B6 PARTIAL not FIXED. NO MINIMUM_COMPLETE.
+FAIL SSH; renew worked to hard_cap but e1000_reset softlock+carrier lost after; third episode renew refused (stale signals)

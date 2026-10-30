@@ -1,0 +1,7 @@
+s23g17b (Asia/Shanghai)
+After 17a SSH timeout: keep no_extend + hard_cap-only cooldown.
+Renew = stuck (armed RIP|same_rip>=4096) OR (spin>=4 && !had_progress_window).
+had_progress snapshotted BEFORE decay reset. Mid-hold still full-local.
+NO MINIMUM_COMPLETE.
+FAIL guest_ssh=MISSING renew=0 (spin||stuck never fired); holds ~30s equivalent_clear only
+20261030-102200

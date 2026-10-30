@@ -1,0 +1,11 @@
+s23g17g (Asia/Shanghai) — OVERALL=FAIL_guest_cpu_smoke (killed after hang ~11:11 CST)
+Knife: no_extend + renew=!idle + experimental hard_cap 45s (charter V1=90s).
+RESULT:
+- guest_login=PASS guest_ssh=PASS
+- remote_done_before=27 force_local_used_before=467658 (fl≫remote)
+- guest_cpu_smoke=FAIL rc=124; smoke hung post-OVERALL (STOP not reached) — killed
+- hard_cap 45s did NOT recover cpu_smoke; fl still dominates; SSH stable like 17d
+B6: open/FAIL (not FIXED). Shorter hard_cap alone insufficient for smoke coverage.
+Next s23g17h: restore tip mid-hold extend + renew=!idle + hard_cap 90s (charter)
++ hard_cap-only cooldown. Expect PASS with fl≫remote → PARTIAL not FIXED.
+NO MINIMUM_COMPLETE.

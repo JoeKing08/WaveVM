@@ -1,0 +1,8 @@
+guest_login=PASS
+guest_ssh=MISSING
+OVERALL=FAIL_guest_ssh
+renew=0 extend=0 expiry=3
+last_stats_cpu0 remote=0 local=290304 fl=0
+last_stats_cpu1 remote=52 local=462592 fl=462592
+fl_dominates=yes
+carrier_lost=yes e1000_watchdog=yes

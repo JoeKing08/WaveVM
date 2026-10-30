@@ -1,0 +1,4 @@
+fractal_tcg-s23g17h (Asia/Shanghai)
+Same binary as flat_tcg-s23g17h (tip extend + renew=!idle + hard_cap 90s).
+Confirm ≥2-node fractal PASS; flΔ vs remoteΔ honest. B6 PARTIAL if fl dominates.
+NO MINIMUM_COMPLETE.

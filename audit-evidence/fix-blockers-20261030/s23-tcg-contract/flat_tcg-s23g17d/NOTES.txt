@@ -1,0 +1,9 @@
+s23g17d (Asia/Shanghai)
+17c: renew softlock_persist → hard_cap@90s but mid-hold signals stale → later episodes
+refuse renew; e1000_reset_task softlock + carrier lost → SSH MISSING.
+Fix: once hold armed, renew while !architecture-idle under hard_cap (signals armed
+the episode; idle ends; hard_cap bounds). Keep no_extend + hard_cap-only cooldown.
+B6 fl dominance still expected PARTIAL. NO MINIMUM_COMPLETE.
+RESULT: guest_ssh=PASS; guest_cpu_smoke=FAIL rc=124 (timeout).
+renew=0 (idle equivalent_clear×2). fl_before≈11.8M remote_before=26 — fl dominates worse.
+Smoke hung after OVERALL=FAIL_guest_cpu_smoke (STOP not reached). Killed.

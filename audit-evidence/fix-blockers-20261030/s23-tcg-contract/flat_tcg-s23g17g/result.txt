@@ -1,0 +1,10 @@
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=27
+local_done_before=752074
+force_local_used_before=467658
+guest_cpu_smoke=FAIL rc=124
+OVERALL=FAIL_guest_cpu_smoke
+killed_after_OVERALL=yes
+fl_dominates=yes (467658 vs remote 27)
+hard_cap_45s_note=SSH ok; cpu_smoke still FAIL rc=124 like 17d; fl still ≫ remote

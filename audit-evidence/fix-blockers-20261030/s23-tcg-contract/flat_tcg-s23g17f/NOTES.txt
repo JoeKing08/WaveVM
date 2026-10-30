@@ -1,0 +1,9 @@
+s23g17f (Asia/Shanghai) — OVERALL=FAIL_hang_initramfs (killed ~11:04 CST)
+Knife: no_extend + renew=!idle + hold_idle_remote divert_skip (hold kept).
+RESULT: boot stuck at "copying initramfs to /dev/vda1"; serial frozen 27472B.
+hold_idle_remote fired heavily at rip=0xffffffff8d5b603b (arch-idle/HLT path).
+Mid-hold remote of any kind (even idle-only divert_skip) re-breaks virtio —
+same class as prior mid-hold remote duty. Do NOT keep this knife.
+fl still dominates when divert did fire (cpu1 fl=319814 remote=32).
+Next: revert idle-skip; try shorter hard_cap (45s) to bound fl episode without
+mid-hold remote. NO MINIMUM_COMPLETE.
