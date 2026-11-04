@@ -1168,10 +1168,12 @@ Future work should proceed as:
 2. Implement those semantics first through the canonical Mode B authority.
 3. Make KVM and TCG obey the same contracts through backend-specific mechanics.
 4. Add optional kernel acceleration only where it preserves those contracts.
-5. Normalize the per-node node-runtime and local-executor boundary while
-   retaining current master/slave processes as compatibility adapters.
+5. Merge the logical master/slave roles into one node-runtime binary and
+   normalize its boundary with the local executor; do not retain independent
+   master/slave production launch paths or compatibility adapters.
 6. Establish member registration, topology, and versioned route snapshots as
-   control-plane operations; retain static `NODE`/`ROUTE` inputs only as
-   bounded bootstrap compatibility.
+   control-plane operations; production admission and forwarding must use
+   committed membership and route snapshots, without static `NODE`/`ROUTE`
+   compatibility inputs.
 7. Keep multi-VM, placement, admission, and lifecycle in user-space control plane.
 ```

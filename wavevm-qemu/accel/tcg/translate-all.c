@@ -414,14 +414,13 @@ bool cpu_restore_state(CPUState *cpu, uintptr_t host_pc, bool will_exit)
     if (check_offset < tcg_init_ctx.code_gen_buffer_size) {
         tb = tcg_tb_lookup(host_pc);
         if (tb) {
-            cpu_restore_state_from_tb(cpu, tb, host_pc, will_exit);
+            r = cpu_restore_state_from_tb(cpu, tb, host_pc, will_exit) == 0;
             if (tb_cflags(tb) & CF_NOCACHE) {
                 /* one-shot translation, invalidate it immediately */
                 tb_phys_invalidate(tb, -1);
                 tcg_tb_remove(tb);
                 tb_destroy(tb);
             }
-            r = true;
         }
     }
 

@@ -1,0 +1,3 @@
+EVID vcpu_coordinator_drain: completion_callback_timeout=1 drained=1
+vCPU coordinator tests: PASS
+NOTE: RM-P7 op-identity across reroute (G→G+1 + cache lookup).

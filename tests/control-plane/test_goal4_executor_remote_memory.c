@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
@@ -40,6 +41,7 @@
 #include "wavevm_runtime_gate.h"
 #include "wavevm_vcpu_handoff.h"
 #include "wavevm_x86_context.h"
+#include "wavevm_kvm_state.h"
 
 #define TEST_VM_ID 256U
 #define TEST_VCPU 0U
@@ -62,6 +64,12 @@ static int g_qemu_ipc_started;
 /* Production executor's mapping of the shared guest RAM (slave_hybrid.c). */
 extern uint8_t *wvm_executor_guest_ram_base(void);
 
+#define A14_MEMORY_QUEUE_SIZE 32U
+struct queued_memory_request {
+    struct wvm_envelope envelope;
+    uint8_t payload[WVM_MEM_COMMIT_HEADER_BYTES + WVM_MEMORY_PAGE_BYTES];
+};
+
 struct remote_state {
     pthread_mutex_t lock;
     pthread_cond_t available;
@@ -73,9 +81,9 @@ struct remote_state {
     int commit_completion_count;
     uint16_t completed_status;
     uint8_t completed_page[WVM_MEMORY_PAGE_BYTES];
-    struct wvm_envelope sent;
-    uint8_t sent_payload[WVM_ENVELOPE_MAX_NETWORK_LOGICAL_PAYLOAD];
-    size_t sent_payload_bytes;
+    struct queued_memory_request queue[A14_MEMORY_QUEUE_SIZE];
+    unsigned queue_head;
+    unsigned max_pending;
     struct wvm_memory_service *service;
     struct wvm_memory_service remote_service;
     int remote_service_initialized;
@@ -96,8 +104,11 @@ struct exit_capture {
     size_t count;
     struct wvm_envelope response;
     struct wvm_vcpu_handoff_result result;
-    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + sizeof(wvm_tcg_context_t)];
+    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     size_t context_bytes;
+    int collect_parallel;
+    unsigned parallel_seen;
+    int parallel_failed;
 };
 
 struct coordinated_path {
@@ -300,10 +311,11 @@ static int setup_manifest(struct wvm_node_runtime_manifest *manifest,
     manifest->launch_plan.node_runtime_control_port = 19121;
     manifest->launch_plan.local_executor_service_port = 19105;
     manifest->launch_plan.local_executor_control_port = 19121;
-    manifest->launch_plan.executor_worker_count = 1;
+    manifest->launch_plan.executor_worker_count = g_real_kvm ? 2 : 1;
     manifest->launch_plan.vcpu_handoff_record_capacity = 4;
     manifest->launch_plan.sync_batch_size = 1;
-    manifest->launch_plan.guest_total_memory_bytes = 4 * 1024 * 1024;
+    manifest->launch_plan.guest_total_memory_bytes =
+        (g_real_kvm ? 32U : 4U) * 1024U * 1024U;
     strcpy(manifest->launch_plan.guest_machine.architecture, "x86_64");
     strcpy(manifest->launch_plan.guest_machine.machine_type, "pc-i440fx-5.2");
     manifest->launch_plan.guest_machine.qemu_compat_version = 502;
@@ -353,11 +365,20 @@ static void fill_projection(
     memory[0].consistency_policy = 1;
     memory[1] = memory[0];
     memory[1].gpa_start = WVM_MEMORY_PAGE_BYTES;
+    memory[1].bytes = manifest->launch_plan.guest_total_memory_bytes -
+                      WVM_MEMORY_PAGE_BYTES;
     memory[1].directory.destination_scope = 99;
     memory[1].directory.destination_vnode = 1;
     memory[1].executor = memory[1].directory;
     memory[1].directory_physical_node_id = 99;
     memory[1].directory_node_instance_id = 202;
+    if (g_real_kvm) {
+        /* CPU-only executor: all guest RAM belongs to the remote node. */
+        memory[0].directory = memory[1].directory;
+        memory[0].executor = memory[1].executor;
+        memory[0].directory_physical_node_id = 99;
+        memory[0].directory_node_instance_id = 202;
+    }
 }
 
 static int read_page(void *opaque, uint64_t gpa,
@@ -400,7 +421,8 @@ static int complete_fault(void *opaque,
      * install. Once the code page ACK is recorded, ignore other GPAs so the
      * final expects still see the install snapshot.
      */
-    if (!(g_real_qemu && state->completed_gpa == WVM_MEMORY_PAGE_BYTES &&
+    if (!((g_real_qemu || g_real_kvm) &&
+          state->completed_gpa == WVM_MEMORY_PAGE_BYTES &&
           gpa != WVM_MEMORY_PAGE_BYTES)) {
         state->completed_gpa = gpa;
         state->completed_version = version;
@@ -416,7 +438,8 @@ static int complete_fault(void *opaque,
 
 static int commit_page(void *opaque, uint64_t gpa, uint64_t base_version,
                        uint16_t offset, const uint8_t *data, size_t data_bytes,
-                       uint64_t *result_version, char *error, size_t error_len)
+                       int source_shared_backing, uint64_t *result_version,
+                       char *error, size_t error_len)
 {
     struct remote_state *state = opaque;
 
@@ -467,6 +490,7 @@ static int complete_remote_fault(
     (void)directory_node_instance_id;
     (void)data;
     (void)data_bytes;
+    (void)source_shared_backing;
     (void)error;
     (void)error_len;
     return 0;
@@ -480,15 +504,22 @@ static int send_memory_envelope(void *opaque, const struct wvm_envelope *envelop
     (void)error;
     (void)error_len;
     if (!state || !envelope ||
-        envelope->payload_bytes > sizeof(state->sent_payload)) {
+        envelope->payload_bytes > sizeof(state->queue[0].payload)) {
         return -EAGAIN;
     }
     pthread_mutex_lock(&state->lock);
+    if (state->send_count == A14_MEMORY_QUEUE_SIZE) {
+        pthread_mutex_unlock(&state->lock);
+        return -EAGAIN;
+    }
+    struct queued_memory_request *queued =
+        &state->queue[(state->queue_head + state->send_count) % A14_MEMORY_QUEUE_SIZE];
     state->send_count++;
-    state->sent = *envelope;
-    state->sent_payload_bytes = envelope->payload_bytes;
-    memcpy(state->sent_payload, envelope->payload, envelope->payload_bytes);
-    state->sent.payload = state->sent_payload;
+    if ((unsigned)state->send_count > state->max_pending) {
+        state->max_pending = (unsigned)state->send_count;
+    }
+    queued->envelope = *envelope;
+    memcpy(queued->payload, envelope->payload, envelope->payload_bytes);
     pthread_cond_broadcast(&state->available);
     pthread_mutex_unlock(&state->lock);
     return 0;
@@ -519,6 +550,7 @@ static void *ack_worker(void *opaque)
     char error[256];
     for (;;) {
         struct wvm_envelope sent;
+        uint8_t payload[sizeof(state->queue[0].payload)];
         int stop = 0;
         int have_send = 0;
 
@@ -528,9 +560,14 @@ static void *ack_worker(void *opaque)
         }
         stop = state->stop;
         if (!stop && state->send_count > 0) {
-            sent = state->sent;
+            const struct queued_memory_request *queued = &state->queue[state->queue_head];
+
+            sent = queued->envelope;
+            memcpy(payload, queued->payload, sent.payload_bytes);
+            sent.payload = payload;
+            state->queue_head = (state->queue_head + 1) % A14_MEMORY_QUEUE_SIZE;
             have_send = 1;
-            state->send_count = 0;
+            state->send_count--;
         }
         pthread_mutex_unlock(&state->lock);
         if (stop) {
@@ -966,7 +1003,6 @@ static pid_t launch_real_qemu_session(
         setenv("WVM_SOCK_PUSH", fd_text, 1);
         setenv("WVM_SLAVE_ID", "1", 1);
         setenv("WVM_SHM_FILE", name, 1);
-        setenv("WVM_DISABLE_AUTO_KVM", "1", 1);
         setenv("WVM_ROLE", "SLAVE", 1);
         setenv("WVM_SLAVE_VCPU_COUNT", "1", 1);
         /* GATE + RUNTIME_SOCKET unlock production typed dirty commit. */
@@ -989,6 +1025,7 @@ static pid_t launch_real_qemu_session(
             snprintf(value, sizeof(value), "%llu",
                      (unsigned long long)manifest->expected_node_instance_id);
             setenv("WVM_RUNTIME_LOCAL_INSTANCE_ID", value, 1);
+            setenv("WVM_NODE_INSTANCE_ID", value, 1);
             snprintf(value, sizeof(value), "%llu",
                      (unsigned long long)projection->local_primary
                          .destination_vnode);
@@ -1019,7 +1056,7 @@ static pid_t launch_real_qemu_session(
                           WVM_SHA256_DIGEST_BYTES);
         snprintf(object_arg, sizeof(object_arg), "/dev/shm/%s", name);
         snprintf(machine_arg, sizeof(machine_arg), "pc");
-        execl(qemu_bin, qemu_bin, "-accel", "wavevm", "-m", "16",
+        execl(qemu_bin, qemu_bin, "-accel", "wavevm,backend=tcg", "-m", "16",
               "-nodefaults", "-S", "-smp", "1", "-nographic", "-mem-path",
               object_arg, "-mem-prealloc", "-machine", machine_arg,
               (char *)NULL);
@@ -1235,6 +1272,17 @@ static int capture_exit(void *opaque, const struct wvm_envelope *envelope,
         return -EOVERFLOW;
     }
     pthread_mutex_lock(&state->lock);
+    if (state->collect_parallel) {
+        if (result.vcpu_index >= 2 ||
+            result.status != WVM_VCPU_HANDOFF_RESULT_SUCCESS ||
+            result.exit_class != WVM_VCPU_EXIT_HALTED ||
+            result.produced_memory_fence_id == 0 ||
+            (state->parallel_seen & (1U << result.vcpu_index))) {
+            state->parallel_failed = 1;
+        } else {
+            state->parallel_seen |= 1U << result.vcpu_index;
+        }
+    }
     if (result.context_bytes != 0) {
         memcpy(state->context, result.context, result.context_bytes);
         result.context = state->context;
@@ -1272,11 +1320,61 @@ static int wait_exit(struct exit_capture *state, size_t expected)
     return result;
 }
 
-static void fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
+static int fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa,
+                           unsigned vcpu)
 {
     struct kvm_sregs sregs;
+    struct kvm_enable_cap cap = { .cap = KVM_CAP_SPLIT_IRQCHIP };
+    struct kvm_fpu fpu;
+    int kvm_fd = -1, vm_fd = -1, cpu_fd = -1;
+    int result = -1;
 
     memset(ctx, 0, sizeof(*ctx));
+    cap.args[0] = 24;
+    kvm_fd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
+    if (kvm_fd < 0 || (vm_fd = ioctl(kvm_fd, KVM_CREATE_VM, 0)) < 0 ||
+        ioctl(vm_fd, KVM_ENABLE_CAP, &cap) < 0 ||
+        (cpu_fd = ioctl(vm_fd, KVM_CREATE_VCPU, vcpu)) < 0) {
+        goto out;
+    }
+    ctx->cpuid_count = 2;
+    ctx->cpuid[0].function = 0;
+    ctx->cpuid[0].eax = 1;
+    ctx->cpuid[0].ebx = 0x756e6547; /* GenuineIntel, independent of host model. */
+    ctx->cpuid[0].edx = 0x49656e69;
+    ctx->cpuid[0].ecx = 0x6c65746e;
+    ctx->cpuid[1].function = 1;
+    ctx->cpuid[1].eax = 0x663;
+    ctx->cpuid[1].edx = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 8) |
+                        (1U << 9) | (1U << 11) | (1U << 15) | (1U << 16) |
+                        (1U << 23) | (1U << 24) |
+                        (1U << 25) | (1U << 26);
+    if (wvm_kvm_cpuid_check_host(kvm_fd, ctx) != 0 ||
+        wvm_kvm_cpuid_import(cpu_fd, ctx) != 0 ||
+        wvm_kvm_extended_state_capture(cpu_fd, ctx) != 0) {
+        goto out;
+    }
+    /* No host can supply an instruction-feature subleaf at UINT32_MAX. */
+    ctx->cpuid[ctx->cpuid_count++] = (wvm_kvm_cpuid_entry_t) {
+        .function = 7, .index = UINT32_MAX,
+        .flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX, .eax = 1,
+    };
+    if (wvm_kvm_cpuid_check_host(kvm_fd, ctx) != -ENOTSUP) goto out;
+    memset(&ctx->cpuid[--ctx->cpuid_count], 0, sizeof(ctx->cpuid[0]));
+    memcpy(&fpu, ctx->fpu_data, sizeof(fpu));
+    memset(fpu.xmm[0], 0x5a, sizeof(fpu.xmm[0]));
+    memcpy(ctx->fpu_data, &fpu, sizeof(fpu));
+    ctx->debug_address[0] = 0x12345000;
+    ctx->sysenter_cs = 0x18;
+    ctx->sysenter_esp = 0x123450;
+    ctx->sysenter_eip = 0x0badc0de;
+    ctx->pat = UINT64_C(0x0007040600010406);
+    ctx->profile_msr_count = 2;
+    ctx->profile_msrs[0].index = 0xc0000103; /* TSC_AUX */
+    ctx->profile_msrs[0].value = 0x1234;
+    ctx->profile_msrs[1].index = 0x2ff; /* MTRR default type */
+    ctx->profile_msrs[1].value = 0xc06;
+    ctx->mp_state = KVM_MP_STATE_RUNNABLE;
     ctx->rip = gpa;
     ctx->rsp = gpa + 0x1000;
     ctx->rflags = 0x2;
@@ -1309,9 +1407,16 @@ static void fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
     sregs.idt.base = 0;
     sregs.idt.limit = 0xffff;
     sregs.cr0 = 0x60000011ULL;
+    sregs.apic_base = vcpu == 0 ? 0xfee00900ULL : 0xfee00800ULL;
     memcpy(ctx->sregs_data, &sregs,
            sizeof(sregs) < sizeof(ctx->sregs_data) ? sizeof(sregs)
                                                    : sizeof(ctx->sregs_data));
+    result = 0;
+out:
+    if (cpu_fd >= 0) close(cpu_fd);
+    if (vm_fd >= 0) close(vm_fd);
+    if (kvm_fd >= 0) close(kvm_fd);
+    return result;
 }
 
 static int make_request(const struct wvm_node_runtime_manifest *manifest,
@@ -1324,14 +1429,17 @@ static int make_request(const struct wvm_node_runtime_manifest *manifest,
     static wvm_tcg_context_t legacy_context;
     static wvm_kvm_context_t kvm_context;
     static uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES +
-                           sizeof(wvm_tcg_context_t)];
+                           WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     static size_t context_bytes;
     uint16_t backend = g_real_kvm ? WVM_VCPU_BACKEND_KVM
                                   : WVM_VCPU_BACKEND_TCG;
 
     memset(request, 0, sizeof(*request));
     if (g_real_kvm) {
-        fill_kvm_prot32(&kvm_context, REAL_QEMU_GPA);
+        if (fill_kvm_prot32(&kvm_context, REAL_QEMU_GPA, TEST_VCPU) != 0) {
+            snprintf(error, error_len, "cannot capture real KVM source state");
+            return -1;
+        }
         if (wvm_x86_context_encode(
                 WVM_VCPU_BACKEND_KVM,
                 WVM_VCPU_CONTEXT_FIELD_ARCHITECTURAL_STATE |
@@ -1449,6 +1557,107 @@ static int make_request(const struct wvm_node_runtime_manifest *manifest,
     return 0;
 }
 
+static int run_parallel_kvm_probe(
+    void *bridge, const struct wvm_node_runtime_manifest *manifest,
+    const struct wvm_runtime_dispatch_projection *projection,
+    struct remote_state *remote, struct exit_capture *exits,
+    char *error, size_t error_len)
+{
+    struct wvm_vcpu_handoff_request requests[2];
+    struct wvm_envelope envelopes[2];
+    uint8_t payloads[2][WVM_ENVELOPE_MAX_NETWORK_LOGICAL_PAYLOAD];
+    uint8_t contexts[2][WVM_X86_CONTEXT_WIRE_HEADER_BYTES +
+                         sizeof(wvm_kvm_context_t)];
+    uint8_t page[WVM_MEMORY_PAGE_BYTES] = {0};
+    uint8_t final_page[WVM_MEMORY_PAGE_BYTES];
+    uint64_t version, seeded_version, final_version;
+    size_t expected;
+
+    /* Both vCPUs publish a flag and wait for their peer inside real KVM_RUN.
+     * A serialized executor can only time out; it cannot return two HLTs. */
+    for (unsigned cpu = 0; cpu < 2; ++cpu) {
+        uint8_t program[] = {
+            0xc7, 0x05, 0x00, 0x22, 0x00, 0x00, 1, 0, 0, 0,
+            0x83, 0x3d, 0x04, 0x22, 0x00, 0x00, 1,
+            0x75, 0xf7,
+            0xc7, 0x05, 0x08, 0x22, 0x00, 0x00, 0x78, 0x56, 0x34, 0x12,
+            0xb8, 1, 0, 0, 0, 0x0f, 0xa2, /* eax=1; cpuid */
+            0xa3, 0x10, 0x22, 0, 0,       /* record the guest CPU signature */
+            0xf4,
+        };
+        if (cpu) {
+            program[2] = 0x04;
+            program[12] = 0x00;
+            program[21] = 0x0c;
+            program[25] = 0x21; program[26] = 0x43;
+            program[27] = 0x65; program[28] = 0x87;
+            program[37] = 0x14;
+        }
+        memcpy(page + cpu * 64U, program, sizeof(program));
+    }
+    if (wvm_directory_store_read_page(
+            &remote->directory_store, 0x2000, final_page, &version,
+            error, error_len) ||
+        wvm_directory_store_commit_page(
+            &remote->directory_store, 0x2000, version, 0, page, sizeof(page),
+            &seeded_version, error, error_len) ||
+        wvm_kvm_page_cache_global_invalidate(0x2000, error, error_len)) {
+        return -1;
+    }
+    for (unsigned cpu = 0; cpu < 2; ++cpu) {
+        wvm_kvm_context_t context;
+        size_t payload_bytes;
+
+        if (make_request(manifest, projection, &requests[cpu], &envelopes[cpu],
+                         payloads[cpu], sizeof(payloads[cpu]), &payload_bytes,
+                         error, error_len) ||
+            fill_kvm_prot32(&context, 0x2000 + cpu * 64U, cpu) ||
+            wvm_x86_context_encode(
+                WVM_VCPU_BACKEND_KVM, requests[cpu].context_valid_fields,
+                &context, sizeof(context), contexts[cpu], sizeof(contexts[cpu]),
+                &requests[cpu].context_bytes, error, error_len)) return -1;
+        requests[cpu].context = contexts[cpu];
+        requests[cpu].vcpu_index = cpu;
+        requests[cpu].handoff_sequence = cpu == 0 ? 8 : 1;
+        requests[cpu].operation_id[15] = 0xc0 + cpu;
+        if (wvm_vcpu_handoff_request_encode(
+                &requests[cpu], payloads[cpu], sizeof(payloads[cpu]),
+                &payload_bytes, error, error_len)) return -1;
+        envelopes[cpu].payload_bytes = payload_bytes;
+        memcpy(envelopes[cpu].operation_id, requests[cpu].operation_id,
+               sizeof(envelopes[cpu].operation_id));
+        wvm_envelope_semantic_digest(payloads[cpu], payload_bytes,
+                                     envelopes[cpu].semantic_payload_digest);
+    }
+    pthread_mutex_lock(&exits->lock);
+    expected = exits->count + 2;
+    exits->collect_parallel = 1;
+    exits->parallel_seen = 0;
+    exits->parallel_failed = 0;
+    pthread_mutex_unlock(&exits->lock);
+    if (wvm_executor_bridge_dispatch(bridge, &envelopes[0], error, error_len) ||
+        wvm_executor_bridge_dispatch(bridge, &envelopes[1], error, error_len) ||
+        wait_exit(exits, expected)) return -1;
+    pthread_mutex_lock(&exits->lock);
+    int valid = exits->parallel_seen == 3 && !exits->parallel_failed;
+    exits->collect_parallel = 0;
+    pthread_mutex_unlock(&exits->lock);
+    if (expect(valid, "two mutually dependent KVM vCPUs return successful HLTs") ||
+        wvm_directory_store_read_page(
+            &remote->directory_store, 0x2000, final_page, &final_version,
+            error, error_len) ||
+        expect(final_version == seeded_version + 1 &&
+               memcmp(final_page + 0x200, "\x01\0\0\0\x01\0\0\0"
+                      "\x78\x56\x34\x12\x21\x43\x65\x87"
+                      "\x63\x06\0\0\x63\x06\0\0", 24) == 0,
+               "one shared dirty-log commit retains both guest writes")) {
+        return -1;
+    }
+    puts("EVID goal4_A14: real_kvm_parallel_vcpus=2 peer_handshake=1 "
+         "both_halted=1 dirty_page_commits=1 both_stores_remote=1 guest_cpuid=0x663");
+    return 0;
+}
+
 int main(void)
 {
     struct wvm_route_rule_record rules[2];
@@ -1456,7 +1665,7 @@ int main(void)
     struct wvm_route_snapshot_record snapshot;
     struct wvm_route_runtime routes;
     struct wvm_runtime_memory_dispatch memory[2];
-    struct wvm_runtime_cpu_dispatch cpus[1];
+    struct wvm_runtime_cpu_dispatch cpus[2];
     struct wvm_runtime_dispatch_projection projection;
     struct wvm_runtime_dispatch_projection remote_projection;
     struct wvm_runtime_manifest_storage storage;
@@ -1542,9 +1751,11 @@ int main(void)
     memset(cpus, 0, sizeof(cpus));
     cpus[0].guest_vcpu_index = TEST_VCPU;
     cpus[0].executor = projection.local_primary;
+    cpus[1] = cpus[0];
+    cpus[1].guest_vcpu_index = 1;
     projection.cpu_dispatch.entries = cpus;
-    projection.cpu_dispatch.count = 1;
-    projection.cpu_dispatch.capacity = 1;
+    projection.cpu_dispatch.count = g_real_kvm ? 2 : 1;
+    projection.cpu_dispatch.capacity = 2;
     if (expect(wvm_runtime_dispatch_projection_validate(
                    &projection, error, sizeof(error)) == 0,
                "dispatch projection") != 0) {
@@ -1612,7 +1823,9 @@ int main(void)
 
         memset(&directory_config, 0, sizeof(directory_config));
         directory_config.initial_epoch = 1;
-        directory_config.max_page_records = 16;
+        directory_config.max_page_records =
+            storage.manifest.launch_plan.guest_total_memory_bytes /
+            WVM_MEMORY_PAGE_BYTES;
         if (wvm_directory_store_init(&remote.directory_store,
                                      &directory_config, error,
                                      sizeof(error)) != 0) {
@@ -1728,8 +1941,8 @@ int main(void)
     runtime_context.physical_node_id = storage.manifest.physical_node_id;
     runtime_context.local_primary_vnode =
         projection.local_primary.destination_vnode;
-    runtime_context.local_vcpu_count = 1;
-    runtime_context.local_memory_bytes = 64ULL * 1024ULL * 1024ULL;
+    runtime_context.local_vcpu_count = g_real_kvm ? 2 : 1;
+    runtime_context.local_memory_bytes = g_real_kvm ? 0 : WVM_MEMORY_PAGE_BYTES;
     runtime_context.guest_memory_bytes =
         storage.manifest.launch_plan.guest_total_memory_bytes;
     runtime_context.executor_service_port =
@@ -1767,7 +1980,8 @@ int main(void)
         memset(&cache_config, 0, sizeof(cache_config));
         cache_config.vm_id = storage.manifest.vm_id;
         cache_config.vm_incarnation = storage.manifest.vm_incarnation;
-        cache_config.max_page_records = 16;
+        cache_config.max_page_records =
+            runtime_context.guest_memory_bytes / WVM_MEMORY_PAGE_BYTES;
         cache_config.completion_timeout_ms = 5000;
         if (expect(wvm_kvm_page_cache_global_install(
                        &cache_config, error, sizeof(error)) == 0,
@@ -1889,6 +2103,9 @@ int main(void)
 
     if (g_real_kvm) {
         uint16_t exit_class;
+        wvm_kvm_context_t returned;
+        struct kvm_fpu fpu;
+        uint64_t fields;
 
         pthread_mutex_lock(&exits.lock);
         exit_class = exits.result.exit_class;
@@ -1904,6 +2121,39 @@ int main(void)
                    "real KVM executed the remote HLT page") != 0) {
             goto out;
         }
+        if (expect(wvm_x86_context_decode(
+                       WVM_VCPU_BACKEND_KVM, exits.context,
+                       exits.context_bytes, &fields, &returned,
+                       sizeof(returned), error, sizeof(error)) == 0 &&
+                       returned.fpu_valid == 1 && returned.lapic_valid == 1 &&
+                       returned.vcpu_events_valid == 1 &&
+                       returned.mp_state_valid == 1 &&
+                       returned.debug_valid == 1 &&
+                       returned.debug_address[0] == 0x12345000 &&
+                       returned.system_msrs_valid == 1 &&
+                       returned.sysenter_cs == 0x18 &&
+                       returned.sysenter_esp == 0x123450 &&
+                       returned.sysenter_eip == 0x0badc0de &&
+                       returned.pat == UINT64_C(0x0007040600010406) &&
+                       returned.profile_msr_count == 2 &&
+                       returned.profile_msrs[0].index == 0xc0000103 &&
+                       returned.profile_msrs[0].value == 0x1234 &&
+                       returned.profile_msrs[1].index == 0x2ff &&
+                       returned.profile_msrs[1].value == 0xc06 &&
+                       returned.mp_state == KVM_MP_STATE_HALTED,
+                   "real KVM returns complete extended state and HALTED MP") != 0) {
+            goto out;
+        }
+        memcpy(&fpu, returned.fpu_data, sizeof(fpu));
+        for (size_t i = 0; i < sizeof(fpu.xmm[0]); i++) {
+            if (expect(((const uint8_t *)fpu.xmm[0])[i] == 0x5a,
+                       "XMM0 survives real executor state round trip") != 0) {
+                goto out;
+            }
+        }
+        printf("EVID goal4_A14: xmm0_preserved=1 lapic_events_valid=1 mp_halted=1 "
+               "debug_registers_preserved=1 sysenter_pat_preserved=1 "
+               "profile_msrs_preserved=1\n");
     }
 
     if (g_real_qemu || g_real_kvm) {
@@ -2131,6 +2381,8 @@ int main(void)
         legacy_request.vcpu_index = request.vcpu_index;
         memcpy(&legacy_request.ctx.kvm, &legacy_context,
                sizeof(legacy_context));
+        /* No interrupt is pending: importing HALTED must not execute HLT. */
+        legacy_request.ctx.kvm.mp_state = KVM_MP_STATE_HALTED;
         coordinated.bridge = coordinated_bridge;
         if (expect(wvm_vcpu_service_submit(&coordinated.service,
                                            coordinated_sockets[0], &legacy_request,
@@ -2175,7 +2427,10 @@ int main(void)
                (unsigned)coordinated.result.status, legacy_ack.status,
                (unsigned)legacy_ack.mode_tcg, legacy_received);
         if (expect(legacy_received == sizeof(legacy_ack) &&
-                       legacy_ack.status == 0 && legacy_ack.mode_tcg == 0,
+                       legacy_ack.status == 0 && legacy_ack.mode_tcg == 0 &&
+                       legacy_ack.ctx.kvm.mp_state_valid == 1 &&
+                       legacy_ack.ctx.kvm.mp_state == KVM_MP_STATE_HALTED &&
+                       legacy_ack.ctx.kvm.rip == legacy_context.rip,
                    "vcpu_service returned a real KVM ACK") != 0) {
             pthread_mutex_unlock(&coordinated.lock);
             goto out;
@@ -2189,6 +2444,7 @@ int main(void)
             goto out;
         }
         pthread_mutex_unlock(&coordinated.lock);
+        printf("EVID goal4_A14: halted_input_not_executed=1\n");
         if (coordinated.service_initialized) {
             wvm_vcpu_service_destroy(&coordinated.service);
             coordinated.service_initialized = 0;
@@ -2210,6 +2466,12 @@ int main(void)
         coordinated_sync_initialized = 0;
     }
 
+    if (g_real_kvm && run_parallel_kvm_probe(
+            bridge, &storage.manifest, &projection, &remote, &exits,
+            error, sizeof(error))) {
+        fprintf(stderr, "parallel KVM probe: %s\n", error);
+        goto out;
+    }
     printf("EVID goal4_A14: remote_fault_ACK version=0x%llx "
            "request_fence_id=%u produced_fence_id=%llu "
            "production_execute_handoff=1\n",

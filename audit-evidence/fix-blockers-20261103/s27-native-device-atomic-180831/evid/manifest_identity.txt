@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.RUKlyj/runtime/vm-256-1-1.manifest
+ea7600e2a44f55083be33a10b5d647a1de5b30d1397691e9bb0885958626f716  /tmp/wavevm-create-vm-single.RUKlyj/runtime/vm-256-1-1.manifest
+035fdbcc724564baac764f24c2dbcb498dd642da77e0cac0704734a061aeab09  /tmp/wavevm-create-vm-single.RUKlyj/runtime/vm-256-1-1.manifest.dispatch
+c73e3e998710c5aa734b3121e0cfb866ad24510ee617d738aada820db17c3639  /tmp/wavevm-create-vm-single.RUKlyj/runtime/vm-256-1-1.manifest.route

@@ -40,6 +40,15 @@
 #include "qemu/plugin-memory.h"
 #endif
 
+/* WaveVM is optional in the upstream TCG build.  The weak hook lets the
+ * coherent SHM path capture a page pre-image without coupling generic QEMU's
+ * TLB code to the WaveVM accelerator object. */
+extern void wavevm_user_mem_record_tcg_write(ram_addr_t ram_addr,
+                                             unsigned size)
+    __attribute__((weak));
+extern void (*wavevm_slave_device_io_hook)(CPUState *cpu, uintptr_t retaddr)
+    __attribute__((weak));
+
 /* DEBUG defines, enable DEBUG_TLB_LOG to log to the CPU_LOG_MMU target */
 /* #define DEBUG_TLB */
 /* #define DEBUG_TLB_LOG */
@@ -1310,6 +1319,10 @@ static uint64_t io_readx(CPUArchState *env, CPUIOTLBEntry *iotlbentry,
         cpu_io_recompile(cpu, retaddr);
     }
 
+    if (&wavevm_slave_device_io_hook && wavevm_slave_device_io_hook &&
+        !memory_region_is_ram(mr) && !memory_region_is_romd(mr)) {
+        wavevm_slave_device_io_hook(cpu, retaddr);
+    }
     if (!qemu_mutex_iothread_locked()) {
         qemu_mutex_lock_iothread();
         locked = true;
@@ -1365,6 +1378,10 @@ static void io_writex(CPUArchState *env, CPUIOTLBEntry *iotlbentry,
     }
     cpu->mem_io_pc = retaddr;
 
+    if (&wavevm_slave_device_io_hook && wavevm_slave_device_io_hook &&
+        !memory_region_is_ram(mr)) {
+        wavevm_slave_device_io_hook(cpu, retaddr);
+    }
     /*
      * The memory_region_dispatch may trigger a flush/resize
      * so for plugins we save the iotlb_data just in case.
@@ -1504,6 +1521,10 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
     ram_addr_t ram_addr = mem_vaddr + iotlbentry->addr;
 
     trace_memory_notdirty_write_access(mem_vaddr, ram_addr, size);
+
+    if (wavevm_user_mem_record_tcg_write) {
+        wavevm_user_mem_record_tcg_write(ram_addr, size);
+    }
 
     if (!cpu_physical_memory_get_dirty_flag(ram_addr, DIRTY_MEMORY_CODE)) {
         struct page_collection *pages

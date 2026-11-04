@@ -12,7 +12,7 @@ out_dir=${WVM_GUEST_OUT_DIR:-"$repo_root/audit-evidence/fix-blockers-20261028/gu
 if [[ -d "$out_dir" ]]; then
     if [[ "${WVM_GUEST_ALLOW_NONEMPTY_OUT:-0}" != "1" ]]; then
         if compgen -G "$out_dir/*.status" >/dev/null 2>&1 || \
-           compgen -G "$out_dir/*/result.txt" >/dev/null 2>&1; then
+           compgen -G "$out_dir/cells/*/result.txt" >/dev/null 2>&1; then
             echo "guest-matrix: refusing non-empty out_dir: $out_dir" >&2
             exit 2
         fi
@@ -65,6 +65,8 @@ run_cell() {
     local status_f="$out_dir/$cell.status"
     local log_f="$out_dir/$cell.log"
     mkdir -p "$cell_dir"
+    # A permitted rerun must produce its own result, including on early failure.
+    rm -f "$cell_dir/result.txt" "$cell_dir/evid/result.txt"
 
     if [[ -z "$topo" || -z "$backend" ]]; then
         echo "UNKNOWN_CELL=$cell" | tee "$status_f" | tee -a "$summary"
@@ -113,7 +115,7 @@ run_cell() {
     # PASS file alone (stale) or rc=0 alone (false success) must not pass.
     local overall=FAIL
     if [[ "$rc" -eq 0 && -f "$cell_dir/result.txt" ]] && \
-        grep -q 'OVERALL=PASS' "$cell_dir/result.txt"; then
+        [[ "$(sed -n '/^OVERALL=/p' "$cell_dir/result.txt" | tail -n 1)" == 'OVERALL=PASS' ]]; then
         overall=PASS
     fi
 

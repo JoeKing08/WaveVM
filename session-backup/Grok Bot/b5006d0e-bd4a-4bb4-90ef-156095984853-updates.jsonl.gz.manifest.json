@@ -1,0 +1,11 @@
+{
+  "archive": "b5006d0e-bd4a-4bb4-90ef-156095984853-updates.jsonl.gz",
+  "compressed_size_bytes": 1967954,
+  "compression": "gzip",
+  "format": "wavevm-session-archive-shards",
+  "part_count": 1,
+  "part_prefix": "b5006d0e-bd4a-4bb4-90ef-156095984853-updates.jsonl.gz.",
+  "part_size_bytes": 47185920,
+  "restore": "cat b5006d0e-bd4a-4bb4-90ef-156095984853-updates.jsonl.gz.[0-9][0-9][0-9] > b5006d0e-bd4a-4bb4-90ef-156095984853-updates.jsonl.gz",
+  "sha256": "996520cd46f7eb05eab7cb6609a57ad5a7e54a8596a4fd17c9b8dc698e5bc6ff"
+}

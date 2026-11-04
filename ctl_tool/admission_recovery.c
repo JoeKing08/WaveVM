@@ -535,6 +535,13 @@ static int project_runtime_manifests_from_launch_plans(
             WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_NODE_RUNTIME) |
             WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR);
 
+        /* Recovery must reproduce the live projection: memory-only
+         * participants do not regain an executor role they never owned. */
+        if (requirement->guest_vcpu_slots == 0) {
+            local_role_bits &=
+                ~WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR);
+        }
+
         if (runtime_storage_init(projection, i, projection->member_capacity,
                                  projection->max_vcpus) != 0) {
             goto allocation_failed;

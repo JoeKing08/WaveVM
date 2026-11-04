@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.rJAQpy/runtime/vm-256-1-1.manifest
+752caed9d5a564e43b2b18dadb6602389b553415521fa4b43419a5a49320c5ba  /tmp/wavevm-create-vm-single.rJAQpy/runtime/vm-256-1-1.manifest
+81f5d725f193cfe32ba1dc9ba62ad26120d8e863a6a68f7c4a1f414370d9619f  /tmp/wavevm-create-vm-single.rJAQpy/runtime/vm-256-1-1.manifest.dispatch
+b52555be055e0c20b53e5025f2d476311446c09a86f9bc202de8a2ca4c4f7464  /tmp/wavevm-create-vm-single.rJAQpy/runtime/vm-256-1-1.manifest.route

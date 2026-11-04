@@ -1,0 +1,17 @@
+=== backend/topology snippets ===
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 6, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-153d9225597cfcb2
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:45305
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-153d9225597cfcb2 (Size: 256 MB)
+=== child runtime logs (names) ===
+/tmp/wavevm-create-vm-single.oFRZ1g/runtime/vm-256-1-1.manifest
+/tmp/wavevm-create-vm-single.oFRZ1g/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-single.oFRZ1g/runtime/vm-256-1-1.manifest.route

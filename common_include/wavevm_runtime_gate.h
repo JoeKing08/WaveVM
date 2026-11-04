@@ -156,6 +156,11 @@ int wvm_runtime_gate_revoke(struct wvm_runtime_gate *gate,
                             uint64_t connection_id, char *error,
                             size_t error_len);
 
+/* Return non-zero when at least one live connection has the requested role. */
+int wvm_runtime_gate_has_registered_role(
+    const struct wvm_runtime_gate *gate,
+    enum wvm_manifest_role_type role);
+
 /*
  * This is the single local check before a registered QEMU, executor, gateway,
  * sidecar, or kernel binding may submit semantic work.

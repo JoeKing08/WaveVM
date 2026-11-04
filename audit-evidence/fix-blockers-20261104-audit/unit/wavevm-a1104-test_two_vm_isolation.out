@@ -1,0 +1,43 @@
+WaveVM Mode A Two-VM Isolation Test
+====================================
+Using existing BIND_CONTEXT interface
+
+[OK] Opened /dev/wavevm for VM1 (fd=3)
+[OK] Opened /dev/wavevm for VM2 (fd=4)
+[OK] Bound fd 3 to VM 1001 (VM1)
+[OK] Bound fd 4 to VM 1002 (VM2)
+[OK] dual Mode A contexts bound
+
+=== Test 1: Context Binding Isolation ===
+[INFO] Kernel capabilities:
+  Magic: 0x574b4358 (expected 0x574b4358)
+  Version: 4 (expected 4)
+  Max concurrent contexts: 64
+  Active contexts: 2
+  Feature bits: 0x1
+[OK] Kernel supports context binding
+[OK] multi-context advertised (active=2 max=64)
+
+=== Test 2: Memory Mapping Isolation ===
+[OK] Mapped VM1 memory at 0x7b1b2af8c000 (GPA 0x100000000)
+[OK] Mapped VM2 memory at 0x7b1b2af77000 (GPA 0x200000000)
+[OK] VM1 and VM2 have distinct virtual address mappings
+
+=== Test 3: Page Fault Isolation ===
+[INFO] Writing test pattern to VM1 memory...
+[OK] VM1 memory written (pattern: 0xDEAD****)
+[INFO] Writing test pattern to VM2 memory...
+[OK] VM2 memory written (pattern: 0xBEEF****)
+[INFO] Verifying VM1 pattern integrity...
+[OK] VM1 pattern intact (no corruption from VM2)
+[INFO] Verifying VM2 pattern integrity...
+[OK] VM2 pattern intact (no corruption from VM1)
+
+=== Test 4: Teardown Isolation ===
+[OK] Unbound and closed VM1 fd
+[OK] VM2 context still active after VM1 teardown (active=2)
+[OK] VM2 memory intact after sibling teardown
+
+====================================
+Mode A dual-VM isolation: PASS
+====================================

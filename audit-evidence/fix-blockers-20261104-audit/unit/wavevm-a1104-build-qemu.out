@@ -1,0 +1,2 @@
+ninja: Entering directory `wavevm-qemu/build'
+[1/5] Generating qemu-version.h with a meson_exe.py custom command

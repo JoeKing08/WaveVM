@@ -1,0 +1,474 @@
+s6: using tcg_helper_stub (real_qemu=0)
+vm=mode-b-vm1 attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=1 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=2 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=3 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=4 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=5 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=6 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=7 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=8 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=9 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=10 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=11 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=12 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=13 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=14 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=15 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=16 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=17 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=18 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=19 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=20 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=21 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=22 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=23 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=24 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=25 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=26 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=27 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=28 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=29 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=30 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=31 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=32 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=33 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=34 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=35 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=36 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=37 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=38 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=39 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=40 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=41 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=42 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=43 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=44 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=45 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=46 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=47 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=48 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=49 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=50 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=51 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=52 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=53 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=54 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=55 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=56 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=57 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=58 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=59 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=60 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=61 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=62 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=63 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=64 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=65 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=66 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=67 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=68 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=69 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=70 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=71 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=72 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=73 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=74 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=75 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=76 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=77 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=78 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+vm=mode-b-vm1 attempt=79 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586
+CREATE_VM vm1 did not reach SUCCESS(0)/RUNNING (got: status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15992114637302161586)
+--- ctl.log ---
+wvm_ctl: mid-flight admission recovery scan complete
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_ctl: queued after-membership hook type=0x101
+wvm_ctl: flushing after-membership hook type=0x101 pending_was=1
+wvm_ctl: admission submit type=0x701 peer=801:802 port=27218 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=801:802 port=27218 rc=0 err=no resumable enrollment for member
+wvm_ctl: cluster enrollment after REGISTER reached ACTIVE
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x401 peer=801:802 port=27218 rc=0 err=
+wvm_ctl: admission submit type=0x201 peer=801:802 port=27218 rc=0 err=
+wvm_ctl: admission submit type=0x301 peer=801:802 port=27218 rc=0 err=
+wvm_ctl: admission submit type=0x202 peer=801:802 port=27218 rc=0 err=
+wvm_ctl: admission submit type=0x302 peer=801:802 port=27218 rc=0 err=
+wvm_ctl: admission submit type=0x402 peer=801:802 port=27218 rc=0 err=
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=27218 rc=-11 err=admitted runtime is starting
+--- agent.log ---
+[node-runtime] host probe published 5 records to /tmp/wavevm-create-vm-dual-mode-b.Cn8ylZ/node-state/host_capabilities.report (tcg=3 kvm=3 kern=3 tcg_bits=1)
+[node-runtime] A10: registration accel digest replaced with probed_accel_digest
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[node-runtime] admitted vm=256 incarnation=1 generation=1 physical_node=801
+[Runtime] chunk identity=vm256_inc1_vol0 dir=/var/lib/wavevm/chunks
+[RuntimeGate] executor registered connection=2
+[Slave KVM] split LAPIC enabled; devices stay in frontend
+[Slave KVM] immediate_exit=1 numa_nodes=0 device_ram=0
+[Hybrid] BIOS ROM slot 3: GPA [0xffff0000, 0x100000000) -> HVA 0x7af8ff03b000
+[SLAVE-BIND] port=27225 ok
+[Hybrid] TCG helper runtime gate=1 socket=/tmp/wvm_user_wvm-v256-i1-g1-n801-07e199e761c9f037.sock namespace=wvm-v256-i1-g1-n801-07e199e761c9f037
+[Hybrid] TCG helper runtime gate=1 socket=/tmp/wvm_user_wvm-v256-i1-g1-n801-07e199e761c9f037.sock namespace=wvm-v256-i1-g1-n801-07e199e761c9f037
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[Hybrid] TCG install notify fd=9 -> push port 25698
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[GW-FINAL] id=1 ip=127.0.0.1 port=9000
+[V30-Init] rx_threads=4 poll_timeout=100ms (shared socket)
+[V30-RX] Thread 0: bound port=27222, shared socket fd=10
+[V30-RX] Thread 1: sharing socket fd=10
+[V30-RX] Thread 2: sharing socket fd=10
+[V30-RX] Thread 3: sharing socket fd=10
+[GW-SET] id=1 ip=127.0.0.1 port=27222
+[GW-SET] id=1 ip=127.0.0.1 port=27222
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=27225, Cores=2, RAM=16 MB, BaseID=1, VM=256
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-07e199e761c9f037
+[Hybrid] KVM Hardware Acceleration Active (RAM: 16 MB).
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:27225
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 801, VM: 256)
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 16 MB >= Reservation 16777216 bytes.
+[Init] Identity Mapped: PhysID 801 -> VirtualID 1 (Primary)
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-07e199e761c9f037 (Size: 16 MB)
+[+] Memory Ready at 0x7af8b97fd000 (attached executor backing store)
+[System] Control Socket: /tmp/wvm_user_wvm-v256-i1-g1-n801-07e199e761c9f037.sock
+[+] WaveVM V29 Node endpoint ready. Waiting for QEMU...
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+--- child runtime logs ---

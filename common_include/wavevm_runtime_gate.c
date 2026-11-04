@@ -793,6 +793,24 @@ int wvm_runtime_gate_revoke(struct wvm_runtime_gate *gate,
     return -1;
 }
 
+int wvm_runtime_gate_has_registered_role(
+    const struct wvm_runtime_gate *gate, enum wvm_manifest_role_type role)
+{
+    size_t i;
+
+    if (!gate || role < WVM_MANIFEST_ROLE_NODE_RUNTIME ||
+        role > WVM_MANIFEST_ROLE_KERNEL_CONTEXT) {
+        return 0;
+    }
+    for (i = 0; i < WVM_RUNTIME_MAX_CONNECTIONS; i++) {
+        if (gate->connections[i].state == WVM_RUNTIME_CONNECTION_REGISTERED &&
+            gate->connections[i].role == role) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int wvm_runtime_gate_authorize(
     const struct wvm_runtime_gate *gate,
     const struct wvm_runtime_operation *operation, char *error,

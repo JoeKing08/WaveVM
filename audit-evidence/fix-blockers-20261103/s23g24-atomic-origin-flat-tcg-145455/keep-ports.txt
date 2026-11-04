@@ -1,0 +1,3 @@
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-21af55d3b0d89296
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:33439

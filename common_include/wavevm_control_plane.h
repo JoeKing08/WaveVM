@@ -59,6 +59,17 @@ struct wvm_control_plane_runtime_manifest_entry {
 };
 
 /*
+ * Probe a runtime projection that is hosted on another physical node.  The
+ * callback must use an authenticated control path and return zero only after
+ * the remote participant has confirmed the exact manifest identity and ready
+ * state.  It is deliberately separate from the local ready-file probe.
+ */
+typedef int (*wvm_control_plane_runtime_health_probe_fn)(
+    void *context, const struct wvm_admission_transaction_record *transaction,
+    const struct wvm_control_plane_runtime_manifest_entry *runtime_entry,
+    char *error, size_t error_len);
+
+/*
  * Membership is configured as a component of the one control-plane owner.
  * The caller supplies bounded tables and the transport-owned result sink;
  * neither the controller nor the receiver creates a process-global registry.
@@ -110,6 +121,10 @@ struct wvm_control_plane {
     int membership_configured;
     int membership_initialized;
     int membership_open;
+    /* Local ready-owner probes are valid only for this physical host. */
+    uint32_t local_physical_node_id;
+    wvm_control_plane_runtime_health_probe_fn runtime_health_probe;
+    void *runtime_health_probe_context;
     const struct wvm_admission_authority *admission_authority;
 };
 
@@ -135,6 +150,15 @@ void wvm_control_plane_set_runtime_manifest_entries(
     struct wvm_control_plane *plane,
     struct wvm_control_plane_runtime_manifest_entry *runtime_manifest_entries,
     size_t runtime_manifest_entry_capacity);
+
+/* Bind the host identity used by local ready-owner liveness checks. */
+void wvm_control_plane_set_local_physical_node_id(
+    struct wvm_control_plane *plane, uint32_t local_physical_node_id);
+
+/* Install the authenticated remote participant health probe before serving. */
+void wvm_control_plane_set_runtime_health_probe(
+    struct wvm_control_plane *plane,
+    wvm_control_plane_runtime_health_probe_fn probe, void *context);
 
 /*
  * Bind the complete admission authority before the control service opens.

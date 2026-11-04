@@ -7,7 +7,9 @@
 
 #include "wavevm_canonical.h"
 #include "wavevm_fault_engine.h"
+#include "wavevm_host_probe.h"
 #include "wavevm_reservation_runtime.h"
+#include "wavevm_runtime_gate.h"
 #include "wavevm_sha256.h"
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
@@ -337,6 +339,138 @@ find_available_capability(const struct wvm_cluster_record_set *records,
         }
     }
     return NULL;
+}
+
+static int snapshot_has_capability(
+    const struct wvm_cluster_record_set *records,
+    const struct wvm_admission_snapshot *snapshot, uint16_t capability_id,
+    uint64_t required_features)
+{
+    size_t i;
+
+    if (!records || !snapshot || !snapshot->nodes) {
+        return 0;
+    }
+    for (i = 0; i < snapshot->node_count; i++) {
+        struct wvm_capability_ref reference = {0};
+        const struct wvm_capability_record *record;
+
+        reference.physical_node_id = snapshot->nodes[i].physical_node_id;
+        reference.node_instance_id = snapshot->nodes[i].node_instance_id;
+        record = find_available_capability(records, &reference, capability_id);
+        if (record && (record->feature_bits & required_features) ==
+                         required_features) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int propose_execution_plan(
+    const struct wvm_vm_request *request,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_cluster_record_set *records,
+    const struct wvm_cluster_snapshot *snapshot,
+    struct wvm_coordinator_prepare_options *options,
+    struct wvm_admission_request *admission_request,
+    struct wvm_admission_plan *plan, char *error, size_t error_len)
+{
+    struct wvm_admission_snapshot eligible = snapshot->admission;
+    int try_kvm = request->execution_backend_policy !=
+                  WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG;
+    int result = -1;
+
+    if (request->execution_backend_policy ==
+            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM &&
+        !snapshot_has_capability(records, &snapshot->admission,
+                                 WVM_CAPABILITY_ID_EXECUTION_KVM,
+                                 WVM_HOST_PROBE_KVM_DIRTY_LOG)) {
+        set_error(error, error_len,
+                  "no complete KVM dirty/resync capability set is published");
+        return -1;
+    }
+    if (request->accelerator_policy ==
+            WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL &&
+        !snapshot_has_capability(records, &snapshot->admission,
+                                 WVM_CAPABILITY_ID_KERNEL_ACCELERATION, 0)) {
+        set_error(error, error_len,
+                  "required kernel acceleration is unavailable on a member");
+        return -1;
+    }
+
+    eligible.nodes = calloc(eligible.node_count, sizeof(*eligible.nodes));
+    if (!eligible.nodes) {
+        set_error(error, error_len, "cannot allocate execution eligibility view");
+        return -1;
+    }
+    for (;;) {
+        memcpy(eligible.nodes, snapshot->admission.nodes,
+               eligible.node_count * sizeof(*eligible.nodes));
+        for (size_t i = 0; i < eligible.node_count; i++) {
+            struct wvm_admission_node *node = &eligible.nodes[i];
+            const struct wvm_capability_record *execution;
+            const struct wvm_capability_record *kernel;
+            struct wvm_capability_ref reference = {0};
+
+            reference.physical_node_id = node->physical_node_id;
+            reference.node_instance_id = node->node_instance_id;
+            execution = find_available_capability(
+                records, &reference, WVM_CAPABILITY_ID_EXECUTION_KVM);
+            kernel = find_available_capability(
+                records, &reference, WVM_CAPABILITY_ID_KERNEL_ACCELERATION);
+            if (!execution ||
+                !(execution->feature_bits & WVM_HOST_PROBE_KVM_DIRTY_LOG)) {
+                node->backend_capabilities &= ~WVM_ADMISSION_BACKEND_CAP_KVM;
+            }
+            if (request->accelerator_policy ==
+                    WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL && !kernel) {
+                node->backend_capabilities = 0;
+                node->runtime_capabilities = 0;
+            }
+        }
+        options->execution_profile.backend = try_kvm ?
+            WVM_MANIFEST_BACKEND_KVM : WVM_MANIFEST_BACKEND_TCG;
+        if (build_admission_request(request, transaction, options,
+                                     admission_request, error, error_len) == 0) {
+            result = wvm_admission_plan_propose(
+                &eligible, admission_request, transaction->admission_tx_id,
+                plan, error, error_len);
+        }
+        if (result == 0 || !try_kvm ||
+            request->execution_backend_policy != WVM_MANIFEST_BACKEND_POLICY_AUTO) {
+            break;
+        }
+        /* AUTO downgrades only after the KVM resource plan is infeasible. */
+        try_kvm = 0;
+        if (error && error_len) {
+            error[0] = '\0';
+        }
+    }
+    free(eligible.nodes);
+    if (result == 0) {
+        struct wvm_execution_fault_profile *profile = &options->execution_profile;
+        int kernel = request->accelerator_policy != WVM_MANIFEST_ACCELERATOR_DISABLED;
+
+        for (uint32_t i = 0; kernel && i < plan->reservation_count; i++) {
+            struct wvm_capability_ref reference = {0};
+            reference.physical_node_id = plan->reservations[i].physical_node_id;
+            reference.node_instance_id = plan->reservations[i].expected_node_instance_id;
+            kernel = find_available_capability(
+                records, &reference, WVM_CAPABILITY_ID_KERNEL_ACCELERATION) != NULL;
+        }
+        profile->kernel_accelerator_bits = kernel ? 1 : 0;
+        profile->dirty_capture_engine = try_kvm ? WVM_FAULT_ENGINE_KVM_DIRTY_LOG :
+            kernel ? WVM_FAULT_ENGINE_KERNEL_ACCELERATION :
+                     WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+        profile->read_fault_engine = try_kvm ? WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC :
+                                              WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+        profile->invalidation_engine = kernel ? WVM_FAULT_ENGINE_KERNEL_ACCELERATION :
+            try_kvm ? WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC :
+                      WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+        profile->fallback_decision = try_kvm ? 1 :
+            request->execution_backend_policy == WVM_MANIFEST_BACKEND_POLICY_AUTO ? 2 : 3;
+    }
+    return result;
 }
 
 static int append_required_capability(
@@ -848,6 +982,8 @@ int wvm_coordinator_prepare(
     struct wvm_cluster_snapshot constrained_snapshot = {0};
     struct wvm_admission_request admission_request;
     struct wvm_admission_placement_options placement_options;
+    struct wvm_coordinator_prepare_options resolved_options;
+    struct wvm_admission_node_listener_plan *resolved_listeners = NULL;
     struct wvm_candidate_vm_manifest candidate;
     struct wvm_capability_ref_list required_capabilities;
     struct wvm_local_name_identity local_name_identity;
@@ -872,7 +1008,6 @@ int wvm_coordinator_prepare(
                                              error_len) != 0 ||
         wvm_fault_engine_profile_validate(&options->execution_profile, error,
                                           error_len) != 0 ||
-        !request_allows_backend(request, options->execution_profile.backend) ||
         options->memory_chunk_bytes == 0 ||
         options->memory_chunk_bytes % WVM_MANIFEST_PAGE_BYTES != 0 ||
         options->host_overhead_memory_bytes % WVM_MANIFEST_PAGE_BYTES != 0 ||
@@ -895,16 +1030,9 @@ int wvm_coordinator_prepare(
         set_error(error, error_len, "coordinator prepare input is invalid");
         return -1;
     }
-    if ((request->accelerator_policy == WVM_MANIFEST_ACCELERATOR_DISABLED &&
-         options->execution_profile.kernel_accelerator_bits != 0) ||
-        (request->accelerator_policy ==
-             WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL &&
-         options->execution_profile.kernel_accelerator_bits == 0)) {
-        set_error(error, error_len,
-                  "resolved accelerator profile violates request policy");
-        return -1;
-    }
     wvm_coordinator_prepared_vm_cleanup(prepared_vm);
+    resolved_options = *options;
+    options = &resolved_options;
     memset(&admission_request, 0, sizeof(admission_request));
     if (build_admission_request(request, transaction, options,
                                 &admission_request, error, error_len) != 0 ||
@@ -919,11 +1047,13 @@ int wvm_coordinator_prepare(
         goto out;
     }
 
-    if (wvm_admission_plan_propose(&constrained_snapshot.admission,
-                                   &admission_request,
-                                   transaction->admission_tx_id,
-                                   &prepared_vm->admission_plan, error,
-                                   error_len) != 0 ||
+    if (propose_execution_plan(request, transaction, records,
+                               &constrained_snapshot, &resolved_options,
+                               &admission_request, &prepared_vm->admission_plan,
+                               error, error_len) != 0 ||
+        !request_allows_backend(request, options->execution_profile.backend) ||
+        wvm_fault_engine_profile_validate(&options->execution_profile, error,
+                                          error_len) != 0 ||
         wvm_cluster_admission_fence_build(
             records, &constrained_snapshot, &admission_request,
             &prepared_vm->admission_plan, &transaction->route_scope_key,
@@ -931,6 +1061,20 @@ int wvm_coordinator_prepare(
             error_len) != 0) {
         goto out;
     }
+
+    resolved_listeners = calloc(options->node_listener_plan_count,
+                                sizeof(*resolved_listeners));
+    if (!resolved_listeners) {
+        set_error(error, error_len, "cannot allocate resolved listener plans");
+        goto out;
+    }
+    memcpy(resolved_listeners, options->node_listener_plans,
+           options->node_listener_plan_count * sizeof(*resolved_listeners));
+    for (i = 0; i < options->node_listener_plan_count; i++) {
+        resolved_listeners[i].kernel_accelerator_required =
+            options->execution_profile.kernel_accelerator_bits != 0;
+    }
+    resolved_options.node_listener_plans = resolved_listeners;
 
     memset(&placement_options, 0, sizeof(placement_options));
     placement_options.memory_consistency_policy =
@@ -1092,6 +1236,19 @@ int wvm_coordinator_prepare(
         const struct wvm_coordinator_node_launch_plan *launch_plan;
         uint64_t local_role_bits = options->node_runtime_role_bits;
 
+        /*
+         * A reservation that contributes only guest memory is a real
+         * node-runtime participant, but it does not own a local vCPU
+         * executor.  Do not advertise an executor role that this manifest
+         * cannot make ready; the runtime uses the same assignment boundary
+         * when deciding whether to start its local executor.
+         */
+        if (candidate.reservation_requirements.entries[i].guest_vcpu_slots ==
+            0) {
+            local_role_bits &=
+                ~WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR);
+        }
+
         if (candidate.reservation_requirements.entries[i].physical_node_id ==
             candidate.host_node) {
             local_role_bits |= options->host_extra_role_bits;
@@ -1148,6 +1305,7 @@ int wvm_coordinator_prepare(
         options->candidate_manifest_bytes_capacity;
     result = 0;
 out:
+    free(resolved_listeners);
     wvm_admission_snapshot_cleanup(&constrained_snapshot.admission);
     if (result != 0) {
         wvm_coordinator_prepared_vm_cleanup(prepared_vm);

@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include "../../../common_include/wavevm_manifest.h"
 #include "../../../common_include/wavevm_config.h"
@@ -30,6 +33,87 @@ static inline const char *wavevm_qemu_runtime_socket_path(void)
         path = getenv("WVM_ENV_SOCK_PATH");
     }
     return path && path[0] != '\0' ? path : NULL;
+}
+
+/*
+ * The node runtime creates this socket in its master role, while an admitted
+ * executor may launch the QEMU frontend first. Registration waits for the
+ * manifest-derived endpoint within a bounded deadline instead of falling back
+ * to an unbound endpoint or using a fixed readiness sleep.
+ */
+static inline int wavevm_qemu_connect_runtime_socket(int socket_type)
+{
+    const char *path = wavevm_qemu_runtime_socket_path();
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    const int64_t deadline = g_get_monotonic_time() + 5000000;
+    int last_error = ENOENT;
+
+    if (!path || strlen(path) >= sizeof(address.sun_path)) {
+        errno = EINVAL;
+        fprintf(stderr, "[WaveVM] runtime socket path invalid: %s\n",
+                path ? path : "<unset>");
+        return -1;
+    }
+    memcpy(address.sun_path, path, strlen(path) + 1U);
+
+    for (;;) {
+        int fd = socket(AF_UNIX, socket_type, 0);
+        int result;
+
+        if (fd < 0) {
+            return -1;
+        }
+        result = connect(fd, (struct sockaddr *)&address, sizeof(address));
+        if (result == 0) {
+            return fd;
+        }
+        last_error = errno;
+        if (last_error == EINPROGRESS) {
+            struct pollfd ready = {.fd = fd, .events = POLLOUT};
+            int64_t remaining = deadline - g_get_monotonic_time();
+            int poll_result;
+            int socket_error = 0;
+            socklen_t socket_error_bytes = sizeof(socket_error);
+
+            if (remaining <= 0) {
+                close(fd);
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            poll_result = poll(&ready, 1,
+                               (int)((remaining + 999) / 1000));
+            if (poll_result > 0 &&
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error,
+                           &socket_error_bytes) == 0) {
+                last_error = socket_error;
+                if (last_error == 0) {
+                    return fd;
+                }
+            } else if (poll_result == 0) {
+                last_error = ETIMEDOUT;
+            } else {
+                last_error = errno;
+            }
+        }
+        close(fd);
+        if (last_error != ENOENT && last_error != ECONNREFUSED &&
+            last_error != EAGAIN && last_error != EWOULDBLOCK &&
+            last_error != ETIMEDOUT && last_error != EINTR) {
+            errno = last_error;
+            fprintf(stderr,
+                    "[WaveVM] runtime socket connect failed path=%s errno=%d (%s)\n",
+                    path, last_error, strerror(last_error));
+            return -1;
+        }
+        if (g_get_monotonic_time() >= deadline) {
+            errno = last_error == 0 ? ETIMEDOUT : last_error;
+            fprintf(stderr,
+                    "[WaveVM] runtime socket connect timed out path=%s errno=%d (%s)\n",
+                    path, errno, strerror(errno));
+            return -1;
+        }
+        g_usleep(10000);
+    }
 }
 
 static inline int wavevm_qemu_parse_u64_env(const char *name,
@@ -150,18 +234,121 @@ static inline bool wavevm_qemu_kernel_accel_usable(void)
     return result == 0;
 }
 
-/*
- * Mode A is admitted from the same manifest as the user-space runtime.  The
- * kernel module currently exposes one context per physical module instance;
- * binding here makes that limitation explicit instead of allowing a second
- * VM to overwrite module-global state.
- */
+static inline int wavevm_qemu_attachment_transfer(
+    int fd, void *buffer, size_t bytes, bool sending, int64_t deadline)
+{
+    uint8_t *cursor = buffer;
+
+    while (bytes) {
+        int64_t remaining = deadline - g_get_monotonic_time();
+        struct pollfd ready = {.fd = fd, .events = sending ? POLLOUT : POLLIN};
+        ssize_t count;
+        int result;
+
+        if (remaining <= 0)
+            return -ETIMEDOUT;
+        result = poll(&ready, 1, (int)((remaining + 999) / 1000));
+        if (result < 0) {
+            if (errno == EINTR)
+                continue;
+            return -errno;
+        }
+        if (!result)
+            return -ETIMEDOUT;
+        count = sending ? send(fd, cursor, bytes, MSG_DONTWAIT | MSG_NOSIGNAL) :
+                          recv(fd, cursor, bytes, MSG_DONTWAIT);
+        if (count < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
+            return -errno;
+        }
+        if (!count)
+            return -ECONNRESET;
+        cursor += count;
+        bytes -= count;
+    }
+    return 0;
+}
+
+/* Obtain an attach-only capability through this VM's admitted local runtime.
+ * A fresh channel leaves the vCPU and memory response streams undisturbed. */
+static inline int wavevm_qemu_get_kernel_attachment(uint8_t capability[32])
+{
+    struct wvm_ipc_runtime_registration registration;
+    struct wvm_ipc_kernel_attachment response;
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    wvm_ipc_header_t header;
+    const char *path = wavevm_qemu_runtime_socket_path();
+    int64_t deadline = g_get_monotonic_time() + 5000000;
+    int fd, result;
+
+    if (!path || strlen(path) >= sizeof(address.sun_path) ||
+        wavevm_qemu_fill_runtime_registration(WVM_IPC_ROLE_SYNC,
+                                              &registration) != 0)
+        return -EINVAL;
+    memcpy(address.sun_path, path, strlen(path) + 1);
+    fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return -errno;
+    result = connect(fd, (struct sockaddr *)&address, sizeof(address));
+    if (result < 0 && errno == EINPROGRESS) {
+        struct pollfd ready = {.fd = fd, .events = POLLOUT};
+        int error = 0;
+        socklen_t bytes = sizeof(error);
+
+        do {
+            int64_t remaining = deadline - g_get_monotonic_time();
+            result = remaining <= 0 ? 0 :
+                poll(&ready, 1, (int)((remaining + 999) / 1000));
+        } while (result < 0 && errno == EINTR);
+        if (result <= 0) {
+            result = result == 0 ? -ETIMEDOUT : -errno;
+            goto out;
+        }
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &bytes) != 0) {
+            result = -errno;
+            goto out;
+        }
+        result = -error;
+    } else if (result < 0) {
+        result = -errno;
+    }
+    if (result < 0)
+        goto out;
+    header = (wvm_ipc_header_t){WVM_IPC_TYPE_REGISTER, sizeof(registration)};
+    result = wavevm_qemu_attachment_transfer(fd, &header, sizeof(header), true,
+                                             deadline);
+    if (!result)
+        result = wavevm_qemu_attachment_transfer(fd, &registration,
+                    sizeof(registration), true, deadline);
+    header = (wvm_ipc_header_t){WVM_IPC_TYPE_KERNEL_ATTACHMENT, 0};
+    if (!result)
+        result = wavevm_qemu_attachment_transfer(fd, &header, sizeof(header),
+                                                 true, deadline);
+    if (!result)
+        result = wavevm_qemu_attachment_transfer(fd, &response,
+                                                 sizeof(response), false,
+                                                 deadline);
+    if (!result) {
+        static const uint8_t zero[32];
+
+        if (response.status || !memcmp(response.capability, zero, sizeof(zero)))
+            result = response.status < 0 ? response.status : -EPROTO;
+        else
+            memcpy(capability, response.capability, sizeof(response.capability));
+    }
+out:
+    close(fd);
+    return result;
+}
+
+/* Mode A attaches to the runtime-owned context for the same manifest. */
 static inline int wavevm_qemu_bind_kernel_context(int dev_fd)
 {
     struct wvm_ioctl_context_bind request;
     uint64_t value;
 
-    if (!wavevm_qemu_runtime_gate_enabled()) return 0;
+    if (!wavevm_qemu_runtime_gate_enabled()) return -EPERM;
     if (dev_fd < 0 ||
         wavevm_qemu_parse_u64_env("WVM_VM_ID", &value) != 0 ||
         value == 0 || value > UINT32_MAX) {
@@ -230,130 +417,13 @@ static inline int wavevm_qemu_bind_kernel_context(int dev_fd)
     request.route_snapshot_key.scope_key.vm_incarnation =
         request.vm_incarnation;
 
+    {
+        int result = wavevm_qemu_get_kernel_attachment(request.attach_capability);
+        if (result)
+            return result;
+    }
     if (ioctl(dev_fd, IOCTL_WVM_BIND_CONTEXT, &request) < 0) {
         return -errno;
     }
-    return 0;
-}
-
-/*
- * s23g7: Mode A FE BIND creates a *separate* kernel context from the node
- * daemon. Dual-yes KVM often runs the sidecar as Mode B (bits==0), so the
- * child never IOCTL_UPDATE_CPU_ROUTE / SET_GATEWAY into the FE fd.
- * Without FE-local inject, REMOTE_RUN stays on AUTO_ROUTE => ENODEV and
- * remote_done only accumulates via HALT-WAKE false counts.
- *
- * Populate bare vnode routes for vCPUs >= split and the sidecar gateway
- * from launch.env (PRIMARY_DESTINATION_VNODE + EXECUTOR_SERVICE_PORT).
- * Returns 0 on success / nothing-to-do; negative -errno on ioctl failure.
- */
-static inline int wavevm_qemu_inject_fe_compute_routes(int dev_fd, int vcpus,
-                                                      int local_split)
-{
-    uint64_t vnode_u = 0;
-    uint64_t port_u = 0;
-    uint32_t vnode;
-    uint16_t port_n;
-    uint32_t ip_n;
-    int remote_cpus;
-    size_t buf_size;
-    struct wvm_ioctl_route_update *payload;
-    struct wvm_ioctl_gateway gw;
-    int i;
-    int mapped = 0;
-
-    if (dev_fd < 0) {
-        return -EINVAL;
-    }
-    if (vcpus <= 0) {
-        vcpus = 1;
-    }
-    if (local_split < 0) {
-        local_split = 0;
-    }
-    if (local_split > vcpus) {
-        local_split = vcpus;
-    }
-    remote_cpus = vcpus - local_split;
-    if (remote_cpus <= 0) {
-        fprintf(stderr,
-                "[WaveVM-QEMU] FE compute routes: split=%d vcpus=%d "
-                "(no remote vCPUs; skip inject)\n",
-                local_split, vcpus);
-        return 0;
-    }
-    if (wavevm_qemu_parse_u64_env(
-            "WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_VNODE", &vnode_u) != 0 ||
-        vnode_u == 0 || vnode_u >= WVM_MAX_GATEWAYS) {
-        fprintf(stderr,
-                "[WaveVM-QEMU] FE compute routes: missing/invalid "
-                "WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_VNODE\n");
-        return -EINVAL;
-    }
-    vnode = (uint32_t)vnode_u;
-    /*
-     * Mode A FE BIND cutover (s23g13 / charter): point SET_GATEWAY at the
-     * Hybrid executor service port — same endpoint Mode B uses for local
-     * handoff. Kernel :9000 <-> Hybrid is the Mode A acceleration of that
-     * contract (wire-ipc §7 / kernel-accelerator §5.2).
-     *
-     * Do NOT prefer WVM_RUNTIME_LOCAL_PORT (V30 sidecar) here: that wraps
-     * Mode A REMOTE_RUN in the old Mode B forward shell (kernel->V30->Hybrid
-     * hairpin). Joe rejected 「旧版本套上新版本」; V30 demux cannot be the
-     * formal Mode A BIND fix. Fall back to LOCAL_PORT only if executor port
-     * is absent (exceptional).
-     */
-    if (wavevm_qemu_parse_u64_env("WVM_EXECUTOR_SERVICE_PORT", &port_u) != 0 ||
-        port_u == 0 || port_u > 65535) {
-        if (wavevm_qemu_parse_u64_env("WVM_RUNTIME_LOCAL_PORT",
-                                      &port_u) != 0 ||
-            port_u == 0 || port_u > 65535) {
-            fprintf(stderr,
-                    "[WaveVM-QEMU] FE compute routes: missing executor port "
-                    "(WVM_EXECUTOR_SERVICE_PORT / WVM_RUNTIME_LOCAL_PORT)\n");
-            return -EINVAL;
-        }
-    }
-    port_n = htons((uint16_t)port_u);
-    ip_n = htonl(0x7f000001u); /* 127.0.0.1 — same-host executor endpoint */
-
-    memset(&gw, 0, sizeof(gw));
-    gw.gw_id = vnode; /* bare node_id index into gateway_table */
-    gw.ip = ip_n;
-    gw.port = port_n;
-    if (ioctl(dev_fd, IOCTL_SET_GATEWAY, &gw) < 0) {
-        fprintf(stderr,
-                "[WaveVM-QEMU] FE SET_GATEWAY vnode=%u port=%u failed: %s\n",
-                vnode, (unsigned)port_u, strerror(errno));
-        return -errno;
-    }
-
-    buf_size = sizeof(*payload) + (size_t)vcpus * sizeof(uint32_t);
-    payload = calloc(1, buf_size);
-    if (!payload) {
-        return -ENOMEM;
-    }
-    payload->start_index = 0;
-    payload->count = (uint32_t)vcpus;
-    for (i = 0; i < vcpus; i++) {
-        if (i >= local_split) {
-            payload->entries[i] = vnode; /* bare vnode */
-            mapped++;
-        } else {
-            payload->entries[i] = WVM_NODE_AUTO_ROUTE;
-        }
-    }
-    if (ioctl(dev_fd, IOCTL_UPDATE_CPU_ROUTE, payload) < 0) {
-        fprintf(stderr,
-                "[WaveVM-QEMU] FE UPDATE_CPU_ROUTE failed: %s\n",
-                strerror(errno));
-        free(payload);
-        return -errno;
-    }
-    free(payload);
-    fprintf(stderr,
-            "[WaveVM-QEMU] FE compute routes injected: split=%d vcpus=%d "
-            "mapped=%d vnode=%u gw=127.0.0.1:%u\n",
-            local_split, vcpus, mapped, vnode, (unsigned)port_u);
     return 0;
 }

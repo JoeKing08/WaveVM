@@ -1,0 +1,3 @@
+admission-plan tests: PASS
+NOTE: RM-P7-origin-not-host oracle included.
+NOTE: Codex A06 sum(ceil(per_node/chunk)) capacity oracle included.

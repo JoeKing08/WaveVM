@@ -1,0 +1,32 @@
+=== section 4 remote memory production path (memory_service) ===
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=13004 directory=99 directory_instance=202 operation=00000000000000000000000000000001 gpa=4096 remote_reads=1 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=13004 directory=99 directory_instance=202 operation=f2000000000000000000000000000000 gpa=0 remote_reads=1 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=13004 directory=99 directory_instance=202 operation=f200000000000000f60d000000000000 gpa=14639104 remote_reads=3575 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=13004 directory=99 directory_instance=202 operation=f200000000000000921b000000000000 gpa=28909568 remote_reads=7059 remote_commits=0
+EVID memory_service_subscriber: leaf_instance=303 next_hop_instance=202
+EVID memory_subscriber_capacity: pages=4097 repeated_read_deduplicated=1 last_page_push=1 admitted_bound=1
+EVID memory_subscriber_read: commit_during_snapshot_delivered=1 untracked_success_rejected=1
+EVID memory_service_capacity: commits=1025 local_receipts_retained=1 remote_receipt_retained=1
+EVID memory_service_retire: callback_pinned=1 new_work_rejected=1 subscribers_removed=1
+EVID memory_read_receipts: pages=8192 bytes=33554432 elapsed_ms=584 retention_ms=60000 same_id_newer_snapshot=1 stale_reply_ignored=1 identity_and_digest_conflicts_rejected=1
+EVID memory_service: dirty_commit base_version=7->result_version=8 STALE_BASE_VERSION=1 ack_version_path=9
+memory-service tests: PASS
+=== section 4 typed executor ABI bridge ===
+EVID executor_bridge_drain: in_flight_timeout=1 drained=1
+EVID executor_bridge_parallel: workers=2 concurrent=2 duplicate_not_executed=1 queued_drain=1
+executor bridge tests: PASS
+=== rebuild slave_hybrid.o (production execute_handoff) ===
+make: 进入目录“/workspaces/WaveVM/node_runtime”
+make: “slave_hybrid.o”已是最新。
+make: 离开目录“/workspaces/WaveVM/node_runtime”
+=== section 4 A14 bridge -> wvm_executor_runtime_execute_handoff -> remote mem ===
+/workspaces/WaveVM/tests/control-plane/test_goal4_executor_remote_memory.c: In function ‘commit_page’:
+/workspaces/WaveVM/tests/control-plane/test_goal4_executor_remote_memory.c:441:28: error: unused parameter ‘source_shared_backing’ [-Werror=unused-parameter]
+  441 |                        int source_shared_backing, uint64_t *result_version,
+      |                        ~~~~^~~~~~~~~~~~~~~~~~~~~
+/workspaces/WaveVM/tests/control-plane/test_goal4_executor_remote_memory.c: In function ‘complete_remote_fault’:
+/workspaces/WaveVM/tests/control-plane/test_goal4_executor_remote_memory.c:493:11: error: ‘source_shared_backing’ undeclared (first use in this function)
+  493 |     (void)source_shared_backing;
+      |           ^~~~~~~~~~~~~~~~~~~~~
+/workspaces/WaveVM/tests/control-plane/test_goal4_executor_remote_memory.c:493:11: note: each undeclared identifier is reported only once for each function it appears in
+cc1: all warnings being treated as errors

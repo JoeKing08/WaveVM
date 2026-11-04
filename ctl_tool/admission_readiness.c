@@ -137,6 +137,96 @@ allocation_failed:
     return -1;
 }
 
+int wvm_ctl_probe_runtime_ready(
+    struct wvm_control_plane *plane,
+    const struct wvm_admission_transaction_record *transaction,
+    const struct wvm_control_plane_runtime_manifest_entry *runtime_entry,
+    size_t member_capacity, uint32_t max_vcpus,
+    struct wvm_admission_transport *transport, char *error,
+    size_t error_len)
+{
+    struct replay_projection projection = {0};
+    struct wvm_coordinator_transaction coordinator;
+    uint8_t *record = NULL;
+    size_t record_bytes = 0;
+    int result = -1;
+
+    if (!plane || !transaction || !runtime_entry || !transport ||
+        member_capacity == 0 || max_vcpus == 0 ||
+        !runtime_entry->record_bytes || runtime_entry->record_byte_count == 0) {
+        if (error && error_len) {
+            snprintf(error, error_len, "remote runtime probe input is invalid");
+        }
+        return -1;
+    }
+    memset(&coordinator, 0, sizeof(coordinator));
+    memcpy(coordinator.request_id, transaction->request_id,
+           sizeof(coordinator.request_id));
+    coordinator.vm_id = transaction->vm_id;
+    coordinator.vm_incarnation = transaction->vm_incarnation;
+    coordinator.manifest_generation = transaction->manifest_generation;
+    memcpy(coordinator.admission_tx_id, transaction->admission_tx_id,
+           sizeof(coordinator.admission_tx_id));
+    memcpy(coordinator.manifest_id, transaction->manifest_id,
+           sizeof(coordinator.manifest_id));
+    coordinator.route_scope_key = transaction->route_scope_key;
+    if (candidate_storage_init(&projection, member_capacity, max_vcpus) != 0 ||
+        !(record = malloc(WVM_CONTROL_PLANE_MAX_RECORD_BYTES)) ||
+        wvm_control_plane_read_candidate(
+            plane, &coordinator, record, WVM_CONTROL_PLANE_MAX_RECORD_BYTES,
+            &record_bytes, error, error_len) != 0 ||
+        wvm_candidate_vm_manifest_decode(
+            record, record_bytes, &projection.candidate, error, error_len) !=
+            0) {
+        goto out;
+    }
+    if (memcmp(projection.candidate.manifest_digest,
+               runtime_entry->candidate_manifest_digest,
+               sizeof(runtime_entry->candidate_manifest_digest)) != 0 ||
+        projection.candidate.vm_id != transaction->vm_id ||
+        projection.candidate.vm_incarnation != transaction->vm_incarnation) {
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "remote runtime probe candidate identity mismatch");
+        }
+        goto out;
+    }
+    projection.manifests = calloc(1, sizeof(*projection.manifests));
+    projection.runtime_lists = calloc(1, sizeof(*projection.runtime_lists));
+    if (!projection.manifests || !projection.runtime_lists) {
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "cannot allocate remote runtime probe projection");
+        }
+        goto out;
+    }
+    projection.runtime_count = 1;
+    if (runtime_storage_init(&projection, 0, member_capacity, max_vcpus) != 0 ||
+        wvm_node_runtime_manifest_decode(
+            runtime_entry->record_bytes, runtime_entry->record_byte_count,
+            &projection.manifests[0], error, error_len) != 0 ||
+        projection.manifests[0].physical_node_id !=
+            runtime_entry->physical_node_id ||
+        projection.manifests[0].expected_node_instance_id !=
+            runtime_entry->expected_node_instance_id ||
+        memcmp(projection.manifests[0].candidate_manifest_digest,
+               runtime_entry->candidate_manifest_digest,
+               sizeof(runtime_entry->candidate_manifest_digest)) != 0) {
+        if (error && error_len && error[0] == '\0') {
+            snprintf(error, error_len,
+                     "remote runtime projection identity mismatch");
+        }
+        goto out;
+    }
+    result = wvm_admission_transport_query_runtime_ready(
+        transport, &projection.candidate, &projection.manifests[0], error,
+        error_len);
+out:
+    free(record);
+    projection_destroy(&projection);
+    return result;
+}
+
 int wvm_ctl_resume_runtime_readiness(
     struct wvm_control_plane *plane,
     const struct wvm_coordinator_transaction *transaction,

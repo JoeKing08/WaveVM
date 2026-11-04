@@ -58,6 +58,7 @@ printf '%s\n' \
     'printf "%s\\n" "$WVM_RUNTIME_SOCKET" >"$QEMU_ENV_OUT"' \
     'printf "%s\\n" "$WVM_SHM_FILE" >>"$QEMU_ENV_OUT"' \
     'printf "%s\\n" "$@" >"$QEMU_ARGS_OUT"' \
+    'touch "$WVM_RUNTIME_READY_FILE"' \
     'sleep 0.2' \
     >"$qemu"
 chmod 700 "$runtime" "$qemu"

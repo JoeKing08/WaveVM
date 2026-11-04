@@ -21,6 +21,7 @@
 #include "executor_runtime.h"
 #include "ingress.h"
 #include "memory_service.h"
+#include "kvm_page_cache.h"
 #include "runtime_context.h"
 #include "vcpu_coordinator.h"
 #include "vcpu_service.h"
@@ -37,6 +38,8 @@ int wavevm_master_runtime_main(
 int wavevm_executor_runtime_main(
     const struct wvm_node_runtime_context *runtime);
 extern volatile sig_atomic_t g_shutdown_requested;
+extern void *g_shm_ptr;
+extern size_t g_shm_size;
 static uint64_t g_agent_parent_pid;
 
 int wavevm_admission_agent_main(int argc, char **argv);
@@ -47,8 +50,22 @@ struct role_launch {
 
 struct memory_network_context {
     int sidecar_fd;
+    uint32_t physical_node_id;
     struct sockaddr_in sidecar_address;
 };
+
+static int reject_unassigned_vcpu_handoff(
+    void *opaque, const struct wvm_envelope *envelope, char *error,
+    size_t error_len)
+{
+    (void)opaque;
+    (void)envelope;
+    if (error && error_len != 0) {
+        snprintf(error, error_len,
+                 "runtime has no admitted local vCPU executor");
+    }
+    return -EPERM;
+}
 
 static void export_hex_env(const char *name, const uint8_t *bytes,
                            size_t byte_count)
@@ -175,7 +192,8 @@ static int parse_u64(const char *text, uint64_t *value)
 }
 
 static int sum_local_memory_bytes(
-    const struct wvm_node_runtime_manifest *manifest, uint64_t *total_out)
+    const struct wvm_node_runtime_manifest *manifest,
+    uint32_t physical_node_id, uint64_t *total_out)
 {
     uint64_t total = 0;
     size_t i;
@@ -184,8 +202,13 @@ static int sum_local_memory_bytes(
         return -1;
     }
     for (i = 0; i < manifest->local_memory_assignments.count; i++) {
-        const uint64_t bytes =
-            manifest->local_memory_assignments.entries[i].bytes;
+        const struct wvm_memory_chunk_assignment *assignment =
+            &manifest->local_memory_assignments.entries[i];
+        const uint64_t bytes = assignment->bytes;
+
+        if (assignment->directory_physical_node_id != physical_node_id) {
+            continue;
+        }
 
         if (bytes == 0 || bytes > UINT64_MAX - total) {
             return -1;
@@ -224,9 +247,8 @@ static int read_authoritative_local_page(
     }
     /*
      * This is a typed read-only adapter over the existing authoritative
-     * directory page table. The page data points at the live WVM_SHM_FILE
-     * mapping used by the local QEMU frontend; V1 ingress never reinterprets
-     * a V1 payload as a legacy packet or invokes legacy network routing.
+     * directory page table. Its committed bytes are independent of mutable
+     * guest mappings; only versioned commits can update that image.
      */
     result = wvm_handle_local_fault_fastpath(gpa, data, version_out);
     if (result != 0 && error && error_len != 0) {
@@ -238,8 +260,8 @@ static int read_authoritative_local_page(
 
 static int commit_authoritative_local_page(
     void *opaque, uint64_t gpa, uint64_t base_version, uint16_t offset,
-    const uint8_t *data, size_t data_bytes, uint64_t *result_version,
-    char *error, size_t error_len)
+    const uint8_t *data, size_t data_bytes, int source_shared_backing,
+    uint64_t *result_version, char *error, size_t error_len)
 {
     int result;
 
@@ -252,10 +274,53 @@ static int commit_authoritative_local_page(
         return -EINVAL;
     }
     result = wvm_handle_local_commit(
-        gpa, base_version, offset, data, data_bytes, result_version);
+        gpa, base_version, offset, data, data_bytes, source_shared_backing,
+        result_version);
     if (result != 0 && error && error_len != 0) {
         snprintf(error, error_len,
                  "local V1 directory cannot commit GPA %#" PRIx64, gpa);
+    }
+    return result;
+}
+
+static int apply_authoritative_local_push(
+    void *opaque, uint32_t directory_physical_node_id,
+    uint64_t directory_node_instance_id, uint64_t gpa,
+    uint64_t base_version, uint64_t version, uint16_t offset,
+    const uint8_t *data, size_t data_bytes, int full_page, char *error,
+    size_t error_len)
+{
+    struct memory_network_context *network = opaque;
+    int result;
+    int backing_applied;
+
+    (void)directory_node_instance_id;
+    if (!network) {
+        return -EINVAL;
+    }
+    /* A same-host directory commit has already updated this VM's shared RAM. */
+    backing_applied = directory_physical_node_id ==
+                      network->physical_node_id;
+    if (wvm_kvm_page_cache_global_active()) {
+        uint8_t *executor_page = wvm_executor_guest_page_hva(gpa);
+        if (!g_shm_ptr || g_shm_size < WVM_MEMORY_PAGE_BYTES ||
+            gpa > g_shm_size - WVM_MEMORY_PAGE_BYTES || !executor_page) {
+            return -EFAULT;
+        }
+        result = wvm_kvm_page_cache_global_install_data(
+            gpa, version, offset, data, data_bytes, full_page,
+            executor_page, (uint8_t *)g_shm_ptr + gpa, error, error_len);
+        if (result != 0 && result != -EALREADY) {
+            return result;
+        }
+        backing_applied = 1;
+    }
+    result = wvm_apply_local_memory_push(
+        gpa, base_version, version, offset, data, data_bytes, full_page,
+        backing_applied);
+    if (result != 0 && error && error_len != 0) {
+        snprintf(error, error_len,
+                 "local V1 guest push failed for GPA %#" PRIx64, gpa);
     }
     return result;
 }
@@ -819,6 +884,8 @@ static int run_runtime_main(int argc, char **argv)
     void *master_result = NULL;
     void *executor_result = NULL;
     void *executor_dispatch_opaque = NULL;
+    int executor_required = 0;
+    int executor_thread_started = 0;
     char instance_text[32];
     char guest_memory_mb_text[32];
 
@@ -849,15 +916,15 @@ static int run_runtime_main(int argc, char **argv)
         char name_error[256] = {0};
 
         if (physical_node_id <= 0 ||
-            sum_local_memory_bytes(&storage.manifest, &local_memory_bytes) !=
+            sum_local_memory_bytes(&storage.manifest, (uint32_t)physical_node_id,
+                                   &local_memory_bytes) !=
                 0 ||
-            local_memory_bytes == 0 ||
             storage.manifest.launch_plan.guest_total_memory_bytes == 0 ||
             storage.manifest.launch_plan.guest_total_memory_bytes %
                     (1024ULL * 1024ULL) !=
                 0) {
             fprintf(stderr,
-                    "[node-runtime] admitted manifest has no usable local "
+                    "[node-runtime] admitted manifest has no usable runtime "
                     "resource context\n");
             wvm_runtime_manifest_storage_free(&storage);
             wvm_runtime_dispatch_storage_free(&dispatch_storage);
@@ -891,6 +958,7 @@ static int run_runtime_main(int argc, char **argv)
             dispatch_storage.projection.local_primary.destination_vnode;
         runtime_context.local_vcpu_count =
             (uint32_t)storage.manifest.local_vcpu_assignments.count;
+        executor_required = runtime_context.local_vcpu_count != 0;
         runtime_context.local_memory_bytes = local_memory_bytes;
         runtime_context.guest_memory_bytes =
             storage.manifest.launch_plan.guest_total_memory_bytes;
@@ -1046,6 +1114,7 @@ static int run_runtime_main(int argc, char **argv)
             wvm_route_runtime_destroy(&route_runtime);
             return 1;
         }
+        memory_network.physical_node_id = (uint32_t)physical_node_id;
         memset(&bridge_config, 0, sizeof(bridge_config));
         bridge_config.manifest = &storage.manifest;
         bridge_config.runtime_gate = &gate;
@@ -1059,16 +1128,22 @@ static int run_runtime_main(int argc, char **argv)
         bridge_config.execute_handoff_opaque = &runtime_context;
         bridge_config.send_envelope = send_runtime_envelope;
         bridge_config.send_envelope_opaque = &memory_network;
-        if (wvm_executor_bridge_dispatch_init(
-                &bridge_config, &executor_dispatch_opaque, error,
-                sizeof(error)) != 0) {
-            fprintf(stderr, "[node-runtime] cannot initialize executor bridge: %s\n",
-                    error[0] ? error : "invalid typed executor boundary");
-            destroy_memory_network_context(&memory_network);
-            wvm_runtime_manifest_storage_free(&storage);
-            wvm_runtime_dispatch_storage_free(&dispatch_storage);
-            wvm_route_runtime_destroy(&route_runtime);
-            return 1;
+        if (executor_required) {
+            if (wvm_executor_bridge_dispatch_init(
+                    &bridge_config, &executor_dispatch_opaque, error,
+                    sizeof(error)) != 0) {
+                fprintf(stderr,
+                        "[node-runtime] cannot initialize executor bridge: %s\n",
+                        error[0] ? error : "invalid typed executor boundary");
+                destroy_memory_network_context(&memory_network);
+                wvm_runtime_manifest_storage_free(&storage);
+                wvm_runtime_dispatch_storage_free(&dispatch_storage);
+                wvm_route_runtime_destroy(&route_runtime);
+                return 1;
+            }
+        } else {
+            fprintf(stderr,
+                    "[node-runtime] memory-only participant: local executor omitted\n");
         }
         memset(&memory_config, 0, sizeof(memory_config));
         memory_config.dispatch = &dispatch_storage.projection;
@@ -1080,10 +1155,13 @@ static int run_runtime_main(int argc, char **argv)
         memory_config.read_page = read_authoritative_local_page;
         memory_config.commit_page = commit_authoritative_local_page;
         memory_config.publish_commit = publish_authoritative_local_page;
+        memory_config.apply_push = apply_authoritative_local_push;
+        memory_config.enable_typed_subscriber_delivery = 1;
         memory_config.complete_commit = complete_memory_commit;
         memory_config.complete_fault = complete_memory_fault;
         memory_config.send_envelope = send_runtime_envelope;
         memory_config.opaque = &memory_network;
+        wvm_logic_set_typed_memory_path(1);
         if (wvm_memory_service_init(&memory_service, &memory_config, error,
                                        sizeof(error)) != 0 ||
             wvm_memory_service_global_install(&memory_service, error,
@@ -1237,7 +1315,9 @@ static int run_runtime_main(int argc, char **argv)
         ingress_config.runtime_connection_id = runtime_connection_id;
         ingress_config.memory_dispatch = wvm_memory_service_dispatch;
         ingress_config.memory_dispatch_opaque = &memory_service;
-        ingress_config.vcpu_dispatch = wvm_executor_bridge_dispatch;
+        ingress_config.vcpu_dispatch = executor_required
+                                           ? wvm_executor_bridge_dispatch
+                                           : reject_unassigned_vcpu_handoff;
         ingress_config.vcpu_dispatch_opaque = executor_dispatch_opaque;
         ingress_config.vcpu_result_dispatch =
             wvm_vcpu_handoff_coordinator_dispatch;
@@ -1267,47 +1347,51 @@ static int run_runtime_main(int argc, char **argv)
         }
     }
 
-    executor_launch.runtime = &runtime_context;
-    if (pthread_create(&executor_thread, NULL, run_executor_role,
-                       &executor_launch) != 0) {
-        perror("[node-runtime] cannot start local executor role");
-        wvm_block_client_global_uninstall();
-        wvm_block_client_destroy(&block_client);
-        wvm_block_service_destroy(&block_service);
-        wvm_vcpu_service_global_uninstall(&vcpu_service);
-        wvm_vcpu_service_destroy(&vcpu_service);
-        wvm_memory_service_global_uninstall(&memory_service);
-        wvm_memory_service_destroy(&memory_service);
-        wvm_vcpu_handoff_coordinator_destroy(&vcpu_coordinator);
-        wvm_executor_bridge_dispatch_destroy(executor_dispatch_opaque);
-        destroy_memory_network_context(&memory_network);
-        wvm_runtime_manifest_storage_free(&storage);
-        wvm_runtime_dispatch_storage_free(&dispatch_storage);
-        wvm_route_runtime_destroy(&route_runtime);
-        return 1;
-    }
+    if (executor_required) {
+        executor_launch.runtime = &runtime_context;
+        if (pthread_create(&executor_thread, NULL, run_executor_role,
+                           &executor_launch) != 0) {
+            perror("[node-runtime] cannot start local executor role");
+            wvm_block_client_global_uninstall();
+            wvm_block_client_destroy(&block_client);
+            wvm_block_service_destroy(&block_service);
+            wvm_vcpu_service_global_uninstall(&vcpu_service);
+            wvm_vcpu_service_destroy(&vcpu_service);
+            wvm_memory_service_global_uninstall(&memory_service);
+            wvm_memory_service_destroy(&memory_service);
+            wvm_vcpu_handoff_coordinator_destroy(&vcpu_coordinator);
+            wvm_executor_bridge_dispatch_destroy(executor_dispatch_opaque);
+            destroy_memory_network_context(&memory_network);
+            wvm_runtime_manifest_storage_free(&storage);
+            wvm_runtime_dispatch_storage_free(&dispatch_storage);
+            wvm_route_runtime_destroy(&route_runtime);
+            return 1;
+        }
+        executor_thread_started = 1;
 
-    /*
-     * The executor must publish a usable local listener before the semantic
-     * coordinator can accept a vCPU handoff. This is a lifecycle gate, not a
-     * timing workaround: failure is reported by the executor startup state.
-     */
-    if (wvm_executor_runtime_wait_ready() != 0) {
-        fprintf(stderr,
-                "[node-runtime] local executor did not reach ready state\n");
-        g_shutdown_requested = 1;
-        pthread_join(executor_thread, &executor_result);
-        wvm_vcpu_service_global_uninstall(&vcpu_service);
-        wvm_vcpu_service_destroy(&vcpu_service);
-        wvm_memory_service_global_uninstall(&memory_service);
-        wvm_memory_service_destroy(&memory_service);
-        wvm_vcpu_handoff_coordinator_destroy(&vcpu_coordinator);
-        wvm_executor_bridge_dispatch_destroy(executor_dispatch_opaque);
-        destroy_memory_network_context(&memory_network);
-        wvm_runtime_manifest_storage_free(&storage);
-        wvm_runtime_dispatch_storage_free(&dispatch_storage);
-        wvm_route_runtime_destroy(&route_runtime);
-        return 1;
+        /*
+         * The executor must publish a usable local listener before the
+         * semantic coordinator can accept a vCPU handoff. This is a lifecycle
+         * gate, not a timing workaround.
+         */
+        if (wvm_executor_runtime_wait_ready() != 0) {
+            fprintf(stderr,
+                    "[node-runtime] local executor did not reach ready state\n");
+            g_shutdown_requested = 1;
+            pthread_join(executor_thread, &executor_result);
+            executor_thread_started = 0;
+            wvm_vcpu_service_global_uninstall(&vcpu_service);
+            wvm_vcpu_service_destroy(&vcpu_service);
+            wvm_memory_service_global_uninstall(&memory_service);
+            wvm_memory_service_destroy(&memory_service);
+            wvm_vcpu_handoff_coordinator_destroy(&vcpu_coordinator);
+            wvm_executor_bridge_dispatch_destroy(executor_dispatch_opaque);
+            destroy_memory_network_context(&memory_network);
+            wvm_runtime_manifest_storage_free(&storage);
+            wvm_runtime_dispatch_storage_free(&dispatch_storage);
+            wvm_route_runtime_destroy(&route_runtime);
+            return 1;
+        }
     }
 
     {
@@ -1323,7 +1407,10 @@ static int run_runtime_main(int argc, char **argv)
                        &master_launch) != 0) {
         perror("[node-runtime] cannot start node-runtime coordinator role");
         g_shutdown_requested = 1;
-        pthread_join(executor_thread, &executor_result);
+        if (executor_thread_started) {
+            pthread_join(executor_thread, &executor_result);
+            executor_thread_started = 0;
+        }
         wvm_block_client_global_uninstall();
         wvm_block_client_destroy(&block_client);
         wvm_block_service_destroy(&block_service);
@@ -1342,7 +1429,10 @@ static int run_runtime_main(int argc, char **argv)
 
     pthread_join(master_thread, &master_result);
     g_shutdown_requested = 1;
-    pthread_join(executor_thread, &executor_result);
+    if (executor_thread_started) {
+        pthread_join(executor_thread, &executor_result);
+        executor_thread_started = 0;
+    }
 
     /*
      * R1: STOP must converge, not merely stop accepting work.  Drain the
@@ -1355,7 +1445,8 @@ static int run_runtime_main(int argc, char **argv)
         int stop_ok = 1;
         char drain_error[256] = {0};
 
-        if (wvm_executor_bridge_dispatch_drain(
+        if (executor_required &&
+            wvm_executor_bridge_dispatch_drain(
                 executor_dispatch_opaque, 30000, drain_error,
                 sizeof(drain_error)) != 0) {
             fprintf(stderr, "[STOP] executor drain failed: %s\n",

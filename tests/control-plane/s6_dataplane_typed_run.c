@@ -184,7 +184,7 @@ int main(int argc, char **argv)
     struct wvm_runtime_dispatch_projection *disp;
     struct wvm_node_runtime_manifest *man;
     uint16_t backend;
-    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + sizeof(wvm_tcg_context_t)];
+    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     size_t context_bytes = 0;
     uint64_t fields =
         WVM_VCPU_CONTEXT_FIELD_ARCHITECTURAL_STATE |
@@ -194,7 +194,7 @@ int main(int argc, char **argv)
     struct wvm_vcpu_handoff_request request;
     uint8_t payload[WVM_VCPU_HANDOFF_REQUEST_HEADER_BYTES +
                     WVM_X86_CONTEXT_WIRE_HEADER_BYTES +
-                    sizeof(wvm_tcg_context_t)];
+                    WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     size_t payload_bytes = 0;
     struct wvm_envelope run_env;
     struct udp_emit_ctx emit;

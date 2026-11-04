@@ -11,6 +11,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_canonical.c" \
     "$repo_root/common_include/wavevm_identity.c" \
     "$repo_root/common_include/wavevm_manifest.c" \
+    "$repo_root/common_include/wavevm_control.c" \
     "$repo_root/common_include/wavevm_capability.c" \
     "$repo_root/common_include/wavevm_runtime_profile.c" \
     "$repo_root/common_include/wavevm_lifecycle.c" \

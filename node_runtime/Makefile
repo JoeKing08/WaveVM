@@ -1,11 +1,13 @@
 CC ?= gcc
 CFLAGS ?= -Wall -O2 -msse4.2 -std=gnu11 -D_DEFAULT_SOURCE
 CPPFLAGS ?= -I../common_include -pthread
+CPPFLAGS += -MMD -MP
 LDFLAGS ?= -pthread
 
 TARGET = ../wavevm_node_runtime
 
 MASTER_OBJS = master_logic.o master_user.o master_main.o
+MASTER_OBJS += kernel_memory.o
 SLAVE_OBJS = slave_hybrid.o slave_vfio.o
 COMMON_OBJS = resources.o sha256.o canonical.o identity.o runtime_names.o manifest.o lifecycle.o runtime_gate.o runtime_dispatch.o executor_abi.o executor_session.o envelope.o memory.o vcpu_handoff.o vcpu_handoff_cache.o x86_context.o local_memory.o route_runtime.o executor_bridge.o vcpu_coordinator.o vcpu_service.o memory_service.o ingress.o directory_store.o kvm_page_cache.o kvm_execution_fetch.o control.o route_delivery.o runtime_delivery.o membership_control.o membership_controller.o reservation_runtime.o admission_stage.o admission_receiver.o route_control.o control_transport.o control_owner.o tls_control_connector.o admission_node_service.o admission_slot_registry.o admission_runtime_agent.o host_probe.o capability.o block_chunk_store.o block_wire.o block_service.o block_client.o
 
@@ -14,7 +16,7 @@ all: $(TARGET)
 $(TARGET): main.o admission_main.o $(MASTER_OBJS) $(SLAVE_OBJS) $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDFLAGS) -lssl -lcrypto
 
-main.o: main.c
+main.o: main.c memory_service.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 admission_main.o: admission_main.c
@@ -26,10 +28,13 @@ master_logic.o: ../master_core/logic_core.c
 master_user.o: ../master_core/user_backend.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
-master_main.o: ../master_core/main_wrapper.c runtime_context.h
+master_main.o: ../master_core/main_wrapper.c runtime_context.h kernel_memory.h ../common_include/wavevm_ioctl.h ../common_include/wavevm_protocol.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
-slave_hybrid.o: ../slave_daemon/slave_hybrid.c runtime_context.h
+kernel_memory.o: kernel_memory.c kernel_memory.h memory_service.h ../common_include/wavevm_ioctl.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+slave_hybrid.o: ../slave_daemon/slave_hybrid.c runtime_context.h ../common_include/wavevm_ioctl.h ../common_include/wavevm_protocol.h ../common_include/wavevm_kvm_state.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 slave_vfio.o: ../slave_daemon/slave_vfio.c
@@ -159,11 +164,11 @@ admission_runtime_agent.o: ../common_include/wavevm_admission_runtime_agent.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(TARGET) main.o $(MASTER_OBJS) $(SLAVE_OBJS) $(COMMON_OBJS)
+	rm -f $(TARGET) main.o admission_main.o $(MASTER_OBJS) $(SLAVE_OBJS) $(COMMON_OBJS) *.d
 
 .PHONY: all clean
 
-host_probe.o: ../common_include/wavevm_host_probe.c
+host_probe.o: ../common_include/wavevm_host_probe.c ../common_include/wavevm_ioctl.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 capability.o: ../common_include/wavevm_capability.c
@@ -180,3 +185,5 @@ block_service.o: block_service.c block_service.h
 
 block_client.o: block_client.c block_client.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+-include $(wildcard *.d)

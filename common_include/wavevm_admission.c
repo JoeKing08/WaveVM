@@ -399,19 +399,6 @@ int wvm_admission_plan_validate(const struct wvm_admission_snapshot *snapshot,
                       reservation->physical_node_id);
             return -1;
         }
-        /*
-         * Fail-closed: a vCPU executor without co-located guest memory requires
-         * remote memory directory/executor support that is not yet admitted.
-         * Memory-only participants (vcpu==0) remain legal for Mode B.
-         */
-        if (reservation->guest_vcpu_slots != 0 &&
-            reservation->guest_memory_bytes == 0) {
-            set_error(error, error_len,
-                      "admission plan places vCPU on node %u without local "
-                      "guest memory (remote memory placement not admitted)",
-                      reservation->physical_node_id);
-            return -1;
-        }
         if (reservation->guest_memory_bytes % WVM_ADMISSION_PAGE_BYTES != 0 ||
             reservation->host_overhead_memory_bytes %
                     WVM_ADMISSION_PAGE_BYTES != 0) {
@@ -699,11 +686,10 @@ static int select_assignment_node(
                                   ((uint32_t)best == (uint32_t)host_index
                                        ? request->host_overhead_memory_bytes
                                        : 0);
-            /*
-             * Spread memory prefers nodes that already hold this VM's vCPUs so
-             * the plan stays locally co-located until remote memory executors
-             * are admitted. Memory-only spill remains allowed afterward.
-             */
+            /* Spread still prefers a vCPU-bearing memory directory for
+             * locality, but a memory-only directory is equally valid when
+             * capacity or policy selects it. The executor is bound later from
+             * the admitted vCPU reservations. */
             if (memory_assignment && has_vcpu != best_has_vcpu) {
                 if (has_vcpu) {
                     best = (int)node_index;
@@ -786,60 +772,9 @@ int wvm_admission_plan_propose(
     }
 
     remaining_memory = request->requested_memory_bytes;
-    /*
-     * Pin one memory chunk onto every node that already received a vCPU so
-     * spread cannot leave a vCPU executor without local guest RAM (remote
-     * memory executors are not admitted yet). Remaining bytes then follow
-     * normal compact/spread scoring, still preferring vCPU nodes.
-     */
-    for (i = 0; i < snapshot->node_count && remaining_memory != 0; i++) {
-        const uint32_t node_index = indices[i];
-        uint64_t chunk;
-        uint32_t available_cpu;
-        uint64_t available_memory;
-        uint64_t memory_used;
-        const struct wvm_admission_node *node = &snapshot->nodes[node_index];
-
-        if (guest_vcpus[node_index] == 0) {
-            continue;
-        }
-        if (!node_is_memory_eligible(node) ||
-            node_available_capacity(node, &available_cpu, &available_memory) !=
-                0) {
-            set_error(error, error_len,
-                      "admission plan places vCPU on node %u without local "
-                      "guest memory (remote memory placement not admitted)",
-                      node->physical_node_id);
-            goto out;
-        }
-        memory_used = guest_memory[node_index] +
-                      (node_index == (uint32_t)host_index
-                           ? request->host_overhead_memory_bytes
-                           : 0);
-        if (memory_used >= available_memory) {
-            set_error(error, error_len,
-                      "admission plan places vCPU on node %u without local "
-                      "guest memory (remote memory placement not admitted)",
-                      node->physical_node_id);
-            goto out;
-        }
-        chunk = request->memory_chunk_bytes;
-        if (chunk > remaining_memory) {
-            chunk = remaining_memory;
-        }
-        if (chunk > available_memory - memory_used) {
-            chunk = available_memory - memory_used;
-        }
-        if (chunk == 0 || chunk % WVM_ADMISSION_PAGE_BYTES != 0) {
-            set_error(error, error_len,
-                      "admission plan places vCPU on node %u without local "
-                      "guest memory (remote memory placement not admitted)",
-                      node->physical_node_id);
-            goto out;
-        }
-        guest_memory[node_index] += chunk;
-        remaining_memory -= chunk;
-    }
+    /* CPU and memory are independent reservations.  A CPU executor may be
+     * backed by a different memory directory; placement renders that pair
+     * after both resource pools have been selected. */
     while (remaining_memory != 0) {
         uint64_t chunk = remaining_memory;
         int node_index;
@@ -931,6 +866,36 @@ static int placement_options_validate(
         return -1;
     }
     return 0;
+}
+
+static const struct wvm_admission_reservation *
+select_memory_executor_reservation(
+    const struct wvm_admission_plan *admission_plan, size_t ordinal)
+{
+    size_t count = 0;
+    size_t i;
+
+    if (!admission_plan || !admission_plan->reservations) {
+        return NULL;
+    }
+    for (i = 0; i < admission_plan->reservation_count; i++) {
+        if (admission_plan->reservations[i].guest_vcpu_slots != 0) {
+            count++;
+        }
+    }
+    if (count == 0) {
+        return NULL;
+    }
+    ordinal %= count;
+    for (i = 0; i < admission_plan->reservation_count; i++) {
+        if (admission_plan->reservations[i].guest_vcpu_slots == 0) {
+            continue;
+        }
+        if (ordinal-- == 0) {
+            return &admission_plan->reservations[i];
+        }
+    }
+    return NULL;
 }
 
 static int listener_plan_matches(
@@ -1374,6 +1339,7 @@ int wvm_admission_placement_plan_build(
                 local_memory > request->memory_chunk_bytes
                     ? request->memory_chunk_bytes
                     : local_memory;
+            const struct wvm_admission_reservation *executor_reservation;
             struct wvm_memory_chunk_assignment *assignment;
 
             if (memory_index >= placement_plan->memory_assignments.capacity) {
@@ -1388,7 +1354,15 @@ int wvm_admission_placement_plan_build(
             assignment->gpa_start = gpa_start;
             assignment->bytes = chunk;
             assignment->directory_physical_node_id = reservation->physical_node_id;
-            assignment->executor_physical_node_id = reservation->physical_node_id;
+            executor_reservation = select_memory_executor_reservation(
+                admission_plan, memory_index);
+            if (!executor_reservation) {
+                set_error(error, error_len,
+                          "memory assignment has no vCPU executor reservation");
+                return -1;
+            }
+            assignment->executor_physical_node_id =
+                executor_reservation->physical_node_id;
             assignment->consistency_policy = options->memory_consistency_policy;
             memcpy(assignment->reservation_id, requirement->reservation_id,
                    sizeof(assignment->reservation_id));

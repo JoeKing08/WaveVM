@@ -166,14 +166,15 @@ int wvm_directory_store_read_page(
      * page or exceed the configured metadata bound.
      */
     pthread_mutex_lock(&store->allocation_lock);
-    if (store->page_record_count >= store->config.max_page_records) {
-        pthread_mutex_unlock(&store->allocation_lock);
-        set_error(error, error_len, "V1 directory page table is full");
-        return -EAGAIN;
-    }
     pthread_mutex_lock(&store->bucket_locks[bucket]);
     page = find_page_locked(store, bucket, gpa);
     if (!page) {
+        if (store->page_record_count >= store->config.max_page_records) {
+            pthread_mutex_unlock(&store->bucket_locks[bucket]);
+            pthread_mutex_unlock(&store->allocation_lock);
+            set_error(error, error_len, "V1 directory page table is full");
+            return -EAGAIN;
+        }
         page = calloc(1, sizeof(*page));
         if (!page) {
             pthread_mutex_unlock(&store->bucket_locks[bucket]);
@@ -224,14 +225,15 @@ int wvm_directory_store_commit_page(
      */
     if (base_version == initial_version(store->config.initial_epoch)) {
         pthread_mutex_lock(&store->allocation_lock);
-        if (store->page_record_count >= store->config.max_page_records) {
-            pthread_mutex_unlock(&store->allocation_lock);
-            set_error(error, error_len, "V1 directory page table is full");
-            return -EAGAIN;
-        }
         pthread_mutex_lock(&store->bucket_locks[bucket]);
         page = find_page_locked(store, bucket, gpa);
         if (!page) {
+            if (store->page_record_count >= store->config.max_page_records) {
+                pthread_mutex_unlock(&store->bucket_locks[bucket]);
+                pthread_mutex_unlock(&store->allocation_lock);
+                set_error(error, error_len, "V1 directory page table is full");
+                return -EAGAIN;
+            }
             page = calloc(1, sizeof(*page));
             if (!page) {
                 pthread_mutex_unlock(&store->bucket_locks[bucket]);

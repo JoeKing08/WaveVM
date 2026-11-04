@@ -52,4 +52,7 @@ void wvm_executor_runtime_publish_ready(void);
 /* Tear down bind/session state published by the helpers above. */
 void wvm_executor_runtime_unbind(void);
 
+/* Resolve a complete guest page through the executor's actual memslots. */
+uint8_t *wvm_executor_guest_page_hva(uint64_t gpa);
+
 #endif

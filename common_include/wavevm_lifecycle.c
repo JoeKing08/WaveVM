@@ -773,8 +773,10 @@ int wvm_node_runtime_manifest_project(
         }
     }
     for (i = 0; i < candidate->memory_placements.count; i++) {
-        if (candidate->memory_placements.entries[i].executor_physical_node_id ==
-            reservation->physical_node_id) {
+        if (candidate->memory_placements.entries[i].directory_physical_node_id ==
+                reservation->physical_node_id ||
+            candidate->memory_placements.entries[i].executor_physical_node_id ==
+                reservation->physical_node_id) {
             if (!runtime_manifest->local_memory_assignments.entries) {
                 return -1;
             }
@@ -1940,9 +1942,11 @@ static int lifecycle_memory_assignment_list_validate(
 
         if (wvm_memory_chunk_assignment_validate(assignment, error, error_len) !=
                 0 ||
-            assignment->executor_physical_node_id != physical_node_id ||
-            memcmp(assignment->reservation_id, reservation_id,
-                   WVM_IDENTITY_ID_BYTES) != 0 ||
+            (assignment->directory_physical_node_id != physical_node_id &&
+             assignment->executor_physical_node_id != physical_node_id) ||
+            (assignment->directory_physical_node_id == physical_node_id &&
+             memcmp(assignment->reservation_id, reservation_id,
+                    WVM_IDENTITY_ID_BYTES) != 0) ||
             (i != 0 &&
              assignments->entries[i - 1].gpa_start >= assignment->gpa_start)) {
             set_error(error, error_len, "local memory assignments are invalid");

@@ -187,13 +187,15 @@ static int complete_fault(void *opaque,
 
 static int commit_page(void *opaque, uint64_t gpa, uint64_t base_version,
                        uint16_t offset, const uint8_t *data, size_t data_bytes,
-                       uint64_t *result_version, char *error, size_t error_len)
+                       int source_shared_backing, uint64_t *result_version,
+                       char *error, size_t error_len)
 {
     (void)opaque;
     (void)gpa;
     (void)offset;
     (void)data;
     (void)data_bytes;
+    (void)source_shared_backing;
     (void)error;
     (void)error_len;
     *result_version = base_version + 1;
@@ -527,7 +529,7 @@ static int fetch_and_execute(struct remote_state *remote, uint8_t *hva,
     operation_id[15] = 0x06;
 
     result = wvm_kvm_fetch_execution_page(TEST_GPA, operation_id, hva,
-                                          &fetched_version, error, error_len);
+                                          &fetched_version, 0, error, error_len);
     if (result != 0) {
         return result;
     }

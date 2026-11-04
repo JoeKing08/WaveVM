@@ -88,10 +88,10 @@ trap 'exit 143' TERM
 "$runtime" --manifest "$manifest" --node-instance "$node_instance" &
 runtime_pid=$!
 
-ready=0
+socket_ready=0
 for _ in $(seq 1 200); do
-    if [[ -f "$WVM_RUNTIME_READY_FILE" && -S "$WVM_RUNTIME_SOCKET" ]]; then
-        ready=1
+    if [[ -S "$WVM_RUNTIME_SOCKET" ]]; then
+        socket_ready=1
         break
     fi
     if ! kill -0 "$runtime_pid" 2>/dev/null; then
@@ -100,13 +100,35 @@ for _ in $(seq 1 200); do
     fi
     sleep 0.05
 done
-if ((ready == 0)); then
+if ((socket_ready == 0)); then
     printf 'node runtime did not publish manifest-derived QEMU IPC socket\n' >&2
     exit 1
 fi
 
 "$qemu" "$@" &
 qemu_pid=$!
+
+ready=0
+for _ in $(seq 1 200); do
+    if [[ -f "$WVM_RUNTIME_READY_FILE" ]]; then
+        ready=1
+        break
+    fi
+    if ! kill -0 "$qemu_pid" 2>/dev/null; then
+        printf 'QEMU exited before manifest-bound runtime readiness\n' >&2
+        exit 1
+    fi
+    if ! kill -0 "$runtime_pid" 2>/dev/null; then
+        printf 'node runtime exited before manifest-bound runtime readiness\n' >&2
+        exit 1
+    fi
+    sleep 0.05
+done
+if ((ready == 0)); then
+    printf 'QEMU did not complete manifest-bound runtime registration\n' >&2
+    exit 1
+fi
+
 wait "$qemu_pid"
 status=$?
 qemu_pid=""

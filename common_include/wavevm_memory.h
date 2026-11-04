@@ -7,10 +7,15 @@
 #include "wavevm_envelope.h"
 
 #define WVM_MEMORY_PAGE_BYTES 4096U
-#define WVM_MEM_READ_PAYLOAD_BYTES 24U
+#define WVM_MEM_READ_PAYLOAD_BYTES 32U
 #define WVM_MEM_ACK_HEADER_BYTES 32U
-#define WVM_MEM_COMMIT_HEADER_BYTES 36U
+#define WVM_MEM_COMMIT_HEADER_BYTES 44U
 #define WVM_MEM_COMMIT_ACK_BYTES 32U
+#define WVM_MEM_PUSH_HEADER_BYTES 48U
+
+enum wvm_mem_push_flags {
+    WVM_MEM_PUSH_FLAG_FULL = 0x0001U,
+};
 
 enum wvm_mem_ack_status {
     WVM_MEM_ACK_SUCCESS = 0,
@@ -38,6 +43,7 @@ struct wvm_mem_read {
     uint16_t reply_destination_kind;
     uint64_t reply_destination_scope;
     uint32_t reply_destination_vnode;
+    uint64_t reply_node_instance_id;
 };
 
 /*
@@ -68,6 +74,7 @@ struct wvm_mem_commit {
     uint16_t reply_destination_kind;
     uint64_t reply_destination_scope;
     uint32_t reply_destination_vnode;
+    uint64_t reply_node_instance_id;
     const uint8_t *data;
     size_t data_bytes;
 };
@@ -78,6 +85,26 @@ struct wvm_mem_commit_ack {
     uint16_t status;
     uint32_t directory_physical_node_id;
     uint64_t directory_node_instance_id;
+};
+
+/*
+ * A directory update is a separate typed operation from the client commit.
+ * BASE_VERSION is required for a diff and zero for an authoritative full
+ * snapshot.  The directory identity is carried in the payload as well as the
+ * envelope so a receiver can reject a push from an old directory instance.
+ * DATA points into the decoded input buffer and is not owned by this object.
+ */
+struct wvm_mem_push {
+    uint64_t gpa;
+    uint64_t base_version;
+    uint64_t version;
+    uint16_t offset;
+    uint16_t size;
+    uint16_t flags;
+    uint32_t directory_physical_node_id;
+    uint64_t directory_node_instance_id;
+    const uint8_t *data;
+    size_t data_bytes;
 };
 
 int wvm_mem_read_encode(const struct wvm_mem_read *read,
@@ -110,6 +137,13 @@ int wvm_mem_commit_ack_decode(
     const uint8_t input[WVM_MEM_COMMIT_ACK_BYTES],
     struct wvm_mem_commit_ack *ack, char *error, size_t error_len);
 
+int wvm_mem_push_encode(const struct wvm_mem_push *push, uint8_t *output,
+                        size_t output_capacity, size_t *output_bytes,
+                        char *error, size_t error_len);
+int wvm_mem_push_decode(const uint8_t *input, size_t input_bytes,
+                        struct wvm_mem_push *push, char *error,
+                        size_t error_len);
+
 /*
  * Build a response envelope after the directory node runtime resolves the
  * read payload's reply destination from its admitted immutable snapshot.
@@ -137,6 +171,7 @@ int wvm_mem_commit_ack_envelope_build(
     const struct wvm_mem_commit_ack *ack,
     uint8_t payload_output[WVM_MEM_COMMIT_ACK_BYTES],
     struct wvm_envelope *response, char *error, size_t error_len);
+
 
 /*
  * Validate the complete semantic payload for V1 memory messages before it

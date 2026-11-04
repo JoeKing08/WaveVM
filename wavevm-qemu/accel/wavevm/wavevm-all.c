@@ -8,6 +8,7 @@
 #include "sysemu/cpus.h"
 #include "sysemu/cpu-timers.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/runstate.h"
 #include "qom/object.h"
 #include "hw/boards.h"
 #include "qemu/option.h"
@@ -50,12 +51,14 @@ extern int wavevm_attach_shared_ram_ptr(void *ram, uint64_t size, int fd);
 extern int wavevm_join_shared_ram_ptr(void *ram, uint64_t size, int fd);
 extern void wavevm_user_mem_set_tcg_shm_coherent(int enabled);
 extern int wavevm_user_mem_tcg_shm_coherent(void);
+extern int wavevm_user_mem_prepare_tcg_dirty_baseline(void);
 extern void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx);
 extern void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx);
 extern void wvm_set_ttl_interval(int ms);
 extern void wvm_register_volatile_ram(uint64_t gpa, uint64_t size);
 extern int wavevm_user_mem_flush_slave_dirty_sync(void);
 extern void wvm_apply_remote_push(uint16_t msg_type, void *payload);
+extern void wvm_apply_local_push(uint16_t msg_type, void *payload);
 extern void wavevm_start_vcpu_thread(CPUState *cpu);
 extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
 static void wavevm_sync_topology(int dev_fd);
@@ -82,7 +85,7 @@ static int write_all(int fd, const void *buf, size_t len);
  * slice that touches MMIO/PIO must restore EIP and ask FE for bounded local
  * execution (WVM_TCG_EXCP_NEED_LOCAL) — not silently drop the access.
  */
-void (*wavevm_slave_pio_hook)(CPUState *cpu, uintptr_t retaddr);
+void (*wavevm_slave_device_io_hook)(CPUState *cpu, uintptr_t retaddr);
 
 static bool wavevm_role_is_slave(void)
 {
@@ -94,14 +97,37 @@ static void QEMU_NORETURN wavevm_slave_request_local_io(CPUState *cpu,
                                                         uintptr_t retaddr)
 {
     static unsigned log_count;
+    bool restored = false;
+    target_ulong before_eip = 0;
+    target_ulong before_rsp = 0;
+    target_ulong after_eip = 0;
+    target_ulong after_rsp = 0;
+
+    if (cpu) {
+        X86CPU *x86_cpu = X86_CPU(cpu);
+        before_eip = x86_cpu->env.eip;
+        before_rsp = x86_cpu->env.regs[R_ESP];
+        /* Keep the result explicit: cpu_loop_exit_restore() discards it. */
+        restored = retaddr && cpu_restore_state(cpu, retaddr, true);
+        after_eip = x86_cpu->env.eip;
+        after_rsp = x86_cpu->env.regs[R_ESP];
+    }
     if (log_count++ < 64) {
         fprintf(stderr,
-                "[WVM-TCG-NEED-LOCAL] slave cpu=%d rip-restore retaddr=%p\n",
-                cpu ? cpu->cpu_index : -1, (void *)retaddr);
+                "[WVM-TCG-NEED-LOCAL] slave cpu=%d retaddr=%p restored=%d "
+                "rip=%#lx->%#lx rsp=%#lx->%#lx\n",
+                cpu ? cpu->cpu_index : -1, (void *)retaddr, restored,
+                (unsigned long)before_eip, (unsigned long)after_eip,
+                (unsigned long)before_rsp, (unsigned long)after_rsp);
     }
     if (cpu) {
+        if (!restored) {
+            error_report("WaveVM cannot restore device-access instruction "
+                         "cpu=%d retaddr=%p", cpu->cpu_index, (void *)retaddr);
+            exit(EXIT_FAILURE);
+        }
         cpu->exception_index = WVM_TCG_EXCP_NEED_LOCAL;
-        cpu_loop_exit_restore(cpu, retaddr);
+        cpu_loop_exit(cpu);
     }
     abort();
 }
@@ -123,7 +149,7 @@ static void wavevm_slave_transaction_failed(CPUState *cpu, hwaddr physaddr,
     wavevm_slave_request_local_io(cpu, retaddr);
 }
 
-static void wavevm_slave_pio_hook_fn(CPUState *cpu, uintptr_t retaddr)
+static void wavevm_slave_device_io_hook_fn(CPUState *cpu, uintptr_t retaddr)
 {
     wavevm_slave_request_local_io(cpu, retaddr);
 }
@@ -137,7 +163,7 @@ static void wavevm_slave_install_device_authority_hooks(void)
         return;
     }
     installed = true;
-    wavevm_slave_pio_hook = wavevm_slave_pio_hook_fn;
+    wavevm_slave_device_io_hook = wavevm_slave_device_io_hook_fn;
     CPU_FOREACH(cpu) {
         CPUClass *cc = CPU_GET_CLASS(cpu);
         cc->do_transaction_failed = wavevm_slave_transaction_failed;
@@ -1018,6 +1044,7 @@ static int wavevm_session_result_from_ack(
 static void *wavevm_executor_session_thread(void *opaque)
 {
     WaveVMAccelState *state = opaque;
+    static unsigned int session_diag_count;
     uint8_t *frame = g_malloc(WVM_EXECUTOR_SESSION_MAX_FRAME_BYTES);
     uint8_t *context = g_malloc(WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES);
     uint8_t *result_payload =
@@ -1045,22 +1072,61 @@ static void *wavevm_executor_session_thread(void *opaque)
         size_t result_payload_bytes = 0;
         uint8_t response[WVM_EXECUTOR_SESSION_MAX_FRAME_BYTES];
         size_t response_bytes = 0;
+        int validation_rc = 0;
+        int validation_stage = 0;
+        int legacy_status;
+        int result_rc = 0;
+        int result_encode_rc = 0;
+        int session_encode_rc = 0;
+        ssize_t response_send_rc = -1;
 
         if (received == 0 || (received < 0 && errno != EINTR)) {
+            if (__sync_fetch_and_add(&session_diag_count, 1U) < 32U) {
+                fprintf(stderr,
+                        "[WaveVM-TCG-Session] recv ended fd=%d bytes=%zd errno=%d\n",
+                        state->executor_session_fd, received,
+                        received < 0 ? errno : 0);
+            }
             break;
         }
         if (received < 0) {
             continue;
         }
-        if (wvm_executor_session_decode(
-                frame, (size_t)received, &message_type, &payload,
-                &payload_bytes, error, sizeof(error)) != 0 ||
-            message_type != WVM_EXECUTOR_SESSION_VCPU_RUN ||
-            wvm_vcpu_handoff_request_decode(
-                payload, payload_bytes, &request, error, sizeof(error)) != 0 ||
-            wavevm_session_authorize_request(&request) != 0 ||
-            wavevm_session_request_to_legacy(
-                &request, &legacy_request, error, sizeof(error)) != 0) {
+        validation_rc = wvm_executor_session_decode(
+            frame, (size_t)received, &message_type, &payload, &payload_bytes,
+            error, sizeof(error));
+        if (validation_rc != 0) {
+            validation_stage = 1;
+        } else if (message_type != WVM_EXECUTOR_SESSION_VCPU_RUN) {
+            validation_rc = -EPROTO;
+            validation_stage = 2;
+        } else {
+            validation_rc = wvm_vcpu_handoff_request_decode(
+                payload, payload_bytes, &request, error, sizeof(error));
+            if (validation_rc != 0) {
+                validation_stage = 3;
+            } else {
+                validation_rc = wavevm_session_authorize_request(&request);
+                if (validation_rc != 0) {
+                    validation_stage = 4;
+                } else {
+                    validation_rc = wavevm_session_request_to_legacy(
+                        &request, &legacy_request, error, sizeof(error));
+                    if (validation_rc != 0) {
+                        validation_stage = 5;
+                    }
+                }
+            }
+        }
+        if (validation_rc != 0) {
+            if (__sync_fetch_and_add(&session_diag_count, 1U) < 32U) {
+                fprintf(stderr,
+                        "[WaveVM-TCG-Session] request validation failed "
+                        "stage=%d rc=%d received=%zd type=%u payload=%zu error=%s\n",
+                        validation_stage, validation_rc, received,
+                        (unsigned)message_type, payload_bytes,
+                        error[0] ? error : "unknown");
+            }
             /* Send error response before closing */
             fprintf(stderr, "[WaveVM-TCG-Session] Request validation failed: %s\n",
                     error[0] ? error : "unknown error");
@@ -1098,24 +1164,68 @@ static void *wavevm_executor_session_thread(void *opaque)
             break;
         }
 
+        if (__sync_fetch_and_add(&session_diag_count, 1U) < 32U) {
+            fprintf(stderr,
+                    "[WaveVM-TCG-Session] submit fd=%d vm=%u vcpu=%u seq=%" PRIu64
+                    " context_bytes=%zu\n",
+                    state->executor_session_fd, request.vm_id,
+                    request.vcpu_index, request.handoff_sequence,
+                    request.context_bytes);
+        }
         memset(&legacy_ack, 0, sizeof(legacy_ack));
-        wavevm_slave_submit_cpu_run(&legacy_request, &legacy_ack);
-        if (wavevm_session_result_from_ack(
-                &request, &legacy_ack, context,
-                WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES, &result, error,
-                sizeof(error)) != 0 ||
-            wvm_vcpu_handoff_result_encode(
+        legacy_status = wavevm_slave_submit_cpu_run(&legacy_request, &legacy_ack);
+        if (__sync_fetch_and_add(&session_diag_count, 1U) < 32U) {
+            fprintf(stderr,
+                    "[WaveVM-TCG-Session] submit returned fd=%d legacy_status=%d ack_status=%d halted=%u\n",
+                    state->executor_session_fd, legacy_status, legacy_ack.status,
+                    (unsigned)legacy_ack.ctx.tcg.halted);
+        }
+        result_rc = wavevm_session_result_from_ack(
+            &request, &legacy_ack, context,
+            WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES, &result, error,
+            sizeof(error));
+        if (result_rc == 0) {
+            result_encode_rc = wvm_vcpu_handoff_result_encode(
                 &result, result_payload,
                 WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES +
                     WVM_VCPU_HANDOFF_RESULT_HEADER_BYTES,
-                &result_payload_bytes, error, sizeof(error)) != 0 ||
-            wvm_executor_session_encode(
+                &result_payload_bytes, error, sizeof(error));
+        }
+        if (result_rc == 0 && result_encode_rc == 0) {
+            session_encode_rc = wvm_executor_session_encode(
                 WVM_EXECUTOR_SESSION_VCPU_EXIT, result_payload,
                 result_payload_bytes, response, sizeof(response),
-                &response_bytes, error, sizeof(error)) != 0 ||
-            send(state->executor_session_fd, response, response_bytes,
-                 MSG_NOSIGNAL) != (ssize_t)response_bytes) {
+                &response_bytes, error, sizeof(error));
+        }
+        if (result_rc == 0 && result_encode_rc == 0 &&
+            session_encode_rc == 0) {
+            response_send_rc = send(state->executor_session_fd, response,
+                                    response_bytes, MSG_NOSIGNAL);
+        }
+        if (result_rc != 0 || result_encode_rc != 0 ||
+            session_encode_rc != 0 || response_send_rc != (ssize_t)response_bytes) {
+            if (__sync_fetch_and_add(&session_diag_count, 1U) < 32U) {
+                fprintf(stderr,
+                        "[WaveVM-TCG-Session] response failed "
+                        "legacy_status=%d ack_status=%d result_rc=%d "
+                        "result_encode_rc=%d session_encode_rc=%d "
+                        "send=%zd/%zu result={status=%u exit=%u ctx=%zu} error=%s\n",
+                        legacy_status, legacy_ack.status, result_rc,
+                        result_encode_rc, session_encode_rc, response_send_rc,
+                        response_bytes, result.status, result.exit_class,
+                        result.context_bytes, error[0] ? error : "unknown");
+            }
             break;
+        }
+        if (result.status != WVM_VCPU_HANDOFF_RESULT_SUCCESS &&
+            __sync_fetch_and_add(&session_diag_count, 1U) < 32U) {
+            fprintf(stderr,
+                    "[WaveVM-TCG-Session] helper returned non-success "
+                    "legacy_status=%d ack_status=%d result={status=%u "
+                    "exit=%u backend=%u vm=%u vcpu=%u ctx=%zu}\n",
+                    legacy_status, legacy_ack.status, result.status,
+                    result.exit_class, result.backend, result.vm_id,
+                    result.vcpu_index, result.context_bytes);
         }
     }
 
@@ -1170,8 +1280,11 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
          * left kvm_enabled() true — otherwise KVM_RUN hangs short-exec probes.
          */
         local_is_tcg = !kvm_enabled() || req.mode_tcg;
-        static unsigned int run_log_count;
-        bool log_run = run_log_count++ < 20;
+        static unsigned int run_log_count[MAX_VCPUS];
+        unsigned int log_slot = cpu->cpu_index >= 0 &&
+                                cpu->cpu_index < MAX_VCPUS ?
+                                (unsigned int)cpu->cpu_index : 0;
+        bool log_run = run_log_count[log_slot]++ < 20;
         if (log_run) {
             fprintf(stderr, "[WaveVM-Slave] vCPU got req mode_tcg=%u cpu=%d guest_vcpu=%u\n",
                     (unsigned)req.mode_tcg, cpu->cpu_index,
@@ -1201,6 +1314,17 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
         }
 
         qemu_mutex_lock_iothread();
+        if (req.mode_tcg && wavevm_user_mem_tcg_shm_coherent()) {
+            /*
+             * The helper's initial dirty bitmap covers QEMU machine setup.
+             * Establish the first execution boundary before importing state;
+             * flushing the stale bootstrap bits as a guest write would have
+             * no pre-image and would reject every TCG ACK with -EIO.
+             */
+            if (wavevm_user_mem_prepare_tcg_dirty_baseline() > 0) {
+                tlb_flush(cpu);
+            }
+        }
         if (local_is_tcg && req.mode_tcg) {
             wavevm_slave_apply_tcg_identity(cpu, req.vcpu_index);
         }
@@ -1216,8 +1340,8 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
         }
 
         if (local_is_tcg) {
-            static unsigned int exec_log_count;
-            unsigned int exec_seq = exec_log_count++;
+            static unsigned int exec_log_count[MAX_VCPUS];
+            unsigned int exec_seq = exec_log_count[log_slot]++;
             bool log_exec = exec_seq < 24 || (exec_seq % 1000) == 0;
             X86CPU *x86cpu = X86_CPU(cpu);
             CPUX86State *env = &x86cpu->env;
@@ -1225,7 +1349,9 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             target_ulong entry_rsp = env->regs[R_ESP];
             target_ulong entry_rdi = env->regs[R_EDI];
             target_ulong entry_rax = env->regs[R_EAX];
+            target_ulong entry_r9 = env->regs[R_R9];
             target_ulong entry_rflags = cpu_compute_eflags(env);
+            uint64_t entry_guest_tsc = cpu_get_tsc(env) + env->tsc_offset;
             WaveVMTcgKickCtx *kick = g_new0(WaveVMTcgKickCtx, 1);
             QemuThread kick_thread;
             uint64_t kick_generation;
@@ -1276,22 +1402,42 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
                                wavevm_tcg_kick_thread, kick,
                                QEMU_THREAD_DETACHED);
             if (log_run || log_exec) {
-                uint8_t code[16] = {0};
+                uint8_t code[64] = {0};
                 uint32_t lock_word = 0;
+                uint32_t gs_word = 0;
+                uint64_t gs_probe_addr = 0;
+                int gs_probe_ret = -1;
                 int code_ret = cpu_memory_rw_debug(cpu, entry_rip,
                                                    code, sizeof(code), 0);
                 int lock_ret = cpu_memory_rw_debug(cpu, entry_rdi,
                                                    (uint8_t *)&lock_word,
                                                    sizeof(lock_word), 0);
+                if (code_ret == 0 && code[0] == 0x65 &&
+                    code[1] == 0x8b && code[2] == 0x35) {
+                    int32_t displacement = (int32_t)ldl_le_p(&code[3]);
+                    uint64_t rip_target = entry_rip + 7 + displacement;
+                    gs_probe_addr = env->segs[R_GS].base + rip_target;
+                    gs_probe_ret = cpu_memory_rw_debug(
+                        cpu, gs_probe_addr, (uint8_t *)&gs_word,
+                        sizeof(gs_word), 0);
+                }
                 fprintf(stderr,
                         "[WaveVM-Slave] TCG ip cpu=%d seq=%u rip=%#lx "
-                        "rsp=%#lx rdi=%#lx rax=%#lx lock=%#x/lr=%d "
-                        "rflags=%#lx int=0x%x read=%d bytes=",
+                        "rsp=%#lx rdi=%#lx rax=%#lx rsi=%#lx r8=%#lx "
+                        "r9=%#lx guest_tsc=%#llx "
+                        "gs=%#lx gs_probe=%#lx/%#x/gr=%d "
+                        "lock=%#x/lr=%d rflags=%#lx int=0x%x read=%d bytes=",
                         cpu->cpu_index, exec_seq,
                         (unsigned long)entry_rip,
                         (unsigned long)entry_rsp,
                         (unsigned long)entry_rdi,
                         (unsigned long)entry_rax,
+                        (unsigned long)env->regs[R_ESI],
+                        (unsigned long)env->regs[R_R8],
+                        (unsigned long)entry_r9,
+                        (unsigned long long)entry_guest_tsc,
+                        (unsigned long)env->segs[R_GS].base,
+                        (unsigned long)gs_probe_addr, gs_word, gs_probe_ret,
                         lock_word, lock_ret,
                         (unsigned long)entry_rflags,
                         (unsigned)cpu->interrupt_request, code_ret);
@@ -1332,7 +1478,9 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
                 target_ulong exit_rsp = env->regs[R_ESP];
                 target_ulong exit_rdi = env->regs[R_EDI];
                 target_ulong exit_rax = env->regs[R_EAX];
+                target_ulong exit_r9 = env->regs[R_R9];
                 target_ulong exit_rflags = cpu_compute_eflags(env);
+                uint64_t exit_guest_tsc = cpu_get_tsc(env) + env->tsc_offset;
                 uint32_t lock_word = 0;
                 int lock_ret = cpu_memory_rw_debug(cpu, exit_rdi,
                                                    (uint8_t *)&lock_word,
@@ -1341,7 +1489,8 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
                 fprintf(stderr,
                         "[WaveVM-Slave] cpu_exec leave cpu=%d seq=%u ret=%d "
                         "rip=%#lx->%#lx rsp=%#lx->%#lx rflags=%#lx->%#lx "
-                        "rdi=%#lx rax=%#lx lock=%#x/lr=%d "
+                        "rdi=%#lx rax=%#lx r9=%#lx guest_tsc=%#llx "
+                        "lock=%#x/lr=%d "
                         "ex=%d halted=%d exit=%d int=0x%x icount_high=%d\n",
                         cpu->cpu_index, exec_seq, exec_ret,
                         (unsigned long)entry_rip,
@@ -1352,6 +1501,8 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
                         (unsigned long)exit_rflags,
                         (unsigned long)exit_rdi,
                         (unsigned long)exit_rax,
+                        (unsigned long)exit_r9,
+                        (unsigned long long)exit_guest_tsc,
                         lock_word, lock_ret,
                         cpu->exception_index, cpu->halted,
                         qatomic_read(&cpu->exit_request),
@@ -1363,7 +1514,17 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             if (log_exec) {
                 wavevm_log_slave_timer_state(cpu, "post", exec_seq);
             }
-            if (exec_ret == EXCP_ATOMIC) {
+            if (req.mode_tcg && exec_ret == EXCP_ATOMIC) {
+                static unsigned int atomic_return_count;
+                if (atomic_return_count++ < 32) {
+                    fprintf(stderr,
+                            "[WVM-TCG-ATOMIC] event=return-to-origin cpu=%d "
+                            "rip=%#lx\n",
+                            cpu->cpu_index,
+                            (unsigned long)X86_CPU(cpu)->env.eip);
+                }
+                exec_ret = WVM_TCG_EXCP_ATOMIC;
+            } else if (exec_ret == EXCP_ATOMIC) {
                 qemu_mutex_unlock_iothread();
                 cpu_exec_step_atomic(cpu);
                 qemu_mutex_lock_iothread();
@@ -1410,26 +1571,11 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
          * cpu->exception_index. NEED_LOCAL must still reach FE as
          * ack.ctx.tcg.exit_reason so FE can arm a bounded local burst.
          */
-        if (local_is_tcg && exec_ret == WVM_TCG_EXCP_NEED_LOCAL) {
-            cpu->exception_index = WVM_TCG_EXCP_NEED_LOCAL;
-        }
-        /*
-         * Architecture idle (§8.1 / baseline §2): quantum kick may preempt
-         * before HLT commits (halted=0). If guest PC is the HLT opcode,
-         * export halted/HLT so FE idle classification is image-agnostic.
-         * Do not invent guest-specific RIP constants.
-         */
         if (local_is_tcg && req.mode_tcg &&
-            exec_ret != WVM_TCG_EXCP_NEED_LOCAL && !cpu->halted) {
-            X86CPU *x86_idle = X86_CPU(cpu);
-            uint8_t op = 0;
-            if (cpu_memory_rw_debug(cpu, x86_idle->env.eip, &op, 1, 0) == 0 &&
-                op == 0xf4) {
-                cpu->halted = 1;
-                cpu->exception_index = EXCP_HLT;
-            }
+            (exec_ret == WVM_TCG_EXCP_NEED_LOCAL ||
+             exec_ret == WVM_TCG_EXCP_ATOMIC)) {
+            cpu->exception_index = exec_ret;
         }
-
         memset(&ack, 0, sizeof(ack));
         wavevm_slave_export_ctx(cpu, &req, &ack, local_is_tcg);
         if (local_is_tcg && req.mode_tcg && dirty_flush_ret < 0) {
@@ -1564,25 +1710,8 @@ static int connect_to_master_helper(void) {
 }
 
 static int connect_to_master_helper_role(uint32_t role) {
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    int sock = wavevm_qemu_connect_runtime_socket(SOCK_STREAM | SOCK_CLOEXEC);
     if (sock < 0) return -1;
-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    
-    // Manifest-gated launches must use a manifest-derived endpoint.
-    const char *env_path = wavevm_qemu_runtime_socket_path();
-    if (!env_path) {
-        fprintf(stderr,
-                "[WVM] manifest-derived QEMU socket path is missing\n");
-        close(sock);
-        return -1;
-    }
-
-    strncpy(addr.sun_path, env_path, sizeof(addr.sun_path) - 1);
-    
-    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(sock);
-        return -1;
-    }
 
     if (role != 0) {
         struct wvm_ipc_runtime_registration registration;
@@ -1699,14 +1828,14 @@ static void *wavevm_master_ipc_thread(void *arg) {
                 tb_flush(first_cpu); 
                 
                 // 2. 同时也需要更新 User-Mode 的版本号 (调用 user-mem.c)
-                wvm_apply_remote_push(msg_type, net_payload);
+                wvm_apply_local_push(msg_type, net_payload);
                 
                 qemu_mutex_unlock_iothread();
                 continue;
             }
             
             // 调用 user-mem 提供的逻辑应用更新
-            wvm_apply_remote_push(msg_type, net_payload);
+            wvm_apply_local_push(msg_type, net_payload);
         }
     }
     close(s->ipc_sock);
@@ -1737,31 +1866,7 @@ static void *wavevm_dirty_sync_thread(void *arg) {
 }
 
 // Kernel Mode IRQ 监听线程
-static void *wavevm_kernel_irq_thread(void *arg) {
-    WaveVMAccelState *s = (WaveVMAccelState *)arg;
-    uint32_t irq_num;
-    
-    while (1) {
-        // 陷入内核等待，直到收到 UDP 中断包
-        if (ioctl(s->dev_fd, IOCTL_WAIT_IRQ, &irq_num) == 0) {
-            qemu_mutex_lock_iothread();
-            // 注入中断 (Pulse)
-            if (kvm_enabled()) {
-                 struct kvm_irq_level irq;
-                 irq.irq = irq_num; // 例如 16
-                 irq.level = 1;
-                 kvm_vm_ioctl(kvm_state, KVM_IRQ_LINE, &irq);
-                 irq.level = 0;
-                 kvm_vm_ioctl(kvm_state, KVM_IRQ_LINE, &irq);
-            }
-            qemu_mutex_unlock_iothread();
-        } else {
-            // 出错或退出
-            break;
-        }
-    }
-    return NULL;
-}
+
 
 // Validate GPA range against actual QEMU RAM mapping (handles discontiguous RAM segments).
 static bool wavevm_gpa_range_valid(uint64_t gpa, uint32_t len, bool is_write)
@@ -2044,23 +2149,8 @@ static int wavevm_init_machine_kernel(WaveVMAccelState *s, MachineState *ms) {
             s->dev_fd = -1;
             return bind_result;
         }
-        /* s23g7: inject CPU route + sidecar gateway into *this* FE context. */
-        {
-            int vcpus = (ms && ms->smp.cpus > 0) ? ms->smp.cpus : 1;
-            int inj = wavevm_qemu_inject_fe_compute_routes(s->dev_fd, vcpus,
-                                                          g_wvm_local_split);
-            if (inj < 0) {
-                fprintf(stderr,
-                        "[WaveVM-QEMU] FE compute-route inject failed: %s "
-                        "(Mode A remotes will ENODEV)\n",
-                        strerror(-inj));
-                /* Non-fatal for boot: local path still works; remotes soft. */
-            }
-        }
     }
     wavevm_setup_memory_region(ms->ram, ms->ram_size, s->dev_fd);
-    // 启动线程
-    qemu_thread_create(&s->irq_thread, "wvm-k-irq", wavevm_kernel_irq_thread, s, QEMU_THREAD_DETACHED);
     return 0;
 }
 
@@ -2084,9 +2174,9 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
         // [Slave Mode]
         s->master_sock = atoi(env_cmd); // Use CMD socket for control loop
         /*
-         * Same-host TCG helpers: join the executor WVM_SHM_FILE so remote AP
-         * slices see live guest RAM (DMA + BSP writes) without stop-the-world
-         * page copies.  Do NOT memcpy anonymous zeros into SHM.
+         * Join this host's executor backing so the local runtime can install
+         * canonical pages without another helper copy. This does not prove
+         * that a frontend on another host shares RAM. Do not copy zeros in.
          * Opt out with WVM_TCG_SHM_COHERENT=0.
          */
         {
@@ -2205,6 +2295,87 @@ static bool wavevm_trackable_ram_section(const MemoryRegionSection *section)
            !memory_region_is_romd(mr);
 }
 
+typedef struct WaveVMInitialRam {
+    MemoryListener listener;
+    GArray *sections;
+} WaveVMInitialRam;
+
+static void wavevm_collect_initial_ram(MemoryListener *listener,
+                                       MemoryRegionSection *section)
+{
+    WaveVMInitialRam *ram = container_of(listener, WaveVMInitialRam, listener);
+
+    if (!wavevm_trackable_ram_section(section)) {
+        return;
+    }
+    memory_region_ref(section->mr);
+    g_array_append_val(ram->sections, *section);
+}
+
+static void wavevm_publish_initial_memory(void *opaque, int running,
+                                          RunState state)
+{
+    static bool published;
+    WaveVMInitialRam ram = {
+        .listener = {.region_add = wavevm_collect_initial_ram},
+        .sections = g_array_new(false, false, sizeof(MemoryRegionSection)),
+    };
+    uint64_t pages = 0;
+    int dirty_baseline_pages = 0;
+    int result = 0;
+
+    (void)opaque;
+    (void)state;
+    if (!running || published) {
+        g_array_free(ram.sections, true);
+        return;
+    }
+    /* vm_state_notify precedes resume_all_vcpus and follows machine reset.
+     * Enumerate the current map: the long-lived listener also saw regions
+     * that firmware/chipset setup has since replaced or unmapped. */
+    memory_listener_register(&ram.listener, &address_space_memory);
+    memory_listener_unregister(&ram.listener);
+    for (guint i = 0; i < ram.sections->len; i++) {
+        MemoryRegionSection *section = &g_array_index(
+            ram.sections, MemoryRegionSection, i);
+        uint64_t bytes = int128_get64(section->size);
+        void *hva = (uint8_t *)memory_region_get_ram_ptr(section->mr) +
+                    section->offset_within_region;
+
+        if (result == 0) {
+            result = wavevm_publish_initial_ram(
+                section->offset_within_address_space, hva, bytes, &pages);
+            if (result != 0) {
+                error_report("WaveVM initial RAM publication failed at "
+                             "GPA %#" PRIx64 ": %s",
+                             section->offset_within_address_space,
+                             strerror(-result));
+            }
+        }
+        memory_region_unref(section->mr);
+    }
+    g_array_free(ram.sections, true);
+    if (result != 0) {
+        exit(EXIT_FAILURE);
+    }
+    /*
+     * Machine construction dirties QEMU's migration bitmap before the guest
+     * runs.  Do not send those bootstrap bits as guest writes on the first
+     * remote TCG handoff; the committed initial image above is the baseline.
+     * Dynamic firmware-shadow mappings publish their own canonical updates.
+     */
+    if (wavevm_user_mem_tcg_shm_coherent()) {
+        dirty_baseline_pages =
+            wavevm_user_mem_prepare_tcg_dirty_baseline();
+        fprintf(stderr,
+                "[WaveVM] initial TCG dirty baseline consumed pages=%d\n",
+                dirty_baseline_pages);
+    }
+    published = true;
+    fprintf(stderr, "[WaveVM] initial RAM committed before vCPU resume "
+                    "pages=%" PRIu64 "\n", pages);
+}
+
 static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *section) {
     if (!wavevm_trackable_ram_section(section)) return;
 
@@ -2304,7 +2475,8 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
          * offset.  This is a one-time copy that ensures BIOS shadow data
          * is visible to all processes sharing the SHM file.
          */
-        if (wavevm_user_mode_enabled()) {
+        if (wavevm_user_mode_enabled() && !wavevm_role_is_slave() &&
+            wavevm_qemu_runtime_gate_enabled()) {
             extern void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva);
             uint64_t bios_start = 0xC0000;
             uint64_t bios_end   = 0x100000;
@@ -2350,8 +2522,6 @@ static MemoryListener wavevm_mem_listener = {
 static int wavevm_init_machine(MachineState *ms) {
     WaveVMAccelState *s = WAVEVM_ACCEL(ms->accelerator);
     bool has_wvm_dev = wavevm_qemu_kernel_accel_usable();
-    const char *disable_auto_kvm = getenv("WVM_DISABLE_AUTO_KVM");
-    bool auto_kvm_enabled = !(disable_auto_kvm && atoi(disable_auto_kvm) == 1);
     char *role = getenv("WVM_ROLE");
     bool is_slave = (role && strcmp(role, "SLAVE") == 0);
 
@@ -2377,10 +2547,12 @@ static int wavevm_init_machine(MachineState *ms) {
         AccelClass *kvm_ac;
         AccelState *saved_accel;
         const char *mode_str = (s->mode == WVM_MODE_USER) ? "user" : "kernel";
+        const char *backend_str = s->backend == WVM_BACKEND_TCG ? "tcg" :
+                                  s->backend == WVM_BACKEND_KVM ? "kvm" : "auto";
 
         g_wvm_kvm_bootstrap_done = true;
-        if (!auto_kvm_enabled) {
-            fprintf(stderr, "[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=%s)\n",
+        if (s->backend == WVM_BACKEND_TCG) {
+            fprintf(stderr, "[WaveVM] backend=tcg (mode=%s), skip KVM bootstrap\n",
                     mode_str);
         } else if (access("/dev/kvm", R_OK | W_OK) == 0) {
             kvm_ac = accel_find("kvm");
@@ -2397,8 +2569,8 @@ static int wavevm_init_machine(MachineState *ms) {
 
                     if (ret == 0) {
                         cpus_register_accel(&wavevm_cpus);
-                        fprintf(stderr, "[WaveVM] KVM bootstrap OK (mode=%s), keep wavevm vCPU control (kvm_enabled=%d)\n",
-                                mode_str, kvm_enabled() ? 1 : 0);
+                        fprintf(stderr, "[WaveVM] KVM bootstrap OK (backend=%s mode=%s), keep wavevm vCPU control (kvm_enabled=%d)\n",
+                                backend_str, mode_str, kvm_enabled() ? 1 : 0);
                     } else {
 #ifdef CONFIG_KVM
                         kvm_allowed = false;
@@ -2406,14 +2578,22 @@ static int wavevm_init_machine(MachineState *ms) {
                         object_unref(OBJECT(g_wvm_kvm_accel));
                         g_wvm_kvm_accel = NULL;
                         ret = 0;
-                        fprintf(stderr, "[WaveVM] KVM bootstrap failed (mode=%s), stay on TCG path\n",
-                                mode_str);
+                        if (s->backend == WVM_BACKEND_KVM) {
+                            error_report("WaveVM backend=kvm KVM bootstrap failed");
+                            return -1;
+                        }
+                        fprintf(stderr, "[WaveVM] KVM bootstrap failed (backend=%s mode=%s), stay on TCG path\n",
+                                backend_str, mode_str);
                     }
                 }
             }
         } else {
-            fprintf(stderr, "[WaveVM] /dev/kvm not available (mode=%s), stay on TCG path\n",
-                    mode_str);
+            if (s->backend == WVM_BACKEND_KVM) {
+                error_report("WaveVM backend=kvm requires accessible /dev/kvm");
+                return -1;
+            }
+            fprintf(stderr, "[WaveVM] /dev/kvm not available (backend=%s mode=%s), stay on TCG path\n",
+                    backend_str, mode_str);
         }
     }
 
@@ -2448,6 +2628,10 @@ static int wavevm_init_machine(MachineState *ms) {
     if (s->mode == WVM_MODE_KERNEL) {
         wavevm_sync_topology(s->dev_fd); 
     }
+    if (s->mode == WVM_MODE_USER && !is_slave &&
+        wavevm_qemu_runtime_gate_enabled()) {
+        qemu_add_vm_change_state_handler(wavevm_publish_initial_memory, NULL);
+    }
     return 0;
 }
 
@@ -2455,6 +2639,38 @@ static char *wavevm_get_mode(Object *obj, Error **errp)
 {
     WaveVMAccelState *s = WAVEVM_ACCEL(obj);
     return g_strdup(s->mode == WVM_MODE_USER ? "user" : "kernel");
+}
+
+static char *wavevm_get_backend(Object *obj, Error **errp)
+{
+    WaveVMAccelState *s = WAVEVM_ACCEL(obj);
+    switch (s->backend) {
+    case WVM_BACKEND_TCG:
+        return g_strdup("tcg");
+    case WVM_BACKEND_KVM:
+        return g_strdup("kvm");
+    default:
+        return g_strdup("auto");
+    }
+}
+
+static void wavevm_set_backend(Object *obj, const char *value, Error **errp)
+{
+    WaveVMAccelState *s = WAVEVM_ACCEL(obj);
+    if (g_strcmp0(value, "auto") == 0) {
+        s->backend = WVM_BACKEND_AUTO;
+        return;
+    }
+    if (g_strcmp0(value, "tcg") == 0) {
+        s->backend = WVM_BACKEND_TCG;
+        return;
+    }
+    if (g_strcmp0(value, "kvm") == 0) {
+        s->backend = WVM_BACKEND_KVM;
+        return;
+    }
+    error_setg(errp, "Invalid backend '%s' (expected 'auto', 'tcg' or 'kvm')",
+               value);
 }
 
 static void wavevm_set_mode(Object *obj, const char *value, Error **errp)
@@ -2530,6 +2746,7 @@ static void wavevm_get_watch(Object *obj, Visitor *v, const char *name, void *op
 static void wavevm_accel_init(Object *obj) {
     WaveVMAccelState *s = WAVEVM_ACCEL(obj);
     s->mode = WVM_MODE_KERNEL;
+    s->backend = WVM_BACKEND_AUTO;
 
     /* Initialize block I/O request tracking */
     qemu_mutex_init(&g_block_request_lock);
@@ -2548,6 +2765,11 @@ static void wavevm_accel_class_init(ObjectClass *oc, void *data) {
     object_class_property_add_str(oc, "mode", wavevm_get_mode, wavevm_set_mode);
     object_class_property_set_description(oc, "mode",
         "Execution mode: 'kernel' or 'user'");
+
+    object_class_property_add_str(oc, "backend",
+                                  wavevm_get_backend, wavevm_set_backend);
+    object_class_property_set_description(oc, "backend",
+        "CPU backend: 'auto', 'tcg' or 'kvm'");
 
     object_class_property_add(oc, "split", "int",
         wavevm_get_split, wavevm_set_split,

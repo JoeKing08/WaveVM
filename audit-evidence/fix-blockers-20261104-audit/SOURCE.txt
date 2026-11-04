@@ -1,0 +1,22 @@
+23eacaf9ca4b8bdc9794fb08a40c86f40b3d9a31
+ M .gitignore
+ D "codex resume --dangerously-bypass-approvals-and-sandbox 01a06603-6dff-7cf2-a234-5547eb4d497d.txt"
+ M common_include/wavevm_admission.c
+ M common_include/wavevm_control_plane.c
+ M common_include/wavevm_control_plane.h
+ M common_include/wavevm_coordinator.c
+ M common_include/wavevm_coordinator.h
+ M common_include/wavevm_host_probe.c
+ M common_include/wavevm_ioctl.h
+ M common_include/wavevm_lifecycle.c
+ M common_include/wavevm_local_memory.c
+ M common_include/wavevm_local_memory.h
+ M common_include/wavevm_manifest.c
+ M common_include/wavevm_memory.c
+ M common_include/wavevm_memory.h
+ M common_include/wavevm_protocol.h
+ M common_include/wavevm_runtime_gate.c
+ M common_include/wavevm_runtime_gate.h
+ M common_include/wavevm_vcpu_handoff.c
+ M common_include/wavevm_x86_context.c
+ 93 files changed, 9643 insertions(+), 5324 deletions(-)

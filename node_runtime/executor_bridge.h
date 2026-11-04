@@ -52,7 +52,8 @@ int wvm_executor_bridge_dispatch_init(
 void wvm_executor_bridge_dispatch_destroy(void *dispatch_opaque);
 
 /*
- * Wait until the ordered typed task queue and its sole worker are idle.
+ * Wait until the typed task queue and all admitted execution workers are idle.
+ * Independent vCPUs may execute concurrently; one vCPU remains serialized.
  * Call after the ingress/executor producers stop and before destroying any
  * service the worker may still call. Returns -ETIMEDOUT without discarding
  * queued work; the caller must treat STOP as incomplete and fail closed.

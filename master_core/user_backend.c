@@ -1040,18 +1040,7 @@ static void u_set_gateway_ip(uint32_t gw_id, uint32_t ip, uint16_t port) {
         }
     }
 
-    // 2. [Fix #4] Mode A 内核路径对齐：传给内核的 gw_id 也用裸 node_id
-    // 内核模块 wavevm.ko 的路由表按裸 node_id 索引，不理解 composite 编码
-    if (g_dev_fd > 0) {
-        struct wvm_ioctl_gateway args;
-        args.gw_id = raw_node_id;  // [Fix #4] 解码后下发内核
-        args.ip = ip;     // 此时已经是网络序
-        args.port = port; // 此时已经是网络序
 
-        if (ioctl(g_dev_fd, IOCTL_SET_GATEWAY, &args) < 0) {
-            perror("[Daemon] Failed to sync dynamic route to kernel");
-        }
-    }
 }
 
 // Deprecated in V29 logic core, but stub provided
@@ -1724,11 +1713,8 @@ static void* rx_thread_loop(void *arg) {
 
 // 供 logic_core 调用
 void wvm_notify_kernel_epoch(uint32_t epoch) {
-    // g_dev_fd 是打开 /dev/wavevm 的句柄，需要在初始化时保存
-    extern int g_dev_fd; 
-    if (g_dev_fd > 0) {
-        ioctl(g_dev_fd, IOCTL_UPDATE_EPOCH, &epoch);
-    }
+    /* Versions are supplied by the canonical memory completion, not an epoch setter. */
+    (void)epoch;
 }
 
 // --- 公共接口定义 ---

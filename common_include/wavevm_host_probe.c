@@ -276,7 +276,9 @@ static int probe_kernel_accel(uint64_t *feature_bits, uint32_t *abi_version)
         return -1;
     }
     close(fd);
-    if (caps.magic != WVM_KERNEL_CONTEXT_MAGIC) {
+    if (caps.magic != WVM_KERNEL_CONTEXT_MAGIC ||
+        caps.version != WVM_KERNEL_CONTEXT_ABI_VERSION ||
+        !(caps.feature_bits & WVM_KERNEL_CAP_CONTEXT_BIND)) {
         return -1;
     }
     *abi_version = caps.version;

@@ -48,4 +48,7 @@ bool kvm_has_waitpkg(void);
 
 bool kvm_hv_vpindex_settable(void);
 
+int kvm_get_msr_snapshot(X86CPU *cpu, struct kvm_msr_entry *entries,
+                         size_t capacity);
+
 #endif

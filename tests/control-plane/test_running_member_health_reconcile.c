@@ -109,6 +109,7 @@ int main(void)
     memset(dependencies, 0, sizeof(dependencies));
     memset(operations, 0, sizeof(operations));
     wvm_control_plane_init(&plane, entries, 4);
+    wvm_control_plane_set_local_physical_node_id(&plane, 1);
     wvm_control_plane_set_route_transaction_entries(&plane, route_entries, 4);
 
     memset(&config, 0, sizeof(config));

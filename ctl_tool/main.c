@@ -96,6 +96,13 @@ struct control_context {
     int lock_initialized;
 };
 
+struct runtime_health_probe_context {
+    struct wvm_control_plane *plane;
+    struct admission_workspace *workspace;
+    size_t member_capacity;
+    uint32_t max_vcpus;
+};
+
 struct local_principal {
     uid_t uid;
     struct wvm_member_key member_key;
@@ -1003,52 +1010,6 @@ static int capability_ref_compare(const void *left_value,
     return 0;
 }
 
-static int capability_available_for_node(
-    const struct wvm_ctl_capability_evidence *evidence,
-    const struct wvm_node_record *node, uint16_t capability_id)
-{
-    size_t i;
-
-    if (!evidence || !node || !evidence->records) {
-        return 0;
-    }
-    for (i = 0; i < evidence->record_count; i++) {
-        const struct wvm_capability_record *record = &evidence->records[i];
-
-        if (record->physical_node_id == node->physical_node_id &&
-            record->node_instance_id == node->node_instance_id &&
-            record->capability_id == capability_id &&
-            record->state == WVM_CAPABILITY_AVAILABLE) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int capability_feature_bits_for_node(
-    const struct wvm_ctl_capability_evidence *evidence,
-    const struct wvm_node_record *node, uint16_t capability_id,
-    uint64_t *feature_bits_out)
-{
-    size_t i;
-
-    if (!evidence || !node || !evidence->records || !feature_bits_out) {
-        return -1;
-    }
-    *feature_bits_out = 0;
-    for (i = 0; i < evidence->record_count; i++) {
-        const struct wvm_capability_record *record = &evidence->records[i];
-
-        if (record->physical_node_id == node->physical_node_id &&
-            record->node_instance_id == node->node_instance_id &&
-            record->capability_id == capability_id &&
-            record->state == WVM_CAPABILITY_AVAILABLE) {
-            *feature_bits_out = record->feature_bits;
-            return 0;
-        }
-    }
-    return -1;
-}
 
 
 static uint64_t current_unix_time_ms(void)
@@ -1074,9 +1035,6 @@ static int admission_workspace_prepare_template(
 {
     struct wvm_coordinator_prepare_options options;
     uint64_t now;
-    int all_kvm = 1;
-    int all_tcg = 1;
-    int all_kernel = 1;
     size_t i;
 
     if (!workspace || !request || !evidence ||
@@ -1091,15 +1049,6 @@ static int admission_workspace_prepare_template(
             &workspace->membership_capture.nodes[i];
 
         workspace->profile_capabilities[i] = node->capability;
-        all_kvm = all_kvm && capability_available_for_node(
-                                  evidence, node,
-                                  WVM_CAPABILITY_ID_EXECUTION_KVM);
-        all_tcg = all_tcg && capability_available_for_node(
-                                  evidence, node,
-                                  WVM_CAPABILITY_ID_EXECUTION_TCG);
-        all_kernel = all_kernel && capability_available_for_node(
-                                      evidence, node,
-                                      WVM_CAPABILITY_ID_KERNEL_ACCELERATION);
     }
     qsort(workspace->profile_capabilities,
           workspace->membership_capture.node_count,
@@ -1121,100 +1070,27 @@ static int admission_workspace_prepare_template(
              "pc-i440fx-5.2");
     options.guest_machine.qemu_compat_version = 502;
     options.guest_machine.firmware_policy = 1;
-    /*
-     * Minimum fault-engine selection via shared probe→profile helper.
-     * KVM requires dirty-log evidence; otherwise AUTO falls back to restricted
-     * TCG (SIGSEGV). UFFD is never selected unless every node advertised it.
-     */
-    {
-        int all_kvm_dirty = all_kvm;
-        int all_tcg_uffd = all_tcg;
-        struct wvm_host_probe_execution_choice choice;
-        char select_error[256] = {0};
-
-        for (i = 0; i < workspace->membership_capture.node_count; i++) {
-            const struct wvm_node_record *node =
-                &workspace->membership_capture.nodes[i];
-            uint64_t bits = 0;
-
-            if (all_kvm_dirty) {
-                if (capability_feature_bits_for_node(
-                        evidence, node, WVM_CAPABILITY_ID_EXECUTION_KVM,
-                        &bits) != 0 ||
-                    (bits & WVM_HOST_PROBE_KVM_DIRTY_LOG) == 0) {
-                    all_kvm_dirty = 0;
-                }
-            }
-            if (all_tcg_uffd) {
-                if (capability_feature_bits_for_node(
-                        evidence, node, WVM_CAPABILITY_ID_EXECUTION_TCG,
-                        &bits) != 0 ||
-                    (bits & WVM_HOST_PROBE_TCG_USERFAULTFD) == 0) {
-                    all_tcg_uffd = 0;
-                }
-            }
-        }
-
-        if (wvm_host_probe_select_execution(
-                request->execution_backend_policy, all_tcg, all_kvm,
-                all_kvm_dirty, all_tcg_uffd, &choice, select_error,
-                sizeof(select_error)) != 0) {
-            snprintf(error, error_len, "%s",
-                     select_error[0] ? select_error
-                                     : "execution profile selection failed");
-            return -1;
-        }
-        options.execution_profile.backend = choice.backend;
-        options.execution_profile.dirty_capture_engine =
-            choice.dirty_capture_engine;
-        options.execution_profile.read_fault_engine = choice.read_fault_engine;
-        options.execution_profile.invalidation_engine =
-            choice.invalidation_engine;
-        options.execution_profile.fallback_decision = choice.fallback_decision;
+    /* Provisional shape only; coordinator resolves against selected roles. */
+    options.execution_profile.backend =
+        request->execution_backend_policy == WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG ?
+        WVM_MANIFEST_BACKEND_TCG : WVM_MANIFEST_BACKEND_KVM;
+    options.execution_profile.kernel_accelerator_bits =
+        request->accelerator_policy == WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL;
+    if (options.execution_profile.backend == WVM_MANIFEST_BACKEND_KVM) {
+        options.execution_profile.dirty_capture_engine = WVM_FAULT_ENGINE_KVM_DIRTY_LOG;
+        options.execution_profile.read_fault_engine = WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC;
+        options.execution_profile.invalidation_engine = WVM_FAULT_ENGINE_NODE_RUNTIME_RESYNC;
+        options.execution_profile.fallback_decision = 1;
+    } else {
+        options.execution_profile.dirty_capture_engine = WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+        options.execution_profile.read_fault_engine = WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+        options.execution_profile.invalidation_engine = WVM_FAULT_ENGINE_SIGSEGV_MPROTECT;
+        options.execution_profile.fallback_decision = 3;
     }
-    if (request->execution_backend_policy ==
-            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG && !all_tcg) {
-        snprintf(error, error_len, "no complete TCG capability set is published");
-        return -1;
-    }
-    if (request->execution_backend_policy ==
-            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM) {
-        int dirty_ok = all_kvm;
-        size_t di;
-
-        for (di = 0; dirty_ok && di < workspace->membership_capture.node_count;
-             di++) {
-            const struct wvm_node_record *node =
-                &workspace->membership_capture.nodes[di];
-            uint64_t bits = 0;
-
-            if (capability_feature_bits_for_node(
-                    evidence, node, WVM_CAPABILITY_ID_EXECUTION_KVM, &bits) !=
-                    0 ||
-                (bits & WVM_HOST_PROBE_KVM_DIRTY_LOG) == 0) {
-                dirty_ok = 0;
-            }
-        }
-        if (!all_kvm || !dirty_ok) {
-            snprintf(error, error_len,
-                     "no complete KVM dirty/resync capability set is published");
-            return -1;
-        }
-    }
-    if (request->accelerator_policy == WVM_MANIFEST_ACCELERATOR_REQUIRE_KERNEL &&
-        !all_kernel) {
-        snprintf(error, error_len,
-                 "required kernel acceleration is unavailable on a member");
-        return -1;
-    }
-    if (request->accelerator_policy != WVM_MANIFEST_ACCELERATOR_DISABLED &&
-        all_kernel) {
-        options.execution_profile.kernel_accelerator_bits = 1;
-        options.execution_profile.invalidation_engine =
-            WVM_FAULT_ENGINE_KERNEL_ACCELERATION;
+    if (options.execution_profile.kernel_accelerator_bits) {
+        options.execution_profile.invalidation_engine = WVM_FAULT_ENGINE_KERNEL_ACCELERATION;
         if (options.execution_profile.backend == WVM_MANIFEST_BACKEND_TCG) {
-            options.execution_profile.dirty_capture_engine =
-                WVM_FAULT_ENGINE_KERNEL_ACCELERATION;
+            options.execution_profile.dirty_capture_engine = WVM_FAULT_ENGINE_KERNEL_ACCELERATION;
         }
     }
     options.execution_profile.context_schema_version = 1;
@@ -1505,6 +1381,65 @@ static int admission_transport_submit(
     }
 }
 
+static int probe_remote_runtime_health(
+    void *opaque, const struct wvm_admission_transaction_record *transaction,
+    const struct wvm_control_plane_runtime_manifest_entry *runtime_entry,
+    char *error, size_t error_len)
+{
+    struct runtime_health_probe_context *probe = opaque;
+    struct wvm_member_key member_key;
+    struct wvm_membership_controller_member_status status;
+    char monitor_error[256];
+    enum wvm_membership_health_state next_health;
+    int result;
+
+    if (!probe || !probe->plane || !probe->workspace ||
+        !probe->workspace->membership_controller || !runtime_entry) {
+        snprintf(error, error_len, "remote runtime health probe is not ready");
+        return -EINVAL;
+    }
+    /* Resolve the member against a fresh authenticated membership snapshot. */
+    if (wvm_membership_controller_capture(
+            probe->workspace->membership_controller,
+            &probe->workspace->membership_capture, error, error_len) != 0) {
+        return -1;
+    }
+    result = wvm_ctl_probe_runtime_ready(
+        probe->plane, transaction, runtime_entry, probe->member_capacity,
+        probe->max_vcpus, &probe->workspace->transport, error, error_len);
+    if (result == 0) {
+        return 0;
+    }
+
+    /*
+     * A failed authenticated probe is monitor evidence, not a self-health
+     * report.  Keep recovery under the member's authenticated self-report;
+     * the monitor only escalates repeated failures from SUSPECT to
+     * UNREACHABLE.  The VM reconcile in the caller remains fail-closed even
+     * if this durable evidence update itself cannot be persisted.
+     */
+    memset(&member_key, 0, sizeof(member_key));
+    member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+    member_key.role_id = runtime_entry->physical_node_id;
+    member_key.instance_id = runtime_entry->expected_node_instance_id;
+    monitor_error[0] = '\0';
+    if (wvm_member_key_validate(&member_key, monitor_error,
+                                sizeof(monitor_error)) == 0 &&
+        wvm_membership_controller_member_status(
+            probe->workspace->membership_controller, &member_key, &status,
+            monitor_error, sizeof(monitor_error)) == 0) {
+        next_health = status.observed_health_state == WVM_MEMBERSHIP_SUSPECT ||
+                              status.observed_health_state ==
+                                  WVM_MEMBERSHIP_UNREACHABLE
+                          ? WVM_MEMBERSHIP_UNREACHABLE
+                          : WVM_MEMBERSHIP_SUSPECT;
+        (void)wvm_membership_controller_mark_monitor_health(
+            probe->workspace->membership_controller, &member_key, next_health,
+            monitor_error, sizeof(monitor_error));
+    }
+    return result;
+}
+
 static int authorize_self_registration(
     void *opaque, enum wvm_membership_controller_authorization_action action,
     const struct wvm_member_key *actor, const struct wvm_member_key *subject,
@@ -1599,6 +1534,7 @@ int main(int argc, char **argv)
     struct wvm_admission_authority_owner_config authority_config;
     struct wvm_ctl_membership_enrollment membership_enrollment;
     struct wvm_ctl_gateway_drain gateway_drain;
+    struct runtime_health_probe_context runtime_health_probe;
     struct wvm_cluster_admission_ack_entry *enrollment_acks = NULL;
     char admission_journal[WVM_CONTROL_PLANE_PATH_MAX];
     char membership_journal[WVM_CONTROL_PLANE_PATH_MAX];
@@ -1796,6 +1732,9 @@ int main(int argc, char **argv)
         goto out;
     }
     wvm_control_plane_init(&plane, entries, options.capacity);
+    wvm_control_plane_set_local_physical_node_id(
+        &plane, options.local_physical_node_id);
+    memset(&runtime_health_probe, 0, sizeof(runtime_health_probe));
     wvm_control_plane_set_route_transaction_entries(&plane, route_entries,
                                                     options.capacity);
     wvm_control_plane_set_runtime_manifest_entries(&plane, runtime_entries,
@@ -1894,6 +1833,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "wvm_ctl: cannot initialize admission transport: %s\n", error);
         goto close_plane;
     }
+    runtime_health_probe.plane = &plane;
+    runtime_health_probe.workspace = &admission_workspace;
+    runtime_health_probe.member_capacity = options.capacity;
+    runtime_health_probe.max_vcpus =
+        options.capacity > 64U ? (uint32_t)options.capacity : 64U;
+    wvm_control_plane_set_runtime_health_probe(
+        &plane, probe_remote_runtime_health, &runtime_health_probe);
     memset(&membership_enrollment, 0, sizeof(membership_enrollment));
     if (wvm_ctl_membership_enrollment_init(
             &membership_enrollment, &plane, options.local_physical_node_id,

@@ -139,6 +139,10 @@ carries the reply leaf RouteKey because the ACK path must not infer it from a
 UDP source address, physical node ID, `target_id`, or a legacy request table.
 The directory resolves that key against its admitted immutable route snapshot
 and creates an ACK whose outer route prefix targets that reply destination.
+The read/commit payload also carries the requester's nonzero node-instance ID.
+Together with the envelope origin physical-node/runtime-instance IDs it names
+the subscriber. An intermediate gateway's next-hop member instance must never
+be substituted for that leaf identity.
 
 ```text
 MemReadPayload {
@@ -147,6 +151,7 @@ MemReadPayload {
     u16 reserved_zero;
     u64 reply_destination_scope;   // zero only for FLAT_VNODE
     u32 reply_destination_vnode;   // 0 is valid; 0xffffffff rejects
+    u64 reply_node_instance_id;    // nonzero leaf node instance, not a gateway
 }
 
 MemAckPayload {
@@ -189,6 +194,7 @@ MemCommitPayload {
     u16 reserved_zero;
     u64 reply_destination_scope;   // zero only for FLAT_VNODE
     u32 reply_destination_vnode;   // 0 is valid; 0xffffffff rejects
+    u64 reply_node_instance_id;    // nonzero leaf node instance, not a gateway
     u8[size] data;
 }
 

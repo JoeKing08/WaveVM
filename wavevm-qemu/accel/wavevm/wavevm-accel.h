@@ -21,12 +21,19 @@ typedef enum {
     WVM_MODE_USER,
 } WvmMode;
 
+typedef enum {
+    WVM_BACKEND_AUTO,
+    WVM_BACKEND_TCG,
+    WVM_BACKEND_KVM,
+} WvmBackend;
+
 typedef struct WaveVMAccelState {
     AccelState parent_obj;
     int dev_fd;
     int sync_sock;
     int ipc_sock;
     WvmMode mode;
+    WvmBackend backend;
     QemuThread sync_thread;
     QemuThread ipc_thread;
     QemuThread irq_thread;
@@ -46,6 +53,10 @@ typedef struct WaveVMAccelState {
 } WaveVMAccelState;
 
 extern int g_wvm_local_split;
+
+/* Called with vCPUs stopped, before the frontend's first resume. */
+int wavevm_publish_initial_ram(uint64_t gpa, void *hva, uint64_t bytes,
+                               uint64_t *published_pages);
 
 /* Bounded diagnostic for remote TCG handoff stack visibility. */
 void wavevm_tcg_log_stack(CPUState *cpu, const char *phase);

@@ -128,6 +128,8 @@ static int dispatch_complete_envelope(struct wvm_ingress *ingress,
         case WVM_ENVELOPE_MSG_MEM_ACK:
         case WVM_ENVELOPE_MSG_COMMIT_DIFF:
         case WVM_ENVELOPE_MSG_MEM_COMMIT_ACK:
+        case WVM_ENVELOPE_MSG_PAGE_PUSH_FULL:
+        case WVM_ENVELOPE_MSG_PAGE_PUSH_DIFF:
             if (!ingress->config.memory_dispatch) {
                 set_error(error, error_len,
                           "memory operation has no local dispatcher");

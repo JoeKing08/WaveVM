@@ -27,7 +27,7 @@
 
 #ifndef CONFIG_USER_ONLY
 /* WaveVM SLAVE: bounce guest PIO to FE device authority (see wavevm-all.c). */
-extern void (*wavevm_slave_pio_hook)(CPUState *cpu, uintptr_t retaddr);
+extern void (*wavevm_slave_device_io_hook)(CPUState *cpu, uintptr_t retaddr);
 #endif
 
 void helper_outb(CPUX86State *env, uint32_t port, uint32_t data)
@@ -35,8 +35,8 @@ void helper_outb(CPUX86State *env, uint32_t port, uint32_t data)
 #ifdef CONFIG_USER_ONLY
     fprintf(stderr, "outb: port=0x%04x, data=%02x\n", port, data);
 #else
-    if (wavevm_slave_pio_hook) {
-        wavevm_slave_pio_hook(env_cpu(env), GETPC());
+    if (wavevm_slave_device_io_hook) {
+        wavevm_slave_device_io_hook(env_cpu(env), GETPC());
     }
     address_space_stb(&address_space_io, port, data,
                       cpu_get_mem_attrs(env), NULL);
@@ -49,8 +49,8 @@ target_ulong helper_inb(CPUX86State *env, uint32_t port)
     fprintf(stderr, "inb: port=0x%04x\n", port);
     return 0;
 #else
-    if (wavevm_slave_pio_hook) {
-        wavevm_slave_pio_hook(env_cpu(env), GETPC());
+    if (wavevm_slave_device_io_hook) {
+        wavevm_slave_device_io_hook(env_cpu(env), GETPC());
     }
     return address_space_ldub(&address_space_io, port,
                               cpu_get_mem_attrs(env), NULL);
@@ -62,8 +62,8 @@ void helper_outw(CPUX86State *env, uint32_t port, uint32_t data)
 #ifdef CONFIG_USER_ONLY
     fprintf(stderr, "outw: port=0x%04x, data=%04x\n", port, data);
 #else
-    if (wavevm_slave_pio_hook) {
-        wavevm_slave_pio_hook(env_cpu(env), GETPC());
+    if (wavevm_slave_device_io_hook) {
+        wavevm_slave_device_io_hook(env_cpu(env), GETPC());
     }
     address_space_stw(&address_space_io, port, data,
                       cpu_get_mem_attrs(env), NULL);
@@ -76,8 +76,8 @@ target_ulong helper_inw(CPUX86State *env, uint32_t port)
     fprintf(stderr, "inw: port=0x%04x\n", port);
     return 0;
 #else
-    if (wavevm_slave_pio_hook) {
-        wavevm_slave_pio_hook(env_cpu(env), GETPC());
+    if (wavevm_slave_device_io_hook) {
+        wavevm_slave_device_io_hook(env_cpu(env), GETPC());
     }
     return address_space_lduw(&address_space_io, port,
                               cpu_get_mem_attrs(env), NULL);
@@ -89,8 +89,8 @@ void helper_outl(CPUX86State *env, uint32_t port, uint32_t data)
 #ifdef CONFIG_USER_ONLY
     fprintf(stderr, "outl: port=0x%04x, data=%08x\n", port, data);
 #else
-    if (wavevm_slave_pio_hook) {
-        wavevm_slave_pio_hook(env_cpu(env), GETPC());
+    if (wavevm_slave_device_io_hook) {
+        wavevm_slave_device_io_hook(env_cpu(env), GETPC());
     }
     address_space_stl(&address_space_io, port, data,
                       cpu_get_mem_attrs(env), NULL);
@@ -103,8 +103,8 @@ target_ulong helper_inl(CPUX86State *env, uint32_t port)
     fprintf(stderr, "inl: port=0x%04x\n", port);
     return 0;
 #else
-    if (wavevm_slave_pio_hook) {
-        wavevm_slave_pio_hook(env_cpu(env), GETPC());
+    if (wavevm_slave_device_io_hook) {
+        wavevm_slave_device_io_hook(env_cpu(env), GETPC());
     }
     return address_space_ldl(&address_space_io, port,
                              cpu_get_mem_attrs(env), NULL);

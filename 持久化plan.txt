@@ -1,3 +1,447 @@
+========================================================================
+当前执行计划：完成纲领 Minimum / 2026-11-01 / Codex agent
+========================================================================
+
+执行状态（2026-11-02）：按 minimum-strict-audit-codex-agent-2026-11-01.txt
+的 R01-R16 收口，不能用下方历史审计的同号 FIXED 记录代替本轮结论。
+2026-11-03 TCG 执行路径复盘与当前状态：
+- 移除了 helper 仅凭下一条 opcode=HLT 就伪造 halted/HLT ACK 的分支；
+  master 本地 wake 不再直接清 halted 或手工调用 x86 interrupt delivery，
+  改由 cpu_exec 和 APIC 原生轮询/投递路径处理。
+- 修正 APIC wake 的 eligibility 判断并在 HALTED 重入时调用 apic_poll_irq；
+  APIC enable/PPR 不符时不能把 IRR 非空当作可投递 IRQ。
+- 远端 TCG 的设备 MMIO 在 region dispatch 前 bounce；PIO hook 统一命名，
+  cpu_restore_state 失败时 fail closed。修正 cpu_restore_state 返回值，
+  只有实际从 TB 恢复 guest 状态成功才报告成功。
+- 原子 slice coordinator 接到本地执行、BIOS/OS trampoline、wake 与 remote
+  ACK 路径；共享 RAM stale-base rebase 不再把旧整页 merged image memcpy
+  回活动 RAM。unit test 加入 commit 完成期间的并发写注入并保留该写。
+- `bash tests/unit/test_coherent_dirty_fence.sh` PASS；QEMU ninja build PASS。
+  双 vCPU guest s27 在 guest 14.95s kernel page fault/panic；s28/s29 未到
+  login，guest 60.56s 出现 RCU kthread starvation。无 `[WVM-TCG-ATOMIC]`
+  marker，原子路径目前没有真实 guest 覆盖，不能声称已修好。
+- 同构原生 QEMU TCG、同 Cirros 镜像、2 vCPU 在 guest 44.85s 到 login；
+  证明当前失败位于 WaveVM TCG execution/memory handoff 路径。证据位于
+  `audit-evidence/fix-blockers-20261103/` 的 s27-s29 与 native baseline。
+- `WVM_TCG_SHM_CONCURRENT=0` 诊断运行到 guest 51.8s：已启动 `/init`、完成
+  20 次 metadata 重试并启动 dropbear，无 RCU stall；外层超时早于 login，
+  只能说明执行轨迹明显不同，不能宣称成功，也不能把 STW 当最终方案。
+- 加入 smoke-only `WVM_GUEST_SPLIT` 覆盖且默认逻辑不变。split=2 全本地
+  WaveVM TCG 2-vCPU 已实际通过 `cirros login` 与 SSH (`wavevm-guest-ssh-ok`)，
+  guest CPU smoke 进入后续检查前被外层日志时限截断；该结果排除本地
+  WaveVM TCG loop/镜像本身为阻断点。split=1 仍在远端 AP/中断或共享状态处
+  失败：s31 CPU1 在 guest 0.39s 从坏地址取指并 fatal exception in interrupt。
+- 曾短暂尝试在通用 `tcg-cpus.c` 为 SLAVE 强开 parallel_cpus，后确认
+  WaveVM 自己的 `wavevm_init_tcg_region_once()` 已设置它，通用路径也不会
+  被 WaveVM 自定义 vCPU thread 调用；该无效改动已撤销，不作为根因或修复。
+2026-11-03 续修结果（split=1，真实 CREATE_VM guest）:
+- split=2 全本地 TCG 仍为 login+SSH PASS（s32）；split=1 仍未 login。
+- s41/s43/s47 对照确认两个地址空间读取到相同 guest lock word；CPU 栈物理页
+  可直接映射并与 incoming push 地址核对，不支持“共享锁字节不可见”这一猜测。
+- **已定位一个确定的覆盖缺陷**：s47 中 CPU0 正在使用的 guest stack page
+  GPA `0xf005000` 同时收到 full-page push `version=6`，本地页版本为 5 且
+  dirty。helper/FE 映射同一 coherent SHM 时，再复制已提交 page image 会覆盖
+  活动 CPU 尚未提交的栈写入。锁字节和两 CPU 栈 GPA 的对照也排除了共享锁
+  可见性或栈页重叠这一解释。
+- 修复了两条入口：memory-service apply-push 带 directory physical/instance
+  身份，本机 directory 不重复复制本机 backing；同机 helper UDP push 新增
+  `WVM_FLAG_SHARED_BACKING`，`wvm_apply_push` 对 coherent SHM 仅推进版本/TB，
+  乱序重排槽保留该标志。跨物理节点 push 仍安装页面。memory-service 来源透传
+  测试通过，node runtime/QEMU 编译通过。
+- 后续 guest 结果仍失败：s48/s49 没登录；s51/s53 也未登录；s52 120s 运行在
+  SMP 启动后触发 guest kernel stack 页上的 NX instruction-fetch fault，随后
+  `native_sched_clock` stack protector panic。s53 25s 未到发生 helper push 的
+  窗口，不能算修复验证。**同源 push 覆盖是已证实缺陷，但不是 TCG 唯一根因，
+  Minimum TCG E2E 仍未通过。**
+- s44 STW 对照跑到 `/init`/virtio，但仍未 login且 force-local占比高；只作为
+  并发诊断证据，不接受 STW/force-local 主导作为交付方案。
+- s35 的单远端 vCPU仍暴露设备 bounce `cpu_restore_state()` 无有效 guest retaddr；
+  必须保留 fail-closed，另行查明并修正常规路径，不能用旧状态重跑掩盖。
+- 临时跨锁/dirty-push/来源日志代码已清理；shared-backing 语义保留；原始证据
+  保存在 s35–s53。
+
+下一步：围绕 s52 的 guest NX instruction-fetch fault（RIP 落到 guest direct-map
+stack/data 区域）定位 CPU0/AP 执行状态与同页更新交叠。shared-push 标志已实现，
+但 s52 仍 panic；s53 的有界运行未走到相关 helper push 时段，故该生产路径尚无
+有效 guest 验证。先用有来源/页地址证据的短测试确认实际 push 入口，再改生产路径。
+保持并发 TCG、UDP、dirty/resync 语义；不把 stop-the-world 或 force-local 主导当作
+完成。修复后验 split=1/0 guest login+SSH、远端 vCPU/memory evidence，最后做 KVM 回归。
+
+Goal4 的真实 QEMU TCG executor -> remote memory_service -> dirty commit
+已通过：远端页版本 0x100000009 -> 0x10000000a，guest 写入 78563412，
+返回 HALTED、完整 context 和成功 fence。修正的是测试 helper 必须显式
+使用已选中的 backend=tcg，避免 AUTO 启动 KVM 后错误进入 cpu_exec。
+该证据不是完整 guest OS/SSH，也不代表 CPU-only KVM 或全部 R11 已关闭。
+2026-11-02 本轮推进：R12 bridge 已按 admitted worker_count 建有界池，
+独立 vCPU 并行、同 vCPU 串行，测试通过双 worker/重复请求/排队与 drain；
+不能据此代替完整 guest 并发验收。R01 同步读取已接保留期容量等待，
+不覆盖仍可重放的结果；容量等待和 ACK 共用一次 completion deadline。
+read waiter 增加 owner 引用标志，避免等待线程取回结果前被过期回收。
+真实 KVM 4 MiB RAM 的 1024 页快照及第 1025 次读取通过；随后 coordinator
+-> vcpu_service 回包也通过。XMM0 哨兵、LAPIC/events valid bits、HALTED MP
+和无唤醒事件时 RIP 不前进均已验证。真实 TCG 同一路径再次通过远端写入。
+R06 两端已接必需扩展状态和关键 ioctl 错误检查；失败结果不带 context，
+frontend 遇终止 handoff failure 不再从旧 CPU 状态重跑。移除空 context
+成功 ACK 和 executor 自行加载本机 BIOS 文件的旧捷径。现 FXSAVE profile
+不承载 XSAVE/AVX，frontend 在 CPU 启动前拒绝该模型；完整 profile 准入、
+CPUID/MSR 合同和真实 guest 验收仍不能标为完成。
+R10 已加载本次模块验证：同 FD UNBIND 与 ioctl/mmap 竞争 64 次通过，
+双 context bind/teardown 通过，authority 延迟 ACK/拒绝/隔离测试通过。
+这不是完整 Mode A 双 guest 的证据。node runtime 与 QEMU 已重新编译通过。
+R13 已移除 frontend 因本机 SHM coherent 而跳过 dirty flush/push fence
+的捷径；本机 backing 映射优化保留。其他 fault/concurrency 分支仍使用
+该标志，尚不能宣称 host/backing identity 合同已全部闭合。
+R14 已改为显式字段 codec：整数大端、固定 x86 架构字节镜像、不传 native
+padding。单测及两端重编通过；新格式真实 KVM/TCG 小程序链路均通过，
+context 分别为 2277/4354 bytes。未启动 guest OS，不冒充最终 guest 验收。
+R06 继续移除 executor 伪造 LAPIC 读值，frontend PREEMPT/HLT 不再凭主机
+超时或计时器镜像强制 RUNNABLE；真实 KVM 小程序和 HALTED 输入探针通过。
+R12 bridge worker 池之外的 KVM 单执行门已改为执行批次：独立 vCPU
+共用输入与提交批次，并行 KVM_RUN，全部退出后唯一收割者读取共享
+memslot dirty log；所有成员等待同一 commit/kernel fence 再返回。
+真实生产 bridge -> executor -> KVM_RUN 双 vCPU 握手通过：互相看到
+peer flag 才能 HLT，两份 guest store 都进入远端目录，同页只提交一次。
+输入冲突（含未变脏的干净页）让整批失败；新批次不会越过未结束批次。
+该证据关闭原 R12 的单 worker/实际 KVM 单执行缺陷，不代替 guest OS
+性能与最终并发矩阵，也不关闭 R04/R06/R13/R15 等独立缺口。
+R04 全 RAM 快照在 4 MiB 通过不等于一般 VM 已可用；1024 槽及 5 秒保留
+仍限制大 RAM 初次快照吞吐，整批 handoff deadline/并发需要继续解决。
+R01 写提交已与读取一样接入容量条件等待、owner 生命周期和同一截止期；
+1025 次连续本地提交通过，完成与超时竞争重新检查完成谓词。未用覆盖
+保留结果规避固定容量，大 RAM 快照吞吐仍未解决。
+R03 canonical read/commit 增加 reply_node_instance_id，目录不再把 gateway
+next-hop instance 当作叶节点实例；测试验证 leaf=303/next-hop=202。
+memory_service STOP 已接 SERVING/DRAINING/RETIRED 和 active-call/route refs：
+回调中不能提前 drain，DRAINING 拒新工作但保留 ACK 收尾，退休移除订阅
+与 cache qualification。memory/local-memory/ingress/service 定向验证通过。
+成员失败、订阅投递完成与 lease/route 退休的完整关联仍不能据此关闭 R03。
+页版本和 RAM 字节安装已共用短临界区，runtime push 提前受同一检查，
+同时更新实际 executor memslot 与 runtime SHM mirror，不能假定二者是
+同一映射。目录容量检查仅针对新页，不能误拒绝已存在页的首次提交；
+此缺陷由本次真实双 vCPU 验证触发，已修复并补入现有 directory-store 测试。
+当前入口：继续 R03 剩余订阅闭环 / R04 一般 RAM 与快照吞吐 /
+R06 CPU profile、CPUID/MSR 合同 / R13 host/backing 证明；R12 不再重复修。
+R06 已补 guest CPUID 表的显式字段编码、两端 capture/import 和 count/flags
+检查，在 SREGS/events 之前安装；FXSAVE profile 拒绝 XSAVE 特征。
+node runtime 已全量重编并增加头文件依赖生成，QEMU ninja 重编通过。
+真实双 vCPU 仍通过握手/单次 dirty commit，guest CPUID(1).EAX 两端均为
+传入的 0x663；这是 CPUID 传输与执行证据，
+不是跨异构主机 CPU-profile 准入、完整 MSR 或 guest OS 验收。
+R06 后续已补 debug regs、SYSENTER/PAT 和原生 QEMU CPU-model 选出的
+profile MSR 列表，按同一 index 集合 import/export，部分 ioctl 结果失败；
+frontend 拒绝缺项的回包。KVM_GET_SUPPORTED_CPUID 已接执行前特征核对，
+并验证不存在的 instruction-feature subleaf 会拒绝；尚不是完整控制面准入。
+最新真实 KVM 回归保住非零 debug/SYSENTER/PAT/TSC_AUX/MTRR 哨兵，
+双 vCPU/远端 dirty commit/HALTED 均通过，当前 KVM context=12613 bytes。
+最终两端重编和 TCG 同路径回归通过；日志 /tmp/wavevm-goal4-{kvm,tcg}-final-20261102.log。
+R03/R04 订阅容量已改为按页哈希、按需分配，以准入 directory 页数与
+participant 上界（含退休实例余量）设限；不再有固定 4096 条读者上限。
+4097 页读者、重复读去重、末页 canonical push、STOP 清理通过。
+读者先加入 provisional 更新集合，再复制页面；资格确认后才成功 ACK，
+避免“先回包后订阅”丢掉并发提交。4097 页之后首次读取期间插入提交，
+证明确实送到 provisional reader；订阅容量不足时不读取/不回成功页面。
+qualification revision 防止旧投递失败误伤新资格；迟到读 ACK 不降低已有
+较新 cache 版本。memory_service ASan/UBSan 含泄漏检测通过。
+最新 node runtime/QEMU 编译及真实 KVM、TCG 同路径回归通过，证据分别在
+/tmp/wavevm-goal4-{kvm,tcg}-registry-20261102.log；不是完整 guest OS 验收。
+R03 本轮继续：`publish_typed_commit()` 发送成功后不再把
+`observed_version`、订阅 lease 当成远端已应用；现有 memory_service 定向测试
+覆盖初始 version=7、发送 version=8 后仍保持 7。规范补明本地 send/enqueue
+不构成应用证据，HINT 不得充当 handoff barrier。当前生产订阅仍固定 HINT；
+`subscriber_delivery_policy` 没有已定义枚举/策略映射，故没有擅自启用
+`FENCE_REQUIRED` 或对所有 HINT 增加 ACK 流量。delivery ACK 只在明确的
+fence-required 策略下要求；该策略/入口尚未定义，因此这部分不能宣称完成。
+成员失败到订阅 stale 的联动及明确的 lease 到期策略仍需收口。
+R04 核查：`logic_core.c` 的 authority page image 独立于活 SHM；QEMU 在恢复
+vCPU 前枚举当前 RAM 区域，将非零初始页按版本提交，零页沿用目录隐式零值，
+BIOS shadow 也走版本化发布；遇到非初始的不同权威页会拒绝覆盖。`bash
+tests/unit/test_directory_committed_image.sh` PASS，验证未提交 SHM 写入不会改
+目录镜像，正常提交更新镜像，而后续 SHM 改写也不污染权威数据。该证据关闭
+“完全别名活 SHM”的源码缺口，但不是跨物理节点的大 RAM/guest 启动验收。
+当前剩余 R03：成员失败/lease及仅当策略明确要求时的应用 ACK/fence 接线；
+剩余 R04：大 RAM 冷启动/快照的跨机和 guest 验收。
+2026-11-03 定向验证：`test_memory_service.sh` PASS（含 4097 页订阅、首次读
+期间并发提交、push 不推进 observed version/lease、STOP 清理）；
+`test_directory_committed_image.sh` PASS；`make -C node_runtime -j2` PASS。
+node runtime 编译仍输出 master/user_backend 与 slave_hybrid 的既有 warning，
+本轮没有改动这些无关项。未重编 QEMU，也未运行 guest。
+R04 本轮已拆开读身份保留与整页结果窗口：按需哈希的紧凑 receipt 保留
+operation/GPA/directory/version/digest，通过准入 RAM 页数设置有界容量；
+已被调用方取走的整页缓存可独立淘汰，显式重试允许重新读取相同或更新
+的权威快照。旧 ACK 不完成较新的重试，同版本不同字节和同 ID 换 GPA
+拒绝。写提交仍保留原结果，没有套用读取的淘汰规则。
+8192 页（32 MiB）定向读取在 60 秒保留期内约 0.57 秒完成；淘汰后重新
+读取与身份/版本冲突反例通过。动态 registry 的 ASan/UBSan/泄漏检查通过。
+KVM 冷快照改为最多 16 个 reader 并行，每个请求受同一个 monotonic
+deadline 限制；失败或失效不进入 KVM_RUN，所有 reader 退出后才结束准备。
+真实 KVM 32 MiB RAM / 8192 页已验证 max_in_flight=16，双 vCPU 握手、
+单次远端 dirty commit、CPU 扩展状态哨兵仍通过；真实 TCG 同路径回归通过。
+node runtime 重编通过，日志 /tmp/wavevm-goal4-kvm-prefetch-20261102.log、
+/tmp/wavevm-goal4-tcg-read-receipts-20261102.log。测试发送器已改有界队列，
+不再用单个 mailbox 覆盖并发请求。这不是跨物理主机延迟/大 RAM 或完整
+guest OS 证据，也不关闭整个 R04。
+下一入口：R04 大 RAM 冷启动/跨机实证；避免重复改已接通的初始 RAM/BIOS
+bootstrap 和独立目录镜像。随后处理 R03 membership failure/lease 联动、R06
+CPU-profile 剩余准入合同和 R13 host/backing 证明。coherent write-set 的真实
+guest 证据及最终 TCG guest E2E 仍未闭合；TCG guest E2E 仍属于 Minimum。
+本节是当前工作入口；下方“历史记录”仅供查证，旧的完成声明和 next gap
+不覆盖本节。不需要通读历史记录才能继续，也不创建 Codex /goal。
+
+目标与范围
+
+- 依据 docs/wavevm-architecture-baseline.md、docs/wavevm-refactor-roadmap.md
+  及 docs/specs/ 完成 Minimum，包括最终真实 guest E2E；goal.txt 不是替代规格。
+- 必须保留：统一 node runtime、manifest/typed 唯一生产路径、Mode A/B、
+  TCG/KVM、flat/fractal、多 VM、同机多计算节点、成员基本生命周期。
+- 并发 TCG 是正常主路径，受限 force_local 是例外；不把完整上游 MTTCG
+  性能、HA、热迁移、RECOVERY_REBIND、跨平台或完整故障矩阵加入本轮。
+- 单活协调器的基础重启对账、重放和部分启动补偿仍属 Minimum。
+- 远程磁盘范围纠正：roadmap §1.1 没有明确要求首版必须提供远程盘，
+  baseline 的 optional device/storage requirements 也不等于强制启用。
+  因此旧审计 B10/B11/B12/B14 不能直接作为无条件 Minimum 阻断项。
+  但已准入远程存储仍必须遵守 storage-device-authority 的身份、顺序、
+  flush、错误与隔离合同；不得误当本地盘、串卷或伪报成功。
+  本轮 guest 主矩阵可用 QEMU 本地盘。远程盘问题保留单独条件分支，
+  不擅自改纲领把相关合同移到 Extended，也不把未满足的合同标为通过。
+
+接手基线（本次只做计划核对，不是重新签署审计结论）
+
+- 当前 HEAD：23eacaf9c；tracked 工作区在计划编辑前无修改。
+  现存未跟踪构建产物不是本轮新增，不批量清理。
+- 10 月 29 日横向审计的对象是 33767b2c2，随后已有 b0f360e69 和
+  23eacaf9c。旧报告是缺口索引，不能照旧行号把已改内容重做一遍。
+- 后续提交涉及 slave_hybrid、wavevm-cpu、runtime-registration 和两个
+  guest 测试脚本。B1 地址魔数、B7 判据、B6 并发/限额已有修复记录；
+  需要确认剩余问题，不能据此直接写“全部已修”。
+- 最近提交声明仍是 B6 PARTIAL；guest PASS 不等于远端并发合同通过。
+  local steps、remote slices 等不同单位的计数不能直接相除当 CPU 占比。
+- 参考：minimum-breadth-audit-codex-agent-2026-10-29.txt，B1-B14/E1-E3/D1-D2。
+  下面每步执行时更新其真实结果，不重复整仓审计。
+
+推进方式
+
+- 一次完成一条生产路径 -> 编译受影响组件 -> 少量针对性验证 -> 下一条。
+  默认串行工作；不并行开多个 agent 或 guest，不为省事重建测试平台。
+- 每步只记录：生产调用链改了什么、最小反例结果、尚缺什么、下一入口。
+  单个 helper 或库测通过不能代替真实 caller 接通。
+- 保留 UDP、MPSC/多队列、批处理、异步 diff 和无关 vCPU 并行；锁只覆盖
+  真实共享状态，不跨网络等待。不靠全局串行化取得“正确”。
+- 无存量业务，不保留旧 header、静态 NODE/ROUTE、独立 master/slave
+  启动、逐字段 IOCTL 等第二生产语义；新命名不加 V1/v1 等版本后缀。
+- 复用 QEMU 的 CPU 状态、设备、事件循环和 kick 等机制；分布式边界
+  必须实现的身份、所有权、提交和完成关联由唯一 runtime 语义承担。
+- 测试先确认准确源码/二进制和本次 run identity。运行有超时和日志上限，
+  先检查磁盘可用量；仅清理本轮明确拥有的进程和临时目录。
+  不全局 pkill，不清空 /tmp，不动 keys、会话源文件或他人证据。
+- 真实缺陷随所属路径验证；不补穷举边界矩阵，不反复跑已经通过且未受
+  新改动影响的测试。guest 长测放最后，定位需要时只做有界单项复现。
+- 临时拒绝不安全组合可以保护状态，但不能冒充相应能力已完成。
+
+0. 收口现有改动与成功判据 [进行中]
+
+2026-10-31：已确认 B1 不再使用 guest RIP 魔数，负 ACK 不置 remote_rpc_ok。
+补齐矩阵只接受最后一条 OVERALL=PASS、rc=0 和本次新结果；允许重跑时清除
+本 cell 旧结果，修正非空目录探测路径。移除 KVM 启动期计数替代负载期
+remote_delta 的放行。test_guest_matrix_result.sh 的正常/timeout/后续失败/
+缺结果/复用旧目录反例通过，两个原脚本 bash -n 通过。
+统一 memory_service 的远端 ACK 完成点增加限频计数，携带 VM/incarnation/
+manifest、origin/instance/runtime/PID 和 operation；仅第一次成功完成计数。
+guest 脚本只比较负载窗口前后同一 admitted VM 的计数，不再接受 commit
+关键词、失败日志、启动提示。生产 memory_service 测试和证据反例通过。
+剩余：最终 guest 运行时验证这些证据，不以定向验证代替真实远端资源证明。
+
+入口：tests/e2e/test_guest_smoke.sh、test_guest_minimum_matrix.sh；
+wavevm-qemu/accel/wavevm/wavevm-cpu.c 的 remote ACK/fallback 记录。
+只核对 b0f360e69..23eacaf9c 及对应修复，补 B1/B7 残留，不重新扫全仓。
+- 禁止 guest 镜像/RIP 魔数参与生产语义。
+- 本次最终 PASS、退出码 0、所需证据和清理必须同时成立；旧结果文件、
+  标题字符串、负 ACK、单纯存活不算成功。
+- 负载窗口必须关联当前 VM/incarnation/vCPU/executor 的成功操作；
+  CPU、内存证据来自完成结果，不能只靠启动阶段计数。
+最小验证：已有脚本检查，加“仅标题”“PASS 但非零退出”“负 ACK”反例；
+若后续提交已覆盖就复用，不另造一套。此步不启动完整 guest 矩阵。
+完成门槛：后续修复可以依赖判据区分真正成功和假阳性。
+
+1. 闭合用户态内存提交与 handoff fence [进行中；B3/B4]
+
+2026-10-31：helper barrier 改为每次请求独立必需 endpoint 集合，按来源去重，
+使用 monotonic deadline；部分发送失败不缩减 required 集，独立 barrier
+允许同时在途。生产源包含测试通过重复/陌生 ACK、缺 peer、并发 fence。
+coherent dirty 改为 QEMU bitmap snapshot 固定写集合，分批 yield 但排空后
+才完成；失败恢复未提交位，snapshot 后新 dirty 不被清除。无 pre-image
+遇到新版只拒绝，禁止旧整页贴新版号重发。真实生产函数定向测试通过 33 页、
+后续新 dirty、stale 和 deadline；slave_hybrid.o 与 QEMU user-mem.o 编译通过。
+2026-11-01：`tests/unit/test_coherent_dirty_fence.sh` 复跑通过；当前实现已
+覆盖 pre-image/write-set、后续 dirty、stale base 和 deadline 反例，但尚未
+用真实 guest 重测新实现，不能把定向测试当作最终 guest 证据。
+这只是安全性与 fence 修复，尚未宣称 coherent 冲突恢复能力已完成：仍需
+在真实 guest 路径确认可证明的 write-set/所有权。typed read/commit、registration 和两个
+push-fence 入口共用绝对 deadline 收发；半包/断连/发送阻塞后关闭坏 stream，
+不复用迟到回包。socketpair 定向反例通过。coherent 同步 flush 的提交与
+最终 fence 共用 5s 预算；master handoff 的整批扫描/提交已同样接入。
+
+入口：wavevm-user-mem.c 的 coherent dirty retry/drain，
+slave_daemon/slave_hybrid.c 的 required-helper barrier；
+合同：memory-consistency、vcpu-handoff 的因果可见性与提交完成。
+- 冲突重试不得将旧整页换新版号覆盖权威页。复用 pre-image/write-set
+  合并或可证明的排他写权；不能建立正确性时保留 dirty 并 resync/失败。
+- 为 handoff 固定因果写集合/dirty generation，允许分批有界 drain；
+  单批预算耗尽不是整个 fence 成功，不恢复无限全 RAM 扫描。
+- 固定 required helper 身份/实例集合，去重 ACK；部分发送不能偷偷缩小
+  required 集合。超时返回未完成/失败，不得放行依赖的 vCPU。
+最小验证：同页两 writer 不同字节不丢更新；超过一批预算不提前放行；
+重复 ACK 或缺一个 required helper 不完成。优先扩展现有 memory/handoff
+测试，必须覆盖当前生产函数而非复制一份修正后的算法。
+完成门槛：用户态 authority 的成功确实代表本次依赖写已提交。
+
+2. Mode A 接入同一身份、放置与提交权威 [定向闭合；最终 guest 证据待后置]
+
+2026-10-31：Mode A/B frontend 都按 vCPU 建立已准入 runtime channel，删除
+QEMU 的独立 REMOTE_RUN 与 split→单 vnode 路由注入；CPU/all 对象编译、
+executor bridge 和共享控制语义定向检查通过。正在接入 per-context 有界
+kernel memory bridge：缺页和 immutable diff 由统一 memory_service 完成，
+结果按操作身份/版本校验；旧内核 UDP 收包与逐字段 route/epoch IOCTL
+生产入口移除。runtime 和新模块已编译，当前 `/dev/wavevm` 存在且
+工作区构建的 `wavevm.ko` 已加载；本轮用密码文件执行了实际模块探针。
+已补完整 config 范围发布、kernel-issued attach capability、本地注册连接
+的 SO_PEERCRED PID/UID 校验；QEMU 经独立有界 IPC 获取 attach-only 凭据。
+owner dequeue/complete/invalidate/stop 额外校验 TGID，子进程继承 FD 不获权威。
+STOP 先 quiesce 写入口/撤销 PTE，再 drain，防止排空后新增脏页。初次 PTE
+强制只读以触发 page_mkwrite。stale commit 保留原始 intent，按原 pre-image
+合并最新权威页，并保留未修改字节；连续冲突及 fetch 失败的生产函数检查
+通过。完整 runtime/QEMU/module 构建通过（后续每次修改仍重编受影响项）。
+`test_memory_authority` 已编译，覆盖实际模块的附件拒绝、延迟/拒绝 ACK、
+同 GPA 双 context 和 sibling teardown；本轮实际执行并通过。此前三个完整
+隔离测试因未启动 memory authority responder 而在首次缺页时 SIGBUS；本轮
+为测试夹具补上真实 dequeue/complete responder 后，`test_two_vm_isolation`、
+`test_targeted_isolation` 和 `test_worker_failure_isolation` 全部通过，覆盖
+同 GPA、双 VM、同 VM 多 FD、异步 teardown 与 peer churn。该证据闭合基础
+Mode A 隔离，不替代最终 guest 矩阵中的统一 runtime 行为验证。
+QEMU 页版本表同时改为按完整 GPA 寻址的稀疏 radix，修复 4 GiB 周期别名；
+高地址及并发节点发布的生产函数检查通过。coherent SHM 的冲突恢复仍缺
+可靠 pre-image；CPU-only 仍有拒绝门，不能据这些检查标 Minimum 完成。
+
+入口：master_core/kernel_backend.c、kernel-accelerator 合同、
+wavevm-runtime-registration.h、wavevm-all.c 的 context 绑定；
+沿 node runtime 的 admitted dispatch 与 memory authority 接线。
+- context 接收完整、原子校验的 manifest 派生快照，不由 split、一个
+  vnode、固定 loopback 或逐字段 IOCTL 重新规划各 vCPU 的目的地。
+- 每个操作保留规范身份、操作关联和陈旧性检查；不借 header.epoch
+  偷塞 VM ID，也不让 kernel 另建目录/一致性语义。
+- 正常化 transport 返回约定，但 dirty 只有收到 user-space authority
+  的语义 commit ACK/result_version 才能结算。修 send_rc 判断只是子项。
+- 保留真正 per-VM context、引用生命周期、加速队列和并行性；Mode A
+  必须最终通过同一合同，不能以永久关闭 Mode A 代替完成。
+最小验证：两个 admitted remote vCPU 目的地不被合并；vnode 0 可用；
+旧 incarnation 被拒绝；延迟/拒绝 commit ACK 不提前 clean。
+改动后复用 tests/mode-a/ 和 test_mode_ab_shared_semantics 的相关隔离项，
+验证停/关一个 context 不影响另一个；不在这里跑最终 guest 矩阵。
+完成门槛：Mode A 只是同一语义的加速实现，而非另一套成功标准。
+
+3. 资源放置与生产 CREATE 收口 [进行中；B9/B13/E2]
+
+2026-10-31：backend 选择移入 coordinator，AUTO 先尝试完整 KVM 计划，
+不可行再 TCG；仅选中 executor 要有 KVM dirty 能力，memory-only 成员
+不要求 KVM/TCG。REQUIRE_KERNEL 约束参与资源，PREFER 按实际选中节点
+解析。ctl 编译和完整 coordinator 定向脚本通过，含 KVM CPU + 非 KVM
+memory、REQUIRE_KVM、CPU 资源不足时 whole-VM TCG fallback。修正原
+coordinator fixture 缺少 storage 输出容量导致的测试错误。
+CPU-only executor 仍保留拒绝门，执行/远程内存支持未完成，不能删门报完。
+admission_authority_owner 检查通过；dynamic provider 的旧脚本漏链 control.c，
+补齐依赖后通过。
+
+入口：ctl_tool/main.c、common_include/wavevm_admission.c；
+合同：resource-placement-admission 与 runtime-manifest-lifecycle。
+- backend 由可行计划及实际参与角色决定，禁止对全部 membership 做
+  all_kvm/all_tcg/all_kernel 后提前否决或降级。
+- REQUIRE_KVM 只要求选中 CPU executor 满足 KVM 合同；无 KVM 内存节点
+  或无关成员不能破坏原本可行的计划。AUTO 先尝试完整 KVM 可行计划。
+- 补齐 CPU-only guest 配额节点使用已准入远端内存的执行/缺页链，
+  再解除 CPU 必须本地分到 guest RAM 的限制。只删 validator 或塞一页
+  象征性内存不算资源池化完成；节点自身运行开销仍正常计账。
+- 核对真实 ctl CREATE -> prepare -> activate/commit -> readiness，
+  保留 physical_host_id 聚合、并发预留、失败补偿和 STOP 清理。
+- 同路径处理 coordinator fixture/输出容量问题 E2，不扩展冷启动故障矩阵。
+最小验证：真实 ctl 的 KVM CPU + 非 KVM memory 组合；加无关 TCG 成员
+不改变结果；CPU 配额与 guest RAM 完全分处两节点仍可访问权威页。
+原 coordinator 测试及受影响的 CREATE/placement 项通过即可进入下一步。
+完成门槛：已准入资源计划可执行，实际资源来自计划而非第二次猜测。
+
+4. 修复 TCG 并发/受限兜底与 KVM drain [待执行；B6/B8]
+
+2026-10-31：先修 B8 的独立子项：KVM preempt drain 改为整段 10/50ms
+deadline，截止后周期 kick 防止后续 KVM_RUN 无保护阻塞；timer_create/
+settime 失败明确终止 QEMU，不能进入无保护执行。wavevm-cpu.o 编译通过；
+KVM guest 行为留给最终分层/guest 验证，不标整步完成。
+
+入口：wavevm-cpu.c、TCG helper/executor 的 handoff/中断/设备回包链；
+合同：baseline §16、vcpu-handoff §8.1 和 KVM 状态/dirty/resync。
+- 从现有真实卡点追踪 owner、pending IPI、NEED_LOCAL、设备完成和内存
+  fence，修清楚谁在等谁。优先复用 QEMU 的中断/设备处理机制。
+- 独立 remote vCPU 允许同时在途/执行；不得用全局 remote_active 门
+  把整个远程执行区间串行化；共享资源仍有精确同步。
+- force_local 按每 vCPU 的例外状态运行，遵守 30s slice、90s hard cap、
+  25s spin cooldown 与有界 device bounce。不循环调整 hold 参数求过关，
+  不放大本地兜底掩盖主路径问题，也不通过禁用该覆盖伪造成功。
+- 用同单位执行时间/区间或清楚定义的执行预算证明正常期远端为主；
+  不把 local steps 与 remote slices 相除，不仅看 remote counter 非零。
+- KVM local drain 使用总 deadline 和可靠 kick；timer 设置失败显式
+  处理，不能靠“最多调用五次”声称耗时有界。
+最小验证：短 BSP + 两个 remote vCPU 的实际并行进展；兜底能按合同
+退出并回到主路径；KVM drain deadline/失败处理。随后仅选一个 TCG guest
+确认卡点消失，再进入完整矩阵。完整上游 MTTCG 性能不在本步承诺内。
+完成门槛：guest 进展依赖正确的分布式主路径，而非大部分时间本地代执行。
+
+5. 横向收口其余 Minimum 与条件存储分支 [待执行]
+
+- E1：先定位既有 multi-Pod 证据，缺失时补有界记录级 capture/admit/
+  compile/forward 验证：不同 leaf Pod 可有重叠本地 vnode，总节点数突破
+  单域预算。不能仅凭 flat 4100 fixture 代替，不要求启动几千个进程。
+- 复用已有双 Mode B/Mode A、同机多计算节点、并发 CREATE、cordon/
+  drain/gateway 替换、STOP 和基础重启对账证据；只重验受本轮修改影响的
+  生产链，发现实质缺口就就地修，不重新建设 HA/恢复框架。
+- 规范维护只修明确冲突：D1 当前实现状态句改成纯要求；D2 与统一 runtime
+  冲突的旧兼容路径条款按用户既定“不留旧路径”对齐。状态留在本 plan，
+  不以改规范为实现捷径，也不顺手扩写全部文档。
+- 条件存储 B10/B11/B12/B14：先核对远程盘的实际公开/准入入口。
+  若接受该能力，按 manifest 绑定 device identity、per-VM/per-device
+  backend、typed completion 与队列身份贯穿，不能首个 I/O 猜索引、
+  多盘共用可变全局后端、环境变量静默切本地盘或全局锁串行所有队列。
+  未满足合同的请求应在运行前明确拒绝，并在交付范围中写明限制。
+  若要承诺完整远程盘，则以独立闭环补 read/write/flush、双盘隔离和
+  独立队列进展；不得将“未启用”或“安全拒绝”标为这些合同已完成。
+完成门槛：Minimum 无遗漏的生产职责；条件能力的支持边界与实际准入一致。
+
+6. 分层矩阵与最终真实 guest 验收 [待执行，最后]
+
+入口：已有 s6_dataplane_probe 与 tests/e2e/test_guest_minimum_matrix.sh。
+- 先复验受影响的 flat/fractal × TCG/KVM 分层合同，再跑真实 guest。
+  逐格串行，先 flat TCG 定位主路径，再复用同一修复跑 fractal TCG 与
+  flat/fractal KVM；kernel、多 VM 和同机多 compute 按 roadmap §14 验收。
+- 不机械铺开所有维度的笛卡尔积，但必须覆盖四个 backend/topology 格、
+  Mode A 加速语义、双 context、双 Mode B 和同机多 compute 的规定门槛。
+- 每格保存 capability、manifest digest、实际 QEMU 参数/构建来源、
+  login/SSH、guest 多 vCPU 负载、负载期远端 CPU/内存成功操作及 STOP 清理。
+  合同写“login or SSH”时按合同判定；脚本若承诺两者则两者都须通过。
+- 遇到失败，沿当前具体生产路径修复并复跑受影响项；不提高超时碰运气，
+  不混用旧版本 PASS，不带隐藏 workaround，不以启动期一次 remote 代替
+  负载期分布式执行，不将既有缺少 KVM/内核能力的 SKIP 计为通过。
+完成门槛：纲领 Minimum 每项有真实实现和相应有效证据，已知阻断清零；
+如实列出性能限制与 Extended，届时才报告 Minimum 完成。
+
+下一次继续的准确入口
+
+继续第 1 步的 coherent 写捕获/原始 write-set，以及 SHM 与权威版本的边界。
+第 2 步本轮真实模块检查和 Mode A 隔离定向验证已通过；后续只需在最终
+guest 矩阵中复验统一 runtime 行为，不重复这组隔离夹具。不要重启一轮全纲领审计。
+第 3 步 CPU-only backing/cache 支持和第 4 步 TCG 主路径仍未完成。
+每完成一条路径就修改本节状态、验证入口和剩余项，不只向历史尾部追加。
+用户已授权继续完成 Minimum；本轮未要求备份或 push。
+
+========================================================================
+历史记录（保留查证；不作为当前执行入口）
+========================================================================
+
 [完成并验证 2026-10-17：Hosted host-OS portability 纲领定稿] Codex+CC 审计/follow-up 后，`docs/wavevm-refactor-roadmap.md` §1.1 Extended 写入 hosted portability（Linux host appliance / hypervisor adapter；KVM 与 Mode A 分维；能力以 appliance 内 probe 为准）并新增 §14.1 验收；`docs/wavevm-architecture-baseline.md` Extended 交叉引用 §1.1/§14.1。`physical_host_id` 须可信声明输入。本轮无生产代码改动。同步刷新 session-backup：Grok Bot（Grok Build session 073dc59e）、Claude Code（9d2e8212）、Codex（Sep-03 4 parts + 新增 Sep-06 4 parts）。
 
 [完成并验证 2026-09-24：node route delivery 输入之一] route-control 新增按 exact prepared 或 active route key 从 durable journal 取回完整 canonical RouteSnapshot 的 API；retired key 拒绝，取回对象由调用方释放。ACTIVATE_MANIFEST 先于 ROUTE_COMMIT，因此 prepared snapshot 必须可用于 delivery。route-control 定向测试覆盖 prepared、重启后 active 取回和 retired 拒绝。该 API 尚未接入 node agent；ACTIVATE 仍缺事务捕获的 cluster node records 或由 controller 派生并传输的 dispatch projection，不能据此声称 delivery/CREATE_VM 闭环。下一步优先补这一份权威输入及 node-level service 生命周期。

@@ -1,0 +1,6 @@
+make: 进入目录“/workspaces/WaveVM/master_core”
+make -C ../node_runtime all
+make[1]: 进入目录“/workspaces/WaveVM/node_runtime”
+make[1]: 对“all”无需做任何事。
+make[1]: 离开目录“/workspaces/WaveVM/node_runtime”
+make: 离开目录“/workspaces/WaveVM/master_core”

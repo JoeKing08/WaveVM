@@ -15,7 +15,9 @@
 #include "wavevm_admission_orchestrator.h"
 #include "wavevm_admission_receiver.h"
 #include "wavevm_membership.h"
+#include "wavevm_host_probe.h"
 #include "wavevm_reservation_runtime.h"
+#include "wavevm_runtime_gate.h"
 #include "wavevm_runtime_names.h"
 #include "../../ctl_tool/admission_readiness.h"
 
@@ -71,12 +73,14 @@ struct prepared_buffers {
     struct wvm_required_member selected_members[4];
     struct wvm_vcpu_assignment vcpus[4];
     struct wvm_memory_chunk_assignment memory[4];
+    struct wvm_storage_assignment storage[4];
     struct wvm_reservation_requirement requirements[4];
     struct wvm_capability_ref required_capabilities[4];
     struct wvm_resource_reservation reservations[4];
     struct wvm_node_runtime_manifest runtimes[4];
     struct wvm_vcpu_assignment local_vcpus[4][4];
     struct wvm_memory_chunk_assignment local_memory[4][4];
+    struct wvm_storage_assignment local_storage[4][4];
     struct wvm_startup_dependency dependencies[4][4];
     struct wvm_exclusive_lease listener_leases[4][3];
 };
@@ -264,7 +268,9 @@ static void fill_options(
     options->memory_consistency_policy = 1;
     options->guest_numa_nodes = 1;
     options->executor_class = 1;
-    options->node_runtime_role_bits = 1;
+    options->node_runtime_role_bits =
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_NODE_RUNTIME) |
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR);
     options->host_extra_role_bits = 2;
     options->candidate_created_at = 1;
     options->prepared_reservation_expiry_unix_time_ms = 1000;
@@ -346,6 +352,9 @@ static void initialize_prepared_vm(struct wvm_coordinator_prepared_vm *prepared,
         buffers->requirements;
     prepared->placement_plan.reservation_requirements.capacity =
         sizeof(buffers->requirements) / sizeof(buffers->requirements[0]);
+    prepared->placement_plan.storage_assignments.entries = buffers->storage;
+    prepared->placement_plan.storage_assignments.capacity =
+        sizeof(buffers->storage) / sizeof(buffers->storage[0]);
     prepared->candidate.required_capabilities.entries =
         buffers->required_capabilities;
     prepared->candidate.required_capabilities.capacity =
@@ -373,6 +382,9 @@ static void initialize_prepared_vm(struct wvm_coordinator_prepared_vm *prepared,
         prepared->node_runtime_manifests[i].startup_dependencies.capacity =
             sizeof(buffers->dependencies[i]) /
             sizeof(buffers->dependencies[i][0]);
+        prepared->node_runtime_manifests[i].local_storage_assignments.entries =
+            buffers->local_storage[i];
+        prepared->node_runtime_manifests[i].local_storage_assignments.capacity = 4;
     }
 }
 
@@ -1097,6 +1109,7 @@ static int test_reservation_receiver(
     scratch.candidate_storage = (struct wvm_admission_candidate_stage_storage){
         .vcpu_placements = buffers.vcpus, .vcpu_placement_capacity = 4,
         .memory_placements = buffers.memory, .memory_placement_capacity = 4,
+        .storage_assignments = buffers.storage, .storage_assignment_capacity = 4,
         .required_members = buffers.selected_members, .required_member_capacity = 4,
         .required_capabilities = buffers.required_capabilities, .required_capability_capacity = 4,
         .execution_capabilities = execution_capabilities, .execution_capability_capacity = 4,
@@ -1194,6 +1207,7 @@ struct participant_decode_buffers {
     struct wvm_route_snapshot_key activation_routes[4];
     struct wvm_runtime_cpu_dispatch dispatch_cpu[4];
     struct wvm_runtime_memory_dispatch dispatch_memory[4];
+    struct wvm_runtime_storage_dispatch dispatch_storage[4];
 };
 
 static void participant_storage_init(
@@ -1204,6 +1218,7 @@ static void participant_storage_init(
     storage->candidate_storage = (struct wvm_admission_candidate_stage_storage){
         .vcpu_placements = buffers->data.vcpus, .vcpu_placement_capacity = 4,
         .memory_placements = buffers->data.memory, .memory_placement_capacity = 4,
+        .storage_assignments = buffers->data.storage, .storage_assignment_capacity = 4,
         .required_members = buffers->data.selected_members, .required_member_capacity = 4,
         .required_capabilities = buffers->data.required_capabilities, .required_capability_capacity = 4,
         .execution_capabilities = buffers->execution_capabilities, .execution_capability_capacity = 4,
@@ -1215,6 +1230,8 @@ static void participant_storage_init(
     storage->runtime_vcpu_assignment_capacity = 4;
     storage->runtime_memory_assignments = buffers->data.local_memory[0];
     storage->runtime_memory_assignment_capacity = 4;
+    storage->runtime_storage_assignments = buffers->data.local_storage[0];
+    storage->runtime_storage_assignment_capacity = 4;
     storage->runtime_capabilities = buffers->runtime_capabilities;
     storage->runtime_capability_capacity = 4;
     storage->runtime_dependencies = buffers->data.dependencies[0];
@@ -1225,6 +1242,8 @@ static void participant_storage_init(
     storage->dispatch_cpu_capacity = 4;
     storage->dispatch_memory_entries = buffers->dispatch_memory;
     storage->dispatch_memory_capacity = 4;
+    storage->dispatch_storage_entries = buffers->dispatch_storage;
+    storage->dispatch_storage_capacity = 4;
 }
 
 struct participant_receiver_context {
@@ -1338,6 +1357,7 @@ static int test_participant_receiver(
     struct wvm_runtime_dispatch_projection dispatch = {0};
     struct wvm_runtime_cpu_dispatch dispatch_cpu[4];
     struct wvm_runtime_memory_dispatch dispatch_memory[4];
+    struct wvm_runtime_storage_dispatch dispatch_storage[4];
     const struct wvm_candidate_vm_manifest *candidate = &prepared->candidate;
     const struct wvm_resource_reservation *reservation = &prepared->reservations[0];
     enum wvm_reservation_runtime_result reservation_result;
@@ -1430,6 +1450,8 @@ static int test_participant_receiver(
     dispatch.cpu_dispatch.capacity = 4;
     dispatch.memory_dispatch.entries = dispatch_memory;
     dispatch.memory_dispatch.capacity = 4;
+    dispatch.storage_dispatch.entries = dispatch_storage;
+    dispatch.storage_dispatch.capacity = 4;
     if (wvm_runtime_dispatch_projection_build(
             candidate, &active, records, route, &dispatch, error,
             sizeof(error)) != 0) {
@@ -1643,6 +1665,125 @@ static int test_ctl_workspace(
     result = 0;
 out:
     wvm_ctl_admission_buffers_destroy(&buffers, &prepared);
+    wvm_ctl_admission_buffers_destroy(&buffers, &prepared);
+    return result;
+}
+
+static int test_role_aware_prepare(
+    const struct wvm_vm_request *original,
+    const struct wvm_coordinator_transaction *transaction,
+    const struct wvm_cluster_record_set *original_records,
+    const struct wvm_coordinator_prepared_route *route,
+    const struct wvm_coordinator_prepare_options *template)
+{
+    struct wvm_cluster_record_set records = *original_records;
+    struct wvm_node_record nodes[2];
+    struct wvm_capability_record capabilities[8];
+    struct wvm_capability_ref references[2];
+    struct wvm_coordinator_node_launch_plan launches[2];
+    struct wvm_admission_node_listener_plan listeners[2];
+    struct wvm_exclusive_lease leases[2][3];
+    struct wvm_ctl_admission_buffers buffers = {0};
+    struct wvm_coordinator_prepared_vm prepared = {0};
+    struct wvm_activation_record activation = {0};
+    struct wvm_coordinator_prepare_options options = *template;
+    struct wvm_vm_request request = *original;
+    char error[256] = {0};
+    int result = -1;
+
+    memcpy(nodes, records.nodes, sizeof(nodes));
+    memcpy(capabilities, records.capability_records, sizeof(capabilities));
+    records.nodes = nodes;
+    records.capability_records = capabilities;
+    capabilities[0].feature_bits = WVM_HOST_PROBE_KVM_DIRTY_LOG;
+    capabilities[4].state = WVM_CAPABILITY_UNAVAILABLE;
+    capabilities[4].reason_code = 1;
+    capabilities[5].state = WVM_CAPABILITY_UNAVAILABLE;
+    capabilities[5].reason_code = 1;
+    for (unsigned iteration = 0; iteration < 3; iteration++) {
+        if (iteration == 2) {
+            /* Too little eligible KVM CPU: AUTO must try the full TCG pool. */
+            capabilities[5].state = WVM_CAPABILITY_AVAILABLE;
+            capabilities[5].reason_code = 0;
+        }
+        for (size_t i = 0; i < 2; i++) {
+            if (refresh_node_profile(&nodes[i], capabilities + 4 * i, 4) != 0) {
+                goto out;
+            }
+            references[i] = nodes[i].capability;
+        }
+        options.execution_profile.per_node_capabilities.entries = references;
+        request.execution_backend_policy = iteration == 1 ?
+            WVM_MANIFEST_BACKEND_POLICY_REQUIRE_KVM : WVM_MANIFEST_BACKEND_POLICY_AUTO;
+        request.requested_vcpus = iteration == 2 ? 7 : 2;
+        request.requested_memory_bytes = iteration == 2 ? 4 * MIB : 20 * MIB;
+        options.memory_chunk_bytes = iteration == 2 ? 2 * MIB : 8 * MIB;
+        fill_node_launch_plans(&options, launches, nodes, listeners, leases);
+        for (size_t i = 0; i < 2; i++) {
+            launches[i].launch_plan.guest_total_memory_bytes = request.requested_memory_bytes;
+        }
+        if (wvm_ctl_admission_buffers_reset(
+                &buffers, request.requested_vcpus, 2, 3,
+                WVM_CTL_ADMISSION_WORKSPACE_BYTES, &prepared, &options,
+                &activation, error, sizeof(error)) != 0 ||
+            wvm_coordinator_prepare(&request, transaction, &records, route,
+                                      &options, &prepared, error, sizeof(error)) != 0) {
+            goto out;
+        }
+        if (prepared.candidate.execution_plan.backend !=
+            (iteration == 2 ? WVM_MANIFEST_BACKEND_TCG : WVM_MANIFEST_BACKEND_KVM)) {
+            snprintf(error, sizeof(error), "unexpected backend %u at iteration %u",
+                     prepared.candidate.execution_plan.backend, iteration);
+            goto out;
+        }
+        if (iteration < 2) {
+            int remote_memory = 0;
+            int memory_runtime_seen = 0;
+            int executor_runtime_seen = 0;
+            for (size_t i = 0; i < prepared.candidate.vcpu_placements.count; i++) {
+                if (prepared.candidate.vcpu_placements.entries[i].executor_physical_node_id != 17) {
+                    snprintf(error, sizeof(error), "vCPU placed on non-KVM node");
+                    goto out;
+                }
+            }
+            for (size_t i = 0; i < prepared.admission_plan.reservation_count; i++) {
+                const struct wvm_admission_reservation *r = &prepared.admission_plan.reservations[i];
+                remote_memory |= r->physical_node_id == 99 &&
+                                 r->guest_vcpu_slots == 0 && r->guest_memory_bytes != 0;
+            }
+            if (!remote_memory) {
+                snprintf(error, sizeof(error), "memory-only participant missing");
+                goto out;
+            }
+            for (size_t i = 0; i < prepared.node_runtime_manifest_count; i++) {
+                const struct wvm_node_runtime_manifest *runtime =
+                    &prepared.node_runtime_manifests[i];
+
+                if (runtime->physical_node_id == 99) {
+                    memory_runtime_seen = 1;
+                    if (runtime->local_role_bits &
+                        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR)) {
+                        snprintf(error, sizeof(error),
+                                 "memory-only runtime advertises executor role");
+                        goto out;
+                    }
+                }
+                if (runtime->physical_node_id == 17 &&
+                    (runtime->local_role_bits &
+                     WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_EXECUTOR))) {
+                    executor_runtime_seen = 1;
+                }
+            }
+            if (!memory_runtime_seen || !executor_runtime_seen) {
+                snprintf(error, sizeof(error),
+                         "runtime role projection is incomplete");
+                goto out;
+            }
+        }
+    }
+    result = 0;
+out:
+    if (result != 0) fprintf(stderr, "role-aware prepare: %s\n", error);
     wvm_ctl_admission_buffers_destroy(&buffers, &prepared);
     return result;
 }
@@ -1862,7 +2003,9 @@ int main(void)
     }
 
     if (test_ctl_workspace(&request, &transaction, &records, &prepared_route,
-                           &options) != 0) {
+                           &options) != 0 ||
+        test_role_aware_prepare(&request, &transaction, &records, &prepared_route,
+                                &options) != 0) {
         return 1;
     }
 
@@ -1874,7 +2017,7 @@ int main(void)
     if (expect(wvm_coordinator_prepare(&request, &transaction, &records,
                                        &prepared_route, &options, &prepared,
                                        error, sizeof(error)) == 0,
-               "prepare deterministic canonical VM proposal") ||
+               error[0] ? error : "prepare deterministic canonical VM proposal") ||
         expect(prepared.admission_plan.reservation_count == 2 &&
                    prepared.reservation_count == 2 &&
                    prepared.node_runtime_manifest_count == 2,
@@ -1894,6 +2037,7 @@ int main(void)
                    &prepared.candidate, &prepared.placement_plan, error,
                    sizeof(error)) == 0,
                    "candidate exactly matches placement plan")) {
+        fprintf(stderr, "coordinator prepare detail: %s\n", error);
         return 1;
     }
     if (expect(registry_17.reservation_count == 1 &&
@@ -1991,7 +2135,7 @@ int main(void)
                                        &prepared_route, &options,
                                        &rejected_prepared, error,
                                        sizeof(error)) != 0,
-               "reject TCG profile when request requires KVM")) {
+               "reject REQUIRE_KVM without dirty/resync evidence")) {
         return 1;
     }
     request.execution_backend_policy = WVM_MANIFEST_BACKEND_POLICY_REQUIRE_TCG;

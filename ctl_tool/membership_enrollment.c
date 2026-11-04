@@ -276,11 +276,6 @@ int wvm_ctl_membership_enrollment_activate_compute(
         return -1;
     }
     controller = &enrollment->plane->membership_controller;
-    if (controller->route_count != 0) {
-        set_error(error, error_len,
-                  "cluster enrollment refuses VM route scopes; use route join");
-        return -1;
-    }
     entry = wvm_membership_controller_find(controller, member_key);
     if (!entry || entry->kind != WVM_MEMBERSHIP_COMPUTE) {
         set_error(error, error_len,
@@ -421,11 +416,6 @@ int wvm_ctl_membership_enrollment_activate_gateway(
         return -1;
     }
     controller = &enrollment->plane->membership_controller;
-    if (controller->route_count != 0) {
-        set_error(error, error_len,
-                  "cluster enrollment refuses VM route scopes; use route join");
-        return -1;
-    }
     entry = wvm_membership_controller_find(controller, member_key);
     if (!entry || entry->kind != WVM_MEMBERSHIP_GATEWAY) {
         set_error(error, error_len,

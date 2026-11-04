@@ -1,0 +1,53 @@
+s6 matrix run_id=s6-a1104 out_dir=/tmp/wavevm-a1104-s6 have_kvm=1 have_wavevm=1
+cells_selected=flat_tcg fractal_tcg flat_kvm fractal_kvm mode_a_one mode_b_dual compute_dual mode_a_dual neg_require_kvm neg_require_kernel auto_tcg_fallback
+cell_deadline_s=180 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=23eacaf9c
+2026年 11月 04日 星期三 12:18:16 CST
+=== CELL flat_tcg ===
+cmd: WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=disabled bash tests/control-plane/test_create_vm_single_node.sh
+RESULT flat_tcg PASS elapsed=17s cleanup_ok=1
+=== CELL fractal_tcg ===
+cmd: WVM_S6_BACKEND=require-tcg bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_tcg PASS elapsed=25s cleanup_ok=1
+=== CELL flat_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm WVM_S6_ACCEL=disabled bash tests/control-plane/test_create_vm_single_node.sh
+RESULT flat_kvm FAIL rc=1 class=memory cleanup_ok=1 note=ok elapsed=34s
+=== CELL fractal_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_kvm FAIL rc=1 class=route cleanup_ok=1 note=ok elapsed=35s
+=== CELL mode_a_one ===
+cmd: WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=require-kernel bash tests/control-plane/test_create_vm_single_node.sh
+RESULT mode_a_one FAIL rc=1 class=unknown cleanup_ok=1 note=ok elapsed=20s
+=== CELL mode_b_dual ===
+cmd: bash tests/control-plane/test_create_vm_dual_mode_b.sh
+RESULT mode_b_dual FAIL rc=1 class=start cleanup_ok=0 note=cleanup_reported_fail elapsed=16s
+=== CELL compute_dual ===
+cmd: bash tests/control-plane/test_same_host_dual_agent_live.sh
+RESULT compute_dual PASS elapsed=8s cleanup_ok=1
+=== CELL mode_a_dual ===
+cmd: bash tests/control-plane/test_create_vm_dual_mode_a.sh
+RESULT mode_a_dual FAIL rc=1 class=unknown cleanup_ok=1 note=ok elapsed=32s
+=== CELL neg_require_kvm ===
+cmd: bash tests/control-plane/test_s6_neg_require_kvm.sh
+RESULT neg_require_kvm PASS elapsed=9s cleanup_ok=1
+=== CELL neg_require_kernel ===
+cmd: bash tests/control-plane/test_s6_neg_require_kernel.sh
+RESULT neg_require_kernel PASS elapsed=9s cleanup_ok=1
+=== CELL auto_tcg_fallback ===
+cmd: bash tests/control-plane/test_s6_auto_tcg_fallback.sh
+RESULT auto_tcg_fallback PASS elapsed=15s cleanup_ok=1
+==== SUMMARY ====
+PASS flat_tcg
+PASS fractal_tcg
+FAIL flat_kvm rc=1
+FAIL fractal_kvm rc=1
+FAIL mode_a_one rc=1
+FAIL mode_b_dual rc=1
+PASS compute_dual
+FAIL mode_a_dual rc=1
+PASS neg_require_kvm
+PASS neg_require_kernel
+PASS auto_tcg_fallback
+totals pass=6 fail=5 skip=0 blocked=0 orphans_ignored=0 out=/tmp/wavevm-a1104-s6 run_id=s6-a1104
+selected=11 invoked=11
+MATRIX_RESULT=FAIL

@@ -29,6 +29,7 @@ struct wvm_kvm_page_cache {
     uint64_t page_count;
     uint64_t next_slice_id;
     int execution_active;
+    struct wvm_kvm_memory_slice *execution_slice;
     int initialized;
 };
 
@@ -40,6 +41,12 @@ struct wvm_kvm_memory_slice {
     int failed;
     int sealed;
     int destroy_requested;
+    unsigned participants;
+    unsigned running;
+    int preparing;
+    int closing;
+    int execution_complete;
+    int execution_status;
 };
 
 struct global_cache {
@@ -89,6 +96,9 @@ static void mark_slice_failed_locked(struct wvm_kvm_memory_slice *slice,
         return;
     }
     slice->failed = 1;
+    if (slice->participants != 0) {
+        slice->closing = 1;
+    }
     if (slice->error_gpa == 0) {
         slice->error_gpa = gpa;
     }
@@ -246,7 +256,13 @@ int wvm_kvm_page_cache_install_full(
     }
     pthread_mutex_lock(&cache->lock);
     page = find_page_locked(cache, gpa);
+    if (page && page->state == WVM_KVM_PAGE_CLEAN &&
+        version <= page->version) {
+        pthread_mutex_unlock(&cache->lock);
+        return -EALREADY;
+    }
     if (cache->execution_active) {
+        mark_slice_failed_locked(cache->execution_slice, gpa);
         if (page) {
             mark_slice_failed_locked(page->slice, gpa);
             page->state = WVM_KVM_PAGE_RESYNC;
@@ -303,7 +319,13 @@ int wvm_kvm_page_cache_apply_diff(
     }
     pthread_mutex_lock(&cache->lock);
     page = find_page_locked(cache, gpa);
+    if (page && page->state == WVM_KVM_PAGE_CLEAN &&
+        version <= page->version) {
+        pthread_mutex_unlock(&cache->lock);
+        return -EALREADY;
+    }
     if (cache->execution_active) {
+        mark_slice_failed_locked(cache->execution_slice, gpa);
         if (page) {
             mark_slice_failed_locked(page->slice, gpa);
             page->state = WVM_KVM_PAGE_RESYNC;
@@ -351,6 +373,10 @@ int wvm_kvm_page_cache_invalidate(
     }
     pthread_mutex_lock(&cache->lock);
     page = find_page_locked(cache, gpa);
+    if (cache->execution_slice &&
+        !cache->execution_slice->execution_complete) {
+        mark_slice_failed_locked(cache->execution_slice, gpa);
+    }
     if (cache->execution_active) {
         if (page) {
             mark_slice_failed_locked(page->slice, gpa);
@@ -444,7 +470,7 @@ int wvm_kvm_memory_slice_capture_dirty(
     pthread_mutex_lock(&slice->cache->lock);
     page = find_page_locked(slice->cache, gpa);
     if (!page || page->state != WVM_KVM_PAGE_CLEAN ||
-        page->version == 0 || slice->sealed) {
+        page->version == 0 || slice->sealed || slice->failed) {
         mark_slice_failed_locked(slice, gpa);
         pthread_mutex_unlock(&slice->cache->lock);
         set_error(error, error_len,
@@ -563,13 +589,13 @@ int wvm_kvm_memory_slice_wait(
     while (slice->pending != 0) {
         wait_result = pthread_cond_timedwait(&slice->cache->completed,
                                              &slice->cache->lock, &deadline);
-        if (wait_result == ETIMEDOUT) {
+        if (wait_result == ETIMEDOUT && slice->pending != 0) {
             slice->failed = 1;
             pthread_mutex_unlock(&slice->cache->lock);
             set_error(error, error_len, "KVM dirty commits exceeded horizon");
             return -ETIMEDOUT;
         }
-        if (wait_result != 0) {
+        if (wait_result != 0 && slice->pending != 0) {
             pthread_mutex_unlock(&slice->cache->lock);
             set_error(error, error_len, "KVM dirty commit wait failed");
             return -wait_result;
@@ -711,41 +737,181 @@ int wvm_kvm_page_cache_global_lookup(
     return result;
 }
 
-int wvm_kvm_execution_global_begin(char *error, size_t error_len)
+int wvm_kvm_page_cache_global_install_data(
+    uint64_t gpa, uint64_t version, uint16_t offset, const uint8_t *data,
+    size_t data_bytes, int full_page, uint8_t *hva, uint8_t *mirror,
+    char *error, size_t error_len)
 {
-    int result = 0;
+    int result;
 
+    if (!data || !hva || offset > WVM_MEMORY_PAGE_BYTES ||
+        data_bytes > WVM_MEMORY_PAGE_BYTES - offset ||
+        (full_page && (offset != 0 || data_bytes != WVM_MEMORY_PAGE_BYTES))) {
+        return -EINVAL;
+    }
     pthread_mutex_lock(&g_global_cache.lock);
     if (!g_global_cache.active) {
         result = -ENOTCONN;
+    } else if (full_page) {
+        result = wvm_kvm_page_cache_install_full(
+            &g_global_cache.cache, gpa, version, error, error_len);
     } else {
-        pthread_mutex_lock(&g_global_cache.cache.lock);
-        if (g_global_cache.cache.execution_active) {
-            result = -EBUSY;
-        } else {
-            g_global_cache.cache.execution_active = 1;
+        result = wvm_kvm_page_cache_apply_diff(
+            &g_global_cache.cache, gpa, version, offset, data_bytes, 0,
+            error, error_len);
+    }
+    if (result == 0) {
+        memcpy(hva + offset, data, data_bytes);
+        if (mirror && mirror != hva) {
+            memcpy(mirror + offset, data, data_bytes);
         }
-        pthread_mutex_unlock(&g_global_cache.cache.lock);
     }
     pthread_mutex_unlock(&g_global_cache.lock);
-    if (result == -ENOTCONN) {
-        set_error(error, error_len, "global KVM page cache is inactive");
-    } else if (result == -EBUSY) {
-        set_error(error, error_len, "another KVM execution is active");
-    }
     return result;
 }
 
-void wvm_kvm_execution_global_end(void)
+int wvm_kvm_execution_global_join(
+    wvm_kvm_prepare_input_fn prepare, void *opaque,
+    struct wvm_kvm_memory_slice **slice_out, uint64_t *error_gpa,
+    char *error, size_t error_len)
 {
-    pthread_mutex_lock(&g_global_cache.lock);
-    if (g_global_cache.active) {
-        pthread_mutex_lock(&g_global_cache.cache.lock);
-        g_global_cache.cache.execution_active = 0;
-        pthread_cond_broadcast(&g_global_cache.cache.completed);
-        pthread_mutex_unlock(&g_global_cache.cache.lock);
+    struct wvm_kvm_page_cache *cache = &g_global_cache.cache;
+    struct wvm_kvm_memory_slice *slice;
+    struct timespec deadline;
+    int result;
+
+    if (!prepare || !slice_out || !error_gpa) {
+        return -EINVAL;
     }
+    *slice_out = NULL;
+    *error_gpa = 0;
+    pthread_mutex_lock(&g_global_cache.lock);
+    if (!g_global_cache.active ||
+        deadline_from_now(cache->config.completion_timeout_ms, &deadline)) {
+        pthread_mutex_unlock(&g_global_cache.lock);
+        return -ENOTCONN;
+    }
+    pthread_mutex_lock(&cache->lock);
     pthread_mutex_unlock(&g_global_cache.lock);
+    for (;;) {
+        slice = cache->execution_slice;
+        if (!slice) {
+            slice = calloc(1, sizeof(*slice));
+            if (!slice) {
+                pthread_mutex_unlock(&cache->lock);
+                return -ENOMEM;
+            }
+            slice->cache = cache;
+            slice->id = cache->next_slice_id++;
+            if (slice->id == 0) slice->id = cache->next_slice_id++;
+            slice->preparing = 1;
+            slice->participants = slice->running = 1;
+            cache->execution_slice = slice;
+            *slice_out = slice;
+            pthread_mutex_unlock(&cache->lock);
+
+            /* No cache/scheduling lock is held during remote input fetch. */
+            result = prepare(opaque, error_gpa);
+            pthread_mutex_lock(&g_global_cache.lock);
+            pthread_mutex_lock(&cache->lock);
+            if (result || slice->failed) {
+                mark_slice_failed_locked(slice, *error_gpa);
+                slice->closing = 1;
+                result = result ? result : -EUCLEAN;
+            } else {
+                cache->execution_active = 1;
+            }
+            slice->preparing = 0;
+            pthread_cond_broadcast(&cache->completed);
+            pthread_mutex_unlock(&cache->lock);
+            pthread_mutex_unlock(&g_global_cache.lock);
+            return result;
+        }
+        if (!slice->preparing && !slice->closing) {
+            slice->participants++;
+            slice->running++;
+            *slice_out = slice;
+            pthread_mutex_unlock(&cache->lock);
+            return 0;
+        }
+        result = pthread_cond_timedwait(&cache->completed, &cache->lock,
+                                         &deadline);
+        if (result == ETIMEDOUT &&
+            (!cache->execution_slice ||
+             (!cache->execution_slice->preparing &&
+              !cache->execution_slice->closing))) {
+            continue;
+        }
+        if (result) {
+            pthread_mutex_unlock(&cache->lock);
+            set_error(error, error_len, "KVM execution cohort admission timed out");
+            return -result;
+        }
+    }
+}
+
+int wvm_kvm_execution_leave(struct wvm_kvm_memory_slice *slice,
+                            int status, uint64_t error_gpa)
+{
+    int harvest;
+
+    pthread_mutex_lock(&slice->cache->lock);
+    slice->closing = 1;
+    if (status) mark_slice_failed_locked(slice, error_gpa);
+    harvest = --slice->running == 0;
+    pthread_cond_broadcast(&slice->cache->completed);
+    pthread_mutex_unlock(&slice->cache->lock);
+    return harvest;
+}
+
+void wvm_kvm_execution_complete(struct wvm_kvm_memory_slice *slice,
+                                 int status, uint64_t error_gpa)
+{
+    pthread_mutex_lock(&slice->cache->lock);
+    if (status) mark_slice_failed_locked(slice, error_gpa);
+    slice->execution_status = slice->failed ? -EUCLEAN : 0;
+    slice->execution_complete = 1;
+    slice->cache->execution_active = 0;
+    pthread_cond_broadcast(&slice->cache->completed);
+    pthread_mutex_unlock(&slice->cache->lock);
+}
+
+int wvm_kvm_execution_wait(struct wvm_kvm_memory_slice *slice,
+                            uint64_t *error_gpa)
+{
+    struct timespec deadline;
+    int result = 0;
+
+    if (deadline_from_now(slice->cache->config.completion_timeout_ms,
+                          &deadline)) return -EINVAL;
+    pthread_mutex_lock(&slice->cache->lock);
+    while (!slice->execution_complete) {
+        result = pthread_cond_timedwait(&slice->cache->completed,
+                                         &slice->cache->lock, &deadline);
+        if (slice->execution_complete) break;
+        if (result) {
+            mark_slice_failed_locked(slice, 0);
+            break;
+        }
+    }
+    *error_gpa = slice->error_gpa;
+    result = slice->execution_complete ? slice->execution_status : -result;
+    pthread_mutex_unlock(&slice->cache->lock);
+    return result;
+}
+
+void wvm_kvm_execution_release(struct wvm_kvm_memory_slice *slice)
+{
+    int last;
+
+    pthread_mutex_lock(&slice->cache->lock);
+    last = --slice->participants == 0;
+    if (last) {
+        slice->cache->execution_slice = NULL;
+        pthread_cond_broadcast(&slice->cache->completed);
+    }
+    pthread_mutex_unlock(&slice->cache->lock);
+    if (last) wvm_kvm_memory_slice_destroy(slice);
 }
 
 int wvm_kvm_memory_slice_global_begin(

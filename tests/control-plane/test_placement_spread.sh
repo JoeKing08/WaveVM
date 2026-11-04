@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Placement spread honesty: exclusive lease accounting + fail-closed remote
-# memory (resource-placement-admission §4 / §5.3). Mode A gate untouched.
+# Placement spread: independent CPU/memory reservations, explicit
+# directory/executor identity, and exclusive lease accounting.
 set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/wavevm-placement-spread.XXXXXX")

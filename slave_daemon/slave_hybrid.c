@@ -48,6 +48,7 @@
 #include "../common_include/wavevm_executor_session.h"
 #include "../common_include/wavevm_vcpu_handoff.h"
 #include "../common_include/wavevm_x86_context.h"
+#include "../common_include/wavevm_kvm_state.h"
 #include "../node_runtime/executor_runtime.h"
 #include "../node_runtime/kvm_page_cache.h"
 #include "../node_runtime/kvm_execution_fetch.h"
@@ -87,46 +88,116 @@ static int *g_tcg_proxy_socks;
 static long g_tcg_proxy_sock_capacity;
 static long g_tcg_proxy_sock_count;
 static pthread_mutex_t g_tcg_proxy_sock_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned int g_tcg_session_diag_count;
 
-/* G4: correlate PUSH_BARRIER cookies with PUSH_BARRIER_ACK from helpers. */
-static pthread_mutex_t g_push_barrier_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_push_barrier_cond = PTHREAD_COND_INITIALIZER;
-static uint64_t g_push_barrier_next = 1;
-static uint64_t g_push_barrier_active_cookie = 0;
-static int g_push_barrier_expect = 0;
-static int g_push_barrier_got = 0;
-
-static void mark_push_barrier_done(uint64_t cookie)
+static int tcg_session_diag_allowed(void)
 {
+    return __sync_fetch_and_add(&g_tcg_session_diag_count, 1U) < 32U;
+}
+
+typedef struct {
+    struct sockaddr_in endpoint;
+    bool acknowledged;
+} push_barrier_peer_t;
+
+typedef struct push_barrier {
+    uint64_t cookie;
+    push_barrier_peer_t *peers;
+    size_t peer_count;
+    size_t remaining;
+    pthread_cond_t cond;
+    struct push_barrier *next;
+} push_barrier_t;
+
+static pthread_mutex_t g_push_barrier_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_push_barrier_next = 1;
+static push_barrier_t *g_push_barriers;
+
+static void mark_push_barrier_done(uint64_t cookie,
+                                   const struct sockaddr_in *source)
+{
+    push_barrier_t *barrier;
+
     pthread_mutex_lock(&g_push_barrier_lock);
-    if (cookie == g_push_barrier_active_cookie && g_push_barrier_expect > 0) {
-        g_push_barrier_got++;
-        pthread_cond_broadcast(&g_push_barrier_cond);
+    for (barrier = g_push_barriers; barrier; barrier = barrier->next) {
+        if (barrier->cookie != cookie) {
+            continue;
+        }
+        for (size_t i = 0; i < barrier->peer_count; i++) {
+            push_barrier_peer_t *peer = &barrier->peers[i];
+
+            if (!peer->acknowledged &&
+                source->sin_family == peer->endpoint.sin_family &&
+                source->sin_addr.s_addr == peer->endpoint.sin_addr.s_addr &&
+                source->sin_port == peer->endpoint.sin_port) {
+                peer->acknowledged = true;
+                barrier->remaining--;
+                pthread_cond_signal(&barrier->cond);
+                break;
+            }
+        }
+        break;
     }
     pthread_mutex_unlock(&g_push_barrier_lock);
 }
 
-static uint64_t push_barrier_begin(int expect_count)
+static int push_barrier_begin(push_barrier_t *barrier)
 {
-    uint64_t cookie;
+    pthread_condattr_t attr;
+    int rc = pthread_condattr_init(&attr);
+
+    if (rc != 0) {
+        return -rc;
+    }
+    rc = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (rc == 0) {
+        rc = pthread_cond_init(&barrier->cond, &attr);
+    }
+    pthread_condattr_destroy(&attr);
+    if (rc != 0) {
+        return -rc;
+    }
 
     pthread_mutex_lock(&g_push_barrier_lock);
-    cookie = g_push_barrier_next++;
-    g_push_barrier_active_cookie = cookie;
-    g_push_barrier_expect = expect_count > 0 ? expect_count : 1;
-    g_push_barrier_got = 0;
+    if (g_push_barrier_next == 0) {
+        pthread_mutex_unlock(&g_push_barrier_lock);
+        pthread_cond_destroy(&barrier->cond);
+        return -EOVERFLOW;
+    }
+    barrier->cookie = g_push_barrier_next++;
+    barrier->remaining = barrier->peer_count;
+    barrier->next = g_push_barriers;
+    g_push_barriers = barrier;
     pthread_mutex_unlock(&g_push_barrier_lock);
-    return cookie;
+    return 0;
 }
 
-static int wait_for_push_barrier_cookie(uint64_t cookie, uint64_t timeout_us)
+static void push_barrier_end(push_barrier_t *barrier)
+{
+    push_barrier_t **link;
+
+    pthread_mutex_lock(&g_push_barrier_lock);
+    for (link = &g_push_barriers; *link; link = &(*link)->next) {
+        if (*link == barrier) {
+            *link = barrier->next;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_push_barrier_lock);
+    pthread_cond_destroy(&barrier->cond);
+}
+
+static int wait_for_push_barrier_cookie(push_barrier_t *barrier,
+                                        uint64_t timeout_us)
 {
     struct timespec ts;
 
     if (timeout_us == 0) {
         timeout_us = 5000000ULL;
     }
-    clock_gettime(CLOCK_REALTIME, &ts);
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return -errno;
+    }
     ts.tv_sec += (time_t)(timeout_us / 1000000ULL);
     ts.tv_nsec += (long)((timeout_us % 1000000ULL) * 1000ULL);
     if (ts.tv_nsec >= 1000000000L) {
@@ -135,13 +206,12 @@ static int wait_for_push_barrier_cookie(uint64_t cookie, uint64_t timeout_us)
     }
 
     pthread_mutex_lock(&g_push_barrier_lock);
-    while (!(g_push_barrier_active_cookie == cookie &&
-             g_push_barrier_got >= g_push_barrier_expect)) {
-        int rc = pthread_cond_timedwait(&g_push_barrier_cond,
+    while (barrier->remaining != 0) {
+        int rc = pthread_cond_timedwait(&barrier->cond,
                                         &g_push_barrier_lock, &ts);
-        if (rc == ETIMEDOUT) {
+        if (rc != 0) {
             pthread_mutex_unlock(&g_push_barrier_lock);
-            return -ETIMEDOUT;
+            return -rc;
         }
     }
     pthread_mutex_unlock(&g_push_barrier_lock);
@@ -301,6 +371,19 @@ typedef struct {
 
 static wvm_kvm_slot_t g_kvm_slots[WVM_KVM_MAX_MEMSLOTS];
 static int g_kvm_slot_count = 0;
+/*
+ * KVM does not expose a userspace read fault for ordinary guest RAM.  Keep a
+ * process-local admission marker for the one complete input snapshot that is
+ * required before the first KVM slice.  A typed push/invalidation that cannot
+ * be applied clears it, so the next slice must resync before executing again.
+ */
+static volatile int g_kvm_ram_snapshot_state = 0;
+
+static void invalidate_kvm_ram_snapshot(void)
+{
+    __atomic_store_n(&g_kvm_ram_snapshot_state, 0, __ATOMIC_RELEASE);
+}
+
 static uint8_t *g_kvm_reserved_hva = NULL;
 static size_t g_kvm_reserved_size = 0;
 // 用于通知 IRQ 线程 Master 地址已就绪
@@ -546,6 +629,20 @@ static void kvm_alarm_handler(int sig) {
      */
     if (g_kvm_immediate_exit && t_kvm_run) {
         __atomic_store_n(&t_kvm_run->immediate_exit, 1, __ATOMIC_RELEASE);
+    }
+}
+
+static pthread_once_t g_kvm_alarm_once = PTHREAD_ONCE_INIT;
+static int g_kvm_alarm_error;
+
+static void install_kvm_alarm_handler(void)
+{
+    struct sigaction action = {0};
+
+    action.sa_handler = kvm_alarm_handler;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGALRM, &action, NULL) < 0) {
+        g_kvm_alarm_error = errno;
     }
 }
 
@@ -851,10 +948,24 @@ static int g_vcpu_init_debug_once = 0;
 
 static int ensure_kvm_page_snapshot(
     const struct wvm_header *hdr, uint64_t gpa, uint8_t *hva,
-    uint64_t *version_out);
+    uint64_t *version_out, uint64_t deadline_ms);
 static int prepare_kvm_execution_snapshot(
     const struct wvm_header *hdr, const wvm_kvm_context_t *context,
     uint64_t *error_gpa_out);
+static int prepare_kvm_ram_snapshot(
+    const struct wvm_header *hdr, uint64_t *error_gpa_out);
+
+struct kvm_input_snapshot {
+    const struct wvm_header *header;
+    const wvm_kvm_context_t *context;
+};
+
+static int prepare_kvm_cohort_input(void *opaque, uint64_t *error_gpa)
+{
+    const struct kvm_input_snapshot *input = opaque;
+    return prepare_kvm_execution_snapshot(input->header, input->context,
+                                           error_gpa);
+}
 
 static uint8_t *wvm_gpa_to_hva(uint64_t gpa)
 {
@@ -981,6 +1092,8 @@ uint8_t *wvm_executor_guest_ram_base(void)
 
 void init_kvm_global() {
     const char *force_tcg = getenv("WVM_FORCE_TCG");
+
+    invalidate_kvm_ram_snapshot();
     if (force_tcg && atoi(force_tcg) == 1) {
         fprintf(stderr, "[Hybrid] WVM_FORCE_TCG=1, skip KVM init.\n");
         g_kvm_available = 0;
@@ -1157,22 +1270,29 @@ void init_kvm_global() {
     g_vm_fd = ioctl(g_kvm_fd, KVM_CREATE_VM, 0);
     if (g_vm_fd < 0) { close(g_kvm_fd); g_kvm_fd = -1; return; }
 
-    /* Do NOT create IRQCHIP on the slave.  On GCP nested virt (kernel 6.14),
-     * having two KVM VMs with in-kernel IRQCHIP causes L1 hypervisor
-     * conflicts that break the master's AP bringup:
-     *   Pipeline #70: IRQCHIP ret=0 → APs stuck at mp_state=1
-     *   Pipeline #73: IRQCHIP ret=0 → recursive page fault during SMP init
-     *   Pipeline #71-72: IRQCHIP failed (EINVAL) → APs boot fine
-     *
-     * Without IRQCHIP, LAPIC MMIO (0xfee00xxx) exits to userspace.  We
-     * intercept these in the KVM_RUN loop with proper register emulation
-     * (APIC ID from dispatch context, etc.) instead of returning zeros. */
+    /* Split irqchip hosts only the executing CPU's LAPIC. PIC/IOAPIC and
+     * device authority remain in the frontend; do not create a second full
+     * IRQCHIP. This follows QEMU's kvm_arch_irqchip_create split path. */
+    {
+        struct kvm_enable_cap cap = { .cap = KVM_CAP_SPLIT_IRQCHIP };
+
+        cap.args[0] = 24;
+        if (ioctl(g_vm_fd, KVM_ENABLE_CAP, &cap) < 0) {
+            fprintf(stderr, "[Hybrid] KVM split LAPIC unavailable: %s\n",
+                    strerror(errno));
+            close(g_vm_fd);
+            close(g_kvm_fd);
+            g_vm_fd = g_kvm_fd = -1;
+            g_kvm_available = 0;
+            return;
+        }
+    }
     ioctl(g_vm_fd, KVM_SET_TSS_ADDR, WVM_KVM_TSS_ADDR);
     {
         __u64 map_addr = WVM_KVM_IDMAP_ADDR;
         ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
     }
-    fprintf(stderr, "[Slave] No IRQCHIP (avoiding nested virt conflict)\n");
+    fprintf(stderr, "[Slave KVM] split LAPIC enabled; devices stay in frontend\n");
 
     for (int i = 0; i < WVM_KVM_MAX_VCPUS; i++) {
         g_kvm_vcpus[i].fd = -1;
@@ -1633,7 +1753,7 @@ static int execute_tcg_executor_session(
     const uint8_t *payload = NULL;
     size_t request_payload_bytes = 0;
     size_t frame_bytes = 0;
-    size_t response_bytes;
+    ssize_t response_bytes;
     size_t payload_bytes = 0;
     uint16_t message_type = 0;
     struct wvm_vcpu_handoff_result decoded_result;
@@ -1659,6 +1779,13 @@ static int execute_tcg_executor_session(
             request_payload_bytes, frame, sizeof(frame), &frame_bytes, error,
             error_len) != 0) {
         return -EPROTO;
+    }
+    if (tcg_session_diag_allowed()) {
+        fprintf(stderr,
+                "[WVM-TCG-SESSION] submit fd=%d vm=%u vcpu=%u seq=%" PRIu64
+                " frame=%zu\n",
+                fd, request->vm_id, request->vcpu_index,
+                request->handoff_sequence, frame_bytes);
     }
     sent = send(fd, frame, frame_bytes, MSG_NOSIGNAL);
     if (sent != (ssize_t)frame_bytes) {
@@ -1694,7 +1821,13 @@ static int execute_tcg_executor_session(
             }
             continue;
         }
-        if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        if (!(descriptor.revents & POLLIN) &&
+            (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+            if (tcg_session_diag_allowed()) {
+                fprintf(stderr,
+                        "[WVM-TCG-SESSION] poll closed fd=%d revents=0x%x\n",
+                        fd, descriptor.revents);
+            }
             if (error && error_len != 0) {
                 snprintf(error, error_len,
                          "TCG executor session closed before its result");
@@ -1706,22 +1839,78 @@ static int execute_tcg_executor_session(
             continue;
         }
         if (response_bytes <= 0) {
+            if (tcg_session_diag_allowed()) {
+                int recv_error = response_bytes < 0 ? errno : 0;
+                fprintf(stderr,
+                        "[WVM-TCG-SESSION] recv ended fd=%d bytes=%zd errno=%d\n",
+                        fd, response_bytes, recv_error);
+            }
             return response_bytes == 0 ? -EPIPE : -errno;
         }
         break;
     }
 
+    if (error && error_len != 0) {
+        error[0] = '\0';
+    }
     if (wvm_executor_session_decode(
             response, response_bytes, &message_type, &payload, &payload_bytes,
-            error, error_len) != 0 ||
-        message_type != WVM_EXECUTOR_SESSION_VCPU_EXIT ||
-        wvm_vcpu_handoff_result_decode(
-            payload, payload_bytes, &decoded_result, error, error_len) != 0 ||
-        wvm_vcpu_handoff_result_validate_request(
+            error, error_len) != 0) {
+        if (tcg_session_diag_allowed()) {
+            fprintf(stderr,
+                    "[WVM-TCG-SESSION] result frame decode failed bytes=%zd error=%s\n",
+                    response_bytes, error && error[0] ? error : "unknown");
+        }
+        return -EPROTO;
+    }
+    if (message_type != WVM_EXECUTOR_SESSION_VCPU_EXIT) {
+        if (tcg_session_diag_allowed()) {
+            fprintf(stderr,
+                    "[WVM-TCG-SESSION] unexpected result message type=%u bytes=%zd payload=%zu\n",
+                    (unsigned)message_type, response_bytes, payload_bytes);
+        }
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "unexpected TCG executor result message");
+        }
+        return -EPROTO;
+    }
+    if (error && error_len != 0) {
+        error[0] = '\0';
+    }
+    if (wvm_vcpu_handoff_result_decode(
+            payload, payload_bytes, &decoded_result, error, error_len) != 0) {
+        if (tcg_session_diag_allowed()) {
+            fprintf(stderr,
+                    "[WVM-TCG-SESSION] result payload decode failed bytes=%zd payload=%zu error=%s\n",
+                    response_bytes, payload_bytes,
+                    error && error[0] ? error : "unknown");
+        }
+        return -EPROTO;
+    }
+    if (error && error_len != 0) {
+        error[0] = '\0';
+    }
+    if (wvm_vcpu_handoff_result_validate_request(
             request, &decoded_result, error, error_len) != 0) {
-        if (error && error_len != 0 && error[0] == '\0') {
-            snprintf(error, error_len,
-                     "TCG executor session result is invalid");
+        if (tcg_session_diag_allowed()) {
+            fprintf(stderr,
+                    "[WVM-TCG-SESSION] result/request mismatch "
+                    "req={vm=%u inc=%" PRIu64 " gen=%" PRIu64
+                    " node=%u runtime=%" PRIu64 " vcpu=%u seq=%" PRIu64
+                    " backend=%u} result={vm=%u inc=%" PRIu64
+                    " gen=%" PRIu64 " node=%u runtime=%" PRIu64
+                    " vcpu=%u seq=%" PRIu64 " backend=%u status=%u} error=%s\n",
+                    request->vm_id, request->vm_incarnation,
+                    request->manifest_generation, request->origin_physical_node_id,
+                    request->origin_runtime_instance_id, request->vcpu_index,
+                    request->handoff_sequence, request->backend,
+                    decoded_result.vm_id, decoded_result.vm_incarnation,
+                    decoded_result.manifest_generation,
+                    decoded_result.origin_physical_node_id,
+                    decoded_result.origin_runtime_instance_id,
+                    decoded_result.vcpu_index, decoded_result.handoff_sequence,
+                    decoded_result.backend, decoded_result.status,
+                    error && error[0] ? error : "unknown");
         }
         return -EPROTO;
     }
@@ -1749,19 +1938,26 @@ static int execute_tcg_executor_session(
  * maps the same WVM_SHM_FILE, so filling this page before the session
  * VCPU_RUN makes the guest fetch remote bytes rather than zeros.
  */
-static uint8_t *executor_guest_page_hva(uint64_t gpa)
+uint8_t *wvm_executor_guest_page_hva(uint64_t gpa)
 {
     uint8_t *hva;
 
-    if ((gpa & (WVM_PAGE_SIZE - 1U)) != 0) {
+    if ((gpa & (WVM_PAGE_SIZE - 1U)) != 0 ||
+        gpa > UINT64_MAX - WVM_MEMORY_PAGE_BYTES) {
         return NULL;
     }
-    hva = wvm_gpa_to_hva(gpa);
-    if (hva) {
+
+    /* A page must fit in one KVM slot; don't return a pointer for a
+     * partially mapped page. */
+    if (wvm_gpa_page_valid(gpa) && (hva = wvm_gpa_to_hva(gpa)) != NULL) {
         return hva;
     }
+
+    /* TCG uses the shared RAM mapping.  Check the subtraction only after
+     * proving the start lies in the mapping to avoid unsigned underflow. */
     if (g_phy_ram && g_phy_ram != MAP_FAILED &&
-        gpa <= g_slave_ram_size - WVM_MEMORY_PAGE_BYTES) {
+        gpa < g_slave_ram_size &&
+        WVM_MEMORY_PAGE_BYTES <= g_slave_ram_size - gpa) {
         return g_phy_ram + gpa;
     }
     return NULL;
@@ -1771,8 +1967,9 @@ static uint8_t *executor_guest_page_hva(uint64_t gpa)
  * A3: Fetch the authoritative remote page and install it into the
  * executor's guest RAM before the typed executor runs.  The old path only
  * placed the ACK bytes in a temporary buffer and discarded them, so a TCG
- * guest could not execute the remote page.  Keeping the ENOTCONN behavior
- * for an uninstalled memory service preserves the R06 fail-closed rule.
+ * guest could not execute the remote page.  An unavailable memory service
+ * remains an explicit ENOTCONN result; callers may only treat that as an
+ * absent optional probe when the admitted path has no remote memory.
  *
  * This is deliberately not a synthetic fence: ack.version is the version
  * returned by the production memory service/directory store.
@@ -1787,6 +1984,8 @@ static uint8_t *executor_guest_page_hva(uint64_t gpa)
  * sleep-claimed success.
  */
 int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len);
+int wavevm_proxy_push_shared_to_local_helpers(uint16_t msg_type, void *payload,
+                                              int len);
 int wavevm_proxy_barrier_local_helpers(uint64_t timeout_us);
 static int notify_tcg_page_installed(uint64_t gpa, uint64_t version,
                                      const uint8_t *page)
@@ -1796,7 +1995,7 @@ static int notify_tcg_page_installed(uint64_t gpa, uint64_t version,
     int br;
 
     if (!page || version == 0) {
-        return 0;
+        return -EINVAL;
     }
 
     /*
@@ -1854,6 +2053,7 @@ static int ensure_remote_memory_side_effect(
         uint8_t page[WVM_MEMORY_PAGE_BYTES];
         uint8_t *guest_page;
         int result;
+        int notify_result;
         size_t z;
         int all_zero = 1;
 
@@ -1903,28 +2103,44 @@ static int ensure_remote_memory_side_effect(
             }
             return -EIO;
         }
-        guest_page = executor_guest_page_hva(entry->gpa_start);
-        if (guest_page) {
-            memcpy(guest_page, page, WVM_MEMORY_PAGE_BYTES);
-            __sync_synchronize();
-            fprintf(stderr,
-                    "[Executor] installed remote page gpa=%#llx version=%#llx "
-                    "bytes=%zu hva=%p first=%02x%02x%02x%02x\n",
-                    (unsigned long long)entry->gpa_start,
-                    (unsigned long long)ack.version,
-                    (size_t)ack.data_bytes, (void *)guest_page,
-                    page[0], page[1], page[2], page[3]);
-            /*
-             * Production TCG dirty self-emit: tell QEMU the installed page's
-             * directory version and arm PROT_READ so the guest store is
-             * tracked and flushed via wavevm_user_mem_flush_slave_dirty_sync.
-             */
-            (void)notify_tcg_page_installed(entry->gpa_start, ack.version, page);
-        } else {
+        guest_page = wvm_executor_guest_page_hva(entry->gpa_start);
+        if (!guest_page) {
             fprintf(stderr,
                     "[Executor] remote page gpa=%#llx has no local guest RAM "
                     "mapping; fetch not installable\n",
                     (unsigned long long)entry->gpa_start);
+            if (error && error_len != 0) {
+                snprintf(error, error_len,
+                         "remote page gpa=%#llx has no local guest RAM mapping",
+                         (unsigned long long)entry->gpa_start);
+            }
+            return -EFAULT;
+        }
+
+        memcpy(guest_page, page, WVM_MEMORY_PAGE_BYTES);
+        __sync_synchronize();
+        fprintf(stderr,
+                "[Executor] installed remote page gpa=%#llx version=%#llx "
+                "bytes=%zu hva=%p first=%02x%02x%02x%02x\n",
+                (unsigned long long)entry->gpa_start,
+                (unsigned long long)ack.version,
+                (size_t)ack.data_bytes, (void *)guest_page,
+                page[0], page[1], page[2], page[3]);
+        /*
+         * Production TCG dirty self-emit: tell QEMU the installed page's
+         * directory version and arm PROT_READ so the guest store is tracked
+         * and flushed via wavevm_user_mem_flush_slave_dirty_sync.  A failed
+         * notification means the page is not safely admitted for execution.
+         */
+        notify_result = notify_tcg_page_installed(
+            entry->gpa_start, ack.version, page);
+        if (notify_result != 0) {
+            if (error && error_len != 0) {
+                snprintf(error, error_len,
+                         "remote page gpa=%#llx install notification failed: %d",
+                         (unsigned long long)entry->gpa_start, notify_result);
+            }
+            return notify_result;
         }
         return 0;
     }
@@ -1953,11 +2169,8 @@ int wvm_executor_runtime_bind_admitted(
     g_num_cores = (long)runtime->executor_worker_count;
     g_base_id = (int)runtime->local_primary_vnode;
     g_executor_ctrl_port = (int)runtime->executor_control_port;
-    g_ram_mb = (int)(runtime->local_memory_bytes / (1024ULL * 1024ULL));
-    if (g_ram_mb <= 0) {
-        g_ram_mb = 64;
-    }
-    g_slave_ram_size = runtime->local_memory_bytes;
+    g_ram_mb = (int)(runtime->guest_memory_bytes / (1024ULL * 1024ULL));
+    g_slave_ram_size = runtime->guest_memory_bytes;
     free(g_tcg_helper_pids);
     g_tcg_helper_pids = NULL;
     free(g_tcg_session_fds);
@@ -2019,6 +2232,7 @@ void wvm_executor_runtime_unbind(void)
     long i;
 
     executor_publish_startup_state(EXECUTOR_STARTING);
+    invalidate_kvm_ram_snapshot();
     g_executor_runtime_ready = 0;
     g_executor_manifest_storage_ptr = NULL;
     g_executor_runtime_gate_ptr = NULL;
@@ -2102,8 +2316,12 @@ int wvm_executor_runtime_execute_handoff(
      * is not installed — skip without claiming a remote-memory fence. Real
      * dependence must come from the executor fault/commit path.
      */
-    remote_memory_result =
-        ensure_remote_memory_side_effect(runtime, request, error, error_len);
+    /* KVM establishes every RAM page in prepare_kvm_execution_snapshot;
+     * do not allocate a second read operation for its first remote page. */
+    remote_memory_result = request->backend == WVM_VCPU_BACKEND_KVM
+                               ? 0
+                               : ensure_remote_memory_side_effect(
+                                     runtime, request, error, error_len);
     if (remote_memory_result == -ENOTCONN) {
         if (error && error_len)
             error[0] = '\0';
@@ -2141,7 +2359,23 @@ int wvm_executor_runtime_execute_handoff(
         if (execute_tcg_executor_session(
                 request, result, result_context, result_context_capacity,
                 error, error_len) != 0) {
+            if (tcg_session_diag_allowed()) {
+                fprintf(stderr,
+                        "[WVM-TCG-SESSION] executor handoff failed "
+                        "vm=%u vcpu=%u seq=%" PRIu64 " error=%s\n",
+                        request->vm_id, request->vcpu_index,
+                        request->handoff_sequence,
+                        error && error[0] ? error : "unknown");
+            }
             return -EIO;
+        }
+        if (result->status != WVM_VCPU_HANDOFF_RESULT_SUCCESS &&
+            tcg_session_diag_allowed()) {
+            fprintf(stderr,
+                    "[WVM-TCG-SESSION] executor returned non-success "
+                    "status=%u exit=%u vm=%u vcpu=%u\n",
+                    result->status, result->exit_class, result->vm_id,
+                    result->vcpu_index);
         }
         if (result->status == WVM_VCPU_HANDOFF_RESULT_SUCCESS) {
             result->produced_memory_fence_id = fence_id;
@@ -2285,11 +2519,13 @@ typed_ack_ready:
         return 0;
     }
 
-    /*
-     * s23g2: MEMORY_FAILURE must still carry the post-run CPU context when
-     * the local executor filled it. Stripping context here forced FE into
-     * zeroed-ACK import / silent drop and hung dual-yes under KVM.
-     */
+    if (local_ack.status == WVM_CPU_RUN_STATUS_MEMORY_FAILURE) {
+        typed_handoff_result_from_request(
+            request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, result);
+        result->error_gpa = local_ack.error_gpa;
+        return 0;
+    }
+
     legacy_context = request->backend == WVM_VCPU_BACKEND_TCG
                          ? (const void *)&local_ack.ctx.tcg
                          : (const void *)&local_ack.ctx.kvm;
@@ -2300,16 +2536,12 @@ typed_ack_ready:
             error_len) != 0) {
         return -EPROTO;
     }
-    if (local_ack.status == WVM_CPU_RUN_STATUS_MEMORY_FAILURE) {
-        typed_handoff_result_from_request(
-            request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, result);
-        result->error_gpa = local_ack.error_gpa;
-    } else {
-        typed_handoff_result_from_request(request, WVM_VCPU_HANDOFF_RESULT_SUCCESS,
-                                          result);
-        result->produced_memory_fence_id = fence_id;
+    typed_handoff_result_from_request(request, WVM_VCPU_HANDOFF_RESULT_SUCCESS,
+                                      result);
+    result->produced_memory_fence_id = fence_id;
+    if (result->status == WVM_VCPU_HANDOFF_RESULT_SUCCESS) {
+        result->exit_class = typed_exit_class_from_legacy_ack(request, &local_ack);
     }
-    result->exit_class = typed_exit_class_from_legacy_ack(request, &local_ack);
     result->context_valid_fields = request->context_valid_fields;
     result->context = result_context;
     result->context_bytes = encoded_context_bytes;
@@ -2354,54 +2586,22 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
       }
     }
 
-    // 对“空上下文探针”走快速 ACK，避免在 KVM_RUN 中无意义阻塞。
-    // 仅匹配明显空输入，不影响真实执行上下文。
-    const wvm_kvm_context_t zero_kvm = {0};
-    bool kvm_empty = !req->mode_tcg &&
-                     memcmp(&req->ctx.kvm, &zero_kvm, sizeof(zero_kvm)) == 0;
-    if (kvm_empty) {
-        struct wvm_header ack_hdr;
-        memset(&ack_hdr, 0, sizeof(ack_hdr));
-        ack_hdr.magic = htonl(WVM_MAGIC);
-        ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
-        ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
-        /* ACK must originate from this slave node and target the requester. */
-        wvm_slave_pack_src(&ack_hdr);
-        ack_hdr.target_id = htonl(hdr->slave_id);  /* s23g13: hdr host-order after ntoh_header */
-        wvm_ack_copy_assoc(&ack_hdr, hdr);
-        ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
-
-        struct wvm_ipc_cpu_run_ack ack;
-        memset(&ack, 0, sizeof(ack));
-        ack.status = 0;
-        ack.mode_tcg = req->mode_tcg;
-        if (req->mode_tcg) {
-            memcpy(&ack.ctx.tcg, &req->ctx.tcg, sizeof(req->ctx.tcg));
-        } else {
-            memcpy(&ack.ctx.kvm, &req->ctx.kvm, sizeof(req->ctx.kvm));
-        }
-
-        uint8_t tx[sizeof(ack_hdr) + sizeof(ack)];
-        memcpy(tx, &ack_hdr, sizeof(ack_hdr));
-        memcpy(tx + sizeof(ack_hdr), &ack, sizeof(ack));
-        if (capture_local_executor_ack(&ack)) {
-            return;
-        }
-        struct wvm_header *tx_hdr = (struct wvm_header *)tx;
-        tx_hdr->crc32 = 0;
-        tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
-        vcpu_exit_cache_complete(run_req_id, requester, tx, sizeof(tx));
-        ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
-        fprintf(stderr, "[Slave FastAck] ret=%zd errno=%d mode=%u req=%llu dst=%s:%u\n",
-                sret, (sret < 0) ? errno : 0, req->mode_tcg,
-                (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
-        return;
-    }
-
     if (t_vcpu_fd < 0 || t_vcpu_id != guest_vcpu_id) {
         init_thread_local_vcpu(guest_vcpu_id);
     }
-    if (t_vcpu_fd < 0 || !t_kvm_run || t_kvm_run == MAP_FAILED) {
+    struct kvm_regs kregs;
+    struct kvm_sregs ksregs;
+    int state_import_result = 0;
+    if (t_vcpu_fd >= 0 && t_kvm_run && t_kvm_run != MAP_FAILED) {
+        if (ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs) < 0) {
+            state_import_result = -errno;
+        } else if (!req->mode_tcg) {
+            state_import_result = wvm_kvm_extended_state_validate(&req->ctx.kvm);
+        }
+    }
+    if (t_vcpu_fd < 0 || !t_kvm_run || t_kvm_run == MAP_FAILED ||
+        state_import_result != 0) {
+kvm_state_rejected:;
         struct wvm_header ack_hdr;
         memset(&ack_hdr, 0, sizeof(ack_hdr));
         ack_hdr.magic = htonl(WVM_MAGIC);
@@ -2434,15 +2634,11 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
         vcpu_exit_cache_complete(run_req_id, requester, tx, sizeof(tx));
         ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
-        fprintf(stderr, "[Slave ErrorAck] vcpu init failed ret=%zd errno=%d req=%llu dst=%s:%u\n",
-                sret, (sret < 0) ? errno : 0,
+        fprintf(stderr, "[Slave ErrorAck] vcpu init/state failed ret=%zd state=%d errno=%d req=%llu dst=%s:%u\n",
+                sret, state_import_result, (sret < 0) ? errno : 0,
                 (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
         return;
     }
-    struct kvm_regs kregs; struct kvm_sregs ksregs;
-    // 1. 读取当前 sregs，供直通路径或转换路径继续使用
-    ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs); 
-
     // 2. 只有不一样的时候才转换！
     if (req->mode_tcg) {
         // TCG 对 KVM：转换计算
@@ -2456,108 +2652,20 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         kregs.r12 = ctx->r12; kregs.r13 = ctx->r13; kregs.r14 = ctx->r14; kregs.r15 = ctx->r15;
         kregs.rip = ctx->rip; kregs.rflags = ctx->rflags;
 
-        /* Keep local APIC/interrupt state and only import architectural sregs. */
-        struct kvm_sregs *remote_sregs = (struct kvm_sregs *)ctx->sregs_data;
-        ksregs.cs = remote_sregs->cs;
-        ksregs.ds = remote_sregs->ds;
-        ksregs.es = remote_sregs->es;
-        ksregs.fs = remote_sregs->fs;
-        ksregs.gs = remote_sregs->gs;
-        ksregs.ss = remote_sregs->ss;
-        ksregs.tr = remote_sregs->tr;
-        ksregs.ldt = remote_sregs->ldt;
-        ksregs.gdt = remote_sregs->gdt;
-        ksregs.idt = remote_sregs->idt;
-        ksregs.cr0 = remote_sregs->cr0;
-        ksregs.cr2 = remote_sregs->cr2;
-        ksregs.cr3 = remote_sregs->cr3;
-        ksregs.cr4 = remote_sregs->cr4;
-        ksregs.cr8 = remote_sregs->cr8;
-        ksregs.efer = remote_sregs->efer;
+        memcpy(&ksregs, ctx->sregs_data, sizeof(ksregs));
     }
 
-    /* [FIX] Lazy BIOS ROM load: on first request, if BIOS area is empty,
-     * load directly from bios.bin file. No timing dependency on QEMU. */
-    {
-        static volatile int bios_copied = 0;
-        if (!bios_copied) {
-            uint32_t *bc = (uint32_t *)(g_phy_ram + 0xFFFF0);
-            if (bc[0] == 0) {
-                /* Try loading from bios.bin file (last 64KB = physical 0xF0000-0xFFFFF) */
-                const char *bios_paths[] = {
-                    getenv("WVM_BIOS_FILE"),
-                    "/workspaces/WaveVM_Frontier-X/wavevm-qemu/pc-bios/bios.bin",
-                    "/usr/share/seabios/bios.bin",
-                    NULL
-                };
-                int loaded = 0;
-                for (int i = 0; i < 3 && !loaded; i++) {
-                    if (!bios_paths[i]) continue;
-                    FILE *bf = fopen(bios_paths[i], "rb");
-                    if (bf) {
-                        fseek(bf, 0, SEEK_END);
-                        long bsz = ftell(bf);
-                        /* Read last 64KB of BIOS image -> physical 0xF0000 */
-                        long off = (bsz > 0x10000) ? (bsz - 0x10000) : 0;
-                        long rdsz = (bsz > 0x10000) ? 0x10000 : bsz;
-                        fseek(bf, off, SEEK_SET);
-                        size_t rd = fread(g_phy_ram + 0xF0000, 1, rdsz, bf);
-                        fclose(bf);
-                        if (rd == (size_t)rdsz) {
-                            fprintf(stderr, "[Hybrid] BIOS ROM loaded from %s (%ld bytes at 0xF0000): reset=%08x\n",
-                                    bios_paths[i], rdsz, *(uint32_t*)(g_phy_ram + 0xFFFF0));
-                            loaded = 1;
-                        }
-                    }
-                }
-                if (!loaded) {
-                    fprintf(stderr, "[Hybrid] WARN: BIOS ROM area empty and no bios.bin found!\n");
-                }
-            }
-            bios_copied = 1;
-        }
+    if (!req->mode_tcg) {
+        state_import_result = wvm_kvm_cpuid_check_host(g_kvm_fd, &req->ctx.kvm);
+        if (state_import_result != 0) goto kvm_state_rejected;
+        state_import_result = wvm_kvm_cpuid_import(t_vcpu_fd, &req->ctx.kvm);
+        if (state_import_result != 0) goto kvm_state_rejected;
     }
-
-    /* SET_REGS first, then SET_MP_STATE.
-     * KVM_SET_MP_STATE(RUNNABLE) on a fresh vCPU can trigger an internal
-     * reset that wipes registers. Setting regs FIRST then MP state avoids
-     * this. We MUST set RUNNABLE every time because the previous KVM_RUN
-     * may have left the vCPU in HALTED state (guest executed HLT). */
-    {
-        int sr_ret = ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
-        int rr_ret = ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
-        /* Always set MP_STATE to RUNNABLE before KVM_RUN.
-         * If the previous execution ended with HLT, the vCPU is now in
-         * HALTED state and KVM_RUN would immediately return KVM_EXIT_HLT
-         * without executing any guest code. */
-        {
-            struct kvm_mp_state mps = { .mp_state = 0 }; /* RUNNABLE */
-            int mp_ret = ioctl(t_vcpu_fd, KVM_SET_MP_STATE, &mps);
-            static __thread int mp_dbg = 0;
-            if (mp_dbg < 5) {
-                fprintf(stderr, "[DBG-MP] KVM_SET_MP_STATE(RUNNABLE) ret=%d errno=%d vcpu_fd=%d\n",
-                        mp_ret, (mp_ret < 0) ? errno : 0, t_vcpu_fd);
-                mp_dbg++;
-            }
-        }
-        /* Re-set regs AFTER mp_state in case the transition wiped them */
-        sr_ret = ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
-        rr_ret = ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
-        static int set_dbg = 0;
-        if (set_dbg < 10) {
-            /* Verify registers actually stuck by reading back */
-            struct kvm_regs kr_verify;
-            struct kvm_sregs ks_verify;
-            ioctl(t_vcpu_fd, KVM_GET_REGS, &kr_verify);
-            ioctl(t_vcpu_fd, KVM_GET_SREGS, &ks_verify);
-            fprintf(stderr, "[DBG-SET] SET sr=%d rr=%d | VERIFY rip=0x%llx cs_base=0x%llx cs_sel=0x%x rflags=0x%llx\n",
-                    sr_ret, rr_ret,
-                    (unsigned long long)kr_verify.rip,
-                    (unsigned long long)ks_verify.cs.base,
-                    (unsigned)ks_verify.cs.selector,
-                    (unsigned long long)kr_verify.rflags);
-            set_dbg++;
-        }
+    /* Install the CPU model before control registers and pending events. */
+    if (ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs) < 0 ||
+        ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs) < 0) {
+        state_import_result = -errno;
+        goto kvm_state_rejected;
     }
 
     /* [V30 TSC 同步] 将 master 传来的 TSC 值注入 slave 本地 vCPU，
@@ -2601,7 +2709,18 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
             n++;
         }
         msr_data.info.nmsrs = n;
-        ioctl(t_vcpu_fd, KVM_SET_MSRS, &msr_data);
+        if (ioctl(t_vcpu_fd, KVM_SET_MSRS, &msr_data) != n) {
+            state_import_result = -EIO;
+            goto kvm_state_rejected;
+        }
+    }
+
+    if (!req->mode_tcg) {
+        state_import_result = wvm_kvm_extended_state_import(
+            t_vcpu_fd, &req->ctx.kvm);
+        if (state_import_result != 0) {
+            goto kvm_state_rejected;
+        }
     }
 
     /*
@@ -2613,46 +2732,28 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     struct wvm_kvm_memory_slice *memory_slice = NULL;
     int memory_fence_status = 0;
     uint64_t memory_error_gpa = 0;
-    int execution_window_active = 0;
+    int harvest_memory = 1;
     if (!req->mode_tcg && wvm_kvm_page_cache_global_active()) {
         char cache_error[256] = {0};
 
         /*
-         * s23g2: SHM-backed guest RAM (!g_wvm_device_ram_mapping) is already
-         * coherent with FE. The typed page-cache fence fails on GPAs dirtied
-         * outside the execution snapshot; vcpu_service then maps
-         * MEMORY_FAILURE → status=-EFAULT with a *zeroed* ACK (no CPU ctx),
-         * which FE must not import. Skip the typed slice under SHM so remote
-         * KVM ACKs carry real state (dual-yes hang fix).
+         * KVM dirty logging is a semantic commit boundary for both device
+         * backed and SHM backed RAM.  SHM makes bytes visible to the frontend,
+         * but it does not commit them to the directory authority or advance
+         * the authoritative page version.  Keep one slice/fence path for
+         * both mappings; an untracked dirty page is a hard failure rather than
+         * silently dropping the kernel dirty bit.
          */
-        if (!g_wvm_device_ram_mapping) {
-            static int shm_fence_dbg;
-            if (shm_fence_dbg++ < 8) {
-                fprintf(stderr,
-                        "[KVM cache] SHM coherent — skip typed memory "
-                        "slice fence\n");
-            }
-        } else if (wvm_kvm_memory_slice_global_begin(
-                       &memory_slice, cache_error, sizeof(cache_error)) != 0) {
+        struct kvm_input_snapshot input = { hdr, &req->ctx.kvm };
+        if (wvm_kvm_execution_global_join(
+                prepare_kvm_cohort_input, &input, &memory_slice,
+                &memory_error_gpa, cache_error, sizeof(cache_error)) != 0) {
             memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
             if (cache_error[0] != '\0') {
                 fprintf(stderr,
                         "[KVM cache] cannot begin execution slice: %s\n",
                         cache_error);
             }
-        } else if (prepare_kvm_execution_snapshot(
-                       hdr, &req->ctx.kvm, &memory_error_gpa) != 0) {
-            memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
-            fprintf(stderr,
-                    "[KVM cache] execution input snapshot failed GPA=%#llx\n",
-                    (unsigned long long)memory_error_gpa);
-        } else if (wvm_kvm_execution_global_begin(
-                       cache_error, sizeof(cache_error)) != 0) {
-            memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
-            fprintf(stderr, "[KVM cache] cannot begin execution window: %s\n",
-                    cache_error[0] ? cache_error : "busy");
-        } else {
-            execution_window_active = 1;
         }
     }
 
@@ -2738,6 +2839,8 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
      */
 
     int ret = -EIO;
+    int local_exit_consumed = 0;
+    t_kvm_alarm_fired = 0;
 
     if (memory_fence_status != 0) {
         /*
@@ -2749,12 +2852,11 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     }
 
     /* --- Thread-directed alarm: 50ms timeout for KVM_RUN --- */
-    t_kvm_alarm_fired = 0;
-    struct sigaction sa_new, sa_old;
-    memset(&sa_new, 0, sizeof(sa_new));
-    sa_new.sa_handler = kvm_alarm_handler;
-    sa_new.sa_flags = 0; /* no SA_RESTART so ioctl gets EINTR */
-    sigaction(SIGALRM, &sa_new, &sa_old);
+    pthread_once(&g_kvm_alarm_once, install_kvm_alarm_handler);
+    if (g_kvm_alarm_error) {
+        memory_fence_status = -g_kvm_alarm_error;
+        goto kvm_run_done;
+    }
 
     timer_t ktimer;
     struct sigevent sev;
@@ -2762,13 +2864,20 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     sev.sigev_notify = SIGEV_THREAD_ID;
     sev._sigev_un._tid = (pid_t)syscall(__NR_gettid);
     sev.sigev_signo = SIGALRM;
-    timer_create(CLOCK_MONOTONIC, &sev, &ktimer);
+    if (timer_create(CLOCK_MONOTONIC, &sev, &ktimer) < 0) {
+        memory_fence_status = -errno;
+        goto kvm_run_done;
+    }
 
     struct itimerspec its = {
         .it_value = { .tv_sec = 0, .tv_nsec = 50000000 }, /* 50ms */
-        .it_interval = { 0, 0 }
+        .it_interval = { .tv_sec = 0, .tv_nsec = 50000000 }
     };
-    timer_settime(ktimer, 0, &its, NULL);
+    if (timer_settime(ktimer, 0, &its, NULL) < 0) {
+        memory_fence_status = -errno;
+        timer_delete(ktimer);
+        goto kvm_run_done;
+    }
 
     for (;;) {
         if (g_shutdown_requested) {
@@ -2778,72 +2887,13 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         if (g_kvm_immediate_exit) {
             __atomic_store_n(&t_kvm_run->immediate_exit, 0, __ATOMIC_RELEASE);
         }
+        local_exit_consumed = 0;
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
         if (ret == 0 && t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
-            /* Intercept LAPIC MMIO (0xfee00000-0xfee00fff).  Without in-kernel
-             * LAPIC bound to this vCPU these exit to userspace.  Emulate
-             * critical registers (especially APIC ID) so the guest kernel
-             * doesn't get confused about which CPU it's running on. */
+            /* The split irqchip owns LAPIC state. Any remaining LAPIC MMIO
+             * exit belongs to frontend device emulation, never a read stub. */
             uint64_t pa = t_kvm_run->mmio.phys_addr;
             if (pa >= 0xfee00000ULL && pa < 0xfee01000ULL) {
-                uint32_t reg_off = (uint32_t)(pa - 0xfee00000ULL);
-                static int lapic_dbg = 0;
-                if (lapic_dbg < 50) {
-                    fprintf(stderr, "[Slave-LAPIC] vcpu=%d %s reg=0x%03x len=%u data=0x",
-                            guest_vcpu_id,
-                            t_kvm_run->mmio.is_write ? "WR" : "RD",
-                            reg_off, t_kvm_run->mmio.len);
-                    for (int bi = t_kvm_run->mmio.len - 1; bi >= 0; bi--)
-                        fprintf(stderr, "%02x", t_kvm_run->mmio.data[bi]);
-                    fprintf(stderr, "\n");
-                    lapic_dbg++;
-                }
-                /*
-                 * No in-kernel irqchip on slave: identity/status READs stay
-                 * local to avoid ICR-poll thrash. WRITES (timer/LVT/ICR/TPR/
-                 * EOI/...) and non-identity READs bounce to FE as KVM_EXIT_MMIO
-                 * so the master's real LAPIC (KVM_SET_LAPIC) sees programming.
-                 * Dual-yes hang root: stubbing timer writes left remote AP
-                 * without ticks under sustained busy.
-                 */
-                if (!t_kvm_run->mmio.is_write) {
-                    uint32_t val = 0;
-                    int stub = 1;
-                    switch (reg_off) {
-                    case 0x020: /* APIC ID */
-                        val = ((uint32_t)guest_vcpu_id) << 24;
-                        break;
-                    case 0x030: /* APIC Version */
-                        val = 0x50014;
-                        break;
-                    case 0x0D0: /* LDR */
-                        val = (1U << (guest_vcpu_id & 7)) << 24;
-                        break;
-                    case 0x0E0: /* DFR */
-                        val = 0xFFFFFFFFU;
-                        break;
-                    case 0x0F0: /* SVR */
-                        val = 0x1FF;
-                        break;
-                    case 0x300: /* ICR low -- delivery status=idle */
-                        val = 0;
-                        break;
-                    default:
-                        stub = 0;
-                        break;
-                    }
-                    if (stub) {
-                        memcpy(t_kvm_run->mmio.data, &val, sizeof(val));
-                        if (t_kvm_run->mmio.len < 4)
-                            memset(t_kvm_run->mmio.data + t_kvm_run->mmio.len, 0,
-                                   8 - t_kvm_run->mmio.len);
-                        if (t_kvm_alarm_fired) break;
-                        continue;
-                    }
-                    /* Non-identity read: fall through to FE bounce. */
-                    break;
-                }
-                /* LAPIC write: bounce to FE (do not stub). */
                 break;
             }
             if (wvm_vfio_intercept_mmio(
@@ -2851,6 +2901,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
                     t_kvm_run->mmio.data,
                     t_kvm_run->mmio.len,
                     t_kvm_run->mmio.is_write)) {
+                local_exit_consumed = 1;
                 if (t_kvm_alarm_fired) break;
                 continue;
             }
@@ -2879,14 +2930,16 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     memset(&its, 0, sizeof(its));
     timer_settime(ktimer, 0, &its, NULL);
     timer_delete(ktimer);
-    sigaction(SIGALRM, &sa_old, NULL);
     if (g_kvm_immediate_exit) {
         __atomic_store_n(&t_kvm_run->immediate_exit, 0, __ATOMIC_RELEASE);
     }
 
 kvm_run_done:
+    if (ret < 0 && !t_kvm_alarm_fired && memory_fence_status == 0) {
+        memory_fence_status = -EIO;
+    }
     /* Host slice expiry is preemption, not a guest HLT. */
-    if (t_kvm_alarm_fired) {
+    if (t_kvm_alarm_fired && (ret < 0 || local_exit_consumed)) {
         fprintf(stderr, "[Slave] KVM_RUN slice expired -- returning preempt exit\n");
         t_kvm_run->exit_reason = WVM_EXIT_PREEMPT;
     }
@@ -2967,7 +3020,15 @@ kvm_run_done:
      * device open for control/ioctl handling, but harvest KVM dirty pages
      * whenever RAM is not actually backed by /dev/wavevm.
      */
-    if (!g_wvm_device_ram_mapping && memory_fence_status == 0) {
+    /* KVM dirty-log capture is backend-specific.  TCG uses its shared RAM
+     * dirty/commit path and must not query the helper's unrelated KVM VM fd
+     * merely because /dev/kvm is available on the host. */
+    if (memory_slice) {
+        harvest_memory = wvm_kvm_execution_leave(
+            memory_slice, memory_fence_status, memory_error_gpa);
+    }
+    if (harvest_memory && !req->mode_tcg && !g_wvm_device_ram_mapping &&
+        memory_fence_status == 0) {
         // [V28.5 FIXED] KVM Dirty Log Sync (Full Implementation)
         // 完整实现：获取位图 -> 遍历 -> 封包 -> 发送
         struct kvm_dirty_log log = { .slot = 0 };
@@ -3040,34 +3101,10 @@ kvm_run_done:
                         if (memory_slice &&
                             wvm_kvm_memory_slice_capture_dirty(
                                 memory_slice, gpa, &dirty, NULL, 0) != 0) {
-                            /*
-                             * s23g2: Page was dirtied during the KVM slice but
-                             * never admitted as CLEAN in the execution
-                             * snapshot (no typed clean base). Under
-                             * device-backed RAM that is a hard fence failure.
-                             * Under SHM-backed RAM the bytes are already
-                             * visible to FE via the shared mapping; failing
-                             * the whole handoff makes FE drop the ACK
-                             * (status=MEMORY_FAILURE) and re-dispatch the
-                             * same stale RIP forever — the KVM dual-yes hang.
-                             */
-                            if (g_wvm_device_ram_mapping) {
-                                wvm_kvm_memory_slice_fail(
-                                    memory_slice, gpa, NULL, 0);
-                                memory_fence_status =
-                                    WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
-                                continue;
-                            }
-                            {
-                                static int shm_skip_dbg;
-                                if (shm_skip_dbg++ < 30) {
-                                    fprintf(stderr,
-                                            "[KVM cache] SHM skip typed dirty "
-                                            "GPA=%#" PRIx64
-                                            " (no clean base; shared RAM)\n",
-                                            gpa);
-                                }
-                            }
+                            /* KVM_GET_DIRTY_LOG already cleared this bit. */
+                            wvm_kvm_memory_slice_fail(memory_slice, gpa, NULL, 0);
+                            memory_fence_status =
+                                WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
                             continue;
                         }
                         task = malloc(sizeof(dirty_page_task_t));
@@ -3120,7 +3157,7 @@ kvm_run_done:
             }
         }
     }
-    if (memory_slice) {
+    if (memory_slice && harvest_memory) {
         int slice_success = 0;
         uint64_t error_gpa = 0;
         char cache_error[256] = {0};
@@ -3140,15 +3177,40 @@ kvm_run_done:
                     " reason=%s\n",
                     error_gpa, cache_error[0] ? cache_error : "resync required");
         }
-        wvm_kvm_memory_slice_destroy(memory_slice);
+    }
+    /*
+     * KVM dirty logging is the only execution path that can leave a kernel
+     * memory fence pending here.  TCG executes against the shared user-space
+     * RAM mapping; a Mode A device may still be open for the node's optional
+     * accelerator capability, but TCG must not turn the absent kernel memory
+     * owner into an executor failure.
+     */
+    if (harvest_memory && !req->mode_tcg && g_wvm_dev_fd >= 0 &&
+        ioctl(g_wvm_dev_fd, IOCTL_WVM_MEMORY_DRAIN) != 0) {
+        memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
+        fprintf(stderr, "[kernel-memory] executor dirty fence failed: %s\n",
+                strerror(errno));
+    }
+    if (memory_slice) {
+        if (harvest_memory) {
+            wvm_kvm_execution_complete(
+                memory_slice, memory_fence_status, memory_error_gpa);
+        }
+        if (wvm_kvm_execution_wait(memory_slice, &memory_error_gpa) != 0) {
+            memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
+            invalidate_kvm_ram_snapshot();
+        }
+        wvm_kvm_execution_release(memory_slice);
         memory_slice = NULL;
     }
-    if (execution_window_active) {
-        wvm_kvm_execution_global_end();
-        execution_window_active = 0;
-    }
     // 导出寄存器状态并回包
-    ioctl(t_vcpu_fd, KVM_GET_REGS, &kregs); ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs);
+    int state_export_result = 0;
+    struct kvm_mp_state exported_mp;
+    if (ioctl(t_vcpu_fd, KVM_GET_MP_STATE, &exported_mp) < 0 ||
+        ioctl(t_vcpu_fd, KVM_GET_REGS, &kregs) < 0 ||
+        ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs) < 0) {
+        state_export_result = -errno;
+    }
     
     /* [DBG] Print registers AFTER KVM_RUN (what we send back) */
     {
@@ -3177,7 +3239,8 @@ kvm_run_done:
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
-    ack->status = memory_fence_status;
+    memset(ack, 0, sizeof(*ack));
+    ack->status = state_export_result ? state_export_result : memory_fence_status;
     ack->error_gpa = memory_error_gpa;
     ack->mode_tcg = req->mode_tcg;
     if (req->mode_tcg) {
@@ -3194,6 +3257,18 @@ kvm_run_done:
         ack_kctx->rip = kregs.rip; ack_kctx->rflags = kregs.rflags;
         memcpy(ack_kctx->sregs_data, &ksregs, sizeof(ksregs));
         ack_kctx->exit_reason = t_kvm_run->exit_reason;
+        state_export_result = wvm_kvm_extended_state_capture(t_vcpu_fd, ack_kctx);
+        if (state_export_result == 0) {
+            state_export_result = wvm_kvm_profile_msrs_transfer(
+                t_vcpu_fd, &req->ctx.kvm, ack_kctx);
+        }
+        if (state_export_result != 0) {
+            ack->status = state_export_result;
+        } else if (ack_kctx->mp_state == KVM_MP_STATE_HALTED &&
+                   ack_kctx->exit_reason == WVM_EXIT_PREEMPT) {
+            /* In-kernel LAPIC keeps HLT inside KVM_RUN until our kick. */
+            ack_kctx->exit_reason = KVM_EXIT_HLT;
+        }
 
         /* [V30 TSC 同步] 读回 slave 端 KVM_RUN 后的 TSC，带回 master。
          * slave 执行期间 TSC 自然递增，master 需要这个更新后的值来
@@ -3215,7 +3290,7 @@ kvm_run_done:
             msr_data.entries[6].index = 0xC0000082;  /* LSTAR */
             msr_data.entries[7].index = 0xC0000083;  /* CSTAR */
             msr_data.entries[8].index = 0xC0000084;  /* SFMASK */
-            if (ioctl(t_vcpu_fd, KVM_GET_MSRS, &msr_data) >= 0) {
+            if (ioctl(t_vcpu_fd, KVM_GET_MSRS, &msr_data) == 9) {
                 ack_kctx->tsc_value = msr_data.entries[0].data;
                 ack_kctx->tsc_deadline = msr_data.entries[1].data;
                 ack_kctx->kernel_gs_base = msr_data.entries[2].data;
@@ -3230,6 +3305,9 @@ kvm_run_done:
             } else {
                 ack_kctx->tsc_valid = 0;
                 ack_kctx->msr_ext_valid = 0;
+                if (req->ctx.kvm.tsc_valid) {
+                    ack->status = -EIO;
+                }
             }
         }
 
@@ -3291,7 +3369,7 @@ static void build_kvm_snapshot_operation_id(
 
 static int ensure_kvm_page_snapshot(
     const struct wvm_header *hdr, uint64_t gpa, uint8_t *hva,
-    uint64_t *version_out)
+    uint64_t *version_out, uint64_t deadline_ms)
 {
     uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
     char error[256] = {0};
@@ -3307,7 +3385,7 @@ static int ensure_kvm_page_snapshot(
      * depends on remote page content, not on a discarded prefetch buffer.
      */
     result = wvm_kvm_fetch_execution_page(gpa, operation_id, hva, version_out,
-                                          error, sizeof(error));
+                                          deadline_ms, error, sizeof(error));
     if (result != 0 && error[0] != '\0') {
         fprintf(stderr, "[KVM cache] execution page fetch GPA=%#llx: %s\n",
                 (unsigned long long)gpa, error);
@@ -3328,7 +3406,138 @@ static int ensure_kvm_execution_page(
     if (!wvm_gpa_page_valid(gpa) || !(hva = wvm_gpa_to_hva(gpa))) {
         return -EFAULT;
     }
-    return ensure_kvm_page_snapshot(hdr, gpa, hva, &version);
+    return ensure_kvm_page_snapshot(hdr, gpa, hva, &version, 0);
+}
+
+#define WVM_KVM_SNAPSHOT_READERS 16U
+
+struct kvm_ram_prefetch {
+    pthread_mutex_t lock;
+    const struct wvm_header *header;
+    uint64_t deadline_ms;
+    uint64_t next_offset;
+    uint64_t error_gpa;
+    uint64_t completed;
+    int slot_index;
+    int result;
+    unsigned active;
+    unsigned peak_active;
+};
+
+static void *kvm_ram_prefetch_worker(void *opaque)
+{
+    struct kvm_ram_prefetch *prefetch = opaque;
+
+    for (;;) {
+        uint64_t gpa = 0, version = 0;
+        struct timespec now;
+        uint8_t *hva;
+        int result;
+
+        pthread_mutex_lock(&prefetch->lock);
+        while (prefetch->slot_index < g_kvm_slot_count) {
+            const wvm_kvm_slot_t *slot = &g_kvm_slots[prefetch->slot_index];
+
+            if (slot->track_dirty && prefetch->next_offset < slot->size) break;
+            prefetch->slot_index++;
+            prefetch->next_offset = 0;
+        }
+        if (prefetch->result || prefetch->slot_index == g_kvm_slot_count) {
+            pthread_mutex_unlock(&prefetch->lock);
+            return NULL;
+        }
+        const wvm_kvm_slot_t *slot = &g_kvm_slots[prefetch->slot_index];
+        gpa = slot->guest_phys_addr + prefetch->next_offset;
+        if ((slot->size & (WVM_PAGE_SIZE - 1U)) != 0 ||
+            slot->guest_phys_addr > UINT64_MAX - slot->size) {
+            prefetch->result = -EOVERFLOW;
+        } else if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            prefetch->result = -EIO;
+        } else if ((uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000 >=
+                   prefetch->deadline_ms) {
+            prefetch->result = -ETIMEDOUT;
+        } else if (__atomic_load_n(&g_kvm_ram_snapshot_state,
+                                    __ATOMIC_ACQUIRE) != 2) {
+            prefetch->result = -ESTALE;
+        }
+        if (prefetch->result) {
+            prefetch->error_gpa = gpa;
+            pthread_mutex_unlock(&prefetch->lock);
+            return NULL;
+        }
+        prefetch->next_offset += WVM_PAGE_SIZE;
+        prefetch->active++;
+        if (prefetch->active > prefetch->peak_active) {
+            prefetch->peak_active = prefetch->active;
+        }
+        pthread_mutex_unlock(&prefetch->lock);
+
+        hva = wvm_gpa_page_valid(gpa) ? wvm_gpa_to_hva(gpa) : NULL;
+        result = hva ? ensure_kvm_page_snapshot(prefetch->header, gpa, hva,
+                            &version, prefetch->deadline_ms) : -EFAULT;
+        pthread_mutex_lock(&prefetch->lock);
+        prefetch->active--;
+        if (result && !prefetch->result) {
+            prefetch->result = result;
+            prefetch->error_gpa = gpa;
+        }
+        if (!result) prefetch->completed++;
+        pthread_mutex_unlock(&prefetch->lock);
+    }
+}
+
+/*
+ * KVM reads ordinary RAM directly from its memslots, so an absent page cannot
+ * fault into the WaveVM memory service.  The entry/page-table prefetch alone
+ * therefore leaves arbitrary guest data pages at whatever bytes happened to
+ * be in the local mapping.  Establish one complete, versioned snapshot before
+ * the first dependent KVM interval.  Subsequent intervals rely on typed page
+ * pushes; a rejected/gapped push clears the marker and forces this pass again.
+ */
+static int prepare_kvm_ram_snapshot(
+    const struct wvm_header *hdr, uint64_t *error_gpa_out)
+{
+    int expected = 0;
+    struct kvm_ram_prefetch prefetch = { .header = hdr };
+    pthread_t readers[WVM_KVM_SNAPSHOT_READERS - 1];
+    size_t started = 0;
+
+    if (error_gpa_out) {
+        *error_gpa_out = 0;
+    }
+    if (__atomic_load_n(&g_kvm_ram_snapshot_state, __ATOMIC_ACQUIRE) == 1) {
+        return 0;
+    }
+    if (!__atomic_compare_exchange_n(&g_kvm_ram_snapshot_state, &expected, 2,
+                                     false, __ATOMIC_ACQ_REL,
+                                     __ATOMIC_ACQUIRE)) {
+        return -EBUSY;
+    }
+
+    prefetch.deadline_ms = wvm_memory_service_global_fault_deadline();
+    if (!prefetch.deadline_ms || pthread_mutex_init(&prefetch.lock, NULL) != 0) {
+        invalidate_kvm_ram_snapshot();
+        return -ENOTCONN;
+    }
+    /* Only a cold/resync pass creates readers. No lock spans a page request. */
+    for (; started < WVM_KVM_SNAPSHOT_READERS - 1; ++started) {
+        if (pthread_create(&readers[started], NULL,
+                            kvm_ram_prefetch_worker, &prefetch) != 0) break;
+    }
+    kvm_ram_prefetch_worker(&prefetch);
+    for (size_t i = 0; i < started; ++i) pthread_join(readers[i], NULL);
+    pthread_mutex_destroy(&prefetch.lock);
+    if (prefetch.result) {
+        invalidate_kvm_ram_snapshot();
+        if (error_gpa_out) *error_gpa_out = prefetch.error_gpa;
+        return prefetch.result;
+    }
+    fprintf(stderr, "[KVM cache] RAM snapshot pages=%llu readers=%zu max_in_flight=%u\n",
+            (unsigned long long)prefetch.completed, started + 1, prefetch.peak_active);
+    expected = 2;
+    return __atomic_compare_exchange_n(
+               &g_kvm_ram_snapshot_state, &expected, 1, false,
+               __ATOMIC_RELEASE, __ATOMIC_ACQUIRE) ? 0 : -ESTALE;
 }
 
 static int read_kvm_snapshot_u64(
@@ -3512,6 +3721,17 @@ static int prepare_kvm_execution_snapshot(
         return -EINVAL;
     }
     sregs = (const struct kvm_sregs *)context->sregs_data;
+
+    /*
+     * Resolve every dirty-tracked RAM page before translating or executing the
+     * requested instruction.  KVM can read data pages without notifying this
+     * process, so a partial entry/page-table prefetch is not a valid input
+     * snapshot for a distributed interval.
+     */
+    result = prepare_kvm_ram_snapshot(hdr, error_gpa_out);
+    if (result != 0) {
+        return result;
+    }
     if (context->rip > UINT64_MAX - sregs->cs.base) {
         return -EOVERFLOW;
     }
@@ -3566,10 +3786,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
             WVM_NTOHLL(snapshot->gpa) != gpa) {
             return;
         }
-        install_result = wvm_kvm_page_cache_global_install_full(
-            gpa, WVM_NTOHLL(snapshot->version), NULL, 0);
-        if (install_result == 0) {
-            memcpy(hva, snapshot->data, WVM_MEMORY_PAGE_BYTES);
+        install_result = wvm_kvm_page_cache_global_install_data(
+            gpa, WVM_NTOHLL(snapshot->version), 0, snapshot->data,
+            WVM_MEMORY_PAGE_BYTES, 1, hva, NULL, NULL, 0);
+        if (install_result != 0 && install_result != -EALREADY) {
+            invalidate_kvm_ram_snapshot();
         }
         return;
     }
@@ -3593,15 +3814,14 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
             return;
         }
         zero_page = (hdr->flags & WVM_FLAG_ZERO) != 0;
-        apply_result = wvm_kvm_page_cache_global_apply_diff(
-            gpa, WVM_NTOHLL(diff->version), offset, data_bytes, zero_page,
-            NULL, 0);
-        if (apply_result == 0) {
-            if (zero_page) {
-                memset(hva, 0, WVM_MEMORY_PAGE_BYTES);
-            } else if (data_bytes != 0) {
-                memcpy(hva + offset, diff->data, data_bytes);
-            }
+        uint8_t zeros[WVM_MEMORY_PAGE_BYTES] = {0};
+        apply_result = wvm_kvm_page_cache_global_install_data(
+            gpa, WVM_NTOHLL(diff->version), zero_page ? 0 : offset,
+            zero_page ? zeros : diff->data,
+            zero_page ? WVM_MEMORY_PAGE_BYTES : data_bytes, 0,
+            hva, NULL, NULL, 0);
+        if (apply_result != 0 && apply_result != -EALREADY) {
+            invalidate_kvm_ram_snapshot();
         }
         return;
     }
@@ -3612,7 +3832,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
 
         if (wvm_kvm_page_cache_global_active()) {
             if (ensure_kvm_page_snapshot(
-                    hdr, gpa, hva, &page_version) != 0 ||
+                    hdr, gpa, hva, &page_version, 0) != 0 ||
                 wvm_kvm_page_cache_global_lookup(
                     gpa, &page_state, &page_version, NULL, 0) != 0 ||
                 page_state != WVM_KVM_PAGE_CLEAN || page_version == 0) {
@@ -3663,6 +3883,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
                     return;
                 }
             }
+            invalidate_kvm_ram_snapshot();
             memcpy(hva, (uint8_t*)payload+8, 4096);
         }
     }
@@ -3674,6 +3895,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
                 return;
             }
         }
+        invalidate_kvm_ram_snapshot();
         if (g_kvm_available) {
             memset(hva, 0, 4096); /* KVM: 不能 MADV_DONTNEED，会破坏 memslot 物理页 */
         } else {
@@ -4547,12 +4769,6 @@ static int spawn_tcg_processes(int base_id) {
             setenv("WVM_SOCK_PUSH", fd_p, 1); 
             setenv("WVM_ROLE", "SLAVE", 1);
             /*
-             * TCG PROXY helpers must stay on the TCG cpu_exec path. Auto-KVM
-             * bootstrap otherwise makes kvm_enabled() true and the service loop
-             * routes mode_tcg=1 requests into KVM_RUN (hang / wrong backend).
-             */
-            setenv("WVM_DISABLE_AUTO_KVM", "1", 1);
-            /*
              * R05: each TCG helper is a single-vCPU, -nodefaults process so the
              * page-install path may briefly raise PROT_WRITE without a concurrent
              * guest writer. Advertise that invariant to the QEMU helper.
@@ -4572,6 +4788,12 @@ static int spawn_tcg_processes(int base_id) {
             snprintf(id_str, sizeof(id_str), "%u", wvm_wire_target(g_slave_vm_id, base_id + i));
             setenv("WVM_SLAVE_ID", id_str, 1);
 
+            fprintf(stderr,
+                    "[Hybrid] TCG helper runtime gate=%s socket=%s namespace=%s\n",
+                    getenv("WVM_RUNTIME_GATE_ACTIVE") ?: "<unset>",
+                    getenv("WVM_RUNTIME_SOCKET") ?: "<unset>",
+                    getenv("WVM_RUNTIME_NAMESPACE") ?: "<unset>");
+
             const char *shm_path = getenv("WVM_SHM_FILE");
             if (shm_path) {
                 setenv("WVM_SHM_FILE", shm_path, 1);
@@ -4588,7 +4810,7 @@ static int spawn_tcg_processes(int base_id) {
                 qemu_argv[ai++] = (char *)tcg_datadir;
             }
             qemu_argv[ai++] = "-accel";
-            qemu_argv[ai++] = "wavevm";
+            qemu_argv[ai++] = "wavevm,backend=tcg";
             if (tcg_machine && *tcg_machine) {
                 qemu_argv[ai++] = "-machine";
                 qemu_argv[ai++] = (char *)tcg_machine;
@@ -4680,7 +4902,8 @@ static int spawn_tcg_processes(int base_id) {
  * Deliver PAGE_PUSH/FORCE_SYNC directly to every local TCG helper push UDP port
  * so remote PROXY vCPUs observe master handoff dirty commits.
  */
-int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len)
+static int proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len,
+                                      int shared_backing)
 {
     uint8_t *pkt;
     struct wvm_header *hdr;
@@ -4723,6 +4946,9 @@ int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len
     hdr->payload_len = htons((uint16_t)len);
     wvm_slave_pack_src(hdr);
     hdr->target_id = hdr->slave_id;
+    if (shared_backing) {
+        hdr->flags |= WVM_FLAG_SHARED_BACKING;
+    }
     hdr->qos_level =
         (msg_type == MSG_PAGE_PUSH_FULL || msg_type == MSG_FORCE_SYNC) ? 0 : 1;
     memcpy(pkt + sizeof(*hdr), payload, (size_t)len);
@@ -4748,17 +4974,26 @@ int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len
     return sent > 0 ? 0 : -EIO;
 }
 
+int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len)
+{
+    return proxy_push_to_local_helpers(msg_type, payload, len, 0);
+}
+
+int wavevm_proxy_push_shared_to_local_helpers(uint16_t msg_type, void *payload,
+                                              int len)
+{
+    return proxy_push_to_local_helpers(msg_type, payload, len, 1);
+}
+
 /*
- * After a batch of local-helper PAGE_PUSHes, give the push listener time to
- * APPLY + lazy-RO flush. Production UDP ACKs do not return to the proxy on a
- * correlated FD (same as notify_tcg_page_installed), so we send a framed
- * PUSH_BARRIER then sleep past the 100ms poll interval.
+ * Each required helper must acknowledge this barrier after applying pushes
+ * and lazy-RO work. Independent callers keep independent completion sets.
  */
 int wavevm_proxy_barrier_local_helpers(uint64_t timeout_us)
 {
     uint8_t barrier_pkt[sizeof(wvm_ipc_header_t) + sizeof(uint64_t)];
     wvm_ipc_header_t *bhdr;
-    uint64_t cookie;
+    push_barrier_t barrier = {0};
     int fd = -1;
     long i;
     int sent = 0;
@@ -4781,45 +5016,50 @@ int wavevm_proxy_barrier_local_helpers(uint64_t timeout_us)
      * G4: one cookie for the batch; each helper ACKs after APPLY+lazy-RO.
      * Wait for sent ACKs via proxy RX demux — never usleep-claim success.
      */
-    cookie = push_barrier_begin((int)g_num_cores);
+    barrier.peer_count = (size_t)g_num_cores;
+    barrier.peers = calloc(barrier.peer_count, sizeof(*barrier.peers));
+    if (!barrier.peers) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < g_num_cores; i++) {
+        barrier.peers[i].endpoint = tcg_endpoints[i].push_addr;
+    }
+    br = push_barrier_begin(&barrier);
+    if (br != 0) {
+        free(barrier.peers);
+        return br;
+    }
 
     memset(barrier_pkt, 0, sizeof(barrier_pkt));
     bhdr = (wvm_ipc_header_t *)barrier_pkt;
     bhdr->type = WVM_IPC_TYPE_PUSH_BARRIER;
-    bhdr->len = (uint32_t)sizeof(cookie);
-    memcpy(barrier_pkt + sizeof(*bhdr), &cookie, sizeof(cookie));
+    bhdr->len = (uint32_t)sizeof(barrier.cookie);
+    memcpy(barrier_pkt + sizeof(*bhdr), &barrier.cookie,
+           sizeof(barrier.cookie));
 
     for (i = 0; i < g_num_cores; i++) {
         if (sendto(fd, barrier_pkt, sizeof(barrier_pkt), MSG_NOSIGNAL,
-                   (struct sockaddr *)&tcg_endpoints[i].push_addr,
-                   sizeof(tcg_endpoints[i].push_addr)) ==
+                   (struct sockaddr *)&barrier.peers[i].endpoint,
+                   sizeof(barrier.peers[i].endpoint)) ==
             (ssize_t)sizeof(barrier_pkt)) {
             sent++;
         }
     }
-    if (sent <= 0) {
-        return -EIO;
-    }
-    if (sent != (int)g_num_cores) {
-        pthread_mutex_lock(&g_push_barrier_lock);
-        if (g_push_barrier_active_cookie == cookie) {
-            g_push_barrier_expect = sent;
-        }
-        pthread_mutex_unlock(&g_push_barrier_lock);
-    }
-
-    br = wait_for_push_barrier_cookie(cookie,
-                                      timeout_us ? timeout_us : 5000000ULL);
+    br = sent == (int)barrier.peer_count ?
+        wait_for_push_barrier_cookie(&barrier, timeout_us) : -EIO;
     {
         static int log_count;
         if (log_count < 40) {
             fprintf(stderr,
                     "[Hybrid] local-helper barrier cores=%ld sent=%d "
                     "cookie=%llu wait=%d\n",
-                    g_num_cores, sent, (unsigned long long)cookie, br);
+                    g_num_cores, sent,
+                    (unsigned long long)barrier.cookie, br);
             log_count++;
         }
     }
+    push_barrier_end(&barrier);
+    free(barrier.peers);
     return br;
 }
 
@@ -4992,12 +5232,12 @@ void* tcg_proxy_thread(void *arg) {
                 wvm_ipc_header_t *ipc = (wvm_ipc_header_t *)pkt;
                 if (ipc->type == WVM_IPC_TYPE_PUSH_BARRIER_ACK &&
                     ipc->len == sizeof(uint64_t) &&
-                    msgs[i].msg_len >=
+                    msgs[i].msg_len ==
                         (int)(sizeof(*ipc) + sizeof(uint64_t))) {
                     uint64_t ack_cookie;
                     memcpy(&ack_cookie, pkt + sizeof(*ipc),
                            sizeof(ack_cookie));
-                    mark_push_barrier_done(ack_cookie);
+                    mark_push_barrier_done(ack_cookie, &src_addrs[i]);
                     {
                         static int ack_log;
                         if (ack_log < 40) {
@@ -5201,8 +5441,8 @@ int wavevm_executor_runtime_main(
 
     if (!runtime || !runtime->manifest || !runtime->dispatch ||
         runtime->physical_node_id == 0 || runtime->manifest->vm_id == 0 ||
-        runtime->local_memory_bytes == 0 ||
-        runtime->local_memory_bytes % (1024ULL * 1024ULL) != 0 ||
+        runtime->guest_memory_bytes == 0 ||
+        runtime->guest_memory_bytes % (1024ULL * 1024ULL) != 0 ||
         runtime->executor_worker_count == 0) {
         fprintf(stderr, "[Runtime] admitted executor context is invalid\n");
         executor_publish_startup_state(EXECUTOR_FAILED);
@@ -5252,8 +5492,8 @@ int wavevm_executor_runtime_main(
     }
     g_service_port = runtime->executor_service_port;
     g_num_cores = (long)runtime->executor_worker_count;
-    g_ram_mb = (int)(runtime->local_memory_bytes / (1024ULL * 1024ULL));
-    g_slave_ram_size = runtime->local_memory_bytes;
+    g_ram_mb = (int)(runtime->guest_memory_bytes / (1024ULL * 1024ULL));
+    g_slave_ram_size = runtime->guest_memory_bytes;
     g_base_id = (int)runtime->local_primary_vnode;
     g_executor_ctrl_port = runtime->executor_control_port;
     g_slave_vm_id = runtime->manifest->vm_id;

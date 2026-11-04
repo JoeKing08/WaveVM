@@ -1350,6 +1350,21 @@ find_requirement(const struct wvm_reservation_requirement_list *requirements,
     return NULL;
 }
 
+static const struct wvm_reservation_requirement *
+find_requirement_by_node(
+    const struct wvm_reservation_requirement_list *requirements,
+    uint32_t physical_node_id)
+{
+    size_t i;
+
+    for (i = 0; i < requirements->count; i++) {
+        if (requirements->entries[i].physical_node_id == physical_node_id) {
+            return &requirements->entries[i];
+        }
+    }
+    return NULL;
+}
+
 static int reservation_requirement_list_validate(
     const struct wvm_reservation_requirement_list *requirements, char *error,
     size_t error_len)
@@ -1428,13 +1443,6 @@ static int assignment_lists_validate(const struct wvm_placement_plan *plan,
             assignment->gpa_start != expected_gpa) {
             set_error(error, error_len,
                       "placement plan has gapped memory assignments");
-            return -1;
-        }
-        if (assignment->directory_physical_node_id !=
-            assignment->executor_physical_node_id) {
-            set_error(error, error_len,
-                      "placement plan splits memory directory from executor "
-                      "(remote memory placement not admitted)");
             return -1;
         }
         expected_gpa += assignment->bytes;
@@ -1522,11 +1530,11 @@ int wvm_placement_plan_validate(const struct wvm_placement_plan *plan,
 
             if (memcmp(assignment->reservation_id, requirement->reservation_id,
                        WVM_IDENTITY_ID_BYTES) == 0) {
-                if (assignment->executor_physical_node_id !=
+                if (assignment->directory_physical_node_id !=
                     requirement->physical_node_id ||
                     assignment->bytes > UINT64_MAX - guest_memory_bytes) {
                     set_error(error, error_len,
-                              "memory assignment targets the wrong reservation");
+                              "memory assignment targets the wrong directory reservation");
                     return -1;
                 }
                 guest_memory_bytes += assignment->bytes;
@@ -1573,11 +1581,22 @@ int wvm_placement_plan_validate(const struct wvm_placement_plan *plan,
         }
     }
     for (i = 0; i < plan->memory_assignments.count; i++) {
-        if (!find_requirement(
-                &plan->reservation_requirements,
-                plan->memory_assignments.entries[i].reservation_id)) {
+        const struct wvm_memory_chunk_assignment *assignment =
+            &plan->memory_assignments.entries[i];
+        const struct wvm_reservation_requirement *directory_requirement;
+        const struct wvm_reservation_requirement *executor_requirement;
+
+        directory_requirement = find_requirement(
+            &plan->reservation_requirements, assignment->reservation_id);
+        executor_requirement = find_requirement_by_node(
+            &plan->reservation_requirements,
+            assignment->executor_physical_node_id);
+        if (!directory_requirement ||
+            directory_requirement->physical_node_id !=
+                assignment->directory_physical_node_id ||
+            !executor_requirement || executor_requirement->guest_vcpu_slots == 0) {
             set_error(error, error_len,
-                      "memory assignment references an unknown reservation");
+                      "memory assignment has no admitted directory or executor reservation");
             return -1;
         }
     }

@@ -5,6 +5,7 @@
 #include "sysemu/cpus.h"
 #include "sysemu/hw_accel.h"
 #include "sysemu/kvm.h" 
+#include "kvm_i386.h"
 #include "sysemu/runstate.h"
 #include "qapi/error.h"
 #include "linux/kvm.h"
@@ -16,10 +17,13 @@
 #include "exec/address-spaces.h"
 #include "exec/cpu-all.h"
 #include "hw/i386/apic.h"
+#include "hw/i386/apic_internal.h"
+#include "hw/intc/i8259.h"
 #include "../kvm/kvm-cpus.h"
 #include "../../../common_include/wavevm_protocol.h" 
 #include "../../../common_include/wavevm_config.h"
 #include "../../../common_include/wavevm_ioctl.h"
+#include "../../../common_include/wavevm_kvm_state.h"
 #include "wavevm-accel.h"
 #include "wavevm-runtime-registration.h"
 #include "qemu/thread.h"
@@ -133,25 +137,8 @@ static int write_full(int fd, const void *buf, size_t len);
 
 static int connect_to_master_helper_role(uint32_t role)
 {
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    const char *env_path;
-
+    int sock = wavevm_qemu_connect_runtime_socket(SOCK_STREAM | SOCK_CLOEXEC);
     if (sock < 0) {
-        return -1;
-    }
-
-    env_path = wavevm_qemu_runtime_socket_path();
-    if (!env_path) {
-        fprintf(stderr,
-                "[WaveVM-CPU] manifest-derived QEMU socket path is missing\n");
-        close(sock);
-        return -1;
-    }
-
-    strncpy(addr.sun_path, env_path, sizeof(addr.sun_path) - 1);
-    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sock);
         return -1;
     }
     if (role != 0) {
@@ -336,6 +323,7 @@ static QemuCond g_wavevm_tcg_slice_cond;
 static int g_wavevm_tcg_local_active;
 static bool g_wavevm_tcg_remote_pending;
 static bool g_wavevm_tcg_remote_active; /* STW: any remote; concurrent derives */
+static bool g_wavevm_tcg_atomic_pending;
 static bool g_wavevm_tcg_remote_vcpu_active[MAX_VCPUS];
 static int g_wavevm_tcg_remote_active_count;
 static bool g_wavevm_tcg_local_handoff;
@@ -381,6 +369,53 @@ static uint64_t g_wavevm_tcg_need_local_last_rip[MAX_VCPUS];
 #endif
 /* Shared with FE slice_budget_us pairing (see wavevm_tcg_slice_budget_us). */
 static int g_wavevm_tcg_spin_count[MAX_VCPUS];
+
+static void wavevm_tcg_atomic_enter(CPUState *cpu)
+{
+    qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
+    while (g_wavevm_tcg_atomic_pending) {
+        qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
+    }
+    g_wavevm_tcg_atomic_pending = true;
+    {
+        CPUState *other;
+        CPU_FOREACH(other) {
+            if (other != cpu && !other->unplug) {
+                cpu_exit(other);
+            }
+        }
+    }
+    while (g_wavevm_tcg_local_active > 0 || g_wavevm_tcg_remote_pending ||
+           g_wavevm_tcg_remote_active ||
+           g_wavevm_tcg_remote_active_count > 0) {
+        qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
+    }
+    qemu_mutex_unlock(&g_wavevm_tcg_slice_lock);
+
+    {
+        static unsigned int log_count;
+        if (log_count++ < 32) {
+            fprintf(stderr, "[WVM-TCG-ATOMIC] event=enter cpu=%d\n",
+                    cpu->cpu_index);
+        }
+    }
+}
+
+static void wavevm_tcg_atomic_leave(CPUState *cpu)
+{
+    qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
+    g_wavevm_tcg_atomic_pending = false;
+    qemu_cond_broadcast(&g_wavevm_tcg_slice_cond);
+    qemu_mutex_unlock(&g_wavevm_tcg_slice_lock);
+
+    {
+        static unsigned int log_count;
+        if (log_count++ < 32) {
+            fprintf(stderr, "[WVM-TCG-ATOMIC] event=leave cpu=%d\n",
+                    cpu->cpu_index);
+        }
+    }
+}
 
 static void wavevm_tcg_note_remote_done(CPUState *cpu)
 {
@@ -925,10 +960,10 @@ static void wavevm_tcg_local_slice_enter(void)
      * §8.1 / baseline §16: coherent SHM defaults to concurrent MAIN.
      * WVM_TCG_SHM_CONCURRENT=0 selects stop-the-world (wait for remotes here).
      */
-    if (!wavevm_tcg_shm_allow_concurrent()) {
-        while (g_wavevm_tcg_remote_pending || g_wavevm_tcg_remote_active) {
-            qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
-        }
+    while (g_wavevm_tcg_atomic_pending ||
+           (!wavevm_tcg_shm_allow_concurrent() &&
+            (g_wavevm_tcg_remote_pending || g_wavevm_tcg_remote_active))) {
+        qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
     }
     g_wavevm_tcg_local_active++;
     if (g_wavevm_tcg_local_handoff) {
@@ -982,7 +1017,8 @@ static void wavevm_tcg_remote_slice_enter(CPUState *owner)
          * 2 vCPU is acceptance threshold, not an implementation ceiling.
          */
         int ci = owner->cpu_index < MAX_VCPUS ? owner->cpu_index : 0;
-        while (g_wavevm_tcg_remote_vcpu_active[ci]) {
+        while (g_wavevm_tcg_atomic_pending ||
+               g_wavevm_tcg_remote_vcpu_active[ci]) {
             qemu_cond_wait(&g_wavevm_tcg_slice_cond, &g_wavevm_tcg_slice_lock);
         }
         g_wavevm_tcg_remote_vcpu_active[ci] = true;
@@ -1008,7 +1044,8 @@ static void wavevm_tcg_remote_slice_enter(CPUState *owner)
         for (;;) {
             bool prefer = wavevm_tcg_prefer_active();
             bool peer_run = wavevm_tcg_has_runnable_local_peer(owner);
-            bool need_wait = g_wavevm_tcg_remote_active ||
+            bool need_wait = g_wavevm_tcg_atomic_pending ||
+                             g_wavevm_tcg_remote_active ||
                              g_wavevm_tcg_local_active > 0 ||
                              ((g_wavevm_tcg_local_handoff || prefer) && peer_run);
             if (!need_wait) {
@@ -1179,6 +1216,7 @@ static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip,
     int64_t until;
     int *spin_count = g_wavevm_tcg_spin_count;
     bool concurrent = wavevm_tcg_shm_allow_concurrent();
+    bool local_peer = wavevm_tcg_has_local_peer(cpu);
 
     if (ack_eip == 0) {
         return;
@@ -1251,21 +1289,15 @@ static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip,
      */
     if (concurrent) {
         /*
-         * Minimum §8.1: concurrent remains MAIN. Medium spin → short
-         * NEED_LOCAL-style budget only (clears on RIP progress). Wall hold
-         * (30s/90s/25s) only at high spin — exceptional softlock coverage.
+         * A generic same-RIP spin only needs a local diversion when another
+         * local vCPU can release the state the remote vCPU is waiting on.
+         * With split=0 there is no such peer. Keep NEED_LOCAL device bounces
+         * independent; they still provide their bounded local budget.
          */
-        /*
-         * §8.1: after hard_cap, re-arm cooldown (25s) MUST suppress spin
-         * re-arm so remote MAIN can resume. force_local must not dominate.
-         */
-        if (!wavevm_tcg_force_local_disabled() && spin_count[ci] >= 4) {
+        if (local_peer && !wavevm_tcg_force_local_disabled() &&
+            spin_count[ci] >= 4) {
             int64_t now_arm = wavevm_tcg_mono_ns();
-            /*
-             * §8.1: after hard_cap the cooldown suppress gate MUST hold.
-             * Do not lift/clear cooldown on elevated spin (that bypassed the
-             * contract and redefined MAIN as force_local).
-             */
+
             if (g_wavevm_tcg_spin_arm_cooldown_until_ns[ci] != 0 &&
                 now_arm < g_wavevm_tcg_spin_arm_cooldown_until_ns[ci]) {
                 static int cooldown_suppress_log;
@@ -1277,96 +1309,90 @@ static void wavevm_tcg_remote_spin_backoff(CPUState *cpu, uint64_t ack_eip,
                             (long long)((g_wavevm_tcg_spin_arm_cooldown_until_ns[ci]
                                          - now_arm) / 1000000LL));
                 }
-                /* keep spin count for diagnostics; do not arm during cooldown */
             } else {
-
-            /*
-             * §8.1: elevated spin (>=4) arms bounded wall hold (30s/90s/25s).
-             * Budgets alone under-cover softlock when spin stays 4..7 (RCU/IPI
-             * windows) — s23g16g hung after hold_expiry under gate>=8 +
-             * cooldown_suppress with only budget coverage. s23g16f early_clear
-             * and s23g16a idle-clear both forbidden (§8.1 RIP-wobble rule).
-             * Clear only at slice expiry / renew refusal / hard_cap.
-             * fl dominance from micro-slice accounting during honest holds is
-             * a known MINIMUM_COMPLETE blocker; do not game counters.
-             */
-            int force = 32;
-            if (spin_count[ci] >= 8) {
-                force = 64;
-            }
-            if (spin_count[ci] >= 16) {
-                force = 128;
-            }
-            g_wavevm_tcg_force_local[ci] = force;
-            g_wavevm_tcg_force_local_rip[ci] = ack_eip;
-            if (spin_count[ci] >= 4 &&
-                !wavevm_tcg_vcpu_is_idle_not_softlock(cpu, ack_eip,
-                                                     ack_exit_reason,
-                                                     ack_halted,
-                                                     ack_mp_state)) {
-                /*
-                 * Exceptional softlock hold (§8.1): full-local for bounded slice.
-                 * Mid-hold remote duty re-broke virtio; mid-hold early-clear
-                 * hung boot. s23g17: first arm only sets hold_until; do not
-                 * extend toward hard_cap on every spin ACK (fl dominance).
-                 * Stuck-only renew at slice boundary owns continuation.
-                 * Never wall-hold architecture-idle (halted/HLT/MP/HLT-insn).
-                 */
-                int64_t hold_until = now_arm + 30000000000LL; /* §8.1 hold slice 30s */
-                const int64_t hold_max_ns = 90000000000LL; /* §8.1 hard cap 90s */
-                bool first_arm = !g_wavevm_tcg_force_local_hold[ci] ||
-                                 g_wavevm_tcg_force_local_hold_armed_ns[ci] == 0;
-                if (first_arm) {
-                    g_wavevm_tcg_force_local_hold_armed_ns[ci] = now_arm;
-                    g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
-                    g_wavevm_tcg_force_local_hold_progress[ci] = 0;
-                    g_wavevm_tcg_force_local_hold_same_rip[ci] = 0;
-                    g_wavevm_tcg_force_local_hold_last_rip[ci] = 0;
-                    {
-                        int64_t cap = g_wavevm_tcg_force_local_hold_armed_ns[ci] +
-                                      hold_max_ns;
-                        if (hold_until > cap) {
-                            hold_until = cap;
-                        }
-                    }
-                    g_wavevm_tcg_force_local_hold[ci] = true;
-                    g_wavevm_tcg_force_local_hold_until_ns[ci] = hold_until;
-                    if (concurrent_force_log++ < 64) {
-                        fprintf(stderr,
-                                "[WVM-TCG-SPIN-LOCAL] concurrent cpu=%d rip=%#llx "
-                                "spin=%d arm force_local=%d hold_ms=30000 "
-                                "hold_full_local=1 first_arm=1\n",
-                                cpu->cpu_index, (unsigned long long)ack_eip,
-                                spin_count[ci], force);
-                    }
-                } else {
-                    /* s23g17h: tip mid-hold spin extend, hard_cap bounded. */
-                    {
-                        int64_t cap = g_wavevm_tcg_force_local_hold_armed_ns[ci] +
-                                      hold_max_ns;
-                        if (hold_until > cap) {
-                            hold_until = cap;
-                        }
-                    }
-                    if (hold_until > g_wavevm_tcg_force_local_hold_until_ns[ci]) {
-                        g_wavevm_tcg_force_local_hold_until_ns[ci] = hold_until;
-                    }
-                    if (concurrent_force_log++ < 64) {
-                        fprintf(stderr,
-                                "[WVM-TCG-SPIN-LOCAL] concurrent cpu=%d rip=%#llx "
-                                "spin=%d hold_active extend=1 force_local=%d\n",
-                                cpu->cpu_index, (unsigned long long)ack_eip,
-                                spin_count[ci], force);
-                    }
+                int force = 32;
+                if (spin_count[ci] >= 8) {
+                    force = 64;
                 }
-            } else if (concurrent_force_log++ < 64) {
+                if (spin_count[ci] >= 16) {
+                    force = 128;
+                }
+                g_wavevm_tcg_force_local[ci] = force;
+                g_wavevm_tcg_force_local_rip[ci] = ack_eip;
+
+                if (!wavevm_tcg_vcpu_is_idle_not_softlock(
+                        cpu, ack_eip, ack_exit_reason, ack_halted,
+                        ack_mp_state)) {
+                    int64_t hold_until = now_arm + 30000000000LL;
+                    const int64_t hold_max_ns = 90000000000LL;
+                    bool first_arm = !g_wavevm_tcg_force_local_hold[ci] ||
+                                     g_wavevm_tcg_force_local_hold_armed_ns[ci] == 0;
+
+                    if (first_arm) {
+                        g_wavevm_tcg_force_local_hold_armed_ns[ci] = now_arm;
+                        g_wavevm_tcg_force_local_hold_ticks[ci] = 0;
+                        g_wavevm_tcg_force_local_hold_progress[ci] = 0;
+                        g_wavevm_tcg_force_local_hold_same_rip[ci] = 0;
+                        g_wavevm_tcg_force_local_hold_last_rip[ci] = 0;
+                        if (hold_until > now_arm + hold_max_ns) {
+                            hold_until = now_arm + hold_max_ns;
+                        }
+                        g_wavevm_tcg_force_local_hold[ci] = true;
+                        g_wavevm_tcg_force_local_hold_until_ns[ci] = hold_until;
+                        if (concurrent_force_log++ < 64) {
+                            fprintf(stderr,
+                                    "[WVM-TCG-SPIN-LOCAL] concurrent cpu=%d "
+                                    "rip=%#llx spin=%d arm force_local=%d "
+                                    "hold_ms=30000 hold_full_local=1 "
+                                    "first_arm=1\n",
+                                    cpu->cpu_index,
+                                    (unsigned long long)ack_eip,
+                                    spin_count[ci], force);
+                        }
+                    } else {
+                        if (hold_until >
+                            g_wavevm_tcg_force_local_hold_until_ns[ci]) {
+                            g_wavevm_tcg_force_local_hold_until_ns[ci] =
+                                hold_until;
+                        }
+                        if (concurrent_force_log++ < 64) {
+                            fprintf(stderr,
+                                    "[WVM-TCG-SPIN-LOCAL] concurrent cpu=%d "
+                                    "rip=%#llx spin=%d hold_active extend=1 "
+                                    "force_local=%d\n",
+                                    cpu->cpu_index,
+                                    (unsigned long long)ack_eip,
+                                    spin_count[ci], force);
+                        }
+                    }
+                } else if (concurrent_force_log++ < 64) {
+                    fprintf(stderr,
+                            "[WVM-TCG-SPIN-LOCAL] concurrent cpu=%d "
+                            "rip=%#llx spin=%d arm force_local=%d "
+                            "hold_full_local=0 (short budget only)\n",
+                            cpu->cpu_index, (unsigned long long)ack_eip,
+                            spin_count[ci], force);
+                }
+            }
+        } else if (!wavevm_tcg_force_local_disabled() &&
+                   spin_count[ci] >= 4) {
+            /*
+             * A single-vCPU remote guest can still need a short frontend
+             * execution window to complete an architectural device/BIOS
+             * transition. It must never receive the peer-dependent wall hold:
+             * there is no local peer that can make a 30s hold productive.
+             */
+            int force = spin_count[ci] >= 8 ? 64 : 32;
+            if (g_wavevm_tcg_force_local[ci] < force) {
+                g_wavevm_tcg_force_local[ci] = force;
+            }
+            g_wavevm_tcg_force_local_rip[ci] = ack_eip;
+            if (concurrent_force_log++ < 64) {
                 fprintf(stderr,
                         "[WVM-TCG-SPIN-LOCAL] concurrent cpu=%d rip=%#llx "
-                        "spin=%d arm force_local=%d hold_full_local=0 "
-                        "(short budget only)\n",
+                        "spin=%d no_local_peer=1 short_budget=%d hold=0\n",
                         cpu->cpu_index, (unsigned long long)ack_eip,
                         spin_count[ci], force);
-            }
             }
         }
         return;
@@ -1632,28 +1658,6 @@ static bool wavevm_kvm_apply_remote_lapic_mmio(CPUState *cpu,
     return true;
 }
 
-/* Keep local APIC/interrupt state and only import architectural sregs fields. */
-static void wavevm_apply_arch_sregs(struct kvm_sregs *dst,
-                                    const struct kvm_sregs *src)
-{
-    dst->cs = src->cs;
-    dst->ds = src->ds;
-    dst->es = src->es;
-    dst->fs = src->fs;
-    dst->gs = src->gs;
-    dst->ss = src->ss;
-    dst->tr = src->tr;
-    dst->ldt = src->ldt;
-    dst->gdt = src->gdt;
-    dst->idt = src->idt;
-    dst->cr0 = src->cr0;
-    dst->cr2 = src->cr2;
-    dst->cr3 = src->cr3;
-    dst->cr4 = src->cr4;
-    dst->cr8 = src->cr8;
-    dst->efer = src->efer;
-}
-
 /* 
  * [物理意图] 充当远程 Slave 的“本地代理执行人”。
  * [关键逻辑] 当远程计算节点触发 PIO/MMIO 退出时，Master 在本地 QEMU 中代为执行该 I/O 操作并返回结果。
@@ -1686,6 +1690,8 @@ static void wavevm_handle_mmio(CPUState *cpu) {
 static void wavevm_tcg_run_local_wake(CPUState *cpu, X86CPU *x86cpu, int ci)
 {
     CPUState *cs = CPU(x86cpu);
+    APICCommonState *apic = x86cpu->apic_state ?
+        APIC_COMMON(x86cpu->apic_state) : NULL;
     static int local_wake_dbg[MAX_VCPUS] = {0};
     int tr = -1;
     int wake_iters = 0;
@@ -1701,6 +1707,29 @@ static void wavevm_tcg_run_local_wake(CPUState *cpu, X86CPU *x86cpu, int ci)
     }
 
     qemu_mutex_lock_iothread();
+    {
+        int highest_irr = apic_get_highest_priority_irr(x86cpu->apic_state);
+        int ppr = apic ? apic_get_ppr(apic) : 0;
+        int pic_output = isa_pic ? pic_get_output(isa_pic) : 0;
+        bool apic_pending = apic &&
+            (apic->spurious_vec & APIC_SV_ENABLE) && highest_irr >= 0 &&
+            (!ppr || (highest_irr & 0xf0) > (ppr & 0xf0));
+
+        if (local_wake_dbg[ci] < 20) {
+            CPUX86State *denv = &x86cpu->env;
+
+            fprintf(stderr,
+                    "[WVM-TCG-WAKE-STATE] cpu=%d halted=%d intreq=0x%x "
+                    "has_work=%d irr=%d ppr=0x%x apic_pending=%d "
+                    "pic_output=%d eflags=0x%x\n",
+                    cpu->cpu_index, cpu->halted,
+                    (unsigned)cs->interrupt_request, cpu_has_work(cpu),
+                    highest_irr, ppr, apic_pending, pic_output,
+                    (unsigned)cpu_compute_eflags(denv));
+        }
+
+    }
+    /* cpu_exec owns the halted transition and interrupt delivery. */
     /*
      * This is a master-side TCG entry for a LAPIC/PIC wakeup.  Follow the
      * native TCG event boundaries: an EXCP_INTERRUPT means another vCPU
@@ -1714,15 +1743,19 @@ static void wavevm_tcg_run_local_wake(CPUState *cpu, X86CPU *x86cpu, int ci)
         cpu->exception_index = -1;
         wavevm_tcg_clear_stale_exit(cpu);
         qemu_mutex_unlock_iothread();
+        wavevm_tcg_local_slice_enter();
         cpu_exec_start(cpu);
         tr = cpu_exec(cpu);
         cpu_exec_end(cpu);
+        wavevm_tcg_local_slice_leave();
         qemu_mutex_lock_iothread();
         wake_iters++;
 
         if (tr == EXCP_ATOMIC) {
             qemu_mutex_unlock_iothread();
+            wavevm_tcg_atomic_enter(cpu);
             cpu_exec_step_atomic(cpu);
+            wavevm_tcg_atomic_leave(cpu);
             qemu_mutex_lock_iothread();
             continue;
         }
@@ -1732,6 +1765,13 @@ static void wavevm_tcg_run_local_wake(CPUState *cpu, X86CPU *x86cpu, int ci)
             continue;
         }
         if (tr == EXCP_HLT || tr == EXCP_HALTED || cpu->halted) {
+            if (x86cpu->apic_state) {
+                apic_poll_irq(x86cpu->apic_state);
+            }
+            if (cpu_has_work(cpu)) {
+                cpu->exception_index = -1;
+                continue;
+            }
             cpu->halted = 1;
             cpu->exception_index = -1;
             break;
@@ -1756,6 +1796,45 @@ static void wavevm_tcg_run_local_wake(CPUState *cpu, X86CPU *x86cpu, int ci)
                 cpu->halted, (unsigned)cs->interrupt_request);
     }
     qemu_mutex_unlock_iothread();
+}
+
+static void wavevm_tcg_pause_apic_timer(CPUState *cpu)
+{
+    APICCommonState *apic = X86_CPU(cpu)->apic_state
+        ? APIC_COMMON(X86_CPU(cpu)->apic_state) : NULL;
+
+    if (apic && apic->timer) {
+        static unsigned int log_count;
+        timer_del(apic->timer);
+        if (log_count++ < 32) {
+            fprintf(stderr,
+                    "[WVM-TCG-APIC-OWNER] action=pause cpu=%d "
+                    "expiry=%lld\n",
+                    cpu->cpu_index, (long long)apic->timer_expiry);
+        }
+    }
+}
+
+static void wavevm_tcg_resume_apic_timer(CPUState *cpu)
+{
+    APICCommonState *apic = X86_CPU(cpu)->apic_state
+        ? APIC_COMMON(X86_CPU(cpu)->apic_state) : NULL;
+
+    if (apic) {
+        APICCommonClass *klass = APIC_COMMON_GET_CLASS(apic);
+        if (klass->post_load) {
+            klass->post_load(apic);
+        }
+        {
+            static unsigned int log_count;
+            if (log_count++ < 32) {
+                fprintf(stderr,
+                        "[WVM-TCG-APIC-OWNER] action=resume cpu=%d "
+                        "expiry=%lld\n",
+                        cpu->cpu_index, (long long)apic->timer_expiry);
+            }
+        }
+    }
 }
 
 static void wavevm_tcg_deliver_init_sipi(CPUState *cpu, X86CPU *x86cpu)
@@ -1840,23 +1919,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
                         *last_probe = now_us;
                     }
 
-                    /* HALT-WAKE: Pipeline #40 approach with critical fix.
-                     *
-                     * Use full kvm_cpu_exec() with a bounded timer.
-                     * CRITICAL: Do NOT set mp_state to HALTED here!
-                     * If we force HALTED, KVM puts the AP directly into
-                     * vcpu_block. The LAPIC timer was never armed on the
-                     * master's KVM (it was armed on the slave during
-                     * OS-SIPI), so vcpu_block has no pending interrupt
-                     * to wake on. The AP sleeps until SIGUSR1 with
-                     * 0 timer ticks -> RCU stall.
-                     *
-                     * Instead, set RUNNABLE and let the AP execute its
-                     * idle loop naturally: HLT instruction -> KVM handles
-                     * HLT internally -> vcpu_block -> LAPIC timer fires
-                     * -> timer handler re-arms -> HLT -> ... This keeps
-                     * timer ticks flowing continuously.
-                     */
+                    /* Let KVM process actual pending LAPIC events. A host
+                     * probe or timer kick must not wake a halted guest. */
 
                     static int halt_wake_dbg[MAX_VCPUS] = {0};
                     int ci = cpu->cpu_index;
@@ -1867,17 +1931,9 @@ static void wavevm_remote_exec(CPUState *cpu) {
                                 ci, mp.mp_state);
                     }
 
-                    bool had_wake_source = hlt_pending_irq ||
-                                            (cpu->interrupt_request != 0 ||
-                                             cpu_has_work(cpu));
-
-                    /* Set RUNNABLE so AP executes idle loop naturally.
-                     * The idle loop will HLT, and KVM handles that
-                     * internally when kvm_halt_in_kernel() is true. */
-                    cpu->halted = 0;
                     {
                         X86CPU *x86cpu = X86_CPU(cpu);
-                        x86cpu->env.mp_state = KVM_MP_STATE_RUNNABLE;
+                        x86cpu->env.mp_state = mp.mp_state;
                     }
 
                     /* s23g6: bound local HALT-WAKE tightly (was 5s wall).
@@ -1915,7 +1971,11 @@ static void wavevm_remote_exec(CPUState *cpu) {
                         timer_delete(hw_timer);
                     }
 
-                    ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp);
+                    if (ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp) < 0) {
+                        error_report("WaveVM cannot read MP state after HALT probe: %s",
+                                     strerror(errno));
+                        exit(EXIT_FAILURE);
+                    }
                     if (halt_wake_dbg[ci] < 20) {
                         fprintf(stderr, "[WVM-HALT-WAKE] cpu=%d ret=%d "
                                 "mp=%d halted=%d irq=0x%x has_work=%d\n",
@@ -1924,9 +1984,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
                         halt_wake_dbg[ci]++;
                     }
 
-                    if (mp.mp_state == KVM_MP_STATE_RUNNABLE ||
-                        had_wake_source ||
-                        (!cpu->halted && mp.mp_state != KVM_MP_STATE_HALTED)) {
+                    if (mp.mp_state == KVM_MP_STATE_RUNNABLE) {
                         /* AP was woken by IPI and is doing real work.
                          * Sync state and dispatch to slave. */
                         if (ci < MAX_VCPUS) {
@@ -2155,9 +2213,11 @@ static void wavevm_remote_exec(CPUState *cpu) {
             while (tramp_iters < max_tramp_iters) {
             qemu_mutex_unlock_iothread();
             wavevm_tcg_clear_stale_exit(cpu);
+            wavevm_tcg_local_slice_enter();
             cpu_exec_start(cpu);
             int tr = cpu_exec(cpu);
             cpu_exec_end(cpu);
+            wavevm_tcg_local_slice_leave();
                 qemu_mutex_lock_iothread();
 
                 /* EXCP_INTERRUPT (0x10000): another vCPU called cpu_exit()
@@ -2174,7 +2234,9 @@ static void wavevm_remote_exec(CPUState *cpu) {
                  * Don't count this as a real iteration. */
                 if (tr == EXCP_ATOMIC) {
                     qemu_mutex_unlock_iothread();
+                    wavevm_tcg_atomic_enter(cpu);
                     cpu_exec_step_atomic(cpu);
+                    wavevm_tcg_atomic_leave(cpu);
                     qemu_mutex_lock_iothread();
                     continue;
                 }
@@ -2249,9 +2311,11 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 while (tramp_iters < max_tramp_iters) {
                     qemu_mutex_unlock_iothread();
                     wavevm_tcg_clear_stale_exit(cpu);
+                    wavevm_tcg_local_slice_enter();
                     cpu_exec_start(cpu);
                     int tr = cpu_exec(cpu);
                     cpu_exec_end(cpu);
+                    wavevm_tcg_local_slice_leave();
                     qemu_mutex_lock_iothread();
 
                     if (tr == EXCP_INTERRUPT) {
@@ -2260,7 +2324,9 @@ static void wavevm_remote_exec(CPUState *cpu) {
 
                     if (tr == EXCP_ATOMIC) {
                         qemu_mutex_unlock_iothread();
+                        wavevm_tcg_atomic_enter(cpu);
                         cpu_exec_step_atomic(cpu);
+                        wavevm_tcg_atomic_leave(cpu);
                         qemu_mutex_lock_iothread();
                         continue;
                     }
@@ -2338,7 +2404,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
             X86CPU *x86cpu = X86_CPU(cpu);
             CPUState *cs = CPU(x86cpu);
 
-            if (cs->interrupt_request & CPU_INTERRUPT_POLL) {
+            if (cs->interrupt_request &
+                (CPU_INTERRUPT_HARD | CPU_INTERRUPT_POLL)) {
                 qemu_mutex_lock_iothread();
                 apic_poll_irq(x86cpu->apic_state);
                 cs->interrupt_request &= ~CPU_INTERRUPT_POLL;
@@ -2382,7 +2449,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
             X86CPU *x86cpu = X86_CPU(cpu);
             CPUState *cs = CPU(x86cpu);
 
-            if (cs->interrupt_request & CPU_INTERRUPT_POLL) {
+            if (cs->interrupt_request &
+                (CPU_INTERRUPT_HARD | CPU_INTERRUPT_POLL)) {
                 qemu_mutex_lock_iothread();
                 apic_poll_irq(x86cpu->apic_state);
                 cs->interrupt_request &= ~CPU_INTERRUPT_POLL;
@@ -2448,190 +2516,11 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 cpu->cpu_index, kvm_enabled(), vcpu_sock, g_wvm_local_split);
     }
     
-    // 如果没有 socket (说明是 Kernel Mode), 走 IOCTL 路径
-    if (vcpu_sock < 0) { 
-        WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
-        if (s->mode != WVM_MODE_KERNEL) {
-            g_usleep(1000); // 异常状态，非 Kernel 且无 Socket
-            return;
-        }
-
-        // 1. 准备请求结构体
-        struct wvm_ipc_cpu_run_req req;
-        struct wvm_ipc_cpu_run_ack ack = {0};
-        wvm_tcg_context_t sent_tcg;
-        uint32_t forwarded_irq = 0;
-        memset(&req, 0, sizeof(req));
-        memset(&sent_tcg, 0, sizeof(sent_tcg));
-        
-        req.slave_id = WVM_NODE_AUTO_ROUTE;
-        req.vcpu_index = cpu->cpu_index;
-
-        // 2. 序列化 CPU 状态
-        if (kvm_enabled()) {
-            struct kvm_regs kregs;
-            struct kvm_sregs ksregs;
-            cpu_synchronize_state(cpu);
-            ioctl(cpu->kvm_fd, KVM_GET_REGS, &kregs);
-            ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
-
-            req.mode_tcg = 0;
-            req.ctx.kvm.rax = kregs.rax; req.ctx.kvm.rbx = kregs.rbx; req.ctx.kvm.rcx = kregs.rcx;
-            req.ctx.kvm.rdx = kregs.rdx; req.ctx.kvm.rsi = kregs.rsi; req.ctx.kvm.rdi = kregs.rdi;
-            req.ctx.kvm.rsp = kregs.rsp; req.ctx.kvm.rbp = kregs.rbp;
-            req.ctx.kvm.r8  = kregs.r8;  req.ctx.kvm.r9  = kregs.r9;  req.ctx.kvm.r10 = kregs.r10;
-            req.ctx.kvm.r11 = kregs.r11; req.ctx.kvm.r12 = kregs.r12; req.ctx.kvm.r13 = kregs.r13;
-            req.ctx.kvm.r14 = kregs.r14; req.ctx.kvm.r15 = kregs.r15;
-            req.ctx.kvm.rip = kregs.rip; req.ctx.kvm.rflags = kregs.rflags;
-            memcpy(req.ctx.kvm.sregs_data, &ksregs, sizeof(ksregs));
-        } else {
-            req.mode_tcg = 1;
-            wvm_tcg_get_state(cpu, &req.ctx.tcg);
-            req.ctx.tcg.slice_budget_us = wavevm_tcg_slice_budget_us(cpu);
-            sent_tcg = req.ctx.tcg;
-            forwarded_irq = sent_tcg.interrupt_request &
-                            WVM_TCG_REMOTE_IRQ_FORWARD_MASK;
-        }
-
-        // 3. 陷入内核 (Trap into Kernel)
-        // 这一步会阻塞，直到远程执行完毕并返回结果
-        {
-            static int dbg_kp_cnt = 0;
-            if (dbg_kp_cnt < 20) {
-                fprintf(stderr, "[WVM-DBG] kernel path cpu=%d target=%u mode_tcg=%u "
-                        "rip=%#llx\n",
-                        cpu->cpu_index, req.slave_id, req.mode_tcg,
-                        (unsigned long long)req.ctx.kvm.rip);
-                dbg_kp_cnt++;
-            }
-        }
-        struct wvm_ioctl_remote_run remote_run;
-        memset(&remote_run, 0, sizeof(remote_run));
-        remote_run.req = req;
-        int ret = ioctl(s->dev_fd, IOCTL_WVM_REMOTE_RUN, &remote_run);
-
-        if (ret < 0) {
-            static int dbg_fail_cnt = 0;
-            if (dbg_fail_cnt < 10) {
-                fprintf(stderr, "[WVM-DBG] IOCTL_WVM_REMOTE_RUN failed cpu=%d: %s\n",
-                        cpu->cpu_index, strerror(errno));
-                dbg_fail_cnt++;
-            }
-            return;
-        }
-
-        // 4. Read the explicit Mode A ioctl response container.
-        ack = remote_run.ack;
-        /* B7: validate negative ACK before remote_rpc_ok. */
-        if (ack.status < 0) {
-            static int ioctl_neg_dbg;
-            if (ioctl_neg_dbg++ < 32) {
-                fprintf(stderr,
-                        "[WVM-DBG] IOCTL_WVM_REMOTE_RUN neg ack cpu=%d "
-                        "status=%d\n",
-                        cpu->cpu_index, ack.status);
-            }
-            return;
-        }
-        if (cpu->cpu_index < MAX_VCPUS) {
-            g_wavevm_remote_rpc_ok[cpu->cpu_index] = true;
-        }
-
-        if (ack.mode_tcg) {
-            wavevm_tcg_import_remote_ack(cpu, &ack.ctx.tcg, &sent_tcg,
-                                         forwarded_irq);
-        } else {
-            struct kvm_regs kregs;
-            struct kvm_sregs ksregs;
-            wvm_kvm_context_t *kctx = &ack.ctx.kvm;
-
-            kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx; 
-            kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
-            kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
-            kregs.r8 = kctx->r8;   kregs.r9 = kctx->r9;   kregs.r10 = kctx->r10; 
-            kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
-            kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
-            kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
-            
-            ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
-            wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
-            ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
-            ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
-            
-            struct kvm_run *run = cpu->kvm_run;
-            run->exit_reason = kctx->exit_reason;
-
-            if (kctx->exit_reason == KVM_EXIT_IO) {
-                uint16_t port = kctx->io.port;
-                int is_write = (kctx->io.direction == KVM_EXIT_IO_OUT);
-                uint8_t io_buf[64];
-                size_t io_bytes = (size_t)kctx->io.size * kctx->io.count;
-                if (io_bytes > sizeof(kctx->io.data)) io_bytes = sizeof(kctx->io.data);
-                if (io_bytes > sizeof(io_buf)) io_bytes = sizeof(io_buf);
-                if (is_write) {
-                    memcpy(io_buf, kctx->io.data, io_bytes);
-                }
-                run->io.direction = kctx->io.direction;
-                run->io.size      = kctx->io.size;
-                run->io.port      = kctx->io.port;
-                run->io.count     = kctx->io.count;
-                if (kctx->io.size != 1 && kctx->io.size != 2 &&
-                    kctx->io.size != 4 && kctx->io.size != 8) { return; }
-                if (kctx->io.count == 0 || kctx->io.count > 8) { return; }
-                qemu_mutex_lock_iothread();
-                for (uint32_t i = 0; i < kctx->io.count; i++) {
-                    address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
-                                     io_buf + i * kctx->io.size, kctx->io.size, is_write);
-                }
-                qemu_mutex_unlock_iothread();
-                if (!is_write) {
-                    memcpy(kctx->io.data, io_buf, io_bytes);
-                    if (run->io.data_offset >= sizeof(struct kvm_run) &&
-                        run->io.data_offset + io_bytes <= 12288) {
-                        memcpy((uint8_t *)run + run->io.data_offset, io_buf, io_bytes);
-                    }
-                }
-            } 
-            else if (kctx->exit_reason == KVM_EXIT_MMIO) {
-                uint8_t mmio_buf[8];
-                hwaddr addr = kctx->mmio.phys_addr;
-                int mmio_wr = kctx->mmio.is_write;
-                unsigned len = kctx->mmio.len;
-                if (len != 1 && len != 2 && len != 4 && len != 8) { return; }
-                if ((addr >= 0xfee00000ULL && addr < 0xfee01000ULL) &&
-                    wavevm_kvm_apply_remote_lapic_mmio(cpu, kctx, run)) {
-                    /* FE LAPIC programmed via KVM_SET_LAPIC. */
-                } else {
-                    if (mmio_wr) {
-                        memcpy(mmio_buf, kctx->mmio.data, len);
-                    }
-                    qemu_mutex_lock_iothread();
-                    address_space_rw(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
-                                     mmio_buf, len, mmio_wr);
-                    qemu_mutex_unlock_iothread();
-                    if (!mmio_wr) {
-                        memcpy(kctx->mmio.data, mmio_buf, len);
-                        memcpy(run->mmio.data, mmio_buf, len);
-                    }
-                    run->mmio.phys_addr = addr;
-                    run->mmio.len = len;
-                    run->mmio.is_write = mmio_wr;
-                }
-            }
-            else if (kctx->exit_reason == KVM_EXIT_MMIO) {
-                run->mmio.phys_addr = kctx->mmio.phys_addr;
-                run->mmio.len       = kctx->mmio.len;
-                run->mmio.is_write  = kctx->mmio.is_write;
-                memcpy(run->mmio.data, kctx->mmio.data, 8);
-                if (!wavevm_valid_mmio_exit(run)) {
-                    return;
-                }
-                qemu_mutex_lock_iothread();
-                wavevm_handle_mmio(cpu);
-                qemu_mutex_unlock_iothread();
-            }
-        }
-        return; 
+    /* Mode A and B share the admitted runtime CPU handoff authority. */
+    if (vcpu_sock < 0) {
+        error_report("WaveVM vCPU %d has no admitted runtime channel",
+                     cpu->cpu_index);
+        exit(EXIT_FAILURE);
     }
 
     // 准备发送缓冲区
@@ -2643,6 +2532,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
     struct wvm_ipc_cpu_run_ack ack;
     WVMHandoffDirtyJournal *dirty_journal = NULL;
     bool tcg_slice_active = false;
+    bool tcg_apic_timer_paused = false;
     memset(&req, 0, sizeof(req));
     memset(&ack, 0, sizeof(ack));
 
@@ -2654,8 +2544,12 @@ static void wavevm_remote_exec(CPUState *cpu) {
         struct kvm_regs kregs;
         struct kvm_sregs ksregs;
         cpu_synchronize_state(cpu);
-        ioctl(cpu->kvm_fd, KVM_GET_REGS, &kregs);
-        ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
+        if (ioctl(cpu->kvm_fd, KVM_GET_REGS, &kregs) < 0 ||
+            ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs) < 0) {
+            error_report("WaveVM vCPU %d cannot capture KVM registers: %s",
+                         cpu->cpu_index, strerror(errno));
+            exit(EXIT_FAILURE);
+        }
 
         /* [DIAG] Dump first 16 bytes at trampoline GPA + full regs for AP */
         if (cpu->cpu_index > 0) {
@@ -2699,48 +2593,12 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
         memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
         {
-            struct kvm_lapic_state klapic;
-            if (ioctl(cpu->kvm_fd, KVM_GET_LAPIC, &klapic) >= 0) {
-                memcpy(kctx->lapic_data, &klapic, sizeof(klapic));
-                kctx->lapic_valid = 1;
-            } else {
-                kctx->lapic_valid = 0;
-            }
-        }
-        {
-            struct kvm_vcpu_events kev;
-            if (ioctl(cpu->kvm_fd, KVM_GET_VCPU_EVENTS, &kev) >= 0) {
-                memcpy(kctx->vcpu_events_data, &kev, sizeof(kev));
-                kctx->vcpu_events_valid = 1;
-            } else {
-                kctx->vcpu_events_valid = 0;
-            }
-        }
-        {
-            struct kvm_fpu fpu;
-            if (ioctl(cpu->kvm_fd, KVM_GET_FPU, &fpu) >= 0) {
-                memcpy(kctx->fpu_data, &fpu, sizeof(fpu));
-                kctx->fpu_valid = 1;
-            } else {
-                kctx->fpu_valid = 0;
-            }
-        }
-        {
-            struct kvm_xcrs xcrs;
-            if (ioctl(cpu->kvm_fd, KVM_GET_XCRS, &xcrs) >= 0) {
-                memcpy(kctx->xcrs_data, &xcrs, sizeof(xcrs));
-                kctx->xcrs_valid = 1;
-            } else {
-                kctx->xcrs_valid = 0;
-            }
-        }
-        {
-            struct kvm_mp_state mp;
-            if (ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp) >= 0) {
-                kctx->mp_state = mp.mp_state;
-                kctx->mp_state_valid = 1;
-            } else {
-                kctx->mp_state_valid = 0;
+            int state_result = wvm_kvm_extended_state_capture(cpu->kvm_fd, kctx);
+
+            if (state_result != 0) {
+                error_report("WaveVM vCPU %d cannot capture KVM extended state: %s",
+                             cpu->cpu_index, strerror(-state_result));
+                exit(EXIT_FAILURE);
             }
         }
 
@@ -2764,7 +2622,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
             msr_data.entries[6].index = 0xC0000082;  /* LSTAR */
             msr_data.entries[7].index = 0xC0000083;  /* CSTAR */
             msr_data.entries[8].index = 0xC0000084;  /* SFMASK */
-            if (ioctl(cpu->kvm_fd, KVM_GET_MSRS, &msr_data) >= 0) {
+            if (ioctl(cpu->kvm_fd, KVM_GET_MSRS, &msr_data) == 9) {
                 kctx->tsc_value = msr_data.entries[0].data;
                 kctx->tsc_deadline = msr_data.entries[1].data;
                 kctx->kernel_gs_base = msr_data.entries[2].data;
@@ -2777,8 +2635,29 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 kctx->sfmask = msr_data.entries[8].data;
                 kctx->msr_ext_valid = 0x7; /* gs|apic|syscall */
             } else {
-                kctx->tsc_valid = 0;
-                kctx->msr_ext_valid = 0;
+                error_report("WaveVM vCPU %d cannot capture all required KVM MSRs",
+                             cpu->cpu_index);
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        {
+            struct kvm_msr_entry entries[WVM_KVM_MAX_PROFILE_MSRS];
+            int count = kvm_get_msr_snapshot(X86_CPU(cpu), entries,
+                                             G_N_ELEMENTS(entries));
+
+            if (count < 0) {
+                error_report("WaveVM vCPU %d cannot capture CPU-model MSRs: %s",
+                             cpu->cpu_index, strerror(-count));
+                exit(EXIT_FAILURE);
+            }
+            for (int i = 0; i < count; ++i) {
+                if (!wvm_kvm_msr_has_named_field(entries[i].index)) {
+                    wvm_kvm_msr_entry_t *entry =
+                        &kctx->profile_msrs[kctx->profile_msr_count++];
+                    entry->index = entries[i].index;
+                    entry->value = entries[i].data;
+                }
             }
         }
 
@@ -2851,9 +2730,6 @@ static void wavevm_remote_exec(CPUState *cpu) {
         }
     } else {
         req.mode_tcg = 1;
-        wvm_tcg_get_state(cpu, &req.ctx.tcg);
-        /* STW pairing: shorter helper quantum under spin/prefer (see protocol). */
-        req.ctx.tcg.slice_budget_us = wavevm_tcg_slice_budget_us(cpu);
     }
 
     {
@@ -2880,17 +2756,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
         static int handoff_dbg[MAX_VCPUS] = {0};
         wavevm_tcg_remote_slice_enter(cpu);
         tcg_slice_active = true;
-        if (wavevm_user_mem_tcg_shm_coherent()) {
-            if (handoff_dbg[ci] < 20) {
-                fprintf(stderr,
-                        "[WVM-TCG-HANDOFF] cpu=%d SHM-coherent skip flush/fence "
-                        "fd=%d slice_budget_us=%u spin=%d\n",
-                        cpu->cpu_index, vcpu_sock,
-                        (unsigned)req.ctx.tcg.slice_budget_us,
-                        g_wavevm_tcg_spin_count[
-                            cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0]);
-            }
-        } else {
+        /* A local SHM attach says nothing about a remote executor's backing.
+         * Both mappings must observe canonical directory commit/fence. */
         if (handoff_dbg[ci] < 20) {
             fprintf(stderr, "[WVM-TCG-HANDOFF] cpu=%d flush begin fd=%d\n",
                     cpu->cpu_index, vcpu_sock);
@@ -2930,7 +2797,15 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 return;
             }
         }
-        } /* !shm_coherent */
+        /* Transfer ownership of this vCPU's LAPIC timer with its CPU state.
+         * Running the same timer in both QEMU processes can coalesce distinct
+         * same-vector arrivals into one IRR bit and lose a guest interrupt. */
+        qemu_mutex_lock_iothread();
+        wvm_tcg_get_state(cpu, &req.ctx.tcg);
+        wavevm_tcg_pause_apic_timer(cpu);
+        tcg_apic_timer_paused = true;
+        qemu_mutex_unlock_iothread();
+        req.ctx.tcg.slice_budget_us = wavevm_tcg_slice_budget_us(cpu);
         {
             static int cr3_dbg[MAX_VCPUS] = {0};
             if (cr3_dbg[ci] < 20) {
@@ -2962,6 +2837,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
             fprintf(stderr, "[WVM-TCG-IPC] cpu=%d write header failed fd=%d errno=%d\n",
                     cpu->cpu_index, vcpu_sock, errno);
             wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
+            qemu_mutex_lock_iothread();
+            wavevm_tcg_resume_apic_timer(cpu);
+            tcg_apic_timer_paused = false;
+            qemu_mutex_unlock_iothread();
             if (tcg_slice_active) {
                 wavevm_tcg_remote_slice_leave(cpu);
             }
@@ -2973,6 +2852,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
             fprintf(stderr, "[WVM-TCG-IPC] cpu=%d write payload failed fd=%d errno=%d\n",
                     cpu->cpu_index, vcpu_sock, errno);
             wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
+            qemu_mutex_lock_iothread();
+            wavevm_tcg_resume_apic_timer(cpu);
+            tcg_apic_timer_paused = false;
+            qemu_mutex_unlock_iothread();
             if (tcg_slice_active) {
                 wavevm_tcg_remote_slice_leave(cpu);
             }
@@ -2991,6 +2874,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
             fprintf(stderr, "[WVM-TCG-IPC] cpu=%d read ack failed fd=%d errno=%d\n",
                     cpu->cpu_index, vcpu_sock, errno);
             wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
+            qemu_mutex_lock_iothread();
+            wavevm_tcg_resume_apic_timer(cpu);
+            tcg_apic_timer_paused = false;
+            qemu_mutex_unlock_iothread();
             if (tcg_slice_active) {
                 wavevm_tcg_remote_slice_leave(cpu);
             }
@@ -2999,54 +2886,31 @@ static void wavevm_remote_exec(CPUState *cpu) {
     }
     /* B7: do not mark remote_rpc_ok until negative ACK state is rejected. */
     if (ack.status < 0) {
-        int sync_ret = 0;
-        if (ack.error_gpa != 0) {
-            sync_ret = wavevm_user_mem_sync_page(ack.error_gpa);
-        }
         if (req.mode_tcg) {
             wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
-            fprintf(stderr,
-                    "[WVM-TCG-IPC] cpu=%d ack status=%d mode=%u error_gpa=%#llx sync_ret=%d\n",
-                    cpu->cpu_index, ack.status, ack.mode_tcg,
-                    (unsigned long long)ack.error_gpa, sync_ret);
             if (tcg_slice_active) {
                 wavevm_tcg_remote_slice_leave(cpu);
             }
-            return;
         }
-        /*
-         * s23g2: KVM MEMORY_FAILURE. vcpu_service maps handoff MEMORY_FAILURE
-         * to status=-EFAULT and historically returns a *zeroed* ACK (no CPU
-         * ctx). Importing that zeros the AP (FAIL_ENTRY storm). Only fall
-         * through to import when the ACK carries a live architectural ctx
-         * (cr0!=0). Otherwise sync error_gpa and retry next iteration.
-         */
-        {
-            const struct kvm_sregs *ks =
-                (const struct kvm_sregs *)ack.ctx.kvm.sregs_data;
-            int ctx_live = (ks->cr0 != 0) || (ack.ctx.kvm.rip != 0);
-            static int kvm_mf_dbg[MAX_VCPUS];
-            int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
-            if (kvm_mf_dbg[ci] < 40) {
-                fprintf(stderr,
-                        "[WVM-KVM-IPC] cpu=%d MEMORY_FAILURE status=%d "
-                        "error_gpa=%#llx sync_ret=%d exit=%u rip=%#llx "
-                        "cr0=%#llx ctx_live=%d\n",
-                        cpu->cpu_index, ack.status,
-                        (unsigned long long)ack.error_gpa, sync_ret,
-                        ack.ctx.kvm.exit_reason,
-                        (unsigned long long)ack.ctx.kvm.rip,
-                        (unsigned long long)ks->cr0, ctx_live);
-                kvm_mf_dbg[ci]++;
-            }
-            if (!ctx_live) {
-                return;
-            }
-        }
-        /* fall through to deserialize + exit handling */
+        /* A terminal failed interval cannot be re-executed from old state. */
+        error_report("WaveVM vCPU %d terminal handoff failure status=%d gpa=%#llx",
+                     cpu->cpu_index, ack.status,
+                     (unsigned long long)ack.error_gpa);
+        exit(EXIT_FAILURE);
     } else if (cpu->cpu_index < MAX_VCPUS) {
         /* B7: positive ACK only — negative state must not count as remote OK. */
         g_wavevm_remote_rpc_ok[cpu->cpu_index] = true;
+    }
+    if (ack.mode_tcg != req.mode_tcg) {
+        if (tcg_apic_timer_paused) {
+            qemu_mutex_lock_iothread();
+            wavevm_tcg_resume_apic_timer(cpu);
+            tcg_apic_timer_paused = false;
+            qemu_mutex_unlock_iothread();
+        }
+        error_report("WaveVM vCPU %d backend changed during handoff",
+                     cpu->cpu_index);
+        exit(EXIT_FAILURE);
     }
     if (req.mode_tcg) {
         wavevm_user_mem_finish_handoff_dirty(dirty_journal, 1);
@@ -3070,8 +2934,14 @@ static void wavevm_remote_exec(CPUState *cpu) {
                         (unsigned long long)ack.ctx.tcg.regs[R_ESP]);
             }
         }
+        qemu_mutex_lock_iothread();
         wavevm_tcg_import_remote_ack(cpu, &ack.ctx.tcg, &req.ctx.tcg,
                                      forwarded_irq);
+        if (tcg_apic_timer_paused) {
+            wavevm_tcg_resume_apic_timer(cpu);
+            tcg_apic_timer_paused = false;
+        }
+        qemu_mutex_unlock_iothread();
         wavevm_tcg_log_stack(cpu, "master-post-import");
         if (tcg_slice_active) {
             wavevm_tcg_remote_slice_leave(cpu);
@@ -3081,6 +2951,19 @@ static void wavevm_remote_exec(CPUState *cpu) {
                                           ack.ctx.tcg.exit_reason,
                                           ack.ctx.tcg.halted,
                                           ack.ctx.tcg.mp_state);
+        }
+        if (ack.ctx.tcg.exit_reason == WVM_TCG_EXCP_ATOMIC) {
+            static unsigned int atomic_step_count;
+            if (atomic_step_count++ < 32) {
+                fprintf(stderr,
+                        "[WVM-TCG-ATOMIC] event=frontend-step cpu=%d "
+                        "rip=%#llx\n",
+                        cpu->cpu_index,
+                        (unsigned long long)ack.ctx.tcg.eip);
+            }
+            wavevm_tcg_atomic_enter(cpu);
+            cpu_exec_step_atomic(cpu);
+            wavevm_tcg_atomic_leave(cpu);
         }
     } else {
         if (tcg_slice_active) {
@@ -3150,6 +3033,11 @@ static void wavevm_remote_exec(CPUState *cpu) {
             }
         }
 
+        if (!wvm_kvm_profile_msrs_match(&req.ctx.kvm, kctx)) {
+            error_report("WaveVM vCPU %d returned an incomplete CPU-model MSR set",
+                         cpu->cpu_index);
+            exit(EXIT_FAILURE);
+        }
         kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
         kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
         kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
@@ -3157,34 +3045,19 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
         kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
         kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
-        if (kctx->lapic_valid) {
-            struct kvm_lapic_state klapic;
-            memcpy(&klapic, kctx->lapic_data, sizeof(klapic));
-            ioctl(cpu->kvm_fd, KVM_SET_LAPIC, &klapic);
+        memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+        int cpuid_result = wvm_kvm_cpuid_import(cpu->kvm_fd, kctx);
+        if (cpuid_result != 0) {
+            error_report("WaveVM vCPU %d cannot restore guest CPUID: %s",
+                         cpu->cpu_index, strerror(-cpuid_result));
+            exit(EXIT_FAILURE);
         }
-        if (kctx->vcpu_events_valid) {
-            struct kvm_vcpu_events kev;
-            memcpy(&kev, kctx->vcpu_events_data, sizeof(kev));
-            ioctl(cpu->kvm_fd, KVM_SET_VCPU_EVENTS, &kev);
+        if (ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs) < 0 ||
+            ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs) < 0) {
+            error_report("WaveVM vCPU %d cannot restore KVM registers: %s",
+                         cpu->cpu_index, strerror(errno));
+            exit(EXIT_FAILURE);
         }
-        if (kctx->fpu_valid) {
-            struct kvm_fpu fpu;
-            memcpy(&fpu, kctx->fpu_data, sizeof(fpu));
-            ioctl(cpu->kvm_fd, KVM_SET_FPU, &fpu);
-        }
-        if (kctx->xcrs_valid) {
-            struct kvm_xcrs xcrs;
-            memcpy(&xcrs, kctx->xcrs_data, sizeof(xcrs));
-            ioctl(cpu->kvm_fd, KVM_SET_XCRS, &xcrs);
-        }
-        if (kctx->mp_state_valid) {
-            struct kvm_mp_state mp = { .mp_state = kctx->mp_state };
-            ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &mp);
-        }
-        ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
-        wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
-        ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
-        ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
 
         /* [V30 TSC 同步] 将 slave 端执行后的 TSC 值写回 master 本地 vCPU。
          * 没有这一步，master 本地 KVM 的 TSC 停留在 dispatch 前的旧值，
@@ -3229,7 +3102,31 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 n++;
             }
             msr_data.info.nmsrs = n;
-            ioctl(cpu->kvm_fd, KVM_SET_MSRS, &msr_data);
+            if (ioctl(cpu->kvm_fd, KVM_SET_MSRS, &msr_data) != n) {
+                error_report("WaveVM vCPU %d cannot restore all required KVM MSRs",
+                             cpu->cpu_index);
+                exit(EXIT_FAILURE);
+            }
+        }
+        {
+            int state_result = wvm_kvm_extended_state_import(cpu->kvm_fd, kctx);
+
+            if (state_result != 0) {
+                error_report("WaveVM vCPU %d cannot restore KVM extended state: %s",
+                             cpu->cpu_index, strerror(-state_result));
+                exit(EXIT_FAILURE);
+            }
+            X86_CPU(cpu)->env.mp_state = kctx->mp_state;
+            cpu->halted = kctx->mp_state != KVM_MP_STATE_RUNNABLE;
+            cpu->exception_index = cpu->halted ? EXCP_HLT : 0;
+        }
+        /* cpu_synchronize_state may consider the pre-handoff userspace copy
+         * current. Refresh it through QEMU's complete native KVM importer so
+         * a later device callback/local run cannot restore that old copy. */
+        if (kvm_arch_get_registers(cpu) < 0) {
+            error_report("WaveVM vCPU %d cannot refresh returned KVM state",
+                         cpu->cpu_index);
+            exit(EXIT_FAILURE);
         }
 
         // 5. Replay IO/MMIO
@@ -3336,101 +3233,18 @@ static void wavevm_remote_exec(CPUState *cpu) {
             }
         }
         else if (kctx->exit_reason == WVM_EXIT_PREEMPT) {
-            X86CPU *x86cpu = X86_CPU(cpu);
             int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
-            cpu->halted = 0;
-            cpu->exception_index = 0;
-            x86cpu->env.mp_state = KVM_MP_STATE_RUNNABLE;
-            {
-                struct kvm_mp_state run_mp = { .mp_state = KVM_MP_STATE_RUNNABLE };
-                ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &run_mp);
-            }
-            /* s23g: remote AP busy-preempt → one bounded FE local drain so
-             * in-kernel LAPIC ticks reach the guest (slave has no irqchip). */
-            if (cpu->cpu_index > 0) {
-                ap_kvm_preempt_drain[ci] = 1;
-            }
+
+            /* Host preemption does not change the guest's MP state. */
+            ap_kvm_preempt_drain[ci] = cpu->cpu_index > 0 && !cpu->halted;
         }
-        /* [FIX] HLT: halt the vCPU so QEMU waits for timer interrupt.
-         *
-         * But if the slave already returned a pending injected interrupt
-         * (for example, a No-IRQCHIP LAPIC timer synthesized into
-         * vcpu_events.interrupt), forcing HALTED here would immediately
-         * bury that wake source again. Keep the vCPU RUNNABLE in that case
-         * so the next local KVM entry can consume the interrupt. */
         else if (kctx->exit_reason == KVM_EXIT_HLT) {
             int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
-            bool keep_pending_irq = false;
-            bool lapic_timer_expired = false;
 
-            /*
-             * s23g4: interrupt.nr alone is NOT a pending inject (stale field).
-             * Only injected/nmi/exception.pending count. Separately: slave has
-             * no irqchip, so a remote HLT ACK with LAPIC timer cur==0 means the
-             * tick already fired on the bounced LAPIC image — FE must drain
-             * local kvm_cpu_exec so in-kernel irqchip can inject. Without that
-             * drain, keep_pending via stale nr kept AP RUNNABLE and re-remotely
-             * spun HLT forever (pass3: cur=0, zero WVM-KVM-DRAIN, login MISSING).
-             */
-            if (kctx->vcpu_events_valid) {
-                const struct kvm_vcpu_events *kev =
-                    (const struct kvm_vcpu_events *)kctx->vcpu_events_data;
-                keep_pending_irq = kev->interrupt.injected ||
-                                   kev->nmi.pending ||
-                                   kev->exception.pending ||
-                                   kev->exception.injected;
-            }
-            if (kctx->lapic_valid) {
-                const struct kvm_lapic_state *lapic =
-                    (const struct kvm_lapic_state *)kctx->lapic_data;
-                uint32_t lvt = wavevm_lapic_reg32(lapic, 0x320);
-                uint32_t init = wavevm_lapic_reg32(lapic, 0x380);
-                uint32_t cur = wavevm_lapic_reg32(lapic, 0x390);
-                uint32_t svr = wavevm_lapic_reg32(lapic, 0x0f0);
-                /* LVT mask=bit16; SVR software-enable=bit8; cur==0 + init!=0 => fired */
-                if ((svr & 0x100) && !(lvt & 0x10000) && init != 0 && cur == 0) {
-                    lapic_timer_expired = true;
-                }
-            }
-
-            if (keep_pending_irq || lapic_timer_expired) {
-                X86CPU *x86cpu = X86_CPU(cpu);
-                cpu->halted = 0;
-                cpu->exception_index = 0;
-                x86cpu->env.mp_state = KVM_MP_STATE_RUNNABLE;
-                if (ci < MAX_VCPUS) {
-                    ap_hlt_pending_irq[ci] = 1;
-                    /* Main loop consumes ap_kvm_preempt_drain for local exec. */
-                    if (cpu->cpu_index > 0) {
-                        ap_kvm_preempt_drain[ci] = 1;
-                    }
-                }
-                {
-                    struct kvm_mp_state run_mp = { .mp_state = KVM_MP_STATE_RUNNABLE };
-                    ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &run_mp);
-                }
-                {
-                    static int hlt_drain_dbg[MAX_VCPUS];
-                    if (ci < MAX_VCPUS && hlt_drain_dbg[ci] < 24) {
-                        fprintf(stderr,
-                                "[WVM-HLT-DRAIN-ARM] cpu=%d inj=%d lapic_exp=%d\n",
-                                cpu->cpu_index,
-                                keep_pending_irq ? 1 : 0,
-                                lapic_timer_expired ? 1 : 0);
-                        hlt_drain_dbg[ci]++;
-                    }
-                }
-            } else {
-                if (ci < MAX_VCPUS) {
-                    ap_hlt_pending_irq[ci] = 0;
-                }
-                cpu->halted = 1;
-                cpu->exception_index = EXCP_HLT;
-                {
-                    struct kvm_mp_state halt_mp = { .mp_state = KVM_MP_STATE_HALTED };
-                    ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &halt_mp);
-                }
-            }
+            /* The imported MP/events/LAPIC state is authoritative. Neither
+             * a stale interrupt vector nor a zero timer count proves wakeup. */
+            ap_hlt_pending_irq[ci] = !cpu->halted;
+            ap_kvm_preempt_drain[ci] = cpu->cpu_index > 0 && !cpu->halted;
         }
     }
 }
@@ -3484,6 +3298,11 @@ static void *wavevm_cpu_thread_fn(void *arg) {
 
     /* KVM bootstrap for this vCPU (if KVM is the underlying engine) */
     if (kvm_enabled()) {
+        /* The distributed FPU profile carries FXSAVE, not XSAVE components. */
+        if (X86_CPU(cpu)->env.features[FEAT_1_ECX] & CPUID_EXT_XSAVE) {
+            error_report("WaveVM KVM CPU model requires unsupported distributed XSAVE state");
+            exit(EXIT_FAILURE);
+        }
         kvm_init_vcpu(cpu, &error_fatal);
         kvm_init_cpu_signals(cpu);
         cpu_synchronize_state(cpu);
@@ -3539,7 +3358,8 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                     int ci = cpu->cpu_index;
                     timer_t drain_timer;
                     struct sigevent sev;
-                    int timer_ok;
+                    struct itimerspec drain_expiry = {0};
+                    gint64 drain_deadline;
                     static int drain_dbg;
                     int cpl3_need = 0;
                     int drain_rounds = 0;
@@ -3560,17 +3380,24 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                     sev.sigev_notify = SIGEV_THREAD_ID;
                     sev.sigev_signo = SIGUSR1;
                     sev._sigev_un._tid = syscall(SYS_gettid);
-                    timer_ok = (timer_create(CLOCK_MONOTONIC, &sev,
-                                             &drain_timer) == 0);
-                    if (timer_ok) {
-                        struct itimerspec its = {0};
-                        /* 10ms normal; 50ms when draining mid-kernel to CPL3 */
-                        if (cpl3_need) {
-                            its.it_value.tv_nsec = 50000000L;
-                        } else {
-                            its.it_value.tv_nsec = 10000000L;
-                        }
-                        timer_settime(drain_timer, 0, &its, NULL);
+                    if (timer_create(CLOCK_MONOTONIC, &sev, &drain_timer) != 0) {
+                        error_report("WaveVM KVM drain timer_create: %s",
+                                     strerror(errno));
+                        exit(EXIT_FAILURE);
+                    }
+                    /* One total budget, even when a KVM_RUN returns early. */
+                    drain_deadline = g_get_monotonic_time() +
+                                     (cpl3_need ? 50000 : 10000);
+                    drain_expiry.it_value.tv_nsec =
+                        cpl3_need ? 50000000L : 10000000L;
+                    /* A kick just before reentry must not leave it unbounded. */
+                    drain_expiry.it_interval.tv_nsec = 1000000L;
+                    if (timer_settime(drain_timer, 0, &drain_expiry, NULL) != 0) {
+                        int saved_errno = errno;
+                        timer_delete(drain_timer);
+                        error_report("WaveVM KVM drain timer_settime: %s",
+                                     strerror(saved_errno));
+                        exit(EXIT_FAILURE);
                     }
                     if (drain_dbg++ < 32) {
                         fprintf(stderr,
@@ -3578,8 +3405,10 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                                 "kvm_cpu_exec after preempt/hlt cpl3=%d\n",
                                 ci, cpl3_need);
                     }
-                    /* Up to 5 short rounds until CPL3 or halt (still bounded). */
                     do {
+                        if (g_get_monotonic_time() >= drain_deadline) {
+                            break;
+                        }
                         (void)kvm_cpu_exec(cpu);
                         drain_rounds++;
                         if (cpu->halted || !cpl3_need) {
@@ -3589,12 +3418,8 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                             (sr_chk.cs.selector & 3) == 3) {
                             break;
                         }
-                    } while (drain_rounds < 5 && timer_ok);
-                    if (timer_ok) {
-                        struct itimerspec its = {0};
-                        timer_settime(drain_timer, 0, &its, NULL);
-                        timer_delete(drain_timer);
-                    }
+                    } while (drain_rounds < 5);
+                    timer_delete(drain_timer);
                     /* Stay RUNNABLE for next remote unless HLT parked us. */
                     if (!cpu->halted) {
                         X86CPU *x86cpu = X86_CPU(cpu);
@@ -3926,17 +3751,35 @@ static void *wavevm_cpu_thread_fn(void *arg) {
             } else {
                 /* TCG local execution */
                 int r;
+                unsigned int local_interrupts = 0;
                 int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
                 static int local_tcg_dbg[MAX_VCPUS];
                 int dbg = local_tcg_dbg[ci];
                 qemu_mutex_unlock_iothread();
                 wavevm_tcg_local_slice_enter();
-                wavevm_tcg_clear_stale_exit(cpu);
-                cpu_exec_start(cpu);
-                r = cpu_exec(cpu);
-                cpu_exec_end(cpu);
+                do {
+                    /*
+                     * Match native MTTCG's boundary handling: an
+                     * EXCP_INTERRUPT is an asynchronous kick, not a guest
+                     * execution result.  Re-enter cpu_exec so a timer or
+                     * sibling kick cannot consume the bounded local budget
+                     * one empty return at a time.
+                     */
+                    wavevm_tcg_clear_stale_exit(cpu);
+                    cpu_exec_start(cpu);
+                    r = cpu_exec(cpu);
+                    cpu_exec_end(cpu);
+                    if (r != EXCP_INTERRUPT || !cpu_can_run(cpu)) {
+                        break;
+                    }
+                    qatomic_mb_set(&cpu->exit_request, 0);
+                    cpu->exception_index = -1;
+                    local_interrupts++;
+                } while (local_interrupts < 64);
                 wavevm_tcg_local_slice_leave();
-                wavevm_tcg_note_local_done(cpu);
+                if (r != EXCP_INTERRUPT) {
+                    wavevm_tcg_note_local_done(cpu);
+                }
                 wavevm_tcg_clear_force_local_if_progress(cpu);
                 qemu_mutex_lock_iothread();
 
@@ -3944,12 +3787,14 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                     X86CPU *x86cpu = X86_CPU(cpu);
                     CPUX86State *env = &x86cpu->env;
                     uint32_t lock_word = 0;
+                    uint64_t guest_tsc = cpu_get_tsc(env) + env->tsc_offset;
                     int lock_ret = cpu_memory_rw_debug(cpu, env->regs[R_EDI],
                                                        (uint8_t *)&lock_word,
                                                        sizeof(lock_word), 0);
                     fprintf(stderr,
                             "[WVM-TCG-LOCAL] cpu=%d n=%d ret=%d rip=0x%lx cs=0x%x "
-                            "cr0=0x%lx rdi=0x%lx rax=0x%lx lock=0x%x/lr=%d "
+                            "cr0=0x%lx rdi=0x%lx rax=0x%lx r9=0x%lx "
+                            "guest_tsc=0x%llx lock=0x%x/lr=%d "
                             "halted=%d intreq=0x%x exit_req=%d\n",
                             cpu->cpu_index, dbg, r,
                             (unsigned long)env->eip,
@@ -3957,6 +3802,8 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                             (unsigned long)env->cr[0],
                             (unsigned long)env->regs[R_EDI],
                             (unsigned long)env->regs[R_EAX],
+                            (unsigned long)env->regs[R_R9],
+                            (unsigned long long)guest_tsc,
                             lock_word, lock_ret,
                             cpu->halted,
                             (unsigned)cpu->interrupt_request,
@@ -3974,9 +3821,9 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                     break;
                 case EXCP_ATOMIC:
                     qemu_mutex_unlock_iothread();
-                    wavevm_tcg_local_slice_enter();
+                    wavevm_tcg_atomic_enter(cpu);
                     cpu_exec_step_atomic(cpu);
-                    wavevm_tcg_local_slice_leave();
+                    wavevm_tcg_atomic_leave(cpu);
                     qemu_mutex_lock_iothread();
                     break;
                 default:
@@ -4006,7 +3853,6 @@ out:
  */
 void wavevm_start_vcpu_thread(CPUState *cpu) {
     char thread_name[VCPU_THREAD_NAME_SIZE];
-    WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
     char *role = getenv("WVM_ROLE");
 
     static pthread_mutex_t g_init_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -4031,7 +3877,7 @@ void wavevm_start_vcpu_thread(CPUState *cpu) {
         pthread_mutex_unlock(&g_init_lock);
     }
 
-    if (s->mode == WVM_MODE_USER && !(role && strcmp(role, "SLAVE") == 0)) {
+    if (!(role && strcmp(role, "SLAVE") == 0)) {
         // 动态边界检查
         if (cpu->cpu_index < g_configured_vcpus) {
             g_vcpu_socks[cpu->cpu_index] = connect_to_master_helper();
@@ -4041,7 +3887,7 @@ void wavevm_start_vcpu_thread(CPUState *cpu) {
             }
         }
     } else {
-        // Kernel 模式和 Slave 模式不使用此机制
+        /* Executor helpers receive work through their inherited session. */
         g_vcpu_socks[cpu->cpu_index] = -1; 
     }
     

@@ -3322,7 +3322,9 @@ static int kvm_get_msrs(X86CPU *cpu)
                      (uint32_t)e->index);
     }
 
-    assert(ret == cpu->kvm_msr_buf->nmsrs);
+    if (ret != cpu->kvm_msr_buf->nmsrs) {
+        return -EIO;
+    }
     /*
      * MTRR masks: Each mask consists of 5 parts
      * a  10..0: must be zero
@@ -4068,6 +4070,23 @@ int kvm_arch_get_registers(CPUState *cs)
  out:
     cpu_sync_bndcs_hflags(&cpu->env);
     return ret;
+}
+
+int kvm_get_msr_snapshot(X86CPU *cpu, struct kvm_msr_entry *entries,
+                         size_t capacity)
+{
+    int result = kvm_get_msrs(cpu);
+    size_t count;
+
+    if (result < 0) {
+        return result;
+    }
+    count = cpu->kvm_msr_buf->nmsrs;
+    if (!entries || count > capacity) {
+        return -E2BIG;
+    }
+    memcpy(entries, cpu->kvm_msr_buf->entries, count * sizeof(*entries));
+    return count;
 }
 
 void kvm_arch_pre_run(CPUState *cpu, struct kvm_run *run)

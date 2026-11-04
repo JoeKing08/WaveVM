@@ -10,6 +10,27 @@
 #include "../common_include/wavevm_runtime_dispatch.h"
 
 #define WVM_MEMORY_SERVICE_MAX_PENDING 1024U
+#define WVM_MEMORY_SERVICE_MAX_CACHE_ENTRIES 4096U
+
+enum wvm_memory_subscriber_state {
+    WVM_MEMORY_SUBSCRIBER_EMPTY = 0,
+    WVM_MEMORY_SUBSCRIBER_ACTIVE = 1,
+    WVM_MEMORY_SUBSCRIBER_STALE = 2,
+    WVM_MEMORY_SUBSCRIBER_REMOVING = 3,
+    WVM_MEMORY_SUBSCRIBER_REMOVED = 4,
+    WVM_MEMORY_SUBSCRIBER_READING = 5,
+};
+
+enum wvm_memory_delivery_requirement {
+    WVM_MEMORY_DELIVERY_HINT = 1,
+    WVM_MEMORY_DELIVERY_FENCE_REQUIRED = 2,
+};
+
+enum wvm_memory_service_state {
+    WVM_MEMORY_SERVICE_SERVING = 0,
+    WVM_MEMORY_SERVICE_DRAINING = 1,
+    WVM_MEMORY_SERVICE_RETIRED = 2,
+};
 
 enum wvm_memory_commit_state {
     WVM_MEMORY_COMMIT_EMPTY = 0,
@@ -49,8 +70,8 @@ typedef int (*wvm_memory_complete_fault_fn)(
  */
 typedef int (*wvm_memory_commit_page_fn)(
     void *opaque, uint64_t gpa, uint64_t base_version, uint16_t offset,
-    const uint8_t *data, size_t data_bytes, uint64_t *result_version,
-    char *error, size_t error_len);
+    const uint8_t *data, size_t data_bytes, int source_shared_backing,
+    uint64_t *result_version, char *error, size_t error_len);
 typedef int (*wvm_memory_publish_commit_fn)(
     void *opaque, uint64_t gpa, uint64_t result_version, uint16_t offset,
     const uint8_t *data, size_t data_bytes, uint32_t writer_physical_node_id,
@@ -62,6 +83,12 @@ typedef int (*wvm_memory_complete_commit_fn)(
     char *error, size_t error_len);
 typedef int (*wvm_memory_send_envelope_fn)(
     void *opaque, const struct wvm_envelope *envelope, char *error,
+    size_t error_len);
+typedef int (*wvm_memory_apply_push_fn)(
+    void *opaque, uint32_t directory_physical_node_id,
+    uint64_t directory_node_instance_id, uint64_t gpa,
+    uint64_t base_version, uint64_t version, uint16_t offset,
+    const uint8_t *data, size_t data_bytes, int full_page, char *error,
     size_t error_len);
 
 struct wvm_memory_service_config {
@@ -77,15 +104,45 @@ struct wvm_memory_service_config {
     wvm_memory_complete_commit_fn complete_commit;
     wvm_memory_complete_fault_fn complete_fault;
     wvm_memory_send_envelope_fn send_envelope;
+    wvm_memory_apply_push_fn apply_push;
+    int enable_typed_subscriber_delivery;
     void *opaque;
 };
 
+struct wvm_memory_subscriber {
+    struct wvm_memory_subscriber *next;
+    uint8_t subscription_id[WVM_IDENTITY_ID_BYTES];
+    uint64_t gpa;
+    uint32_t subscriber_physical_node_id;
+    uint64_t subscriber_node_instance_id;
+    uint64_t subscriber_runtime_instance_id;
+    struct wvm_vm_route_scope_key route_scope_key;
+    struct wvm_runtime_route_destination destination;
+    struct wvm_route_snapshot_key route_snapshot_key;
+    uint64_t observed_version;
+    uint64_t qualification_revision;
+    uint16_t delivery_requirement;
+    uint8_t state;
+    uint64_t last_validated_at;
+    uint64_t lease_or_observed_epoch;
+};
+
+struct wvm_memory_cache_entry {
+    uint64_t gpa;
+    uint64_t version;
+    uint8_t valid;
+    uint8_t resync_in_flight;
+};
+
 struct wvm_memory_pending_entry {
+    struct wvm_memory_pending_entry *next;
     uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
     uint8_t completion_payload_digest[WVM_SHA256_DIGEST_BYTES];
     uint64_t gpa;
     uint32_t directory_physical_node_id;
     uint64_t directory_node_instance_id;
+    uint64_t retained_until_ms;
+    uint64_t result_version;
     uint8_t state;
     uint8_t route_op_ref_held; /* A05: outstanding_operation_refs pin */
 };
@@ -96,6 +153,7 @@ struct wvm_memory_commit_entry {
     uint32_t origin_physical_node_id;
     uint64_t origin_runtime_instance_id;
     struct wvm_mem_commit_ack result;
+    uint64_t retained_until_ms;
     uint8_t state;
 };
 
@@ -106,6 +164,7 @@ struct wvm_memory_outgoing_commit_entry {
     uint32_t directory_physical_node_id;
     uint64_t directory_node_instance_id;
     struct wvm_mem_commit_ack result;
+    uint64_t retained_until_ms;
     uint8_t state;
     uint8_t route_op_ref_held; /* A05: outstanding_operation_refs pin */
 };
@@ -115,12 +174,32 @@ struct wvm_memory_service {
     pthread_mutex_t pending_lock;
     pthread_mutex_t commit_lock;
     pthread_mutex_t outgoing_commit_lock;
-    struct wvm_memory_pending_entry
-        pending[WVM_MEMORY_SERVICE_MAX_PENDING];
+    pthread_mutex_t subscriber_lock;
+    pthread_mutex_t cache_lock;
+    /* Compact read receipts outlive the bounded, page-bearing waiters. */
+    struct wvm_memory_pending_entry **pending_buckets;
+    size_t pending_bucket_count;
+    size_t pending_reap_cursor;
+    uint64_t pending_count;
+    uint64_t pending_limit;
+    uint32_t pending_active;
     struct wvm_memory_commit_entry
         commits[WVM_MEMORY_SERVICE_MAX_PENDING];
     struct wvm_memory_outgoing_commit_entry outgoing_commits
         [WVM_MEMORY_SERVICE_MAX_PENDING];
+    struct wvm_memory_subscriber **subscriber_buckets;
+    size_t subscriber_bucket_count;
+    uint64_t subscriber_count;
+    uint64_t subscriber_limit;
+    struct wvm_memory_cache_entry cache
+        [WVM_MEMORY_SERVICE_MAX_CACHE_ENTRIES];
+    uint64_t next_delivery_attempt_id;
+    uint64_t remote_read_completions;
+    uint64_t remote_commit_completions;
+    uint64_t completion_log_ms;
+    /* Protected by subscriber_lock; callbacks run without holding it. */
+    uint64_t active_calls;
+    enum wvm_memory_service_state lifecycle_state;
     int initialized;
 };
 
@@ -131,10 +210,9 @@ int wvm_memory_service_init(
 void wvm_memory_service_destroy(struct wvm_memory_service *service);
 
 /*
- * Wait for inbound fault table entries and outgoing/inbound commit records
- * that are still in flight to reach a terminal result. Call only after the
- * ingress and executor producers stop; a timeout is STOP-incomplete and the
- * caller must not report normal completion.
+ * Reject new work, allow pending ACKs to complete, then retire subscribers
+ * after callbacks and in-flight fault/commit records finish. Call after the
+ * ingress and executor producers stop. A timeout is STOP-incomplete.
  */
 int wvm_memory_service_drain(struct wvm_memory_service *service,
                              uint32_t timeout_ms, char *error,
@@ -183,6 +261,12 @@ int wvm_memory_service_global_request_fault(
     uint64_t gpa, const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
     uint64_t delivery_attempt_id, struct wvm_mem_ack *ack,
     uint8_t page[WVM_MEMORY_PAGE_BYTES], char *error, size_t error_len);
+/* Share one monotonic deadline across a bounded group of page requests. */
+uint64_t wvm_memory_service_global_fault_deadline(void);
+int wvm_memory_service_global_request_fault_before(
+    uint64_t gpa, const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    uint64_t delivery_attempt_id, uint64_t deadline_ms, struct wvm_mem_ack *ack,
+    uint8_t page[WVM_MEMORY_PAGE_BYTES], char *error, size_t error_len);
 int wvm_memory_service_global_complete(
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], uint64_t gpa,
     uint64_t version, uint16_t status,
@@ -195,6 +279,12 @@ int wvm_memory_service_global_request_commit(
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
     uint64_t delivery_attempt_id, struct wvm_mem_commit_ack *ack,
     char *error, size_t error_len);
+int wvm_memory_service_global_request_commit_from_shared_backing(
+    uint64_t gpa, uint64_t base_version, uint16_t offset,
+    const uint8_t *data, size_t data_bytes,
+    const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
+    uint64_t delivery_attempt_id, int source_shared_backing,
+    struct wvm_mem_commit_ack *ack, char *error, size_t error_len);
 
 int wvm_memory_service_global_complete_commit(
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], uint64_t gpa,

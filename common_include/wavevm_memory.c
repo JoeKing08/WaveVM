@@ -88,9 +88,32 @@ static int commit_ack_status_valid(uint16_t status)
     return status <= WVM_MEM_COMMIT_ACK_INTERNAL_FAILURE;
 }
 
+static int push_valid(const struct wvm_mem_push *push)
+{
+    int full;
+
+    if (!push || !gpa_valid(push->gpa) || push->version == 0 ||
+        push->directory_physical_node_id == 0 ||
+        push->directory_node_instance_id == 0 ||
+        (push->flags & ~WVM_MEM_PUSH_FLAG_FULL) != 0) {
+        return 0;
+    }
+    full = (push->flags & WVM_MEM_PUSH_FLAG_FULL) != 0;
+    if (full) {
+        return push->base_version == 0 && push->offset == 0 &&
+               push->size == WVM_MEMORY_PAGE_BYTES &&
+               push->data && push->data_bytes == WVM_MEMORY_PAGE_BYTES;
+    }
+    return push->base_version != 0 && push->size != 0 &&
+           push->size <= WVM_MEMORY_PAGE_BYTES &&
+           push->offset <= WVM_MEMORY_PAGE_BYTES - push->size &&
+           push->data && push->data_bytes == push->size;
+}
+
 static int commit_valid(const struct wvm_mem_commit *commit)
 {
     return commit && gpa_valid(commit->gpa) && commit->base_version != 0 &&
+           commit->reply_node_instance_id != 0 &&
            commit->size != 0 && commit->size <= WVM_MEMORY_PAGE_BYTES &&
            commit->offset <= WVM_MEMORY_PAGE_BYTES - commit->size &&
            reply_destination_valid(commit->reply_destination_kind,
@@ -104,6 +127,7 @@ int wvm_mem_read_encode(const struct wvm_mem_read *read,
                            char *error, size_t error_len)
 {
     if (!read || !output || !gpa_valid(read->gpa) ||
+        read->reply_node_instance_id == 0 ||
         !reply_destination_valid(read->reply_destination_kind,
                                  read->reply_destination_scope,
                                  read->reply_destination_vnode)) {
@@ -115,6 +139,7 @@ int wvm_mem_read_encode(const struct wvm_mem_read *read,
     write_be16(output + 10, 0);
     write_be64(output + 12, read->reply_destination_scope);
     write_be32(output + 20, read->reply_destination_vnode);
+    write_be64(output + 24, read->reply_node_instance_id);
     return 0;
 }
 
@@ -132,7 +157,8 @@ int wvm_mem_read_decode(const uint8_t *input, size_t input_bytes,
     read->reply_destination_kind = read_be16(input + 8);
     read->reply_destination_scope = read_be64(input + 12);
     read->reply_destination_vnode = read_be32(input + 20);
-    if (!gpa_valid(read->gpa) ||
+    read->reply_node_instance_id = read_be64(input + 24);
+    if (!gpa_valid(read->gpa) || read->reply_node_instance_id == 0 ||
         !reply_destination_valid(read->reply_destination_kind,
                                  read->reply_destination_scope,
                                  read->reply_destination_vnode)) {
@@ -166,6 +192,7 @@ int wvm_mem_commit_encode(const struct wvm_mem_commit *commit,
     write_be16(output + 22, 0);
     write_be64(output + 24, commit->reply_destination_scope);
     write_be32(output + 32, commit->reply_destination_vnode);
+    write_be64(output + 36, commit->reply_node_instance_id);
     memcpy(output + WVM_MEM_COMMIT_HEADER_BYTES, commit->data,
            commit->size);
     *output_bytes = required_bytes;
@@ -197,6 +224,7 @@ int wvm_mem_commit_decode(const uint8_t *input, size_t input_bytes,
     commit->reply_destination_kind = read_be16(input + 20);
     commit->reply_destination_scope = read_be64(input + 24);
     commit->reply_destination_vnode = read_be32(input + 32);
+    commit->reply_node_instance_id = read_be64(input + 36);
     commit->data = input + WVM_MEM_COMMIT_HEADER_BYTES;
     commit->data_bytes = size;
     if (!commit_valid(commit)) {
@@ -346,6 +374,71 @@ int wvm_mem_commit_ack_decode(
     return 0;
 }
 
+int wvm_mem_push_encode(const struct wvm_mem_push *push, uint8_t *output,
+                        size_t output_capacity, size_t *output_bytes,
+                        char *error, size_t error_len)
+{
+    size_t required_bytes;
+
+    if (!push_valid(push) || !output || !output_bytes) {
+        set_error(error, error_len, "V1 memory push payload is invalid");
+        return -1;
+    }
+    required_bytes = WVM_MEM_PUSH_HEADER_BYTES + push->data_bytes;
+    if (output_capacity < required_bytes) {
+        set_error(error, error_len, "V1 memory push output is too small");
+        return -1;
+    }
+    write_be64(output, push->gpa);
+    write_be64(output + 8, push->base_version);
+    write_be64(output + 16, push->version);
+    write_be16(output + 24, push->offset);
+    write_be16(output + 26, push->size);
+    write_be16(output + 28, push->flags);
+    write_be16(output + 30, 0);
+    write_be32(output + 32, push->directory_physical_node_id);
+    write_be32(output + 36, 0);
+    write_be64(output + 40, push->directory_node_instance_id);
+    memcpy(output + WVM_MEM_PUSH_HEADER_BYTES, push->data, push->data_bytes);
+    *output_bytes = required_bytes;
+    return 0;
+}
+
+int wvm_mem_push_decode(const uint8_t *input, size_t input_bytes,
+                        struct wvm_mem_push *push, char *error,
+                        size_t error_len)
+{
+    uint16_t size;
+
+    if (!input || !push || input_bytes < WVM_MEM_PUSH_HEADER_BYTES ||
+        read_be16(input + 30) != 0 || read_be32(input + 36) != 0) {
+        set_error(error, error_len, "V1 memory push payload is malformed");
+        return -1;
+    }
+    size = read_be16(input + 26);
+    if (size == 0 ||
+        input_bytes != WVM_MEM_PUSH_HEADER_BYTES + (size_t)size) {
+        set_error(error, error_len, "V1 memory push payload has bad length");
+        return -1;
+    }
+    memset(push, 0, sizeof(*push));
+    push->gpa = read_be64(input);
+    push->base_version = read_be64(input + 8);
+    push->version = read_be64(input + 16);
+    push->offset = read_be16(input + 24);
+    push->size = size;
+    push->flags = read_be16(input + 28);
+    push->directory_physical_node_id = read_be32(input + 32);
+    push->directory_node_instance_id = read_be64(input + 40);
+    push->data = input + WVM_MEM_PUSH_HEADER_BYTES;
+    push->data_bytes = size;
+    if (!push_valid(push)) {
+        set_error(error, error_len, "V1 memory push payload is invalid");
+        return -1;
+    }
+    return 0;
+}
+
 int wvm_mem_ack_envelope_build(
     const struct wvm_envelope *request,
     const struct wvm_envelope_route *resolved_reply_route,
@@ -473,6 +566,7 @@ int wvm_memory_payload_validate(uint16_t message_type,
     struct wvm_mem_ack ack;
     struct wvm_mem_commit commit;
     struct wvm_mem_commit_ack commit_ack;
+    struct wvm_mem_push push;
 
     switch (message_type) {
     case WVM_ENVELOPE_MSG_MEM_READ:
@@ -491,6 +585,19 @@ int wvm_memory_payload_validate(uint16_t message_type,
         }
         return wvm_mem_commit_ack_decode(payload, &commit_ack, error,
                                             error_len);
+    case WVM_ENVELOPE_MSG_PAGE_PUSH_FULL:
+    case WVM_ENVELOPE_MSG_PAGE_PUSH_DIFF:
+        if (wvm_mem_push_decode(payload, payload_bytes, &push, error,
+                                error_len) != 0) {
+            return -1;
+        }
+        if ((message_type == WVM_ENVELOPE_MSG_PAGE_PUSH_FULL) !=
+            ((push.flags & WVM_MEM_PUSH_FLAG_FULL) != 0)) {
+            set_error(error, error_len,
+                      "V1 memory push type does not match payload flags");
+            return -1;
+        }
+        return 0;
     default:
         return 0;
     }

@@ -2043,6 +2043,26 @@ void wvm_control_plane_set_runtime_manifest_entries(
     }
 }
 
+void wvm_control_plane_set_local_physical_node_id(
+    struct wvm_control_plane *plane, uint32_t local_physical_node_id)
+{
+    if (!plane) {
+        return;
+    }
+    plane->local_physical_node_id = local_physical_node_id;
+}
+
+void wvm_control_plane_set_runtime_health_probe(
+    struct wvm_control_plane *plane,
+    wvm_control_plane_runtime_health_probe_fn probe, void *context)
+{
+    if (!plane) {
+        return;
+    }
+    plane->runtime_health_probe = probe;
+    plane->runtime_health_probe_context = context;
+}
+
 int wvm_control_plane_set_admission_authority(
     struct wvm_control_plane *plane,
     const struct wvm_admission_authority *authority, char *error,
@@ -3746,6 +3766,34 @@ static int control_plane_required_runtimes_ready(
             continue;
         }
         matched++;
+        /*
+         * The ready file and PID are host-local facts.  A controller must
+         * never inspect its own filesystem to decide that a participant on a
+         * different physical node died; that observation belongs to the
+         * authenticated membership/control transport.  Keep A12 for the
+         * participant hosted by this control-plane process only.
+         */
+        if (plane->local_physical_node_id == 0 ||
+            entry->physical_node_id != plane->local_physical_node_id) {
+            ready_error[0] = '\0';
+            if (plane->runtime_health_probe &&
+                plane->runtime_health_probe(
+                    plane->runtime_health_probe_context, tx, entry,
+                    ready_error, sizeof(ready_error)) != 0) {
+                *ready_out = 0;
+                set_error(error, error_len, "%s",
+                          ready_error[0] ? ready_error
+                                         : "remote runtime health probe failed");
+                return 0;
+            }
+            if (!plane->runtime_health_probe) {
+                *ready_out = 0;
+                set_error(error, error_len,
+                          "remote runtime health probe is unavailable");
+                return 0;
+            }
+            continue;
+        }
         if (!entry->record_bytes || entry->record_byte_count == 0 ||
             wvm_canonical_record_parse(entry->record_bytes,
                                        entry->record_byte_count,

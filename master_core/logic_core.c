@@ -135,6 +135,12 @@ int wavevm_proxy_push_to_local_helpers(uint16_t msg_type, void *payload, int len
     (void)len;
     return 0;
 }
+__attribute__((weak))
+int wavevm_proxy_push_shared_to_local_helpers(uint16_t msg_type, void *payload,
+                                              int len)
+{
+    return wavevm_proxy_push_to_local_helpers(msg_type, payload, len);
+}
 #endif
 extern int broadcast_push_to_qemu_fenced(uint16_t msg_type, void *payload,
                                           int len, uint64_t timeout_us);
@@ -179,6 +185,7 @@ static inline int wait_local_qemu_push_barrier_safe(uint64_t timeout_us)
 
 // 哈希环脏标记 (解决 CPU 抖动)
 static atomic_bool g_ring_dirty = false;
+static int g_typed_memory_path;
 
 static struct {
     uint8_t buf[MTU_SIZE + 128]; 
@@ -281,22 +288,9 @@ static pthread_mutex_t g_dir_table_locks[LOCK_SHARDS];
 
 #ifndef __KERNEL__
 static uint8_t *resolve_page_data(page_meta_t *page, uint64_t gpa) {
-    /*
-     * Prefer live WVM_SHM_FILE mapping whenever it exists. An early heap
-     * allocation (before SHM attach) must not permanently shadow guest RAM —
-     * §6 TCG short-exec writes code into SHM and helpers fault-fetch via this
-     * directory; zeros here mean the helper executes empty pages.
-     */
-    if (g_shm_ptr && g_shm_size >= 4096 && gpa <= g_shm_size - 4096) {
-        uint8_t *shm_page = (uint8_t *)g_shm_ptr + gpa;
-        if (page->base_page_data && page->base_page_data != shm_page) {
-            memcpy(shm_page, page->base_page_data, 4096);
-            /* prior heap page intentionally leaked — rare bring-up path */
-        }
-        page->base_page_data = shm_page;
-        return page->base_page_data;
-    }
-
+    (void)gpa;
+    /* Guest mappings are mutable caches, never the committed directory image.
+     * The frontend publishes its initial RAM before resuming any vCPU. */
     if (page->base_page_data) {
         return page->base_page_data;
     }
@@ -1447,16 +1441,7 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
     
     page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
     if (page) {
-#ifndef __KERNEL__
-        /* Authoritative bytes are the live SHM image when attached. */
-        if (g_shm_ptr && g_shm_size >= 4096 && gpa <= g_shm_size - 4096) {
-            memcpy(page_buffer, (uint8_t *)g_shm_ptr + gpa, 4096);
-            page->base_page_data = (uint8_t *)g_shm_ptr + gpa;
-        } else
-#endif
-        {
-            memcpy(page_buffer, page->base_page_data, 4096);
-        }
+        memcpy(page_buffer, page->base_page_data, 4096);
         if (version_out) {
             *version_out = page->version;
         }
@@ -1470,7 +1455,8 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
 
 int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
                                uint16_t offset, const uint8_t *data,
-                               size_t data_bytes, uint64_t *result_version)
+                               size_t data_bytes, int source_shared_backing,
+                               uint64_t *result_version)
 {
     uint32_t lock_idx;
     page_meta_t *page;
@@ -1484,18 +1470,6 @@ int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
         offset > WVM_PAGE_BYTES - data_bytes) {
         return -EINVAL;
     }
-#ifndef __KERNEL__
-    /*
-     * A local V1 success must be visible to the live QEMU RAM image. Do not
-     * fall back to the legacy heap-backed page allocation here, otherwise the
-     * caller could receive a successful ACK for bytes QEMU cannot read.
-     */
-    if (!g_shm_ptr || g_shm_size < WVM_PAGE_BYTES ||
-        gpa > g_shm_size - WVM_PAGE_BYTES) {
-        return -EOPNOTSUPP;
-    }
-#endif
-
     lock_idx = get_lock_idx(gpa);
     pthread_mutex_lock(&active_dir_locks()[lock_idx]);
     page = find_page_meta_locked(gpa);
@@ -1527,6 +1501,12 @@ int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
         return epoch != g_curr_epoch ? -ESTALE : -EOVERFLOW;
     }
     memcpy(page->base_page_data + offset, data, data_bytes);
+#ifndef __KERNEL__
+    if (!source_shared_backing && g_shm_ptr && g_shm_size >= WVM_PAGE_BYTES &&
+        gpa <= g_shm_size - WVM_PAGE_BYTES) {
+        memcpy((uint8_t *)g_shm_ptr + gpa + offset, data, data_bytes);
+    }
+#endif
     page->version = MAKE_VERSION(epoch, counter + 1U);
     *result_version = page->version;
     pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
@@ -1545,6 +1525,7 @@ int wvm_publish_local_commit(uint64_t gpa, uint64_t result_version,
     uint32_t lock_idx;
     page_meta_t *page;
     int use_full_page = data_bytes >= SMALL_UPDATE_THRESHOLD;
+    int local_push_result = 0;
 
     if (!data || result_version == 0 ||
         (gpa & (WVM_PAGE_BYTES - 1UL)) != 0 ||
@@ -1651,20 +1632,117 @@ int wvm_publish_local_commit(uint64_t gpa, uint64_t result_version,
     {
         uint16_t local_type =
             use_full_page ? MSG_PAGE_PUSH_FULL : MSG_PAGE_PUSH_DIFF;
-        (void)notify_local_qemu_push(local_type, payload, (int)payload_bytes);
-        (void)wavevm_proxy_push_to_local_helpers(local_type, payload,
-                                                 (int)payload_bytes);
+        int qemu_result = notify_local_qemu_push(
+            local_type, payload, (int)payload_bytes);
+        int helper_result = wavevm_proxy_push_shared_to_local_helpers(
+            local_type, payload, (int)payload_bytes);
+
+        /*
+         * The directory mutation is already applied, so a failed required
+         * local delivery must be reported as an incomplete fence. The caller
+         * retains the semantic operation result and must not reapply bytes on
+         * retry; remote HINT fanout remains best-effort and can resync later.
+         */
+        if (qemu_result < 0) {
+            local_push_result = qemu_result;
+        } else if (helper_result < 0) {
+            local_push_result = helper_result;
+        }
     }
 #endif
 
-    broadcast_to_subscriber_ids(
-        subscriber_ids, subscriber_count, writer_node_id,
-        use_full_page ? MSG_PAGE_PUSH_FULL : MSG_PAGE_PUSH_DIFF, payload,
-        (int)payload_bytes, 0);
+    if (!g_typed_memory_path) {
+        broadcast_to_subscriber_ids(
+            subscriber_ids, subscriber_count, writer_node_id,
+            use_full_page ? MSG_PAGE_PUSH_FULL : MSG_PAGE_PUSH_DIFF, payload,
+            (int)payload_bytes, 0);
+    }
 
     wvm_free_local(payload);
     wvm_free_local(full_page);
     wvm_free_local(subscriber_ids);
+    return local_push_result;
+}
+
+void wvm_logic_set_typed_memory_path(int enabled)
+{
+    g_typed_memory_path = enabled != 0;
+}
+
+int wvm_apply_local_memory_push(uint64_t gpa, uint64_t base_version,
+                                uint64_t result_version, uint16_t offset,
+                                const uint8_t *data, size_t data_bytes,
+                                int full_page, int backing_already_applied)
+{
+    uint8_t payload[sizeof(struct wvm_full_page_push)];
+    uint16_t message_type;
+    size_t payload_bytes;
+    int qemu_result;
+    int helper_result;
+
+    (void)base_version;
+    if (!data || result_version == 0 ||
+        (gpa & (WVM_PAGE_BYTES - 1UL)) != 0) {
+        return -EINVAL;
+    }
+    if (full_page) {
+        struct wvm_full_page_push *push =
+            (struct wvm_full_page_push *)payload;
+
+        if (offset != 0 || data_bytes != WVM_PAGE_BYTES) {
+            return -EINVAL;
+        }
+        push->gpa = WVM_HTONLL(gpa);
+        push->version = WVM_HTONLL(result_version);
+        memcpy(push->data, data, WVM_PAGE_BYTES);
+        message_type = MSG_PAGE_PUSH_FULL;
+        payload_bytes = sizeof(*push);
+    } else {
+        struct wvm_diff_log *diff = (struct wvm_diff_log *)payload;
+
+        if (data_bytes == 0 || data_bytes > WVM_PAGE_BYTES ||
+            offset > WVM_PAGE_BYTES - data_bytes ||
+            sizeof(*diff) + data_bytes > sizeof(payload)) {
+            return -EINVAL;
+        }
+        diff->gpa = WVM_HTONLL(gpa);
+        diff->version = WVM_HTONLL(result_version);
+        diff->offset = htons(offset);
+        diff->size = htons((uint16_t)data_bytes);
+        memcpy(diff->data, data, data_bytes);
+        message_type = MSG_PAGE_PUSH_DIFF;
+        payload_bytes = sizeof(*diff) + data_bytes;
+    }
+
+#ifndef __KERNEL__
+    /* Keep the daemon's shared view coherent before notifying guest clients. */
+    if (!backing_already_applied && g_shm_ptr && g_shm_size >= WVM_PAGE_BYTES &&
+        gpa <= g_shm_size - WVM_PAGE_BYTES) {
+        if (full_page) {
+            memcpy((uint8_t *)g_shm_ptr + gpa, data, WVM_PAGE_BYTES);
+        } else if (gpa <= g_shm_size - WVM_PAGE_BYTES &&
+                   offset <= WVM_PAGE_BYTES - data_bytes) {
+            memcpy((uint8_t *)g_shm_ptr + gpa + offset, data, data_bytes);
+        }
+    }
+#else
+    (void)backing_already_applied;
+#endif
+
+    qemu_result = notify_local_qemu_push(
+        message_type, payload, (int)payload_bytes);
+#ifndef __KERNEL__
+    helper_result = wavevm_proxy_push_shared_to_local_helpers(
+        message_type, payload, (int)payload_bytes);
+#else
+    helper_result = 0;
+#endif
+    if (qemu_result < 0) {
+        return qemu_result;
+    }
+    if (helper_result < 0) {
+        return helper_result;
+    }
     return 0;
 }
 
@@ -1774,7 +1852,8 @@ static void enqueue_broadcast_to_target(uint32_t target_id, uint16_t msg_type,
         (void)flags;
         if (payload && len > 0) {
             (void)notify_local_qemu_push(msg_type, payload, len);
-            (void)wavevm_proxy_push_to_local_helpers(msg_type, payload, len);
+            (void)wavevm_proxy_push_shared_to_local_helpers(msg_type, payload,
+                                                            len);
         }
 #else
         (void)msg_type;

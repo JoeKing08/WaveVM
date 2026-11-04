@@ -1,0 +1,3 @@
+placement-spread tests: PASS
+NOTE: CPU and memory reservations may be split; directory/executor
+      identity and exclusive listener leases remain fail-closed.

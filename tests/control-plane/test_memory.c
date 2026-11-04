@@ -48,6 +48,7 @@ int main(void)
     read.reply_destination_kind =
         WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE;
     read.reply_destination_vnode = 3;
+    read.reply_node_instance_id = 101;
     if (expect(wvm_mem_read_encode(&read, read_bytes, error,
                                       sizeof(error)) == 0 &&
                    wvm_mem_read_decode(read_bytes, sizeof(read_bytes),
@@ -57,7 +58,8 @@ int main(void)
                    decoded_read.reply_destination_kind ==
                        WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE &&
                    decoded_read.reply_destination_scope == 0 &&
-                   decoded_read.reply_destination_vnode == 3,
+                   decoded_read.reply_destination_vnode == 3 &&
+                   decoded_read.reply_node_instance_id == 101,
                "round trip flat memory read reply route")) {
         return 1;
     }
@@ -221,6 +223,7 @@ int main(void)
         WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
     commit.reply_destination_scope = 99;
     commit.reply_destination_vnode = 7;
+    commit.reply_node_instance_id = 101;
     commit.data = page;
     commit.data_bytes = commit.size;
     if (expect(wvm_mem_commit_encode(
@@ -235,6 +238,7 @@ int main(void)
                    decoded_commit.offset == commit.offset &&
                    decoded_commit.size == commit.size &&
                    decoded_commit.reply_destination_scope == 99 &&
+                   decoded_commit.reply_node_instance_id == 101 &&
                    decoded_commit.data_bytes == commit.size &&
                    memcmp(decoded_commit.data, page, commit.size) == 0 &&
                    wvm_memory_payload_validate(

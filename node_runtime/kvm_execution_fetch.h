@@ -15,6 +15,8 @@
  * the matching bytes from a prior fetch). Otherwise request one remote fault
  * through the installed memory_service, install the authoritative version
  * into the page cache, and copy the returned page bytes into HVA.
+ * A nonzero DEADLINE_MS caps the fault at the caller's monotonic deadline;
+ * zero uses the service completion horizon.
  *
  * This is the same sequence slave_hybrid uses for instruction-fetch pages.
  * A successful KVM/TCG instruction result that depends on those HVA bytes is
@@ -23,6 +25,7 @@
  */
 int wvm_kvm_fetch_execution_page(
     uint64_t gpa, const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
-    uint8_t *hva, uint64_t *version_out, char *error, size_t error_len);
+    uint8_t *hva, uint64_t *version_out, uint64_t deadline_ms,
+    char *error, size_t error_len);
 
 #endif

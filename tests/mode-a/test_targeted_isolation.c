@@ -32,6 +32,15 @@
 static sigjmp_buf g_jmp;
 static volatile sig_atomic_t g_got_sigbus;
 
+struct memory_responder {
+    int fd;
+    uint8_t fill;
+    uint64_t version;
+    atomic_int stop;
+    pthread_t thread;
+    int started;
+};
+
 static void on_sigbus(int sig)
 {
     (void)sig;
@@ -59,6 +68,85 @@ static void fill_bind(struct wvm_ioctl_context_bind *b, uint32_t vm,
     b->route_snapshot_key.topology_revision = 1;
     b->route_snapshot_key.route_generation = 1;
     memset(b->route_snapshot_key.snapshot_digest, tag, WVM_KERNEL_DIGEST_BYTES);
+}
+
+static int register_memory_owner(int fd,
+                                 const struct wvm_ioctl_context_bind *identity)
+{
+    struct wvm_ioctl_memory_config config = {0};
+
+    config.identity = *identity;
+    config.guest_physical_limit = 0x200000000ULL;
+    config.range_count = 1;
+    config.ranges[0].size = config.guest_physical_limit;
+    if (ioctl(fd, IOCTL_WVM_MEMORY_OWNER, &config) < 0) {
+        fprintf(stderr, "MEMORY_OWNER: %s\n", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+static int register_memory_owner_for(int fd, uint32_t vm, uint64_t inst,
+                                     uint8_t tag)
+{
+    struct wvm_ioctl_context_bind identity;
+
+    fill_bind(&identity, vm, inst, tag);
+    return register_memory_owner(fd, &identity);
+}
+
+static void *memory_responder_main(void *opaque)
+{
+    struct memory_responder *responder = opaque;
+
+    while (!atomic_load_explicit(&responder->stop, memory_order_acquire)) {
+        struct wvm_ioctl_memory_operation operation = {0};
+
+        if (ioctl(responder->fd, IOCTL_WVM_MEMORY_DEQUEUE, &operation) < 0) {
+            if (errno == EAGAIN || errno == EINTR)
+                continue;
+            break;
+        }
+        if (operation.kind == WVM_KERNEL_MEMORY_READ) {
+            memset(operation.data, responder->fill,
+                   WVM_KERNEL_MEMORY_PAGE_BYTES);
+            operation.data_bytes = WVM_KERNEL_MEMORY_PAGE_BYTES;
+            operation.result_version = responder->version;
+        } else if (operation.kind == WVM_KERNEL_MEMORY_COMMIT) {
+            operation.result_version = ++responder->version;
+        } else {
+            operation.status = -EINVAL;
+        }
+        if (ioctl(responder->fd, IOCTL_WVM_MEMORY_COMPLETE, &operation) < 0)
+            break;
+    }
+    return NULL;
+}
+
+static int memory_responder_start(struct memory_responder *responder, int fd,
+                                  uint8_t fill)
+{
+    memset(responder, 0, sizeof(*responder));
+    responder->fd = fd;
+    responder->fill = fill;
+    responder->version = 1;
+    atomic_init(&responder->stop, 0);
+    if (pthread_create(&responder->thread, NULL, memory_responder_main,
+                       responder) != 0)
+        return -1;
+    responder->started = 1;
+    return 0;
+}
+
+static void memory_responder_stop(struct memory_responder *responder)
+{
+    if (!responder->started)
+        return;
+    (void)ioctl(responder->fd, IOCTL_WVM_MEMORY_DRAIN);
+    atomic_store_explicit(&responder->stop, 1, memory_order_release);
+    (void)ioctl(responder->fd, IOCTL_WVM_MEMORY_STOP);
+    pthread_join(responder->thread, NULL);
+    responder->started = 0;
 }
 
 static int open_bind(uint32_t vm, uint64_t inst, uint8_t tag)
@@ -123,14 +211,21 @@ static int test_same_gpa(void)
     uint32_t *pa, *pb;
     size_t i, nwords;
     int rc = -1;
+    struct memory_responder responder_a = {0}, responder_b = {0};
 
     printf("\n=== Targeted 1: Same GPA two-VM isolation ===\n");
     fd_a = open_bind(VM_A, 1, 0xA1);
     fd_b = open_bind(VM_B, 1, 0xB2);
     if (fd_a < 0 || fd_b < 0)
         goto out;
+    if (register_memory_owner_for(fd_a, VM_A, 1, 0xA1) != 0 ||
+        register_memory_owner_for(fd_b, VM_B, 1, 0xB2) != 0)
+        goto out;
     if (set_layout(fd_a, SAME_GPA, MEM_SIZE) < 0 ||
         set_layout(fd_b, SAME_GPA, MEM_SIZE) < 0)
+        goto out;
+    if (memory_responder_start(&responder_a, fd_a, 0x11) != 0 ||
+        memory_responder_start(&responder_b, fd_b, 0x22) != 0)
         goto out;
     map_a = map_gpa(fd_a, SAME_GPA, MEM_SIZE);
     map_b = map_gpa(fd_b, SAME_GPA, MEM_SIZE);
@@ -177,6 +272,7 @@ static int test_same_gpa(void)
     /* Teardown A; B must remain intact */
     munmap(map_a, MEM_SIZE);
     map_a = NULL;
+    memory_responder_stop(&responder_a);
     unbind_close(fd_a, VM_A, 1, 0xA1);
     fd_a = -1;
 
@@ -191,6 +287,8 @@ static int test_same_gpa(void)
     printf("[OK] VM_B intact after sibling same-GPA teardown\n");
     rc = 0;
 out:
+    memory_responder_stop(&responder_a);
+    memory_responder_stop(&responder_b);
     if (map_a)
         munmap(map_a, MEM_SIZE);
     if (map_b)
@@ -211,6 +309,7 @@ static int test_multi_fd_same_vm(void)
     size_t i, nwords;
     struct wvm_ioctl_context_caps caps;
     int rc = -1;
+    struct memory_responder responder = {0};
 
     printf("\n=== Targeted 2: Multi-FD same VM ===\n");
     fd1 = open_bind(VM_MULTI, 1, 0xC3);
@@ -231,7 +330,12 @@ static int test_multi_fd_same_vm(void)
             goto out;
         }
     }
+    /* Keep the authority on fd2 so closing fd1 exercises a surviving owner. */
+    if (register_memory_owner_for(fd2, VM_MULTI, 1, 0xC3) != 0)
+        goto out;
     if (set_layout(fd1, SAME_GPA, MEM_SIZE) < 0)
+        goto out;
+    if (memory_responder_start(&responder, fd2, 0x33) != 0)
         goto out;
     /* layout is per-context; fd2 shares context — mmap both */
     m1 = map_gpa(fd1, SAME_GPA, MEM_SIZE);
@@ -295,6 +399,7 @@ static int test_multi_fd_same_vm(void)
     printf("[OK] Multi-FD same VM: sibling FD survived peer close+unmap\n");
     rc = 0;
 out:
+    memory_responder_stop(&responder);
     if (m1)
         munmap(m1, MEM_SIZE);
     if (m2)
@@ -342,6 +447,7 @@ static int test_inflight_async_teardown(void)
     pthread_t thr;
     int i, rc = -1;
     struct wvm_ioctl_context_caps caps;
+    struct memory_responder keep_responder = {0}, peer_responder = {0};
 
     printf("\n=== Targeted 3: In-flight async teardown ===\n");
     atomic_init(&stop, 0);
@@ -352,8 +458,14 @@ static int test_inflight_async_teardown(void)
     fd_peer = open_bind(VM_B, 1, 0xB2);
     if (fd_keep < 0 || fd_peer < 0)
         goto out;
+    if (register_memory_owner_for(fd_keep, VM_A, 1, 0xA1) != 0 ||
+        register_memory_owner_for(fd_peer, VM_B, 1, 0xB2) != 0)
+        goto out;
     if (set_layout(fd_keep, SAME_GPA, MEM_SIZE) < 0 ||
         set_layout(fd_peer, SAME_GPA, MEM_SIZE) < 0)
+        goto out;
+    if (memory_responder_start(&keep_responder, fd_keep, 0x11) != 0 ||
+        memory_responder_start(&peer_responder, fd_peer, 0x22) != 0)
         goto out;
     map_keep = map_gpa(fd_keep, SAME_GPA, MEM_SIZE);
     map_peer = map_gpa(fd_peer, SAME_GPA, MEM_SIZE);
@@ -384,12 +496,20 @@ static int test_inflight_async_teardown(void)
         usleep(2000);
         munmap(map_peer, MEM_SIZE);
         map_peer = NULL;
+        memory_responder_stop(&peer_responder);
         unbind_close(fd_peer, VM_B, 1, 0xB2);
         fd_peer = -1;
         usleep(2000);
         fd_peer = open_bind(VM_B, 1, 0xB2);
         if (fd_peer < 0) {
             fprintf(stderr, "[FAIL] re-BIND peer during stress\n");
+            atomic_store(&stop, 1);
+            pthread_join(thr, NULL);
+            goto out;
+        }
+        if (register_memory_owner_for(fd_peer, VM_B, 1, 0xB2) != 0 ||
+            memory_responder_start(&peer_responder, fd_peer, 0x22) != 0) {
+            fprintf(stderr, "[FAIL] peer authority cycle %d\n", i);
             atomic_store(&stop, 1);
             pthread_join(thr, NULL);
             goto out;
@@ -455,6 +575,8 @@ static int test_inflight_async_teardown(void)
     rc = 0;
 out:
     atomic_store(&stop, 1);
+    memory_responder_stop(&keep_responder);
+    memory_responder_stop(&peer_responder);
     if (map_keep)
         munmap(map_keep, MEM_SIZE);
     if (map_peer)

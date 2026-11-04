@@ -15,9 +15,13 @@
 #define WVM_LOCAL_MEMORY_FAULT_REQUEST_BYTES 32U
 #define WVM_LOCAL_MEMORY_RESULT_LENGTH_BYTES 4U
 #define WVM_LOCAL_MEMORY_COMMIT_REQUEST_HEADER_BYTES \
-    (WVM_IDENTITY_ID_BYTES + 8U + WVM_MEM_COMMIT_HEADER_BYTES)
+    (WVM_IDENTITY_ID_BYTES + 8U + 1U + WVM_MEM_COMMIT_HEADER_BYTES)
 #define WVM_LOCAL_MEMORY_COMMIT_RESULT_BYTES \
     (WVM_IDENTITY_ID_BYTES + WVM_MEM_COMMIT_ACK_BYTES)
+
+#define WVM_LOCAL_MEMORY_COMMIT_FLAG_SHARED_BACKING 0x01U
+#define WVM_LOCAL_MEMORY_COMMIT_FLAGS_VALID \
+    WVM_LOCAL_MEMORY_COMMIT_FLAG_SHARED_BACKING
 
 struct wvm_local_memory_fault_request {
     uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
@@ -28,6 +32,7 @@ struct wvm_local_memory_fault_request {
 struct wvm_local_memory_commit_request {
     uint8_t operation_id[WVM_IDENTITY_ID_BYTES];
     uint64_t delivery_attempt_id;
+    uint8_t flags;
     struct wvm_mem_commit commit;
 };
 

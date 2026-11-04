@@ -1,0 +1,15 @@
+guest_matrix run_id=guest-a1104-kvm out_dir=/tmp/wavevm-a1104-guest-kvm tip=23eacaf9c have_kvm=1
+cells=flat_tcg,fractal_tcg,flat_kvm,fractal_kvm
+2026年 11月 04日 星期三 12:24:23 CST
+=== CELL flat_kvm topology=flat backend=require-kvm ===
+RESULT=flat_kvm FAIL rc=1
+==== SUMMARY ====
+pass=0 fail=1 skip=0 blocked=0
+ran=flat_kvm
+tip=23eacaf9c
+out_dir=/tmp/wavevm-a1104-guest-kvm
+MATRIX_RESULT=FAIL
+MINIMUM_COMPLETE=NOT_CLAIMED_BY_GUEST_MATRIX
+NOTE: guest matrix proves §7 Cirros path per cell; not MTTCG / not charter COMPLETE.
+2026年 11月 04日 星期三 12:24:56 CST
+GUEST_MATRIX_RC:1

@@ -101,8 +101,27 @@ int wvm_kvm_page_cache_global_invalidate(
 int wvm_kvm_page_cache_global_lookup(
     uint64_t gpa, uint8_t *state_out, uint64_t *version_out, char *error,
     size_t error_len);
-int wvm_kvm_execution_global_begin(char *error, size_t error_len);
-void wvm_kvm_execution_global_end(void);
+/* Byte installation and execution admission share the same short lock. */
+int wvm_kvm_page_cache_global_install_data(
+    uint64_t gpa, uint64_t version, uint16_t offset, const uint8_t *data,
+    size_t data_bytes, int full_page, uint8_t *hva, uint8_t *mirror,
+    char *error, size_t error_len);
+
+typedef int (*wvm_kvm_prepare_input_fn)(void *opaque, uint64_t *error_gpa);
+/* One cohort shares a snapshot and dirty-log commit, not a KVM_RUN lock.
+ * Even a failed join may return a slice which must leave/wait/release. */
+int wvm_kvm_execution_global_join(
+    wvm_kvm_prepare_input_fn prepare, void *opaque,
+    struct wvm_kvm_memory_slice **slice_out, uint64_t *error_gpa,
+    char *error, size_t error_len);
+/* Returns 1 only to the last exiting vCPU, which harvests the shared log. */
+int wvm_kvm_execution_leave(struct wvm_kvm_memory_slice *slice,
+                            int status, uint64_t error_gpa);
+void wvm_kvm_execution_complete(struct wvm_kvm_memory_slice *slice,
+                                 int status, uint64_t error_gpa);
+int wvm_kvm_execution_wait(struct wvm_kvm_memory_slice *slice,
+                            uint64_t *error_gpa);
+void wvm_kvm_execution_release(struct wvm_kvm_memory_slice *slice);
 int wvm_kvm_memory_slice_global_begin(
     struct wvm_kvm_memory_slice **slice_out, char *error, size_t error_len);
 

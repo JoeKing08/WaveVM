@@ -2,6 +2,7 @@ ctl_tool/wvm_ctl
 gateway_service/wavevm_gateway
 master_core/wavevm_node_master
 slave_daemon/wavevm_node_slave
+/node_runtime/*.d
 
 wavevm-qemu/build-native/
 *.log

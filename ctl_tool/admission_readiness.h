@@ -2,6 +2,15 @@
 #define WVM_CTL_ADMISSION_READINESS_H
 
 #include "../common_include/wavevm_control_plane.h"
+#include "../common_include/wavevm_admission_transport.h"
+
+int wvm_ctl_probe_runtime_ready(
+    struct wvm_control_plane *plane,
+    const struct wvm_admission_transaction_record *transaction,
+    const struct wvm_control_plane_runtime_manifest_entry *runtime_entry,
+    size_t member_capacity, uint32_t max_vcpus,
+    struct wvm_admission_transport *transport, char *error,
+    size_t error_len);
 
 int wvm_ctl_resume_runtime_readiness(
     struct wvm_control_plane *plane,

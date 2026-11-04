@@ -124,7 +124,8 @@ SubscriberRecord {
 forwarding generation. The directory resolves the current accepted snapshot for
 that scope immediately before each send and pins it for the send/retry attempt.
 `subscribers` is an invalidation/update target set, not an owner set. It may
-over-approximate only while each record remains `ACTIVE` and identity-valid. Its
+over-approximate only while each record remains `ACTIVE` and identity-valid, or
+while it is an identity-qualified provisional read target under §4.1. Its
 absence must cause an extra read or full resynchronization rather than authorize
 a client write. A new node instance or rejoined runtime never inherits an old
 subscription; it must request an authoritative full page again.
@@ -168,8 +169,30 @@ their base-version order.
    snapshot key, observed version, and a `HINT` delivery requirement unless a
    documented fence explicitly requests `FENCE_REQUIRED`.
 
+The directory must reserve an identity-qualified update target before copying
+the read snapshot, so a commit between the copy and reply cannot miss the
+reader. A provisional read target participates in update delivery and becomes
+`ACTIVE` once its snapshot is qualified. Failed qualification or subscription
+resource pressure cannot produce a successful, untracked `CLEAN` snapshot.
+Retirement or a failed older delivery must not invalidate a newer qualification
+by confusing their revisions. No page/subscriber lock is held over network I/O.
+Registry capacity must scale with admitted page and participant counts, with
+bounded allocation and safe pressure handling; a fixed number of reads cannot
+become an implicit guest RAM limit.
+
 The request ID identifies one VM-scoped operation. A retried read uses the same
 ID. Duplicate replies are harmless after the first matching result.
+Completed read identities, GPA/directory bindings and result-version/digest
+checks must survive through the admitted retention horizon. A consumed full
+page payload may be evicted independently: an explicit retry then fetches the
+same or a newer authoritative snapshot. An older reply cannot complete that
+retry, and different bytes at the same completed version are a conflict.
+Read-receipt capacity must scale with admitted RAM with bounded allocation;
+the in-flight/page-result window must not impose a fixed pages-per-retention
+throughput ceiling. Mutation results retain their exact replay semantics.
+A full execution-input prefetch must use bounded concurrency and one shared
+completion deadline, rather than a fresh timeout for every page. Any missing,
+failed or invalidated required page prevents execution of that interval.
 
 ### 4.2 Normal Dirty Commit
 
@@ -285,6 +308,14 @@ carries the subscription/operation identity; failure prevents the owning fence
 from succeeding and follows its bounded retry/query policy. It cannot become an
 indefinite retry against a departed node.
 
+A successful local send/enqueue is not proof that the subscriber applied a
+push. It may refresh forwarding metadata, but it must not advance
+`observed_version`, renew the subscriber lease, or complete a
+`FENCE_REQUIRED` delivery. Only a qualified read snapshot or a matching
+application delivery ACK can establish the corresponding version. The current
+HINT-only production path therefore remains best-effort cache maintenance and
+must not be treated as a handoff barrier.
+
 A normal committed G to G+1 replacement does not make a healthy subscriber
 `STALE`. `ROUTE_COMMIT` first publishes the successor as the current accepted
 snapshot for its `VmRouteScopeKey`; future subscriber sends resolve that
@@ -387,9 +418,9 @@ If a dirty queue is full, allocation fails, or a required fence cannot complete:
 4. The result must leave the page either committed or `RESYNC`; it may not
    pretend that a lost page is clean.
 
-The current emergency dirty-page direct-send behavior is an example of the
-allowed *shape* of a fallback, but it remains nonconforming until it carries
-the canonical versioned commit semantics.
+An emergency dirty-page direct-send fallback must carry the same canonical
+versioned commit semantics as the normal path; sending bytes alone must not
+mark the page clean or complete a dependent fence.
 
 ## 7. Failure, Retry, and Recovery
 

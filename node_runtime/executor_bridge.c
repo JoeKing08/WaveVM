@@ -22,20 +22,31 @@ struct bridge_state {
     pthread_mutex_t task_lock;
     pthread_cond_t task_available;
     pthread_cond_t task_idle;
-    pthread_t task_worker;
+    struct bridge_worker *workers;
+    size_t worker_count;
+    size_t workers_started;
     struct bridge_task *tasks;
     size_t task_capacity;
     size_t task_head;
     size_t task_count;
-    int task_busy;
+    size_t tasks_busy;
     int stopping;
-    int task_worker_started;
 };
 
 struct bridge_task {
     struct wvm_envelope envelope;
     uint8_t *payload;
+    uint32_t vcpu_index;
 };
+
+struct bridge_worker {
+    struct bridge_state *state;
+    pthread_t thread;
+    uint32_t vcpu_index;
+    int busy;
+};
+
+static unsigned int g_executor_bridge_diag_count;
 
 static int authorize_cpu_run(const struct bridge_state *state,
                              const struct wvm_executor_abi_frame *request,
@@ -102,6 +113,7 @@ static int config_is_admitted(const struct wvm_executor_bridge_config *config,
         config->runtime_gate->manifest != config->manifest ||
         config->local_runtime_instance_id == 0 ||
         config->runtime_connection_id == 0 ||
+        config->manifest->launch_plan.executor_worker_count == 0 ||
         config->manifest->launch_plan.vcpu_handoff_record_capacity == 0 ||
         config->dispatch->vm_id != config->manifest->vm_id ||
         config->dispatch->vm_incarnation != config->manifest->vm_incarnation ||
@@ -263,6 +275,7 @@ static int execute_typed_task(struct bridge_state *state,
     struct wvm_vcpu_handoff_result result;
     uint8_t result_context[WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES];
     int execute_result;
+    int validation_result = 0;
 
     if (!state || !task ||
         wvm_vcpu_handoff_request_decode(
@@ -283,9 +296,24 @@ static int execute_typed_task(struct bridge_state *state,
     execute_result = state->config.execute_handoff(
         state->config.execute_handoff_opaque, &request, &result,
         result_context, sizeof(result_context), error, error_len);
-    if (execute_result != 0 ||
-        wvm_vcpu_handoff_result_validate_request(&request, &result, error,
-                                                  error_len) != 0) {
+    if (execute_result == 0) {
+        validation_result = wvm_vcpu_handoff_result_validate_request(
+            &request, &result, error, error_len);
+    }
+    if (execute_result != 0 || validation_result != 0 ||
+        result.status != WVM_VCPU_HANDOFF_RESULT_SUCCESS) {
+        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 32U) {
+            fprintf(stderr,
+                    "[WVM-EXECUTOR-BRIDGE] handoff failed execute=%d "
+                    "validate=%d result={status=%u exit=%u backend=%u "
+                    "vm=%u vcpu=%u ctx=%zu} error=%s\n",
+                    execute_result, validation_result, result.status,
+                    result.exit_class, result.backend, result.vm_id,
+                    result.vcpu_index, result.context_bytes,
+                    error && error[0] ? error : "unknown");
+        }
+    }
+    if (execute_result != 0 || validation_result != 0) {
         handoff_result_from_request(
             &request, WVM_VCPU_HANDOFF_RESULT_EXECUTOR_FAILURE, &result);
         return cache_terminal_and_send(state, &task->envelope, &request,
@@ -304,9 +332,53 @@ static void task_release(struct bridge_task *task)
     memset(task, 0, sizeof(*task));
 }
 
+/* Hold task_lock only for scheduling, never across execution or a reply. */
+static int take_typed_task_locked(struct bridge_worker *worker,
+                                   struct bridge_task *task)
+{
+    struct bridge_state *state = worker->state;
+    size_t offset;
+
+    for (offset = 0; offset < state->task_count; offset++) {
+        size_t index = (state->task_head + offset) % state->task_capacity;
+        uint32_t vcpu_index = state->tasks[index].vcpu_index;
+        size_t i;
+
+        for (i = 0; i < state->worker_count; i++) {
+            if (state->workers[i].busy &&
+                state->workers[i].vcpu_index == vcpu_index) {
+                break;
+            }
+        }
+        if (i != state->worker_count) {
+            continue;
+        }
+        *task = state->tasks[index];
+        if (offset == 0) {
+            memset(&state->tasks[index], 0, sizeof(state->tasks[index]));
+            state->task_head = (state->task_head + 1U) % state->task_capacity;
+        } else {
+            for (i = offset; i + 1U < state->task_count; i++) {
+                size_t next = (index + 1U) % state->task_capacity;
+
+                state->tasks[index] = state->tasks[next];
+                index = next;
+            }
+            memset(&state->tasks[index], 0, sizeof(state->tasks[index]));
+        }
+        state->task_count--;
+        worker->vcpu_index = vcpu_index;
+        worker->busy = 1;
+        state->tasks_busy++;
+        return 1;
+    }
+    return 0;
+}
+
 static void *typed_task_worker(void *opaque)
 {
-    struct bridge_state *state = opaque;
+    struct bridge_worker *worker = opaque;
+    struct bridge_state *state = worker->state;
 
     for (;;) {
         struct bridge_task task;
@@ -314,26 +386,22 @@ static void *typed_task_worker(void *opaque)
 
         memset(&task, 0, sizeof(task));
         pthread_mutex_lock(&state->task_lock);
-        while (!state->stopping && state->task_count == 0) {
+        while (!state->stopping && !take_typed_task_locked(worker, &task)) {
             pthread_cond_wait(&state->task_available, &state->task_lock);
         }
         if (state->stopping) {
             pthread_mutex_unlock(&state->task_lock);
             break;
         }
-        task = state->tasks[state->task_head];
-        memset(&state->tasks[state->task_head], 0,
-               sizeof(state->tasks[state->task_head]));
-        state->task_head = (state->task_head + 1U) % state->task_capacity;
-        state->task_count--;
-        state->task_busy = 1;
         pthread_mutex_unlock(&state->task_lock);
 
         (void)execute_typed_task(state, &task, error, sizeof(error));
         task_release(&task);
 
         pthread_mutex_lock(&state->task_lock);
-        state->task_busy = 0;
+        worker->busy = 0;
+        state->tasks_busy--;
+        pthread_cond_broadcast(&state->task_available);
         pthread_cond_broadcast(&state->task_idle);
         pthread_mutex_unlock(&state->task_lock);
     }
@@ -341,7 +409,8 @@ static void *typed_task_worker(void *opaque)
 }
 
 static int enqueue_typed_task(struct bridge_state *state,
-                              const struct wvm_envelope *envelope)
+                              const struct wvm_envelope *envelope,
+                              uint32_t vcpu_index)
 {
     struct bridge_task task;
     size_t tail;
@@ -354,12 +423,15 @@ static int enqueue_typed_task(struct bridge_state *state,
     memcpy(task.payload, envelope->payload, envelope->payload_bytes);
     task.envelope = *envelope;
     task.envelope.payload = task.payload;
+    task.vcpu_index = vcpu_index;
 
     pthread_mutex_lock(&state->task_lock);
     if (state->stopping || state->task_count == state->task_capacity) {
+        int result = state->stopping ? -ESHUTDOWN : -ENOBUFS;
+
         pthread_mutex_unlock(&state->task_lock);
         task_release(&task);
-        return state->stopping ? -ESHUTDOWN : -ENOBUFS;
+        return result;
     }
     tail = (state->task_head + state->task_count) % state->task_capacity;
     state->tasks[tail] = task;
@@ -459,7 +531,8 @@ int wvm_executor_bridge_dispatch(
              * immutable payload copy and never blocks the RX thread on local
              * execution or a legacy executor response.
              */
-            cache_result = enqueue_typed_task(state, envelope);
+            cache_result = enqueue_typed_task(state, envelope,
+                                               request.vcpu_index);
             if (cache_result != 0) {
                 handoff_result_from_request(
                     &request, WVM_VCPU_HANDOFF_RESULT_EXECUTOR_FAILURE,
@@ -537,6 +610,7 @@ int wvm_executor_bridge_dispatch_init(
     int idle_initialized = 0;
     int cache_initialized = 0;
     int worker_result;
+    size_t i;
 
     if (!dispatch_opaque) {
         set_error(error, error_len, "executor bridge dispatch output is missing");
@@ -554,10 +628,15 @@ int wvm_executor_bridge_dispatch_init(
     state->config = *config;
     state->task_capacity =
         config->manifest->launch_plan.vcpu_handoff_record_capacity;
+    state->worker_count = config->manifest->launch_plan.executor_worker_count;
+    if (state->worker_count > state->task_capacity) {
+        state->worker_count = state->task_capacity;
+    }
     state->tasks = calloc(state->task_capacity, sizeof(*state->tasks));
-    if (!state->tasks) {
+    state->workers = calloc(state->worker_count, sizeof(*state->workers));
+    if (!state->tasks || !state->workers) {
         initialization_result = -ENOMEM;
-        set_error(error, error_len, "cannot allocate typed executor queue");
+        set_error(error, error_len, "cannot allocate typed executor workers");
         goto fail;
     }
     initialization_result = pthread_mutex_init(&state->task_lock, NULL);
@@ -588,26 +667,35 @@ int wvm_executor_bridge_dispatch_init(
         idle_initialized = 1;
     }
     if (initialization_result != 0) {
+        initialization_result = -initialization_result;
         set_error(error, error_len, "cannot initialize executor idle condition");
-        pthread_cond_destroy(&state->task_available);
-        pthread_mutex_destroy(&state->task_lock);
-        wvm_vcpu_handoff_cache_destroy(&state->handoff_cache);
-        free(state);
-        return -initialization_result;
-    }
-
-    worker_result = pthread_create(&state->task_worker, NULL,
-                                   typed_task_worker, state);
-    if (worker_result != 0) {
-        set_error(error, error_len, "cannot start typed executor worker");
-        initialization_result = -worker_result;
         goto fail;
     }
-    state->task_worker_started = 1;
+
+    for (i = 0; i < state->worker_count; i++) {
+        state->workers[i].state = state;
+        worker_result = pthread_create(&state->workers[i].thread, NULL,
+                                       typed_task_worker, &state->workers[i]);
+        if (worker_result != 0) {
+            set_error(error, error_len, "cannot start typed executor worker");
+            initialization_result = -worker_result;
+            goto fail;
+        }
+        state->workers_started++;
+    }
     *dispatch_opaque = state;
     return 0;
 
 fail:
+    if (state->workers_started != 0) {
+        pthread_mutex_lock(&state->task_lock);
+        state->stopping = 1;
+        pthread_cond_broadcast(&state->task_available);
+        pthread_mutex_unlock(&state->task_lock);
+        for (i = 0; i < state->workers_started; i++) {
+            pthread_join(state->workers[i].thread, NULL);
+        }
+    }
     if (cache_initialized) {
         wvm_vcpu_handoff_cache_destroy(&state->handoff_cache);
     }
@@ -621,6 +709,7 @@ fail:
         pthread_mutex_destroy(&state->task_lock);
     }
     free(state->tasks);
+    free(state->workers);
     free(state);
     return initialization_result;
 }
@@ -637,8 +726,8 @@ void wvm_executor_bridge_dispatch_destroy(void *dispatch_opaque)
     state->stopping = 1;
     pthread_cond_broadcast(&state->task_available);
     pthread_mutex_unlock(&state->task_lock);
-    if (state->task_worker_started) {
-        pthread_join(state->task_worker, NULL);
+    for (i = 0; i < state->workers_started; i++) {
+        pthread_join(state->workers[i].thread, NULL);
     }
     for (i = 0; i < state->task_capacity; i++) {
         task_release(&state->tasks[i]);
@@ -648,6 +737,7 @@ void wvm_executor_bridge_dispatch_destroy(void *dispatch_opaque)
     pthread_cond_destroy(&state->task_available);
     pthread_mutex_destroy(&state->task_lock);
     free(state->tasks);
+    free(state->workers);
     free(state);
 }
 
@@ -666,7 +756,7 @@ int wvm_executor_bridge_dispatch_drain(void *dispatch_opaque,
         int idle;
 
         pthread_mutex_lock(&state->task_lock);
-        idle = state->task_count == 0 && !state->task_busy;
+        idle = state->task_count == 0 && state->tasks_busy == 0;
         if (idle) {
             pthread_mutex_unlock(&state->task_lock);
             return 0;

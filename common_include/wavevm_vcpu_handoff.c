@@ -364,7 +364,7 @@ static int result_valid(const struct wvm_vcpu_handoff_result *result)
     }
     if (result->status == WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE) {
         return result->exit_class == WVM_VCPU_EXIT_MEMORY_ERROR &&
-               result->error_gpa != 0 && result->context_bytes == 0 &&
+               result->context_bytes == 0 &&
                result->context_valid_fields == 0;
     }
     if (result->status == WVM_VCPU_HANDOFF_RESULT_EXECUTOR_FAILURE) {

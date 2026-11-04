@@ -204,7 +204,7 @@ struct send_state {
     struct wvm_envelope response;
     struct wvm_vcpu_handoff_result result;
     uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES +
-                    sizeof(wvm_tcg_context_t)];
+                    WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     size_t context_bytes;
 };
 
@@ -286,7 +286,7 @@ static int executor_stub_execute(
     if (!stub || !request || !result || !result_context ||
         result_context_capacity < WVM_VCPU_HANDOFF_MAX_RESULT_CONTEXT_BYTES ||
         request->backend != WVM_VCPU_BACKEND_TCG ||
-        request->vcpu_index != 3 ||
+        (request->vcpu_index < 3 || request->vcpu_index > 5) ||
         wvm_x86_context_decode(
             request->backend, request->context, request->context_bytes,
             &fields, &context, sizeof(context), error, error_len) != 0 ||
@@ -448,9 +448,9 @@ int main(void)
     wvm_tcg_context_t returned_context;
     uint8_t payload[WVM_VCPU_HANDOFF_REQUEST_HEADER_BYTES +
                     WVM_X86_CONTEXT_WIRE_HEADER_BYTES +
-                    sizeof(wvm_tcg_context_t)];
+                    WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     uint8_t result_context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES +
-                           sizeof(wvm_tcg_context_t)];
+                           WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     uint8_t profile_digest[WVM_SHA256_DIGEST_BYTES];
     size_t payload_bytes = 0;
     uint64_t connection_id = 0;
@@ -735,6 +735,99 @@ int main(void)
         wvm_executor_bridge_dispatch_destroy(drain_bridge);
         stub.block = 0;
         puts("EVID executor_bridge_drain: in_flight_timeout=1 drained=1");
+    }
+
+    {
+        void *parallel_bridge = NULL;
+        struct timespec deadline;
+        unsigned int entered;
+        uint32_t vcpu;
+        int parallel_ok = 0;
+
+        manifest.launch_plan.executor_worker_count = 2;
+        manifest.launch_plan.vcpu_handoff_record_capacity = 4;
+        pthread_mutex_lock(&stub.lock);
+        stub.block = 1;
+        stub.released = 0;
+        stub.entered_count = 0;
+        pthread_mutex_unlock(&stub.lock);
+        if (expect(wvm_executor_bridge_dispatch_init(
+                       &config, &parallel_bridge, error, sizeof(error)) == 0,
+                   "initialize two admitted execution workers")) {
+            goto parallel_out;
+        }
+        for (vcpu = 3; vcpu <= 4; vcpu++) {
+            if (expect(make_request(
+                           &manifest, &projection, vcpu, (uint8_t)(vcpu + 10),
+                           &request, &envelope, payload, sizeof(payload),
+                           &payload_bytes, error, sizeof(error)) == 0 &&
+                           wvm_executor_bridge_dispatch(
+                               parallel_bridge, &envelope, error,
+                               sizeof(error)) == 0,
+                       "enqueue independent vCPU handoffs")) {
+                goto parallel_out;
+            }
+        }
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 5;
+        pthread_mutex_lock(&stub.lock);
+        while (stub.entered_count < 2) {
+            if (pthread_cond_timedwait(&stub.entered, &stub.lock,
+                                       &deadline) != 0) {
+                break;
+            }
+        }
+        entered = stub.entered_count;
+        pthread_mutex_unlock(&stub.lock);
+        if (expect(entered == 2,
+                   "both vCPUs execute before either handoff is released") ||
+            expect(wvm_executor_bridge_dispatch(
+                       parallel_bridge, &envelope, error, sizeof(error)) == 0 &&
+                       wait_for_response(&sent, 5) == 0,
+                   "duplicate in-flight request is answered without execution")) {
+            goto parallel_out;
+        }
+        pthread_mutex_lock(&sent.lock);
+        result = sent.result;
+        pthread_mutex_unlock(&sent.lock);
+        if (expect(result.status == WVM_VCPU_HANDOFF_RESULT_IN_PROGRESS,
+                   "duplicate preserves in-progress semantics") ||
+            expect(make_request(&manifest, &projection, 5, 15, &request,
+                                &envelope, payload, sizeof(payload),
+                                &payload_bytes, error, sizeof(error)) == 0 &&
+                       wvm_executor_bridge_dispatch(
+                           parallel_bridge, &envelope, error,
+                           sizeof(error)) == 0 &&
+                       wvm_executor_bridge_dispatch_drain(
+                           parallel_bridge, 100, error,
+                           sizeof(error)) == -ETIMEDOUT,
+                   "drain includes queued and concurrently executing work")) {
+            goto parallel_out;
+        }
+        pthread_mutex_lock(&stub.lock);
+        entered = stub.entered_count;
+        stub.released = 1;
+        pthread_cond_broadcast(&stub.release);
+        pthread_mutex_unlock(&stub.lock);
+        if (expect(entered == 2, "execution is bounded by admitted workers") ||
+            expect(wvm_executor_bridge_dispatch_drain(
+                       parallel_bridge, 5000, error, sizeof(error)) == 0 &&
+                       wait_for_response(&sent, 8) == 0,
+                   "all three independent handoffs finish after release")) {
+            goto parallel_out;
+        }
+        parallel_ok = 1;
+parallel_out:
+        pthread_mutex_lock(&stub.lock);
+        stub.released = 1;
+        pthread_cond_broadcast(&stub.release);
+        pthread_mutex_unlock(&stub.lock);
+        wvm_executor_bridge_dispatch_destroy(parallel_bridge);
+        if (!parallel_ok) {
+            goto out;
+        }
+        puts("EVID executor_bridge_parallel: workers=2 concurrent=2 "
+             "duplicate_not_executed=1 queued_drain=1");
     }
 
     exit_code = 0;

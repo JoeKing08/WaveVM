@@ -19,6 +19,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L \
     "$repo_root/common_include/wavevm_route_runtime.c" \
     "$repo_root/node_runtime/directory_store.c" \
     "$repo_root/node_runtime/memory_service.c" \
+    "$repo_root/node_runtime/kernel_memory.c" \
     "$repo_root/tests/control-plane/test_memory_service.c" \
     -pthread -o "$tmpdir/test_memory_service"
 "$tmpdir/test_memory_service"

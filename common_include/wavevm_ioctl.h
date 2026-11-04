@@ -60,7 +60,7 @@ struct wvm_ioctl_mem_layout {
  * BIND enforces the advertised max (-ENOSPC). SET_VM_ID is retired (-EOPNOTSUPP).
  */
 #define WVM_KERNEL_CONTEXT_MAGIC       0x574b4358U /* "WKCX" */
-#define WVM_KERNEL_CONTEXT_ABI_VERSION 3U /* F11: +node_instance_id; needs new ko */
+#define WVM_KERNEL_CONTEXT_ABI_VERSION 4U
 #define WVM_KERNEL_DIGEST_BYTES        32U
 #define WVM_KERNEL_FENCE_BYTES         16U
 /* Registry + QUERY_CAPS advertised concurrent Mode A context limit. */
@@ -94,6 +94,7 @@ struct wvm_ioctl_context_bind {
     uint8_t capability_profile_digest[WVM_KERNEL_DIGEST_BYTES];
     uint8_t activation_fence[WVM_KERNEL_FENCE_BYTES];
     struct wvm_ioctl_route_snapshot_key route_snapshot_key;
+    uint8_t attach_capability[WVM_KERNEL_DIGEST_BYTES];
 };
 
 struct wvm_ioctl_context_caps {
@@ -105,7 +106,7 @@ struct wvm_ioctl_context_caps {
     uint64_t feature_bits;
 };
 
-#define IOCTL_WVM_BIND_CONTEXT  _IOW('G', 30, struct wvm_ioctl_context_bind)
+#define IOCTL_WVM_BIND_CONTEXT  _IOWR('G', 30, struct wvm_ioctl_context_bind)
 #define IOCTL_WVM_UNBIND_CONTEXT _IOW('G', 31, struct wvm_ioctl_context_bind)
 #define IOCTL_WVM_QUERY_CAPS    _IOR('G', 32, struct wvm_ioctl_context_caps)
 
@@ -129,5 +130,48 @@ struct wvm_ioctl_diff_status {
 };
 
 #define IOCTL_WVM_QUERY_DIFF_STATUS     _IOR('G', 33, struct wvm_ioctl_diff_status)
+
+/* Local capture/completion boundary. Only the context's runtime owner may
+ * dequeue or complete requests; routing and version decisions stay in it. */
+#define WVM_KERNEL_MEMORY_READ   1U
+#define WVM_KERNEL_MEMORY_COMMIT 2U
+#define WVM_KERNEL_MEMORY_PAGE_BYTES 4096U
+#define WVM_KERNEL_MEMORY_MAX_PENDING 256U
+
+struct wvm_ioctl_memory_operation {
+    uint64_t request_id;
+    uint8_t operation_id[16];
+    uint64_t gpa;
+    uint64_t base_version;
+    uint64_t result_version;
+    int32_t status;
+    uint16_t kind;
+    uint16_t offset;
+    uint32_t data_bytes;
+    uint32_t reserved;
+    uint8_t data[WVM_KERNEL_MEMORY_PAGE_BYTES];
+};
+
+struct wvm_ioctl_memory_config {
+    struct wvm_ioctl_context_bind identity;
+    /* Entire admitted GPA extent; holes remain excluded by RAM registration. */
+    uint64_t guest_physical_limit;
+    uint32_t local_vnode;
+    uint32_t range_count;
+    struct wvm_mem_range ranges[32];
+};
+
+struct wvm_ioctl_memory_invalidate {
+    uint64_t gpa;
+    uint64_t result_version;
+};
+
+#define IOCTL_WVM_MEMORY_OWNER _IOW('G', 34, struct wvm_ioctl_memory_config)
+#define IOCTL_WVM_MEMORY_DEQUEUE _IOR('G', 35, struct wvm_ioctl_memory_operation)
+#define IOCTL_WVM_MEMORY_COMPLETE _IOW('G', 36, struct wvm_ioctl_memory_operation)
+#define IOCTL_WVM_MEMORY_STOP _IO('G', 37)
+#define IOCTL_WVM_MEMORY_DRAIN _IO('G', 38)
+#define IOCTL_WVM_MEMORY_INVALIDATE _IOW('G', 39, struct wvm_ioctl_memory_invalidate)
+#define IOCTL_WVM_MEMORY_QUIESCE _IO('G', 40)
 
 #endif // WAVEVM_IOCTL_H

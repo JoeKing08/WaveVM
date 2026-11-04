@@ -1,0 +1,222 @@
+s6 matrix run_id=s6-a1104 out_dir=/tmp/wavevm-a1104-s6 have_kvm=1 have_wavevm=1
+cells_selected=flat_tcg fractal_tcg flat_kvm fractal_kvm mode_a_one mode_b_dual compute_dual mode_a_dual neg_require_kvm neg_require_kernel auto_tcg_fallback
+cell_deadline_s=180 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=23eacaf9c
+2026年 11月 04日 星期三 12:18:16 CST
+=== CELL flat_tcg ===
+cmd: WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=disabled bash tests/control-plane/test_create_vm_single_node.sh
+RESULT flat_tcg PASS elapsed=17s cleanup_ok=1
+=== CELL fractal_tcg ===
+cmd: WVM_S6_BACKEND=require-tcg bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_tcg PASS elapsed=25s cleanup_ok=1
+=== CELL flat_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm WVM_S6_ACCEL=disabled bash tests/control-plane/test_create_vm_single_node.sh
+RESULT flat_kvm FAIL rc=1 class=memory cleanup_ok=1 note=ok elapsed=34s
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+--- child runtime logs ---
+membership ACTIVE confirmed offline
+=== CELL fractal_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_kvm FAIL rc=1 class=route cleanup_ok=1 note=ok elapsed=35s
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+=== CELL mode_a_one ===
+cmd: WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=require-kernel bash tests/control-plane/test_create_vm_single_node.sh
+RESULT mode_a_one FAIL rc=1 class=unknown cleanup_ok=1 note=ok elapsed=20s
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+seed evidence: live-probe tcg=3 kvm=3 kern=3 records=5
+s6 seed flags='--live-probe' digest_prefix=6a8b81b59c095d34...
+attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=5813951978505593180
+attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=5813951978505593180
+status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=5813951978505593180
+node_runtime_data_port=22713
+local_executor_service_port=22716
+dataplane FAIL: production typed short-exec (WVM1 ingress/gateway)
+s6: dataplane probe FAILED
+=== CELL mode_b_dual ===
+cmd: bash tests/control-plane/test_create_vm_dual_mode_b.sh
+RESULT mode_b_dual FAIL rc=1 class=start cleanup_ok=0 note=cleanup_reported_fail elapsed=16s
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+seed evidence: live-probe tcg=3 kvm=3 kern=3 records=5
+vm=mode-b-vm1 attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14677070622286903096
+vm=mode-b-vm1 attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14677070622286903096
+vm=mode-b-vm2 attempt=0 status=14 recorded_state=9 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17026561310631427604
+vm=mode-b-vm2 attempt=1 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17026561310631427604
+killing Mode B vm1 admitted child=17225 (preserve vm2 child=17279)
+vm2_replay status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17026561310631427604
+s6 STOP: status=6 recorded_state=14 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14677070622286903096
+s6: STOP_VM did not reach SUCCESS/STOPPED (got: status=6 recorded_state=14 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14677070622286903096)
+N6: sibling VM2 still live at /dev/shm/wavevm_ram_wvm-v257-i1-g1-n801-d02a15f5bda2b826 after VM1 STOP attempt
+node_runtime_data_port=25459
+local_executor_service_port=25510
+s6 dataplane probe PASS_PRODUCTION_TYPED cell=mode_b_dual backend=require-tcg vm_id=257
+s6 STOP: status=6 recorded_state=20 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17026561310631427604
+s6: STOP_VM did not reach SUCCESS/STOPPED (got: status=6 recorded_state=20 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17026561310631427604)
+s6: leftover SHM /wavevm_ram_wvm-v257-i1-g1-n801-d02a15f5bda2b826
+s6: leftover path /tmp/wvm_user_wvm-v257-i1-g1-n801-d02a15f5bda2b826.sock
+s6: leftover path /tmp/wvm-v257-i1-g1-n801-d02a15f5bda2b826-ready
+dual STOP: surviving VM2 cleanup not ok
+dual Mode B STOP/cleanup FAILED (N6: surviving VM must STOP cleanly; sibling must stay live)
+=== CELL compute_dual ===
+cmd: bash tests/control-plane/test_same_host_dual_agent_live.sh
+RESULT compute_dual PASS elapsed=8s cleanup_ok=1
+=== CELL mode_a_dual ===
+cmd: bash tests/control-plane/test_create_vm_dual_mode_a.sh
+RESULT mode_a_dual FAIL rc=1 class=unknown cleanup_ok=1 note=ok elapsed=32s
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+seed evidence: live-probe tcg=3 kvm=3 kern=3 records=5
+vm=mode-a-vm1 attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=11486658413073892309
+vm=mode-a-vm1 attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=11486658413073892309
+vm=mode-a-vm2 attempt=0 status=14 recorded_state=9 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=1153506773805029527
+vm=mode-a-vm2 attempt=1 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=1153506773805029527
+node_runtime_data_port=30127
+local_executor_service_port=30130
+dataplane FAIL: production typed short-exec (WVM1 ingress/gateway)
+s6: dataplane probe FAILED
+N6: sibling VM2 still live at /dev/shm/wavevm_ram_wvm-v257-i1-g1-n801-5c40ea62cc6de0dc after VM1 STOP
+node_runtime_data_port=30128
+local_executor_service_port=30179
+dataplane FAIL: production typed short-exec (WVM1 ingress/gateway)
+s6: dataplane probe FAILED
+dual STOP: VM1 cleanup not ok
+dual STOP: VM2 cleanup not ok
+dual STOP/cleanup FAILED (N6: any VM STOP failure fails the cell)
+=== CELL neg_require_kvm ===
+cmd: bash tests/control-plane/test_s6_neg_require_kvm.sh
+RESULT neg_require_kvm PASS elapsed=9s cleanup_ok=1
+=== CELL neg_require_kernel ===
+cmd: bash tests/control-plane/test_s6_neg_require_kernel.sh
+RESULT neg_require_kernel PASS elapsed=9s cleanup_ok=1
+=== CELL auto_tcg_fallback ===
+cmd: bash tests/control-plane/test_s6_auto_tcg_fallback.sh
+RESULT auto_tcg_fallback PASS elapsed=15s cleanup_ok=1
+==== SUMMARY ====
+PASS flat_tcg
+PASS fractal_tcg
+FAIL flat_kvm rc=1
+FAIL fractal_kvm rc=1
+FAIL mode_a_one rc=1
+FAIL mode_b_dual rc=1
+PASS compute_dual
+FAIL mode_a_dual rc=1
+PASS neg_require_kvm
+PASS neg_require_kernel
+PASS auto_tcg_fallback
+totals pass=6 fail=5 skip=0 blocked=0 orphans_ignored=0 out=/tmp/wavevm-a1104-s6 run_id=s6-a1104
+selected=11 invoked=11
+MATRIX_RESULT=FAIL

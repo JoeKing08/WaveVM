@@ -193,10 +193,6 @@ source "$launch_env_file"
 : "${WVM_TCG_QEMU_MEM_MB:?}"
 : "${WVM_TCG_QEMU_MACHINE:?}"
 
-if [[ ! -f "$WVM_RUNTIME_READY_FILE" ]]; then
-    log "ERROR: runtime ready file missing: $WVM_RUNTIME_READY_FILE"
-    exit 1
-fi
 if [[ ! -S "$WVM_RUNTIME_SOCKET" ]]; then
     log "ERROR: runtime socket missing: $WVM_RUNTIME_SOCKET"
     exit 1
@@ -217,22 +213,22 @@ fi
 # Frontend = MASTER (must NOT set WVM_ROLE=SLAVE). Helpers already hold SLAVE.
 unset WVM_ROLE || true
 unset WVM_SOCK_CMD WVM_SOCK_REQ WVM_SOCK_PUSH WVM_EXECUTOR_SESSION_FD || true
-# require-tcg: keep FE on TCG/user path (historical Cirros smoke).
-# require-kvm: allow Auto-KVM bootstrap so FE sends mode_tcg=0 matching
-# negotiated KVM backend (else coordinator rejects handoff as -EINVAL).
-if [[ "${WVM_S6_BACKEND}" == "require-kvm" ]]; then
-    unset WVM_DISABLE_AUTO_KVM || true
-    export WVM_DISABLE_AUTO_KVM=0
-else
-    export WVM_DISABLE_AUTO_KVM=1
-fi
+# Backend selection is expressed by the WaveVM accelerator mode below.  Do not
+# inject the legacy auto-KVM override: backend selection is a runtime contract,
+# not a test workaround.
 
 smp=$vcpus
-if [[ "$smp" -gt 1 ]]; then
+if [[ -n "${WVM_GUEST_SPLIT:-}" ]]; then
+    split="$WVM_GUEST_SPLIT"
+elif [[ "$smp" -gt 1 ]]; then
     split=1
 else
     # All remote via PROXY when single vCPU + split=0 (still remote path).
     split=0
+fi
+if [[ ! "$split" =~ ^[0-9]+$ || "$split" -gt "$smp" ]]; then
+    log "ERROR: split must be an integer between 0 and smp (got $split)"
+    exit 2
 fi
 
 serial_log="$art_dir/vm-serial.log"
@@ -247,13 +243,6 @@ source "$launch_env_file"
 set +a
 unset WVM_ROLE || true
 unset WVM_SOCK_CMD WVM_SOCK_REQ WVM_SOCK_PUSH WVM_EXECUTOR_SESSION_FD || true
-if [[ "${WVM_S6_BACKEND}" == "require-kvm" ]]; then
-    unset WVM_DISABLE_AUTO_KVM || true
-    export WVM_DISABLE_AUTO_KVM=0
-else
-    export WVM_DISABLE_AUTO_KVM=1
-fi
-
 # Cap live FE logs (Joe disk-full). Serial via QEMU file: chardev (attach14 pipe
 # to cap_tee stayed 0B despite live FE). stderr via cap_tee (smoke shell stays up).
 # In-place cap_watch bounds serial file same-inode. No ulimit -f.
@@ -265,8 +254,11 @@ log "log_cap_bytes=$GUEST_LOG_CAP_BYTES file_limit_bytes=$GUEST_FILE_LIMIT_BYTES
 # is loaded (Mode A session), QEMU would auto-pick KERNEL and bind can EINVAL
 # if the create child already owns the context — force user for require-tcg.
 accel_args="wavevm,split=${split}"
-if [[ "${WVM_S6_BACKEND}" != "require-kvm" ]]; then
+if [[ "${WVM_S6_BACKEND}" == "require-tcg" ]]; then
+    accel_args="${accel_args},backend=tcg"
     accel_args="${accel_args},mode=user"
+elif [[ "${WVM_S6_BACKEND}" == "require-kvm" ]]; then
+    accel_args="${accel_args},backend=kvm"
 fi
 "$qemu_bin" \
     -L "$datadir" \
@@ -289,6 +281,23 @@ if [[ -f "$cap_watch" ]]; then
     python3 "$cap_watch" "$frontend_log" "$GUEST_LOG_CAP_BYTES" --pid "$frontend_pid" --interval 15 \
         >/dev/null 2>&1 &
     disown $! 2>/dev/null || true
+fi
+
+ready_deadline=$((SECONDS + 30))
+while [[ ! -f "$WVM_RUNTIME_READY_FILE" && SECONDS -lt ready_deadline ]]; do
+    if ! kill -0 "$frontend_pid" 2>/dev/null; then
+        log "ERROR: frontend exited before manifest-bound runtime readiness"
+        exit 1
+    fi
+    if ! kill -0 "$agent_pid" 2>/dev/null; then
+        log "ERROR: node runtime agent exited before manifest-bound runtime readiness"
+        exit 1
+    fi
+    sleep 0.1
+done
+if [[ ! -f "$WVM_RUNTIME_READY_FILE" ]]; then
+    log "ERROR: QEMU did not complete manifest-bound runtime registration"
+    exit 1
 fi
 sleep 3
 if ! kill -0 "$frontend_pid" 2>/dev/null; then
@@ -364,6 +373,13 @@ wvm_tcg_stats_sum() {
     awk '{ last[$1] = $2 + 0 } END { s = 0; for (k in last) s += last[k]; print s + 0 }'
 }
 
+wvm_memory_stats_sum() {
+    awk -v vm="${WVM_VM_ID:?}" -v incarnation="${WVM_VM_INCARNATION:?}" \
+        -v manifest="${WVM_MANIFEST_GENERATION:?}" \
+        -f "$repo_root/tests/e2e/remote_memory_evidence.awk" \
+        "$create_tmpdir/agent.log"
+}
+
 # G9: snapshot remote completion counters BEFORE controlled load.
 stats_before=$(grep -E '\[WVM-TCG-STATS\]' "$frontend_log" 2>/dev/null | tail -n 40 || true)
 printf '%s\n' "$stats_before" >"$art_dir/stats_before.txt"
@@ -372,9 +388,11 @@ printf '%s\n' "$stats_before" >"$art_dir/stats_before.txt"
 remote_before=$(wvm_tcg_stats_sum remote_done "$frontend_log")
 local_before=$(wvm_tcg_stats_sum local_done "$frontend_log")
 force_before=$(wvm_tcg_stats_sum force_local_used "$frontend_log")
+memory_before=$(wvm_memory_stats_sum)
 echo "remote_done_before=$remote_before" >>"$art_dir/result.txt"
 echo "local_done_before=$local_before" >>"$art_dir/result.txt"
 echo "force_local_used_before=$force_before" >>"$art_dir/result.txt"
+echo "remote_memory_before=$memory_before" >>"$art_dir/result.txt"
 
 cpu_smoke_rc=0
 cpu_smoke_timeout_s=${WVM_GUEST_CPU_SMOKE_TIMEOUT_S:-30}
@@ -408,6 +426,10 @@ if [[ "$cpu_smoke_rc" -ne 0 ]] || ! grep -q 'cpu-smoke-ok' "$art_dir/guest_cpu_s
     cat "$art_dir/result.txt" | tee -a "$art_dir/smoke.log"
     exit 1
 fi
+memory_after=$(wvm_memory_stats_sum)
+memory_delta=$((memory_after - memory_before))
+echo "remote_memory_after=$memory_after" >>"$art_dir/result.txt"
+echo "remote_memory_delta=$memory_delta" >>"$art_dir/result.txt"
 echo 'guest_cpu_smoke=PASS' >>"$art_dir/result.txt"
 
 # G9: after load, require remote_done delta (not READY/region_add banner).
@@ -452,9 +474,9 @@ echo "force_local_used_delta=$force_delta" >>"$art_dir/result.txt"
     echo "force_local $force_before -> $force_after delta=$force_delta"
     echo "=== recent WVM-TCG-STATS / WVM-REMOTE ==="
     printf '%s\n' "$stats_after"
-    echo "=== memory / commit signals (authoritative; no vCPU-dispatch) ==="
-    grep -E 'dirty commit|resync-merge|PUSH_BARRIER_ACK|wavevm_user_mem.*commit|slave TCG slice dirty flush|TYPED_MEM_COMMIT|handoff dirty flush pages=' \
-        "$frontend_log" "$create_tmpdir/agent.log" 2>/dev/null | head -n 80 || true
+    echo "=== completed remote memory operations during workload ==="
+    echo "remote_memory $memory_before -> $memory_after delta=$memory_delta"
+    grep -F '[WVM-MEM-STATS]' "$create_tmpdir/agent.log" 2>/dev/null | tail -n 40 || true
     echo "=== WVM-REMOTE (vcpu only; NOT mem evidence) ==="
     grep -E '\[WVM-REMOTE\]' "$frontend_log" 2>/dev/null | head -n 20 || true
 } >"$art_dir/remote_evidence.txt"
@@ -464,26 +486,10 @@ remote_mem=0
 # Require post-login remote completion growth for designated remote path.
 if [[ "$remote_delta" -gt 0 ]]; then
     remote_vcpu=1
-elif [[ "${WVM_S6_BACKEND}" == "require-kvm" && "$remote_before" -gt 0 ]]; then
-    # require-kvm: boot-time remote_done>0 still proves remote KVM path (§7)
-    # when smoke delta is 0 (e.g. light fallback or drain-local dominated).
-    remote_vcpu=1
-    log "G9 require-kvm: accept remote_done_before=$remote_before (smoke delta=0)"
 fi
-# Memory: REAL dirty/commit/resync/fence only — never WVM-REMOTE vCPU dispatch,
-# never SHM coherent / WVM-TCG-STATS alone (xiaolang M9 mis-attribution).
-# Scan runtime logs only — never remote_evidence.txt titles/banners (B7:
-# a section title containing "dirty commit" previously forced remote_mem=1).
-mem_hits=$(grep -E 'dirty commit|resync-merge|PUSH_BARRIER_ACK|wavevm_user_mem.*commit|slave TCG slice dirty flush pages=[1-9]|TYPED_MEM_COMMIT|handoff dirty flush pages=[1-9]|tcg_dirty_self_emit' \
-    "$frontend_log" "$create_tmpdir/agent.log" \
-    "$create_tmpdir"/*.log 2>/dev/null | head -n 40 || true)
-printf '%s\n' "$mem_hits" >"$art_dir/remote_mem_hits.txt"
-if [[ -n "$mem_hits" ]]; then
-    remote_mem=1
-fi
-# Also accept numeric commit counters if instrumentation printed them.
-if grep -qE 'remote_mem_commit_count=[1-9]|dirty_commit_pages=[1-9]|completed_commit_version=0x[1-9a-fA-F]' \
-    "$art_dir/result.txt" "$frontend_log" "$create_tmpdir/agent.log" 2>/dev/null; then
+# These counters advance only after an identity-checked remote semantic ACK.
+# The after sample precedes the extra vCPU polling window above.
+if [[ "$memory_delta" -gt 0 ]]; then
     remote_mem=1
 fi
 

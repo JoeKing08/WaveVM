@@ -344,6 +344,7 @@ int main(void)
     memory_read.reply_destination_kind =
         WVM_ENVELOPE_ROUTE_DESTINATION_FLAT_VNODE;
     memory_read.reply_destination_vnode = 3;
+    memory_read.reply_node_instance_id = 202;
     if (expect(wvm_mem_read_encode(&memory_read, payload, error,
                                       sizeof(error)) == 0,
                "encode typed memory read payload")) {

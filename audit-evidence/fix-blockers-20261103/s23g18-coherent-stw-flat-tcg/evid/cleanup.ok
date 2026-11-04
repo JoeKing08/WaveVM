@@ -1,0 +1,4 @@
+cleanup_ok=1
+note=stop_not_required
+honesty=REQUIRE_STOP=0_stop_not_required_this_cell
+warn=do_not_treat_as_full_STOP_acceptance

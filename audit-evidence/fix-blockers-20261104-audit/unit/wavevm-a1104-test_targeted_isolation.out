@@ -1,0 +1,15 @@
+WaveVM targeted Mode A isolation (same GPA / multi-FD / async teardown)
+ABI v4
+
+=== Targeted 1: Same GPA two-VM isolation ===
+[OK] Same GPA 0x100000000: VM_A and VM_B patterns isolated
+[OK] VM_B intact after sibling same-GPA teardown
+
+=== Targeted 2: Multi-FD same VM ===
+[OK] Multi-FD same VM: sibling FD survived peer close+unmap
+
+=== Targeted 3: In-flight async teardown ===
+[OK] In-flight teardown: keep-VM survived 8 peer churn cycles (402 fault loops)
+
+TARGETED ISOLATION: ALL PASS
+Isolation evidence OK (same-GPA / multi-FD / async teardown).

@@ -36,6 +36,7 @@ static struct {
 } g_global_vcpu_service = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
+static unsigned int g_vcpu_completion_diag_count;
 
 static void set_error(char *error, size_t error_len, const char *fmt, ...)
 {
@@ -352,13 +353,7 @@ static int reply_from_result(
     reply->mode_tcg = entry->legacy_request.mode_tcg;
     reply->error_gpa = result->error_gpa;
 
-    /*
-     * s23g2: on MEMORY_FAILURE (legacy status < 0) still populate CPU ctx when
-     * the handoff result carries one. Returning a zeroed ACK forced FE into
-     * either silent drop or corrupted import (dual-yes hang).
-     */
-    if (reply->status != 0 &&
-        result->status != WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE) {
+    if (reply->status != 0) {
         return 0;
     }
     if (result->context == NULL || result->context_bytes == 0) {
@@ -375,14 +370,6 @@ static int reply_from_result(
                                legacy_context, legacy_bytes, error,
                                error_len) != 0 ||
         valid_fields != result->context_valid_fields) {
-        if (reply->status != 0) {
-            /* Keep MEMORY_FAILURE status; leave ctx zeroed rather than fail the
-             * whole completion path. FE will refuse import of dead ctx. */
-            if (error && error_len) {
-                error[0] = '\0';
-            }
-            return 0;
-        }
         if (!error || error[0] == '\0') {
             set_error(error, error_len,
                       "typed vCPU completion context cannot populate QEMU ACK");
@@ -652,7 +639,25 @@ int wvm_vcpu_service_complete(
     }
     reply_result = reply_from_result(entry, request, result, &reply, error,
                                      error_len);
+    if (reply_result == 0 &&
+        result->status != WVM_VCPU_HANDOFF_RESULT_SUCCESS &&
+        __sync_fetch_and_add(&g_vcpu_completion_diag_count, 1U) < 32U) {
+        fprintf(stderr,
+                "[WVM-VCPU-SERVICE] non-success result mapped to ACK "
+                "status=%u exit=%u legacy_status=%d vm=%u vcpu=%u\n",
+                result->status, result->exit_class, reply.status,
+                result->vm_id, result->vcpu_index);
+    }
     if (reply_result != 0) {
+        if (__sync_fetch_and_add(&g_vcpu_completion_diag_count, 1U) < 32U) {
+            fprintf(stderr,
+                    "[WVM-VCPU-SERVICE] reply conversion failed rc=%d "
+                    "status=%u exit=%u backend=%u vm=%u vcpu=%u ctx=%zu "
+                    "error=%s\n",
+                    reply_result, result->status, result->exit_class,
+                    result->backend, result->vm_id, result->vcpu_index,
+                    result->context_bytes, error && error[0] ? error : "unknown");
+        }
         memset(&reply, 0, sizeof(reply));
         reply.status = reply_result;
         reply.mode_tcg = entry->legacy_request.mode_tcg;

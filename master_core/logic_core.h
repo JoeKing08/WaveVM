@@ -78,7 +78,8 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
  */
 int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
                                uint16_t offset, const uint8_t *data,
-                               size_t data_bytes, uint64_t *result_version);
+                               size_t data_bytes, int source_shared_backing,
+                               uint64_t *result_version);
 
 /*
  * Publish an already-applied V1 commit to the captured subscriber set.
@@ -88,6 +89,15 @@ int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
 int wvm_publish_local_commit(uint64_t gpa, uint64_t result_version,
                                 uint16_t offset, const uint8_t *data,
                                 size_t data_bytes, uint32_t writer_node_id);
+
+/* Apply a validated typed subscriber update to the local guest boundary. */
+int wvm_apply_local_memory_push(uint64_t gpa, uint64_t base_version,
+                                uint64_t result_version, uint16_t offset,
+                                const uint8_t *data, size_t data_bytes,
+                                int full_page, int backing_already_applied);
+
+/* Select the typed memory path; legacy remote fanout remains the fallback. */
+void wvm_logic_set_typed_memory_path(int enabled);
 
 // [V29] 宣告兴趣 (异步)
 void wvm_declare_interest_in_neighborhood(uint64_t gpa);

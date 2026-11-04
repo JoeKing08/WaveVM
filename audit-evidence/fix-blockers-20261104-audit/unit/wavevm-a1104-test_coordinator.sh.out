@@ -1,0 +1,3 @@
+/usr/bin/ld: /tmp/ccHYusiN.o: in function `wvm_ctl_probe_runtime_ready':
+admission_readiness.c:(.text+0xcf1): undefined reference to `wvm_admission_transport_query_runtime_ready'
+collect2: error: ld returned 1 exit status

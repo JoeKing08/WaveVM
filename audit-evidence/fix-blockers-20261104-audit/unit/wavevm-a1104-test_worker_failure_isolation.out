@@ -1,0 +1,32 @@
+WaveVM Mode A worker-failure-class isolation
+
+=== Concurrent peer destroy under keep-VM faults ===
+... bind keep
+... bind peer
+... layout
+... mmap keep
+... mmap peer
+... prime memset
+... keep primed
+... peer primed
+... spawn stress
+... stress spawned
+... peer cycle 1/12 faults=34
+... peer cycle 2/12 faults=56
+... peer cycle 3/12 faults=67
+... peer cycle 4/12 faults=121
+... peer cycle 5/12 faults=134
+... peer cycle 6/12 faults=157
+... peer cycle 7/12 faults=178
+... peer cycle 8/12 faults=212
+... peer cycle 9/12 faults=259
+... peer cycle 10/12 faults=281
+... peer cycle 11/12 faults=302
+... peer cycle 12/12 faults=382
+[OK] peer destroy×12 under faults (loops=383)
+
+=== Mutual destroy churn ===
+[OK] mutual destroy×10; fresh BIND OK
+
+WORKER-FAILURE ISOLATION: ALL PASS
+NOTE: module TX kthread kill not injected; concurrent detach/destroy + survivor integrity covered. Verify dmesg clean.

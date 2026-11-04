@@ -13,6 +13,10 @@
 #include <sys/ioctl.h>
 #include <errno.h>
 #include <stdint.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <sched.h>
+#include <sys/mman.h>
 #include "../../common_include/wavevm_ioctl.h"
 
 static int bind_vm(int fd, uint32_t vm_id)
@@ -38,6 +42,16 @@ static int bind_vm(int fd, uint32_t vm_id)
            WVM_KERNEL_DIGEST_BYTES);
     if (ioctl(fd, IOCTL_WVM_BIND_CONTEXT, &bind) < 0) {
         fprintf(stderr, "BIND vm=%u: %s\n", vm_id, strerror(errno));
+        return -1;
+    }
+    /* Register the complete admitted range before a frontend RAM layout. */
+    struct wvm_ioctl_memory_config config = {0};
+    config.identity = bind;
+    config.guest_physical_limit = 0x300000000ULL;
+    config.range_count = 1;
+    config.ranges[0].size = config.guest_physical_limit;
+    if (ioctl(fd, IOCTL_WVM_MEMORY_OWNER, &config) != 0) {
+        perror("MEMORY_OWNER");
         return -1;
     }
     return 0;
@@ -93,6 +107,82 @@ static int set_layout(int fd, uint64_t gpa, uint64_t size)
         return -1;
     }
     return 0;
+}
+
+struct unbind_race {
+    int fd;
+    atomic_int stop;
+    atomic_uint maps;
+    atomic_uint errors;
+};
+
+static void *race_bound_operations(void *opaque)
+{
+    struct unbind_race *race = opaque;
+    struct wvm_ioctl_mem_layout layout = { .count = 1 };
+
+    layout.slots[0].size = 4096;
+    while (!atomic_load(&race->stop)) {
+        void *mapping;
+
+        if (ioctl(race->fd, IOCTL_SET_MEM_LAYOUT, &layout) != 0 &&
+            errno != ENOTCONN && errno != ENODEV) {
+            atomic_fetch_add(&race->errors, 1);
+            break;
+        }
+        mapping = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                       MAP_SHARED, race->fd, 0);
+        if (mapping != MAP_FAILED) {
+            atomic_fetch_add(&race->maps, 1);
+            /* Keep a VMA reference across a possible explicit UNBIND. */
+            sched_yield();
+            munmap(mapping, 4096);
+        } else if (errno != ENOTCONN && errno != ENODEV) {
+            atomic_fetch_add(&race->errors, 1);
+            break;
+        }
+    }
+    return NULL;
+}
+
+static int test_concurrent_unbind(void)
+{
+    struct unbind_race race = { .fd = -1 };
+    pthread_t worker;
+    uint32_t vm = 3200;
+    int result = -1;
+
+    atomic_init(&race.stop, 0);
+    atomic_init(&race.maps, 0);
+    atomic_init(&race.errors, 0);
+    race.fd = open("/dev/wavevm", O_RDWR | O_CLOEXEC);
+    if (race.fd < 0 || bind_vm(race.fd, vm) != 0 ||
+        pthread_create(&worker, NULL, race_bound_operations, &race) != 0) {
+        if (race.fd >= 0) close(race.fd);
+        return -1;
+    }
+    while (atomic_load(&race.maps) == 0 && atomic_load(&race.errors) == 0) {
+        sched_yield();
+    }
+    for (unsigned int i = 0; i < 64; i++) {
+        if (unbind_vm(race.fd, vm) != 0 || bind_vm(race.fd, ++vm) != 0) {
+            goto out;
+        }
+        sched_yield();
+    }
+    result = atomic_load(&race.errors) == 0 ? 0 : -1;
+out:
+    atomic_store(&race.stop, 1);
+    pthread_join(worker, NULL);
+    if (atomic_load(&race.errors) != 0) {
+        result = -1;
+    }
+    close(race.fd);
+    if (result == 0) {
+        printf("[OK] same-FD UNBIND races ioctl/mmap: cycles=64 mappings=%u\n",
+               atomic_load(&race.maps));
+    }
+    return result;
 }
 
 int main(void)
@@ -169,6 +259,8 @@ int main(void)
         return 1;
     close(fd2);
     fd2 = -1;
+    if (test_concurrent_unbind() != 0)
+        return 1;
     printf("Mode A dual-context bind/teardown: PASS\n");
     return 0;
 }

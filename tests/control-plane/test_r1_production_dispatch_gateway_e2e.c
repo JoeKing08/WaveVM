@@ -472,8 +472,8 @@ static void *executor_main(void *opaque)
     struct wvm_envelope_reassembler reassembler;
     struct wvm_envelope_reassembled completed;
     uint8_t payload[WVM_VCPU_HANDOFF_RESULT_HEADER_BYTES +
-                    WVM_X86_CONTEXT_WIRE_HEADER_BYTES + sizeof(wvm_tcg_context_t)];
-    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + sizeof(wvm_tcg_context_t)];
+                    WVM_X86_CONTEXT_WIRE_HEADER_BYTES + WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
+    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     char error[192];
     wvm_tcg_context_t legacy;
     size_t context_bytes = 0;
@@ -607,9 +607,9 @@ int main(int argc, char **argv)
     uint16_t executor_control = 0, reply_control = 0;
     int executor_fd = -1, reply_fd = -1, config_fd = -1, sender = -1;
     pid_t gateway = -1;
-    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + sizeof(wvm_tcg_context_t)];
+    uint8_t context[WVM_X86_CONTEXT_WIRE_HEADER_BYTES + WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     uint8_t payload[WVM_VCPU_HANDOFF_REQUEST_HEADER_BYTES +
-                    WVM_X86_CONTEXT_WIRE_HEADER_BYTES + sizeof(wvm_tcg_context_t)];
+                    WVM_X86_CONTEXT_WIRE_HEADER_BYTES + WVM_X86_CONTEXT_MAX_NATIVE_BYTES];
     size_t context_bytes = 0, payload_bytes = 0;
     wvm_tcg_context_t legacy;
     struct wvm_vcpu_handoff_request request;

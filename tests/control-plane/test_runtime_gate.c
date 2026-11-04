@@ -348,6 +348,9 @@ int main(void)
                    second_connection_id != 0 &&
                    second_connection_id != connection_id,
                "register separate local connection from same process") ||
+        expect(wvm_runtime_gate_has_registered_role(
+                   &gate, WVM_MANIFEST_ROLE_QEMU_FRONTEND) != 0,
+               "observe a registered QEMU frontend role") ||
         expect(wvm_runtime_gate_bind_activation(&gate, &manifest, error,
                                                 sizeof(error)) == 0,
                "bind exact activation projection") ||
@@ -406,7 +409,9 @@ int main(void)
     if (expect(wvm_runtime_gate_authorize(&gate, &operation, error,
                                           sizeof(error)) == 0 &&
                    wvm_runtime_gate_revoke(&gate, second_connection_id, error,
-                                           sizeof(error)) == 0,
+                                           sizeof(error)) == 0 &&
+                   wvm_runtime_gate_has_registered_role(
+                       &gate, WVM_MANIFEST_ROLE_QEMU_FRONTEND) == 0,
                "keep the second local connection authorized")) {
         return 1;
     }

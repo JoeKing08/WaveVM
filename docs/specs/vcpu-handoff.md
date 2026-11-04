@@ -206,10 +206,20 @@ zeroing it silently.
 
 For KVM, the contract includes at least:
 
-- General registers, instruction pointer, flags, and segment/control state.
+- General and debug registers, instruction pointer, flags, and segment/control
+  state, including the selected profile's SYSENTER and PAT values.
 - FPU and extended state needed by the selected KVM capability set.
+- The guest CPUID table, including indexed-leaf flags and per-vCPU topology
+  values. Import installs this table before control registers and pending
+  events; an executor must not substitute its host CPU model. The selected
+  profile must be supported by every admitted CPU executor, and features whose
+  state is not carried by the context must be rejected before execution.
 - LAPIC state, vCPU events, MP state, and interrupt injection state.
 - Guest TSC, TSC deadline, kernel GS base, and any required clock/MSR values.
+  The frontend selects additional MSR indices using QEMU's CPU-model state
+  rules. The executor must import and export that same index set, reject
+  partial KVM MSR transfers, and preserve one value per index. A fixed list of
+  common MSRs cannot replace the selected profile's complete state.
 - Pending PIO/MMIO completion data and exit context when QEMU device authority
   must complete a previous exit before the next KVM run.
 - Exit class, error detail, and valid-field indicators.
@@ -478,6 +488,13 @@ It does not relax:
 - required memory fences before `VCPU_RUN`;
 - interrupt watermark merge on import;
 - QEMU device-authority ownership of PIO/MMIO completion.
+
+QEMU `EXCP_ATOMIC` is process-local: a helper must not complete it with its
+own `cpu_exec_step_atomic()` and assume the frontend or other helper processes
+are paused. A remote TCG helper returns an atomic-required exit at the
+unexecuted instruction; the frontend blocks new remote slices, drains
+in-flight slices, and executes the native QEMU atomic step before allowing
+remote slices to resume. Ordinary TCG slices remain concurrent.
 
 A local interval under `force_local` still returns through the ordinary
 `VCPU_EXIT` / import path when it later hands off again.

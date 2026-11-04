@@ -57,6 +57,7 @@ int main(void)
     memset(&commit_request, 0, sizeof(commit_request));
     commit_request.operation_id[15] = 2;
     commit_request.delivery_attempt_id = 8;
+    commit_request.flags = WVM_LOCAL_MEMORY_COMMIT_FLAG_SHARED_BACKING;
     commit_request.commit.gpa = 0x8000;
     commit_request.commit.base_version = 2;
     commit_request.commit.offset = 5;
@@ -65,6 +66,7 @@ int main(void)
         WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
     commit_request.commit.reply_destination_scope = 7;
     commit_request.commit.reply_destination_vnode = 2;
+    commit_request.commit.reply_node_instance_id = 101;
     commit_request.commit.data = commit_data;
     commit_request.commit.data_bytes = sizeof(commit_data);
     if (expect(wvm_local_memory_commit_request_encode(
@@ -78,6 +80,7 @@ int main(void)
                           sizeof(commit_request.operation_id)) == 0 &&
                    decoded_commit_request.delivery_attempt_id ==
                        commit_request.delivery_attempt_id &&
+                   decoded_commit_request.flags == commit_request.flags &&
                    decoded_commit_request.commit.gpa ==
                        commit_request.commit.gpa &&
                    decoded_commit_request.commit.base_version ==

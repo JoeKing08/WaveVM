@@ -20,6 +20,14 @@ struct delayed_completion {
     struct wvm_kvm_dirty_page dirty;
 };
 
+static int prepare_input(void *opaque, uint64_t *error_gpa)
+{
+    unsigned *calls = opaque;
+    (void)error_gpa;
+    ++*calls;
+    return 0;
+}
+
 static void *complete_after_timeout(void *opaque)
 {
     struct delayed_completion *completion = opaque;
@@ -247,6 +255,10 @@ int main(void)
             .max_page_records = 2,
             .completion_timeout_ms = 1000,
         };
+        struct wvm_kvm_memory_slice *first = NULL, *second = NULL;
+        uint8_t bytes[WVM_MEMORY_PAGE_BYTES] = {0};
+        uint8_t update[WVM_MEMORY_PAGE_BYTES] = {1};
+        unsigned prepares = 0;
 
         if (expect(wvm_kvm_page_cache_global_install(
                        &window_config, error, sizeof(error)) == 0,
@@ -254,11 +266,21 @@ int main(void)
             expect(wvm_kvm_page_cache_global_install_full(
                        0, 1, error, sizeof(error)) == 0,
                    "install the execution-window base page") ||
-            expect(wvm_kvm_execution_global_begin(
-                       error, sizeof(error)) == 0,
-                   "begin the execution window") ||
-            expect(wvm_kvm_page_cache_global_install_full(
-                       0, 2, error, sizeof(error)) == -EBUSY,
+            expect(wvm_kvm_execution_global_join(
+                       prepare_input, &prepares, &first, &error_gpa,
+                       error, sizeof(error)) == 0 &&
+                   wvm_kvm_execution_global_join(
+                       prepare_input, &prepares, &second, &error_gpa,
+                       error, sizeof(error)) == 0 && first == second &&
+                   prepares == 1,
+                   "independent vCPUs join one prepared execution cohort") ||
+            expect(wvm_kvm_page_cache_global_install_data(
+                       0, 1, 0, update, sizeof(update), 1, bytes, NULL,
+                       error, sizeof(error)) == -EALREADY && bytes[0] == 0,
+                   "replayed input cannot overwrite RAM during execution") ||
+            expect(wvm_kvm_page_cache_global_install_data(
+                       0, 2, 0, update, sizeof(update), 1, bytes, NULL,
+                       error, sizeof(error)) == -EBUSY && bytes[0] == 0,
                    "reject a full snapshot during execution") ||
             expect(wvm_kvm_page_cache_global_lookup(
                        0, &state, &version, error, sizeof(error)) == 0 &&
@@ -267,26 +289,41 @@ int main(void)
             expect(wvm_kvm_page_cache_global_apply_diff(
                        0, 2, 0, 1, 0, error, sizeof(error)) == -EBUSY,
                    "reject a diff during execution")) {
-            wvm_kvm_execution_global_end();
-            wvm_kvm_page_cache_global_uninstall();
             return 1;
         }
-        wvm_kvm_execution_global_end();
+        if (expect(wvm_kvm_execution_leave(first, 0, 0) == 0 &&
+                   wvm_kvm_execution_leave(second, 0, 0) == 1,
+                   "only the last exiting vCPU may harvest the shared log")) {
+            return 1;
+        }
+        wvm_kvm_execution_complete(second, 0, 0);
+        if (expect(wvm_kvm_execution_wait(first, &error_gpa) == -EUCLEAN &&
+                   wvm_kvm_execution_wait(second, &error_gpa) == -EUCLEAN,
+                   "input conflict fails every vCPU even without dirty pages")) {
+            return 1;
+        }
+        wvm_kvm_execution_release(first);
+        wvm_kvm_execution_release(second);
         if (expect(wvm_kvm_page_cache_global_install_full(
                        0, 2, error, sizeof(error)) == 0,
                    "repair a blocked page after execution") ||
-            expect(wvm_kvm_execution_global_begin(
+            expect(wvm_kvm_execution_global_join(
+                       prepare_input, &prepares, &first, &error_gpa,
                        error, sizeof(error)) == 0,
-                   "begin a second execution window") ||
+                   "begin a second execution cohort") ||
             expect(wvm_kvm_page_cache_global_invalidate(
                        0, error, sizeof(error)) == -EBUSY,
                    "reject invalidation during execution")) {
-            wvm_kvm_execution_global_end();
-            wvm_kvm_page_cache_global_uninstall();
             return 1;
         }
-        wvm_kvm_execution_global_end();
+        (void)wvm_kvm_execution_leave(first, 0, 0);
+        wvm_kvm_execution_complete(first, 0, 0);
+        if (expect(wvm_kvm_execution_wait(first, &error_gpa) == -EUCLEAN,
+                   "a clean-page invalidation fails the whole cohort")) return 1;
+        wvm_kvm_execution_release(first);
         wvm_kvm_page_cache_global_uninstall();
+        puts("EVID kvm_cohort: members=2 preparations=1 single_harvester=1 "
+             "input_conflict_fails_all=1 byte_install_guarded=1");
     }
 
     puts("KVM page-cache tests: PASS");

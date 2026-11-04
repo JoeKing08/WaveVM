@@ -1,0 +1,2 @@
+rm-p7-concurrent-create: PASS
+NOTE: 4-way capacity + exclusive port/SHM lease fail-closed.

@@ -9,7 +9,8 @@
 
 int wvm_kvm_fetch_execution_page(
     uint64_t gpa, const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
-    uint8_t *hva, uint64_t *version_out, char *error, size_t error_len)
+    uint8_t *hva, uint64_t *version_out, uint64_t deadline_ms,
+    char *error, size_t error_len)
 {
     uint8_t state = WVM_KVM_PAGE_ABSENT;
     uint64_t version = 0;
@@ -57,8 +58,8 @@ int wvm_kvm_fetch_execution_page(
 
     memset(&ack, 0, sizeof(ack));
     memset(page, 0, sizeof(page));
-    result = wvm_memory_service_global_request_fault(
-        gpa, operation_id, 1, &ack, page, error, error_len);
+    result = wvm_memory_service_global_request_fault_before(
+        gpa, operation_id, 1, deadline_ms, &ack, page, error, error_len);
     if (result != 0) {
         return result;
     }
@@ -73,12 +74,21 @@ int wvm_kvm_fetch_execution_page(
         return -EIO;
     }
 
-    result = wvm_kvm_page_cache_global_install_full(gpa, ack.version, error,
-                                                    error_len);
+    result = wvm_kvm_page_cache_global_install_data(
+        gpa, ack.version, 0, page, sizeof(page), 1, hva, NULL, error, error_len);
+    if (result == -EALREADY) {
+        /* A newer typed push may have installed bytes while the ACK travelled. */
+        result = wvm_kvm_page_cache_global_lookup(
+            gpa, &state, &version, error, error_len);
+        if (!result && state == WVM_KVM_PAGE_CLEAN && version) {
+            *version_out = version;
+            return 0;
+        }
+        return result ? result : -ESTALE;
+    }
     if (result != 0) {
         return result;
     }
-    memcpy(hva, page, WVM_MEMORY_PAGE_BYTES);
     *version_out = ack.version;
     return 0;
 }

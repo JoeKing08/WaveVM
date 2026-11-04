@@ -108,6 +108,15 @@ int main(void)
         wvm_directory_store_destroy(&store);
         return 1;
     }
+    if (expect(wvm_directory_store_commit_page(
+                   &store, WVM_MEMORY_PAGE_BYTES,
+                   UINT64_C(0x0000000900000001), 0, data, sizeof(data),
+                   &next_version, error, sizeof(error)) == 0 &&
+                   next_version == UINT64_C(0x0000000900000002),
+               "capacity cannot reject a first commit to an existing page")) {
+        wvm_directory_store_destroy(&store);
+        return 1;
+    }
 
     wvm_directory_store_destroy(&store);
 

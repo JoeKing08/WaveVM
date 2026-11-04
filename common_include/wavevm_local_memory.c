@@ -110,12 +110,13 @@ int wvm_local_memory_commit_request_encode(
     if (!request || !output || !output_bytes ||
         all_zero(request->operation_id, sizeof(request->operation_id)) ||
         request->delivery_attempt_id == 0 ||
-        output_capacity < WVM_IDENTITY_ID_BYTES + 8U +
+        (request->flags & ~WVM_LOCAL_MEMORY_COMMIT_FLAGS_VALID) != 0 ||
+        output_capacity < WVM_IDENTITY_ID_BYTES + 8U + 1U +
                               WVM_MEM_COMMIT_HEADER_BYTES ||
         wvm_mem_commit_encode(
             &request->commit,
-            output + WVM_IDENTITY_ID_BYTES + 8U,
-            output_capacity - (WVM_IDENTITY_ID_BYTES + 8U),
+            output + WVM_IDENTITY_ID_BYTES + 8U + 1U,
+            output_capacity - (WVM_IDENTITY_ID_BYTES + 8U + 1U),
             &commit_bytes, error, error_len) != 0) {
         if (!error || error[0] == '\0') {
             set_error(error, error_len,
@@ -126,7 +127,8 @@ int wvm_local_memory_commit_request_encode(
     memcpy(output, request->operation_id, WVM_IDENTITY_ID_BYTES);
     write_be64(output + WVM_IDENTITY_ID_BYTES,
                request->delivery_attempt_id);
-    *output_bytes = WVM_IDENTITY_ID_BYTES + 8U + commit_bytes;
+    output[WVM_IDENTITY_ID_BYTES + 8U] = request->flags;
+    *output_bytes = WVM_IDENTITY_ID_BYTES + 8U + 1U + commit_bytes;
     return 0;
 }
 
@@ -138,13 +140,15 @@ int wvm_local_memory_commit_request_decode(
     struct wvm_mem_commit commit;
 
     if (!input || !request ||
-        input_bytes < WVM_IDENTITY_ID_BYTES + 8U +
+        input_bytes < WVM_IDENTITY_ID_BYTES + 8U + 1U +
                           WVM_MEM_COMMIT_HEADER_BYTES ||
         all_zero(input, WVM_IDENTITY_ID_BYTES) ||
         read_be64(input + WVM_IDENTITY_ID_BYTES) == 0 ||
+        (input[WVM_IDENTITY_ID_BYTES + 8U] &
+         ~WVM_LOCAL_MEMORY_COMMIT_FLAGS_VALID) != 0 ||
         wvm_mem_commit_decode(
-            input + WVM_IDENTITY_ID_BYTES + 8U,
-            input_bytes - (WVM_IDENTITY_ID_BYTES + 8U),
+            input + WVM_IDENTITY_ID_BYTES + 8U + 1U,
+            input_bytes - (WVM_IDENTITY_ID_BYTES + 8U + 1U),
             &commit, error, error_len) != 0) {
         if (!error || error[0] == '\0') {
             set_error(error, error_len,
@@ -155,6 +159,7 @@ int wvm_local_memory_commit_request_decode(
     memset(request, 0, sizeof(*request));
     memcpy(request->operation_id, input, WVM_IDENTITY_ID_BYTES);
     request->delivery_attempt_id = read_be64(input + WVM_IDENTITY_ID_BYTES);
+    request->flags = input[WVM_IDENTITY_ID_BYTES + 8U];
     request->commit = commit;
     return 0;
 }

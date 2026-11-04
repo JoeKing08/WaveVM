@@ -14,6 +14,7 @@
  * ---------------------------------------------------------------------------
  */
 #include "qemu/osdep.h"
+#include "qemu/main-loop.h"
 #include <sys/mman.h>
 #include <signal.h>
 #include <sys/eventfd.h>
@@ -31,6 +32,7 @@
 #include <time.h>
 #include <stdatomic.h>
 #include "sysemu/kvm.h"
+#include "exec/exec-all.h"
 #include "exec/memory.h"
 #include "exec/ram_addr.h"
 
@@ -38,6 +40,10 @@
 #include "../../../common_include/wavevm_local_memory.h"
 #include "../../../common_include/wavevm_memory.h"
 #include "wavevm-runtime-registration.h"
+
+void wavevm_user_mem_record_tcg_write(ram_addr_t ram_addr, unsigned size);
+int wavevm_publish_initial_ram(uint64_t gpa, void *hva, uint64_t bytes,
+                               uint64_t *published_pages);
 
 /*
  * WaveVM V29.5 "Wavelet" User-Mode Memory Engine (Production Ready)
@@ -49,21 +55,30 @@ static int g_fd_req = -1;
 static __thread uint8_t t_net_buf[WVM_MAX_PACKET_SIZE];
 static int g_fd_push = -1;
 static int g_ipc_diff_sock = -1; // [FIX-G1] Master TCG harvester 专用 IPC socket
+/* Kept open so a stopped TCG helper can still prove QEMU frontend readiness. */
+static int g_runtime_registration_fd = -1;
 static void *g_ram_base = NULL;
 static size_t g_ram_size = 0;
 static void *g_shm_shadow = NULL;
 static uint32_t g_slave_id = 0;
 static bool g_fault_hook_enabled = false;
 static bool g_fault_hook_checked = false;
-/* Same-host TCG: slave joined WVM_SHM_FILE; RAM coherent with master FE. */
+/* Local helper/runtime share a backing; this is not a remote FE proof. */
 static int g_tcg_shm_coherent = 0;
+/*
+ * A helper's RAM dirty bitmap starts dirty while QEMU is constructing the
+ * machine and joining the shared backing.  Those bits describe the admitted
+ * initial image, not a guest write from a remote CPU slice.  Consume that
+ * bootstrap state once, immediately before the first slice, so later dirty
+ * bits have a matching pre-image generation.
+ */
+static atomic_bool g_tcg_dirty_baseline_ready = false;
 
 void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
 {
     g_tcg_shm_coherent = enabled ? 1 : 0;
     if (g_tcg_shm_coherent) {
-        /* Shared pages must stay addressable; PROT_NONE only hides already-
-         * correct SHM contents behind demand faults / IPC pulls. */
+        /* The local runtime installs canonical pages in this shared backing. */
         g_fault_hook_enabled = false;
         /*
          * Join may enable coherent after wavevm_user_mem_init. Ensure dirty
@@ -82,7 +97,6 @@ int wavevm_user_mem_tcg_shm_coherent(void)
 {
     return g_tcg_shm_coherent;
 }
-
 
 /*
  * Deferred SIGSEGV fault path (capability-fault-engines.md §4.2 / V1 non-goal):
@@ -153,12 +167,234 @@ static pthread_t g_harvester_thread;
 typedef struct {
     uintptr_t hva_start;
     uintptr_t hva_end;
+    ram_addr_t ram_start;
     uint64_t  gpa_start;
     uint64_t  size;
 } GVMRamBlock;
 
 static GVMRamBlock g_mem_blocks[MAX_RAM_BLOCKS];
 static int g_block_count = 0;
+
+int wavevm_user_mem_prepare_tcg_dirty_baseline(void)
+{
+    bool expected = false;
+    int cleared = 0;
+
+    if (!g_tcg_shm_coherent || kvm_enabled() || g_block_count <= 0) {
+        return 0;
+    }
+    if (!atomic_compare_exchange_strong_explicit(
+            &g_tcg_dirty_baseline_ready, &expected, true,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return 0;
+    }
+
+    for (int bi = 0; bi < g_block_count; bi++) {
+        GVMRamBlock *block = &g_mem_blocks[bi];
+
+        if (block->ram_start == RAM_ADDR_INVALID) {
+            continue;
+        }
+        for (uint64_t offset = 0; offset + WVM_MEMORY_PAGE_BYTES <= block->size;
+             offset += WVM_MEMORY_PAGE_BYTES) {
+            if (cpu_physical_memory_test_and_clear_dirty(
+                    block->ram_start + offset, WVM_MEMORY_PAGE_BYTES,
+                    DIRTY_MEMORY_MIGRATION)) {
+                cleared++;
+            }
+        }
+    }
+
+    fprintf(stderr,
+            "[WaveVM-User] TCG coherent dirty baseline consumed pages=%d "
+            "blocks=%d\n",
+            cleared, g_block_count);
+    return cleared;
+}
+
+/* WVM coherent pre-image support begin */
+/*
+ * Coherent TCG writes do not take the fault-hook path.  QEMU's dirty bitmap
+ * therefore tells us only that a page changed, not which bytes belonged to
+ * this execution generation.  Keep one pre-image for the first TCG store in
+ * each generation so a stale commit can merge the local write-set onto the
+ * newer directory page instead of publishing an old full-page snapshot.
+ */
+typedef struct WVMCoherentPreimage {
+    uint64_t gpa;
+    uint64_t generation;
+    uint8_t *bytes;
+    struct WVMCoherentPreimage *next;
+} WVMCoherentPreimage;
+
+static WVMCoherentPreimage *g_coherent_preimages;
+static pthread_mutex_t g_coherent_preimage_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic uint64_t g_coherent_generation = 1;
+static _Atomic uint64_t g_coherent_capture_failed_generation;
+
+static bool coherent_ram_page_from_ram_addr(ram_addr_t ram_addr,
+                                             uint64_t *gpa_out,
+                                             uint8_t **hva_out)
+{
+    for (int i = 0; i < g_block_count; i++) {
+        GVMRamBlock *blk = &g_mem_blocks[i];
+        ram_addr_t offset;
+
+        if (blk->ram_start == RAM_ADDR_INVALID || ram_addr < blk->ram_start) {
+            continue;
+        }
+        offset = ram_addr - blk->ram_start;
+        if (offset >= blk->size) {
+            continue;
+        }
+        offset &= ~((ram_addr_t)WVM_MEMORY_PAGE_BYTES - 1);
+        if (offset >= blk->size) {
+            continue;
+        }
+        *gpa_out = blk->gpa_start + offset;
+        *hva_out = (uint8_t *)(blk->hva_start + offset);
+        return true;
+    }
+    return false;
+}
+
+static WVMCoherentPreimage *coherent_find_preimage_locked(uint64_t gpa,
+                                                           uint64_t generation)
+{
+    for (WVMCoherentPreimage *entry = g_coherent_preimages;
+         entry; entry = entry->next) {
+        if (entry->gpa == gpa && entry->generation == generation) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+static int coherent_copy_preimage(uint64_t gpa, uint64_t generation,
+                                  uint8_t out[WVM_MEMORY_PAGE_BYTES],
+                                  uint64_t *used_generation)
+{
+    int result = -ENOENT;
+    WVMCoherentPreimage *selected = NULL;
+
+    pthread_mutex_lock(&g_coherent_preimage_lock);
+    /*
+     * A TCG write hook runs before its store.  The dirty snapshot can win the
+     * race after the hook captured its pre-image but before the store sets the
+     * dirty bit.  That write then appears in the next bitmap generation.  Use
+     * the oldest still-pending pre-image so rebasing includes every local byte
+     * change since the last successful commit.
+     */
+    for (WVMCoherentPreimage *entry = g_coherent_preimages;
+         entry; entry = entry->next) {
+        if (entry->gpa == gpa && entry->generation <= generation &&
+            (!selected || entry->generation < selected->generation)) {
+            selected = entry;
+        }
+    }
+    if (selected) {
+        if (selected->bytes) {
+            memcpy(out, selected->bytes, WVM_MEMORY_PAGE_BYTES);
+            if (used_generation) {
+                *used_generation = selected->generation;
+            }
+            result = 0;
+        } else {
+            result = -EIO;
+        }
+    } else {
+        uint64_t failed_generation = atomic_load_explicit(
+            &g_coherent_capture_failed_generation, memory_order_acquire);
+        if (failed_generation != 0 && failed_generation <= generation) {
+            result = -EIO;
+        }
+    }
+    pthread_mutex_unlock(&g_coherent_preimage_lock);
+    return result;
+}
+
+static void coherent_discard_preimage(uint64_t gpa, uint64_t generation)
+{
+    pthread_mutex_lock(&g_coherent_preimage_lock);
+    WVMCoherentPreimage **cursor = &g_coherent_preimages;
+    while (*cursor) {
+        WVMCoherentPreimage *entry = *cursor;
+        if (entry->gpa == gpa && entry->generation <= generation) {
+            *cursor = entry->next;
+            free(entry->bytes);
+            free(entry);
+            continue;
+        }
+        cursor = &entry->next;
+    }
+    pthread_mutex_unlock(&g_coherent_preimage_lock);
+}
+
+/* Called by QEMU's notdirty_write() before the first store retires. */
+void wavevm_user_mem_record_tcg_write(ram_addr_t ram_addr, unsigned size)
+{
+    uint64_t first = (uint64_t)ram_addr & ~(uint64_t)(WVM_MEMORY_PAGE_BYTES - 1);
+    uint64_t last;
+    uint64_t generation;
+
+    /* Only the slave bitmap-snapshot path consumes these pre-images.  The
+     * master uses flush_dirty_to_ipc and has no matching generation advance,
+     * so recording there would retain entries indefinitely. */
+    if (!g_tcg_shm_coherent || !g_is_slave || size == 0) {
+        return;
+    }
+    if ((uint64_t)size - 1 > UINT64_MAX - (uint64_t)ram_addr) {
+        pthread_mutex_lock(&g_coherent_preimage_lock);
+        atomic_store_explicit(&g_coherent_capture_failed_generation,
+                              atomic_load_explicit(&g_coherent_generation,
+                                                   memory_order_acquire),
+                              memory_order_release);
+        pthread_mutex_unlock(&g_coherent_preimage_lock);
+        return;
+    }
+    last = ((uint64_t)ram_addr + size - 1) &
+           ~(uint64_t)(WVM_MEMORY_PAGE_BYTES - 1);
+
+    pthread_mutex_lock(&g_coherent_preimage_lock);
+    generation = atomic_load_explicit(&g_coherent_generation,
+                                     memory_order_acquire);
+    for (uint64_t page = first;; page += WVM_MEMORY_PAGE_BYTES) {
+        uint64_t gpa;
+        uint8_t *hva;
+        WVMCoherentPreimage *entry;
+
+        if (coherent_ram_page_from_ram_addr((ram_addr_t)page, &gpa, &hva)) {
+            entry = coherent_find_preimage_locked(gpa, generation);
+            if (!entry) {
+                entry = calloc(1, sizeof(*entry));
+                if (entry) {
+                    entry->bytes = malloc(WVM_MEMORY_PAGE_BYTES);
+                }
+                if (!entry || !entry->bytes) {
+                    free(entry ? entry->bytes : NULL);
+                    free(entry);
+                    atomic_store_explicit(
+                        &g_coherent_capture_failed_generation, generation,
+                        memory_order_release);
+                } else {
+                    entry->gpa = gpa;
+                    entry->generation = generation;
+                    memcpy(entry->bytes, hva, WVM_MEMORY_PAGE_BYTES);
+                    entry->next = g_coherent_preimages;
+                    g_coherent_preimages = entry;
+                }
+            }
+        } else {
+            atomic_store_explicit(&g_coherent_capture_failed_generation,
+                                  generation, memory_order_release);
+        }
+        if (page >= last || UINT64_MAX - page < WVM_MEMORY_PAGE_BYTES) {
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_coherent_preimage_lock);
+}
+/* WVM coherent pre-image support end */
 
 #define MAX_VOLATILE_RANGES 16
 
@@ -221,6 +457,7 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
     }
     g_mem_blocks[g_block_count].hva_start = (uintptr_t)hva;
     g_mem_blocks[g_block_count].hva_end   = (uintptr_t)hva + size;
+    g_mem_blocks[g_block_count].ram_start = qemu_ram_addr_from_host(hva);
     g_mem_blocks[g_block_count].gpa_start = gpa;
     g_mem_blocks[g_block_count].size      = size;
     g_block_count++;
@@ -259,6 +496,52 @@ static void* gpa_to_hva_safe(uint64_t gpa) {
         }
     }
     return NULL;
+}
+
+static void wvm_invalidate_code_page_on_cpu(CPUState *cpu,
+                                           run_on_cpu_data data)
+{
+    ram_addr_t start = data.host_ulong;
+
+    (void)cpu;
+    mmap_lock();
+    tb_invalidate_phys_range(start, start + WVM_MEMORY_PAGE_BYTES);
+    mmap_unlock();
+}
+
+static void wvm_invalidate_pushed_code_page(uint64_t gpa)
+{
+    void *hva;
+    ram_addr_t ram_addr;
+
+    if (!tcg_enabled()) {
+        return;
+    }
+    hva = gpa_to_hva_safe(gpa);
+    if (!hva) {
+        return;
+    }
+    ram_addr = qemu_ram_addr_from_host(hva);
+    if (ram_addr == RAM_ADDR_INVALID) {
+        return;
+    }
+    if (cpu_physical_memory_get_dirty_flag(ram_addr, DIRTY_MEMORY_CODE)) {
+        return;
+    }
+
+    if (first_cpu) {
+        async_safe_run_on_cpu(first_cpu, wvm_invalidate_code_page_on_cpu,
+                              RUN_ON_CPU_HOST_ULONG(ram_addr));
+    }
+    {
+        static unsigned int log_count;
+        if (log_count++ < 24) {
+            fprintf(stderr,
+                    "[WVM-TCG-TB-INVALIDATE] gpa=%#llx ram=%#llx pages=1\n",
+                    (unsigned long long)gpa,
+                    (unsigned long long)ram_addr);
+        }
+    }
 }
 
 // 通用极速零检测
@@ -369,6 +652,7 @@ typedef struct {
     uint16_t len;
     uint8_t *data;
     uint64_t timestamp_us; // 存入时间戳
+    bool backing_already_applied;
     bool active;
 } ReorderSlot;
 
@@ -381,7 +665,9 @@ static inline int get_reorder_idx(uint64_t gpa, uint64_t version) {
 }
 
 // 存入未来的包
-static void buffer_future_packet(uint64_t gpa, uint64_t version, uint16_t type, void *data, uint16_t len) {
+static void buffer_future_packet(uint64_t gpa, uint64_t version, uint16_t type,
+                                 void *data, uint16_t len,
+                                 bool backing_already_applied) {
     int idx = get_reorder_idx(gpa, version);
     pthread_spin_lock(&g_reorder_lock);
 
@@ -393,6 +679,7 @@ static void buffer_future_packet(uint64_t gpa, uint64_t version, uint16_t type, 
     g_reorder_buf[idx].msg_type = type;
     g_reorder_buf[idx].len = len;
     g_reorder_buf[idx].active = true;
+    g_reorder_buf[idx].backing_already_applied = backing_already_applied;
     g_reorder_buf[idx].timestamp_us = get_us_time();
     g_reorder_buf[idx].data = malloc(len);
     if (g_reorder_buf[idx].data) memcpy(g_reorder_buf[idx].data, data, len);
@@ -411,7 +698,8 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write);
  * [关键逻辑] 执行严格的版本判定（is_next_version）：顺序包直接 memcpy，版本断层包则强制失效（Invalidate）本地映射。
  * [后果] 实现了 MESI 协议的远程写入动作。它保证了即便在乱序网络下，本地 vCPU 看到的内存也是单调递增的一致性状态。
  */
-void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
+static void wvm_apply_push(uint16_t msg_type, void *payload,
+                           bool backing_already_applied) {
     {
         static unsigned long push_count;
         bool tracked_push = msg_type == MSG_PAGE_PUSH_DIFF ||
@@ -463,14 +751,19 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             // 1. 安全 GPA→HVA 转换（兼容 PCI hole 多段 RAM）
             void *page_hva = gpa_to_hva_safe(gpa);
             if (!page_hva) return;
-            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
-            // 2. 应用增量数据
-            memcpy((uint8_t*)page_hva + offset, log->data, size);
-            // 3. 放入惰性锁回队列 (性能优化)
-            defer_ro_protect(gpa);
+            if (!(backing_already_applied && g_tcg_shm_coherent)) {
+                mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
+                // 2. Apply the diff when the local runtime did not install it.
+                memcpy((uint8_t*)page_hva + offset, log->data, size);
+                // 3. 放入惰性锁回队列 (性能优化)
+                defer_ro_protect(gpa);
+            }
 
             // 4. 更新本地版本
             set_local_page_version(gpa, push_ver);
+            if (size != 0) {
+                wvm_invalidate_pushed_code_page(gpa);
+            }
         }
         // 情况 C: 版本断层 (Gap Detected)
         // 例如：本地是 v10，收到了 v12。中间缺了 v11。
@@ -501,13 +794,16 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
         if (is_newer_version(get_local_page_version(gpa), push_ver)) {
             void *page_hva = gpa_to_hva_safe(gpa);
             if (!page_hva) return;
-            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
-            memcpy(page_hva, full->data, 4096);
+            if (!(backing_already_applied && g_tcg_shm_coherent)) {
+                mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
+                memcpy(page_hva, full->data, 4096);
 
-            // 惰性锁回
-            defer_ro_protect(gpa);
+                // 惰性锁回
+                defer_ro_protect(gpa);
+            }
 
             set_local_page_version(gpa, push_ver);
+            wvm_invalidate_pushed_code_page(gpa);
         }
     }
     // --- 分支 3: Prophet RPC (V29 新增) ---
@@ -525,8 +821,10 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             if (gpa + r_len <= g_ram_size) {
                 void *rpc_hva = gpa_to_hva_safe(gpa);
                 if (!rpc_hva) continue;
-                mprotect(rpc_hva, r_len, PROT_READ | PROT_WRITE);
-                memset(rpc_hva, val, r_len);
+                if (!(backing_already_applied && g_tcg_shm_coherent)) {
+                    mprotect(rpc_hva, r_len, PROT_READ | PROT_WRITE);
+                    memset(rpc_hva, val, r_len);
+                }
                 // [FIX] 同步 Prophet 版本号，否则后续 diff 引擎认为该页没变过，
                 //       导致远端节点版本断层无法收敛。
                 for (uint64_t pg = gpa & ~0xFFFULL; pg < gpa + r_len; pg += 4096) {
@@ -537,6 +835,16 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             }
         }
     }
+}
+
+void wvm_apply_remote_push(uint16_t msg_type, void *payload)
+{
+    wvm_apply_push(msg_type, payload, false);
+}
+
+void wvm_apply_local_push(uint16_t msg_type, void *payload)
+{
+    wvm_apply_push(msg_type, payload, true);
 }
 
 // 检查并应用后续包 (链式反应)
@@ -571,13 +879,14 @@ hit:
     // 命中！执行应用逻辑
     void *d = s->data;
     uint16_t t = s->msg_type;
+    bool backing_already_applied = s->backing_already_applied;
 
     s->active = false;
     s->data = NULL; // [修复] 彻底杜绝野指针
 
     pthread_spin_unlock(&g_reorder_lock);
 
-    wvm_apply_remote_push(t, d);
+    wvm_apply_push(t, d, backing_already_applied);
     free(d);
     return true;
 }
@@ -601,68 +910,140 @@ typedef struct WVMHandoffDirtyJournal {
 
 // 线程局部
 static __thread int t_com_sock = -1;
+static __thread uint64_t t_memory_deadline_us;
+#define WVM_MEMORY_IPC_TIMEOUT_US 5000000ULL
+#define WVM_MEMORY_DIRTY_BATCH_TIMEOUT_US 60000000ULL
 
 // --- 辅助函数 ---
 
-// 使用二级页表风格的目录来存储版本号，适配 64 位地址空间
-
-#define L1_BITS 10
-#define L2_BITS 10
-#define L1_SIZE (1UL << L1_BITS)
-#define L2_SIZE (1UL << L2_BITS)
 #define PAGE_SHIFT 12
 
-// 二级索引结构
-static uint64_t **g_ver_root = NULL;
+/* Sparse radix covers every bit of a uint64_t GPA, with no modulo alias.
+ * Published nodes live for the QEMU process lifetime; readers need no lock. */
+#define WVM_PAGE_VERSION_BITS 10U
+#define WVM_PAGE_VERSION_SLOTS (1U << WVM_PAGE_VERSION_BITS)
+#define WVM_PAGE_VERSION_LEVELS ((64U - PAGE_SHIFT + WVM_PAGE_VERSION_BITS - 1) / WVM_PAGE_VERSION_BITS)
+struct wvm_page_version_node {
+    uintptr_t entries[WVM_PAGE_VERSION_SLOTS];
+};
+static struct wvm_page_version_node g_page_versions;
 
-/*
- * [物理意图] 维护本地缓存页面的“逻辑时钟（版本号）”快照。
- * [关键逻辑] 采用二级页表结构的索引表（Radix-like Table），以 O(1) 时间复杂度追踪 500PB 空间内每页的版本。
- * [后果] 这是判定“何为真理”的基石。版本号记录错误会直接导致读到旧数据（Stale Read）或触发不必要的全页强制同步。
- */
-static uint64_t get_local_page_version(uint64_t gpa) {
-    if (!g_ver_root) return 0;
-
+static uint64_t *local_page_version_slot(uint64_t gpa, bool create)
+{
+    struct wvm_page_version_node *node = &g_page_versions;
     uint64_t pfn = gpa >> PAGE_SHIFT;
-    uint64_t l1_idx = (pfn >> L2_BITS) & (L1_SIZE - 1);
-    uint64_t l2_idx = pfn & (L2_SIZE - 1);
 
-    if (g_ver_root[l1_idx] == NULL) return 0;
-    return __atomic_load_n(&g_ver_root[l1_idx][l2_idx], __ATOMIC_ACQUIRE);
+    for (int level = WVM_PAGE_VERSION_LEVELS - 1; level > 0; level--) {
+        unsigned int index = (pfn >> (level * WVM_PAGE_VERSION_BITS)) &
+                             (WVM_PAGE_VERSION_SLOTS - 1);
+        uintptr_t child = __atomic_load_n(&node->entries[index], __ATOMIC_ACQUIRE);
+        if (!child && create) {
+            struct wvm_page_version_node *allocated = g_malloc0(sizeof(*allocated));
+            uintptr_t expected = 0;
+            if (!__atomic_compare_exchange_n(&node->entries[index], &expected,
+                    (uintptr_t)allocated, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+                g_free(allocated);
+                child = expected;
+            } else {
+                child = (uintptr_t)allocated;
+            }
+        }
+        if (!child)
+            return NULL;
+        node = (struct wvm_page_version_node *)child;
+    }
+    return (uint64_t *)&node->entries[pfn & (WVM_PAGE_VERSION_SLOTS - 1)];
 }
 
-static void set_local_page_version(uint64_t gpa, uint64_t version) {
-    if (!g_ver_root) {
-        g_ver_root = calloc(L1_SIZE, sizeof(uint64_t *));
-        if (!g_ver_root) return; // OOM: 静默放弃版本追踪，不会崩溃
-    }
+static uint64_t get_local_page_version(uint64_t gpa)
+{
+    uint64_t *slot = local_page_version_slot(gpa, false);
+    return slot ? __atomic_load_n(slot, __ATOMIC_ACQUIRE) : 0;
+}
 
-    uint64_t pfn = gpa >> PAGE_SHIFT;
-    uint64_t l1_idx = (pfn >> L2_BITS) & (L1_SIZE - 1);
-    uint64_t l2_idx = pfn & (L2_SIZE - 1);
-
-    if (g_ver_root[l1_idx] == NULL) {
-        g_ver_root[l1_idx] = calloc(L2_SIZE, sizeof(uint64_t));
-        if (!g_ver_root[l1_idx]) return; // OOM: 同上
-    }
-    __atomic_store_n(&g_ver_root[l1_idx][l2_idx], version, __ATOMIC_RELEASE);
+static void set_local_page_version(uint64_t gpa, uint64_t version)
+{
+    uint64_t *slot = local_page_version_slot(gpa, true);
+    __atomic_store_n(slot, version, __ATOMIC_RELEASE);
 }
 
 static void safe_log(const char *msg) {
     if (write(STDERR_FILENO, msg, strlen(msg))) {};
 }
 
-// 健壮的阻塞读取 (处理 EINTR)
-static int read_exact(int fd, void *buf, size_t len) {
-    size_t received = 0;
-    char *ptr = (char *)buf;
-    while (received < len) {
-        ssize_t ret = read(fd, ptr + received, len - received);
-        if (ret > 0) received += ret;
-        else if (ret == 0) return -1; // EOF
-        else if (errno != EINTR) return -1; // Error
+static int memory_ipc_transfer(int fd, void *buf, size_t len, bool sending,
+                                uint64_t deadline_us)
+{
+    uint8_t *ptr = buf;
+
+    while (len != 0) {
+        uint64_t now = get_us_time();
+        struct pollfd pfd = {.fd = fd, .events = sending ? POLLOUT : POLLIN};
+        int timeout_ms;
+        int ready;
+        ssize_t n;
+
+        if (now >= deadline_us) {
+            return -ETIMEDOUT;
+        }
+        timeout_ms = (int)MIN((deadline_us - now + 999) / 1000,
+                              (uint64_t)INT_MAX);
+        ready = poll(&pfd, 1, timeout_ms);
+        if (ready < 0 && errno == EINTR) {
+            continue;
+        }
+        if (ready <= 0) {
+            return ready == 0 ? -ETIMEDOUT : -errno;
+        }
+        n = sending ? send(fd, ptr, len, MSG_DONTWAIT | MSG_NOSIGNAL) :
+                      recv(fd, ptr, len, MSG_DONTWAIT);
+        if (n < 0 && (errno == EINTR || errno == EAGAIN ||
+                      errno == EWOULDBLOCK)) {
+            continue;
+        }
+        if (n <= 0) {
+            return n == 0 ? -ECONNRESET : -errno;
+        }
+        ptr += n;
+        len -= (size_t)n;
     }
     return 0;
+}
+
+static uint64_t memory_ipc_deadline(void)
+{
+    uint64_t now = get_us_time();
+    uint64_t deadline = now > UINT64_MAX - WVM_MEMORY_IPC_TIMEOUT_US
+                            ? UINT64_MAX
+                            : now + WVM_MEMORY_IPC_TIMEOUT_US;
+
+    return t_memory_deadline_us ? MIN(deadline, t_memory_deadline_us) : deadline;
+}
+
+static uint64_t memory_dirty_batch_deadline(void)
+{
+    uint64_t now = get_us_time();
+    uint64_t deadline = now > UINT64_MAX - WVM_MEMORY_DIRTY_BATCH_TIMEOUT_US
+                            ? UINT64_MAX
+                            : now + WVM_MEMORY_DIRTY_BATCH_TIMEOUT_US;
+
+    if (t_memory_deadline_us && t_memory_deadline_us < deadline) {
+        deadline = t_memory_deadline_us;
+    }
+    return deadline;
+}
+
+static void discard_memory_ipc(int fd)
+{
+    /* A partial exchange cannot safely share framing with the next request. */
+    shutdown(fd, SHUT_RDWR);
+    if (fd == t_com_sock) {
+        close(t_com_sock);
+        t_com_sock = -1;
+    } else if (fd == g_ipc_diff_sock) {
+        close(g_ipc_diff_sock);
+        g_ipc_diff_sock = -1;
+    }
 }
 
 static void write_be64(uint8_t output[8], uint64_t value)
@@ -726,6 +1107,7 @@ static int fill_commit_reply_destination(
     uint64_t kind;
     uint64_t scope;
     uint64_t vnode;
+    uint64_t node_instance;
 
     if (!commit ||
         parse_u64_env("WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_KIND",
@@ -734,12 +1116,14 @@ static int fill_commit_reply_destination(
                          &scope) != 0 ||
         parse_u64_env("WVM_RUNTIME_LOCAL_PRIMARY_DESTINATION_VNODE",
                          &vnode) != 0 ||
-        kind > UINT16_MAX || vnode > UINT32_MAX) {
+        parse_u64_env("WVM_NODE_INSTANCE_ID", &node_instance) != 0 ||
+        kind > UINT16_MAX || vnode > UINT32_MAX || node_instance == 0) {
         return -EINVAL;
     }
     commit->reply_destination_kind = (uint16_t)kind;
     commit->reply_destination_scope = scope;
     commit->reply_destination_vnode = (uint32_t)vnode;
+    commit->reply_node_instance_id = node_instance;
     return 0;
 }
 
@@ -759,6 +1143,11 @@ static int ack_status_to_errno(uint16_t status)
     default:
         return -EPROTO;
     }
+}
+
+static bool is_initial_directory_version(uint64_t version)
+{
+    return version != 0 && (uint32_t)version == 1U;
 }
 
 
@@ -824,6 +1213,9 @@ static int request_commit_on_fd(
     size_t request_bytes_count = 0;
     char error[160] = {0};
     int status;
+    int transfer_rc;
+    const char *failed_phase = "request-header";
+    uint64_t deadline = memory_ipc_deadline();
 
     if (fd < 0 || !data || !ack_out || base_version == 0 ||
         gpa % WVM_MEMORY_PAGE_BYTES != 0 || data_bytes == 0 ||
@@ -837,6 +1229,9 @@ static int request_commit_on_fd(
         return -EOVERFLOW;
     }
     request.delivery_attempt_id = 1;
+    if (g_tcg_shm_coherent) {
+        request.flags |= WVM_LOCAL_MEMORY_COMMIT_FLAG_SHARED_BACKING;
+    }
     request.commit.gpa = gpa;
     request.commit.base_version = base_version;
     request.commit.offset = offset;
@@ -851,18 +1246,44 @@ static int request_commit_on_fd(
     }
     header.type = WVM_IPC_TYPE_TYPED_MEM_COMMIT;
     header.len = (uint32_t)request_bytes_count;
-    if (write_all_fd(fd, &header, sizeof(header)) < 0 ||
-        write_all_fd(fd, request_bytes, request_bytes_count) < 0 ||
-        read_exact(fd, result_bytes, sizeof(result_bytes)) < 0 ||
-        wvm_local_memory_commit_result_decode(
+    transfer_rc = memory_ipc_transfer(fd, &header, sizeof(header), true, deadline);
+    if (transfer_rc == 0) {
+        failed_phase = "request-payload";
+        transfer_rc = memory_ipc_transfer(fd, request_bytes, request_bytes_count,
+                                          true, deadline);
+    }
+    if (transfer_rc == 0) {
+        failed_phase = "result";
+        transfer_rc = memory_ipc_transfer(fd, result_bytes, sizeof(result_bytes),
+                                          false, deadline);
+    }
+    if (transfer_rc != 0) {
+        static int transfer_error_log_count;
+        if (transfer_error_log_count < 20) {
+            fprintf(stderr,
+                    "[WaveVM-User] typed commit IPC failed phase=%s "
+                    "gpa=%#llx fd=%d rc=%d\n",
+                    failed_phase, (unsigned long long)gpa, fd, transfer_rc);
+            transfer_error_log_count++;
+        }
+        discard_memory_ipc(fd);
+        return transfer_rc;
+    }
+    if (wvm_local_memory_commit_result_decode(
             result_bytes, &result, error, sizeof(error)) != 0 ||
         memcmp(result.operation_id, request.operation_id,
                sizeof(request.operation_id)) != 0 ||
         result.ack.gpa != gpa) {
-        return -EIO;
+        discard_memory_ipc(fd);
+        return -EPROTO;
     }
     *ack_out = result.ack;
     status = commit_status_to_errno(result.ack.status);
+    if (status == 0) {
+        if (result.ack.result_version <= base_version) {
+            return -EPROTO;
+        }
+    }
     return status;
 }
 
@@ -885,6 +1306,7 @@ static int request_page_over_ipc(
     struct wvm_mem_ack decoded_ack;
     char error[160] = {0};
     int result;
+    uint64_t deadline = memory_ipc_deadline();
 
     if (!ack_out || !page || gpa % WVM_MEMORY_PAGE_BYTES != 0) {
         return -EINVAL;
@@ -908,24 +1330,38 @@ static int request_page_over_ipc(
     }
     header.type = WVM_IPC_TYPE_TYPED_MEM_FAULT;
     header.len = sizeof(request_bytes);
-    if (write_all_fd(t_com_sock, &header, sizeof(header)) < 0 ||
-        write_all_fd(t_com_sock, request_bytes, sizeof(request_bytes)) < 0 ||
-        read_exact(t_com_sock, result_length, sizeof(result_length)) < 0 ||
-        wvm_local_memory_result_length_decode(
+    result = memory_ipc_transfer(t_com_sock, &header, sizeof(header), true,
+                                 deadline);
+    if (result == 0) {
+        result = memory_ipc_transfer(t_com_sock, request_bytes,
+                                     sizeof(request_bytes), true, deadline);
+    }
+    if (result == 0) {
+        result = memory_ipc_transfer(t_com_sock, result_length,
+                                     sizeof(result_length), false, deadline);
+    }
+    if (result != 0) {
+        discard_memory_ipc(t_com_sock);
+        return result;
+    }
+    if (wvm_local_memory_result_length_decode(
             result_length, &ack_bytes_count, error, sizeof(error)) != 0) {
-        close(t_com_sock);
-        t_com_sock = -1;
-        return -EIO;
+        discard_memory_ipc(t_com_sock);
+        return -EPROTO;
     }
     if (ack_bytes_count == 0) {
         return -EIO;
     }
-    if (read_exact(t_com_sock, ack_bytes, ack_bytes_count) < 0 ||
-        wvm_mem_ack_decode(ack_bytes, ack_bytes_count, &decoded_ack,
+    result = memory_ipc_transfer(t_com_sock, ack_bytes, ack_bytes_count,
+                                 false, deadline);
+    if (result != 0) {
+        discard_memory_ipc(t_com_sock);
+        return result;
+    }
+    if (wvm_mem_ack_decode(ack_bytes, ack_bytes_count, &decoded_ack,
                               error, sizeof(error)) != 0 ||
         decoded_ack.gpa != gpa) {
-        close(t_com_sock);
-        t_com_sock = -1;
+        discard_memory_ipc(t_com_sock);
         return -EPROTO;
     }
     if (decoded_ack.status == WVM_MEM_ACK_SUCCESS) {
@@ -937,21 +1373,115 @@ static int request_page_over_ipc(
     return 0;
 }
 
-static int internal_connect_master_role(uint32_t role) {
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock < 0) return -1;
-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
+int wavevm_publish_initial_ram(uint64_t gpa, void *hva, uint64_t bytes,
+                               uint64_t *published_pages)
+{
+    uint8_t source[WVM_MEMORY_PAGE_BYTES] QEMU_ALIGNED(8);
+    uint8_t committed[WVM_MEMORY_PAGE_BYTES] QEMU_ALIGNED(8);
+    int result = 0;
 
-    const char *env_path = wavevm_qemu_runtime_socket_path();
-    if (!env_path) {
-        fprintf(stderr,
-                "[WaveVM-User] manifest-derived QEMU socket path is missing\n");
+    if (!hva || !published_pages || bytes == 0 ||
+        gpa > UINT64_MAX - bytes ||
+        (gpa | bytes) % WVM_MEMORY_PAGE_BYTES != 0) {
+        return -EINVAL;
+    }
+    pthread_mutex_lock(&g_dirty_flush_lock);
+    for (uint64_t offset = 0; offset < bytes;
+         offset += WVM_MEMORY_PAGE_BYTES) {
+        struct wvm_mem_ack read_ack;
+        struct wvm_mem_commit_ack commit_ack;
+        uint64_t page_gpa = gpa + offset;
+
+        memcpy(source, (uint8_t *)hva + offset, sizeof(source));
+        /* Untouched RAM already has the directory's implicit zero image. */
+        if (is_page_all_zero(source)) {
+            continue;
+        }
+        result = request_page_over_ipc(page_gpa, &read_ack, committed);
+        if (result == 0) {
+            result = ack_status_to_errno(read_ack.status);
+        }
+        if (result != 0 || read_ack.version == 0) {
+            result = result ? result : -EPROTO;
+            break;
+        }
+        if (memcmp(source, committed, sizeof(source)) == 0) {
+            set_local_page_version(page_gpa, read_ack.version);
+            continue;
+        }
+        /* Only an unmodified initial page may be seeded. Never retag a
+         * different committed image and overwrite it with frontend bytes. */
+        if (!is_initial_directory_version(read_ack.version) ||
+            !is_page_all_zero(committed)) {
+            result = -ESTALE;
+            break;
+        }
+        result = request_commit_on_fd(t_com_sock, page_gpa, read_ack.version,
+                                       0, source, sizeof(source), &commit_ack);
+        if (result != 0) {
+            break;
+        }
+        set_local_page_version(page_gpa, commit_ack.result_version);
+        (*published_pages)++;
+    }
+    pthread_mutex_unlock(&g_dirty_flush_lock);
+    return result;
+}
+
+static int wavevm_publish_ram_mapping(uint64_t gpa, const uint8_t *hva,
+                                      uint64_t bytes)
+{
+    int result = 0;
+
+    if (!hva || bytes == 0 || gpa > UINT64_MAX - bytes) {
+        return -EINVAL;
+    }
+    pthread_mutex_lock(&g_dirty_flush_lock);
+    while (bytes != 0) {
+        uint8_t committed[WVM_MEMORY_PAGE_BYTES] QEMU_ALIGNED(8);
+        struct wvm_mem_ack read_ack;
+        uint64_t page_gpa = gpa & ~(uint64_t)(WVM_MEMORY_PAGE_BYTES - 1U);
+        uint16_t page_offset = (uint16_t)(gpa - page_gpa);
+        size_t page_bytes = MIN(bytes, WVM_MEMORY_PAGE_BYTES - page_offset);
+
+        result = request_page_over_ipc(page_gpa, &read_ack, committed);
+        if (result == 0) {
+            result = ack_status_to_errno(read_ack.status);
+        }
+        if (result != 0 || read_ack.version == 0) {
+            result = result ? result : -EPROTO;
+            break;
+        }
+        if (memcmp(committed + page_offset, hva, page_bytes) != 0) {
+            struct wvm_mem_commit_ack commit_ack;
+
+            result = request_commit_on_fd(t_com_sock, page_gpa,
+                                           read_ack.version, page_offset, hva,
+                                           page_bytes, &commit_ack);
+            if (result != 0) {
+                break;
+            }
+            set_local_page_version(page_gpa, commit_ack.result_version);
+        } else {
+            set_local_page_version(page_gpa, read_ack.version);
+        }
+        gpa += page_bytes;
+        hva += page_bytes;
+        bytes -= page_bytes;
+    }
+    pthread_mutex_unlock(&g_dirty_flush_lock);
+    return result;
+}
+
+static int internal_connect_master_role(uint32_t role) {
+    uint64_t deadline = memory_ipc_deadline();
+    int sock = wavevm_qemu_connect_runtime_socket(
+        SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC);
+    if (sock < 0) return -1;
+    int flags = fcntl(sock, F_GETFL);
+    if (flags < 0 || fcntl(sock, F_SETFL, flags & ~O_NONBLOCK) < 0) {
         close(sock);
         return -1;
-    }
-    strncpy(addr.sun_path, env_path, sizeof(addr.sun_path) - 1);
-    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        close(sock); return -1;
     }
 
     if (role != 0) {
@@ -974,8 +1504,10 @@ static int internal_connect_master_role(uint32_t role) {
         }
         reg_hdr.type = WVM_IPC_TYPE_REGISTER;
         reg_hdr.len = (uint32_t)payload_size;
-        if (write_all_fd(sock, &reg_hdr, sizeof(reg_hdr)) < 0 ||
-            write_all_fd(sock, payload, payload_size) < 0) {
+        if (memory_ipc_transfer(sock, &reg_hdr, sizeof(reg_hdr), true,
+                                deadline) != 0 ||
+            memory_ipc_transfer(sock, (void *)payload, payload_size, true,
+                                deadline) != 0) {
             close(sock);
             return -1;
         }
@@ -1024,11 +1556,6 @@ static int ensure_local_shm_shadow(void)
  */
 void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva)
 {
-    if (ensure_local_shm_shadow() < 0) {
-        fprintf(stderr, "[WaveVM-BIOS] sync_bios_shadow: SHM shadow not available\n");
-        return;
-    }
-
     uint64_t bios_start = 0xC0000;
     uint64_t bios_end   = 0x100000;  /* 1MB */
     uint64_t region_end = gpa + size;
@@ -1040,21 +1567,26 @@ void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva)
 
     uint64_t copy_size   = copy_end - copy_start;
     uint64_t hva_offset  = copy_start - gpa;      /* offset into the HVA region */
-    uint64_t shm_offset  = copy_start;             /* GPA == offset in SHM for ram0 */
+    int result;
 
-    if (shm_offset + copy_size > g_ram_size) {
-        fprintf(stderr, "[WaveVM-BIOS] sync_bios_shadow: SHM too small for GPA 0x%llx+0x%llx\n",
-                (unsigned long long)shm_offset, (unsigned long long)copy_size);
+    if (g_is_slave || !g_ram_size || !wavevm_qemu_runtime_gate_enabled()) {
         return;
     }
-
-    memcpy((uint8_t *)g_shm_shadow + shm_offset,
-           (uint8_t *)hva + hva_offset,
-           copy_size);
-
-    fprintf(stderr, "[WaveVM-BIOS] synced BIOS shadow GPA [0x%llx, 0x%llx) -> SHM offset 0x%llx (%llu bytes)\n",
-            (unsigned long long)copy_start, (unsigned long long)copy_end,
-            (unsigned long long)shm_offset, (unsigned long long)copy_size);
+    /* Publish just the QEMU-authored overlap as versioned commits; do not
+     * write the shared cache before the directory has accepted the bytes. */
+    result = wavevm_publish_ram_mapping(
+        copy_start, (uint8_t *)hva + hva_offset, copy_size);
+    if (result != 0) {
+        fprintf(stderr,
+                "[WaveVM-BIOS] canonical shadow publication failed "
+                "GPA [%#llx,%#llx) rc=%d\n",
+                (unsigned long long)copy_start,
+                (unsigned long long)copy_end, result);
+        _exit(1);
+    }
+    fprintf(stderr,
+            "[WaveVM-BIOS] canonical shadow publication GPA [%#llx,%#llx)\n",
+            (unsigned long long)copy_start, (unsigned long long)copy_end);
 }
 
 /*
@@ -1749,11 +2281,13 @@ void wavevm_user_mem_finish_handoff_dirty(WVMHandoffDirtyJournal *journal,
     free_handoff_dirty_journal(journal);
 }
 
-int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
-                                       WVMHandoffDirtyJournal **journal_out)
+static int flush_dirty_to_ipc(int ipc_fd,
+                              WVMHandoffDirtyJournal **journal_out)
 {
     int flushed = 0;
     int skipped_zero = 0;
+    uint64_t scanned_pages = 0;
+    uint64_t dirty_pages = 0;
     static int flush_log_count = 0;
     WVMHandoffDirtyJournal *journal = NULL;
 
@@ -1787,10 +2321,23 @@ int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
 
         for (uint64_t off = 0; off + 4096 <= blk->size; off += 4096) {
             ram_addr_t ra = ram_base + off;
+            scanned_pages++;
+            if (get_us_time() >= memory_ipc_deadline()) {
+                fprintf(stderr,
+                        "[WaveVM-User] handoff dirty scan deadline "
+                        "scanned=%llu dirty=%llu committed=%d skipped_zero=%d\n",
+                        (unsigned long long)scanned_pages,
+                        (unsigned long long)dirty_pages, flushed,
+                        skipped_zero);
+                pthread_mutex_unlock(&g_dirty_flush_lock);
+                free_handoff_dirty_journal(journal);
+                return -ETIMEDOUT;
+            }
             if (!cpu_physical_memory_test_and_clear_dirty(ra, 4096,
                                                           DIRTY_MEMORY_MIGRATION)) {
                 continue;
             }
+            dirty_pages++;
 
             uint64_t gpa = blk->gpa_start + off;
             void *hva = (void *)(blk->hva_start + off);
@@ -1937,6 +2484,18 @@ int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
      * APPLY (attach10/11 freeze at Cirros initramfs→vda1).
      */
     return flushed;
+}
+
+int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
+                                       WVMHandoffDirtyJournal **journal_out)
+{
+    uint64_t previous_deadline = t_memory_deadline_us;
+    int result;
+
+    t_memory_deadline_us = memory_dirty_batch_deadline();
+    result = flush_dirty_to_ipc(ipc_fd, journal_out);
+    t_memory_deadline_us = previous_deadline;
+    return result;
 }
 
 uint64_t wavevm_user_mem_debug_read_u64(uint64_t gpa, uint64_t offset, int *ok)
@@ -2342,10 +2901,9 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
  * typed-commit full pages so A14 / Phase-10 remote memory evidence is real.
  * Caller must hold g_dirty_flush_lock. Returns pages committed or -errno.
  *
- * Bound per call: full-RAM scan + unbounded commits on every slave cpu_exec
- * return wedged Cirros SMP (CPU1 RCU stall while FE waited on CPU_RUN ACK).
- * Round-robin cursor + commit/scan budgets keep A14 single-page flush correct
- * while guest boot can make progress; uncleared dirty bits remain for later.
+ * Freeze the dirty set once, using QEMU's bitmap snapshot. Batching yields
+ * execution time but cannot complete a causal fence before the set is drained.
+ * Writes after the snapshot stay in the live bitmap for the next fence.
  */
 static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
 {
@@ -2355,11 +2913,13 @@ static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
     int budget;
     int max_scan;
     const bool use_commit = wavevm_qemu_runtime_gate_enabled();
-    static int cursor_bi;
-    static uint64_t cursor_off;
+    DirtyBitmapSnapshot *snapshots[MAX_RAM_BLOCKS] = {0};
+    ram_addr_t ram_bases[MAX_RAM_BLOCKS];
+    uint64_t offsets[MAX_RAM_BLOCKS] = {0};
+    uint64_t deadline = memory_ipc_deadline();
+    uint64_t snapshot_generation;
     const char *budget_env;
-    int bi_start;
-    int passes;
+    static int preimage_failure_log_count;
 
     if (!g_tcg_shm_coherent || !current_snapshot) {
         return 0;
@@ -2376,8 +2936,7 @@ static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
             budget = v;
         }
     }
-    /* Scan at most this many pages of bitmap per call (clean checks are cheap
-     * but still O(RAM) if unbounded — 8k pages ≈ 32MiB window). */
+    /* Yield between bounded bitmap scan batches, without ending the fence. */
     max_scan = budget * 256;
     if (max_scan < 4096) {
         max_scan = 4096;
@@ -2386,55 +2945,140 @@ static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
         max_scan = 65536;
     }
 
-    if (cursor_bi < 0 || cursor_bi >= g_block_count) {
-        cursor_bi = 0;
-        cursor_off = 0;
-    }
+    /*
+     * Move the generation before taking the bitmap snapshot.  A notdirty
+     * callback that starts after this point records its pre-image for the next
+     * fence; the callback and this boundary share the pre-image lock so an
+     * entry can never be silently replaced while it is being copied.
+     */
+    pthread_mutex_lock(&g_coherent_preimage_lock);
+    snapshot_generation = atomic_fetch_add_explicit(&g_coherent_generation, 1,
+                                                     memory_order_acq_rel);
+    for (int bi = 0; bi < g_block_count; bi++) {
+        GVMRamBlock *blk = &g_mem_blocks[bi];
+        ram_addr_t mr_offset;
+        RAMBlock *rb = qemu_ram_block_from_host((void *)blk->hva_start,
+                                               false, &mr_offset);
 
-    bi_start = cursor_bi;
-    passes = 0;
-    while (committed < budget && scanned < max_scan && first_error == 0 &&
-           passes < g_block_count + 1) {
-        GVMRamBlock *blk = &g_mem_blocks[cursor_bi];
-        ram_addr_t ram_base = qemu_ram_addr_from_host((void *)blk->hva_start);
-        uint64_t off = cursor_off;
-
-        if (ram_base == RAM_ADDR_INVALID || blk->size < 4096) {
-            cursor_bi = (cursor_bi + 1) % g_block_count;
-            cursor_off = 0;
-            passes++;
-            if (cursor_bi == bi_start && cursor_off == 0) {
-                break;
-            }
-            continue;
+        ram_bases[bi] = qemu_ram_addr_from_host((void *)blk->hva_start);
+        if (!rb || ram_bases[bi] == RAM_ADDR_INVALID ||
+            blk->size % WVM_MEMORY_PAGE_BYTES != 0) {
+            first_error = -EFAULT;
+            break;
         }
+        snapshots[bi] = cpu_physical_memory_snapshot_and_clear_dirty(
+            rb->mr, mr_offset, blk->size, DIRTY_MEMORY_MIGRATION);
+        if (!snapshots[bi]) {
+            first_error = -ENOMEM;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_coherent_preimage_lock);
 
-        while (off + 4096 <= blk->size && committed < budget &&
-               scanned < max_scan && first_error == 0) {
-            ram_addr_t ra = ram_base + off;
+    for (int bi = 0; bi < g_block_count && first_error == 0; bi++) {
+        GVMRamBlock *blk = &g_mem_blocks[bi];
+
+        while (offsets[bi] + 4096 <= blk->size) {
+            uint64_t off = offsets[bi];
+            ram_addr_t ra = ram_bases[bi] + off;
             uint64_t gpa;
             void *hva;
             uint64_t base_version;
+            uint64_t preimage_generation;
+            uint8_t pre_image[WVM_MEMORY_PAGE_BYTES];
+            struct wvm_mem_ack authority_ack;
+            bool preimage_from_authority = false;
+            int preimage_ret;
             int commit_ret;
 
-            scanned++;
-            if (!cpu_physical_memory_test_and_clear_dirty(
-                    ra, 4096, DIRTY_MEMORY_MIGRATION)) {
-                off += 4096;
+            if (get_us_time() >= deadline) {
+                first_error = -ETIMEDOUT;
+                break;
+            }
+            /* Skip clean bitmap windows without walking every RAM page. */
+            uint64_t window = MIN(blk->size - off, 256ULL * 4096);
+            if (!cpu_physical_memory_snapshot_get_dirty(snapshots[bi],
+                                                         ra, window)) {
+                offsets[bi] += window;
+                continue;
+            }
+            if (++scanned >= max_scan) {
+                sched_yield();
+                scanned = 0;
+            }
+            if (!cpu_physical_memory_snapshot_get_dirty(snapshots[bi],
+                                                         ra, 4096)) {
+                offsets[bi] += 4096;
                 continue;
             }
             gpa = blk->gpa_start + off;
             hva = (void *)(blk->hva_start + off);
-            if (get_local_page_version(gpa) == 0 && is_page_all_zero(hva)) {
-                /* Match master handoff: skip implicit zero dirty bits. */
-                off += 4096;
-                continue;
+            preimage_generation = snapshot_generation;
+            preimage_ret = coherent_copy_preimage(gpa, snapshot_generation,
+                                                  pre_image,
+                                                  &preimage_generation);
+            if (preimage_ret == -ENOENT) {
+                uint8_t authority_page[WVM_MEMORY_PAGE_BYTES];
+                int read_ret = request_page_over_ipc(
+                    gpa, &authority_ack, authority_page);
+
+                /*
+                 * Device DMA and other QEMU-side writes can set the dirty
+                 * bitmap without passing through notdirty_write().  In that
+                 * case the directory image is the only safe pre-image.  Keep
+                 * the fallback tied to a successful, versioned READ; never
+                 * treat the current local page as its own base.
+                 */
+                if (read_ret == 0 &&
+                    ack_status_to_errno(authority_ack.status) == 0 &&
+                    authority_ack.version != 0) {
+                    memcpy(pre_image, authority_page, sizeof(pre_image));
+                    preimage_from_authority = true;
+                    preimage_ret = 0;
+                } else if (read_ret == 0) {
+                    preimage_ret = ack_status_to_errno(authority_ack.status);
+                    if (preimage_ret == 0) {
+                        preimage_ret = -EPROTO;
+                    }
+                } else {
+                    preimage_ret = read_ret;
+                }
+            }
+            if (preimage_ret != 0) {
+                /*
+                 * The current authority page is not a write pre-image.  Using
+                 * it here would turn unrelated remote bytes into this writer's
+                 * full-page commit and can overwrite a concurrent update.
+                 * Keep the dirty bit for the next fence and fail closed until
+                 * the genuine pre-image or a safe resync is available.
+                 */
+                if (preimage_failure_log_count++ < 20) {
+                    fprintf(stderr,
+                            "[WaveVM-User] coherent dirty preimage unavailable "
+                            "gpa=%#llx ret=%d\n",
+                            (unsigned long long)gpa, preimage_ret);
+                }
+                if (preimage_ret != 0) {
+                    /* A dirty bit without a safe base must fail closed. */
+                    first_error = preimage_ret == -ENOENT ? -EIO : preimage_ret;
+                    break;
+                }
             }
             memcpy(current_snapshot, hva, 4096);
+            if (memcmp(current_snapshot, pre_image, WVM_MEMORY_PAGE_BYTES) == 0) {
+                /* A tracked write that produced no byte change needs no commit. */
+                if (preimage_from_authority) {
+                    set_local_page_version(gpa, authority_ack.version);
+                }
+                coherent_discard_preimage(gpa, snapshot_generation);
+                offsets[bi] += 4096;
+                continue;
+            }
             if (use_commit) {
                 struct wvm_mem_commit_ack ack;
 
-                base_version = get_local_page_version(gpa);
+                base_version = preimage_from_authority
+                    ? authority_ack.version : get_local_page_version(gpa);
                 if (base_version == 0) {
                     base_version = 1;
                 }
@@ -2447,24 +3091,28 @@ static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
                 if (commit_ret == -ENOENT || commit_ret == -ESTALE) {
                     struct wvm_mem_ack mat_ack;
                     uint8_t mat_page[WVM_MEMORY_PAGE_BYTES];
+                    uint8_t merged[WVM_MEMORY_PAGE_BYTES];
                     int mat_ret = request_page_over_ipc(gpa, &mat_ack, mat_page);
                     if (mat_ret == 0 &&
                         ack_status_to_errno(mat_ack.status) == 0 &&
                         mat_ack.version != 0) {
-                        base_version = mat_ack.version;
                         /*
-                         * No fault-hook pre-image under coherent SHM: commit
-                         * the post-store full page against rematerialized base
-                         * (create/replace). Prefer fail-closed over silent skip.
+                         * The directory may have advanced since our first
+                         * attempt.  Rebase only the bytes that changed since
+                         * the captured pre-image; untouched bytes come from
+                         * the authority page.
                          */
+                        wvm_merge_commit_write_set(merged, pre_image,
+                                                   current_snapshot, mat_page,
+                                                   WVM_MEMORY_PAGE_BYTES);
                         commit_ret = request_commit_on_fd(
-                            t_com_sock, gpa, base_version, 0, current_snapshot,
+                            t_com_sock, gpa, mat_ack.version, 0, merged,
                             WVM_MEMORY_PAGE_BYTES, &ack);
+                        /* Shared RAM may already contain later peer writes.
+                         * The merged image belongs to the commit, not RAM. */
                     }
                 }
                 if (commit_ret != 0) {
-                    cpu_physical_memory_set_dirty_range(
-                        ra, 4096, 1 << DIRTY_MEMORY_MIGRATION);
                     first_error = commit_ret;
                     break;
                 }
@@ -2477,20 +3125,29 @@ static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
                 add_to_aggregator(gpa, ver + 1, 0, 4096, current_snapshot, 0);
                 set_local_page_version(gpa, ver + 1);
             }
+            coherent_discard_preimage(gpa, snapshot_generation);
             committed++;
-            off += 4096;
+            offsets[bi] += 4096;
+            if (committed % budget == 0) {
+                sched_yield();
+            }
         }
-
-        if (off + 4096 > blk->size) {
-            cursor_bi = (cursor_bi + 1) % g_block_count;
-            cursor_off = 0;
-            passes++;
-        } else {
-            cursor_off = off;
+    }
+    for (int bi = 0; bi < g_block_count; bi++) {
+        if (!snapshots[bi]) {
+            continue;
         }
-        if (cursor_bi == bi_start && cursor_off == 0 && passes > 0) {
-            break;
+        /* Restore only uncommitted snapshot bits; never clear newer writes. */
+        for (uint64_t off = offsets[bi]; off + 4096 <= g_mem_blocks[bi].size;
+             off += 4096) {
+            if (cpu_physical_memory_snapshot_get_dirty(snapshots[bi],
+                                                        ram_bases[bi] + off,
+                                                        4096)) {
+                cpu_physical_memory_set_dirty_range(
+                    ram_bases[bi] + off, 4096, 1 << DIRTY_MEMORY_MIGRATION);
+            }
         }
+        g_free(snapshots[bi]);
     }
     if (!use_commit && committed > 0) {
         flush_aggregator();
@@ -2505,6 +3162,7 @@ int wavevm_user_mem_flush_slave_dirty_sync(void)
     int committed;
     int bitmap_committed = 0;
     long rtt;
+    uint64_t previous_deadline;
     static int flush_log_count;
 
     /*
@@ -2521,6 +3179,8 @@ int wavevm_user_mem_flush_slave_dirty_sync(void)
         return -ENOMEM;
     }
 
+    previous_deadline = t_memory_deadline_us;
+    t_memory_deadline_us = memory_dirty_batch_deadline();
     pthread_mutex_lock(&g_dirty_flush_lock);
     batch_head = __atomic_exchange_n(&g_writable_pages_list, NULL,
                                      __ATOMIC_ACQ_REL);
@@ -2541,11 +3201,14 @@ int wavevm_user_mem_flush_slave_dirty_sync(void)
          * A remote TCG slice return is a causal handoff: all writes made by the
          * slave must be visible to the directory before the CPU ACK is exported.
          */
-            rtt = wait_for_directory_ack_safe_us(5000000ULL);
+        uint64_t now = get_us_time();
+        rtt = now >= t_memory_deadline_us ? -ETIMEDOUT :
+            wait_for_directory_ack_safe_us(t_memory_deadline_us - now);
     } else {
         rtt = 0;
     }
     pthread_mutex_unlock(&g_dirty_flush_lock);
+    t_memory_deadline_us = previous_deadline;
 
     free(current_snapshot);
 
@@ -2700,26 +3363,42 @@ void wvm_set_client_sync_mode(int batch_size, int auto_tune) {
  * [关键逻辑] 通过typed IPC发送commit diff sync请求，等待node_runtime确认所有pending写入已落盘。
  * [后果] 确保了分布式内存的"强顺序一致性"。它防止了在执行关键 IO 指令（如 GPU 命令提交）时，内存数据尚未同步完成的情况。
  */
-static long wait_for_directory_ack_safe_us(uint64_t timeout_us) {
-    /*
-     * Push-visibility fence after a dirty flush batch. Master replies only after
-     * wait_local_qemu_push_barrier (+ helper barrier). Slave commits use
-     * t_com_sock (TLS); g_ipc_diff_sock is often -1 on PROXY helpers — must not
-     * no-op the fence or FE virtio can race PAGE_PUSH APPLY.
-     */
-    int fd = -1;
+static int memory_push_fence(int fd, uint64_t timeout_us, bool include_helpers)
+{
     wvm_ipc_header_t header;
-    uint8_t sync_request[16] = {0};
-    uint8_t sync_response[16];
-    struct pollfd pfd;
-    int pret;
-    int timeout_ms;
-    uint64_t start_us, now_us, elapsed_us;
-    size_t got = 0;
+    uint8_t request[16] = {0};
+    uint8_t response[16];
+    uint64_t now = get_us_time();
+    uint64_t deadline = now + MIN(timeout_us, 5000000ULL);
+    int result;
 
-    if (timeout_us == 0) {
-        timeout_us = 1000000ULL;
+    if (fd < 0) {
+        return -ENOTCONN;
     }
+    deadline = MIN(deadline, memory_ipc_deadline());
+    request[0] = include_helpers ? 0x02 : 0;
+    header.type = WVM_IPC_TYPE_COMMIT_DIFF_SYNC;
+    header.len = sizeof(request);
+    result = memory_ipc_transfer(fd, &header, sizeof(header), true, deadline);
+    if (result == 0) {
+        result = memory_ipc_transfer(fd, request, sizeof(request), true, deadline);
+    }
+    if (result == 0) {
+        result = memory_ipc_transfer(fd, response, sizeof(response), false,
+                                     deadline);
+    }
+    if (result != 0) {
+        discard_memory_ipc(fd);
+        return result;
+    }
+    memcpy(&result, response, sizeof(result));
+    return result > 0 ? -result : result;
+}
+
+static long wait_for_directory_ack_safe_us(uint64_t timeout_us)
+{
+    uint64_t start = get_us_time();
+    int fd, result;
 
     if (g_is_slave) {
         if (t_com_sock < 0) {
@@ -2732,172 +3411,14 @@ static long wait_for_directory_ack_safe_us(uint64_t timeout_us) {
         }
         fd = g_ipc_diff_sock;
     }
-    if (fd < 0) {
-        fprintf(stderr,
-                "[WaveVM-User] push fence: no IPC sock (slave=%d)\n",
-                g_is_slave ? 1 : 0);
-        return -ENOTCONN;
-    }
-
-    header.type = WVM_IPC_TYPE_COMMIT_DIFF_SYNC;
-    header.len = sizeof(sync_request);
-
-    if (write_all_fd(fd, &header, sizeof(header)) < 0 ||
-        write_all_fd(fd, sync_request, sizeof(sync_request)) < 0) {
-        fprintf(stderr,
-                "[WaveVM-User] push fence write failed fd=%d errno=%d\n",
-                fd, errno);
-        return -1;
-    }
-
-    start_us = get_us_time();
-    while (got < sizeof(sync_response)) {
-        now_us = get_us_time();
-        elapsed_us = now_us - start_us;
-        if (elapsed_us >= timeout_us) {
-            fprintf(stderr,
-                    "[WaveVM-User] push fence timeout fd=%d waited=%lluus\n",
-                    fd, (unsigned long long)elapsed_us);
-            return -ETIMEDOUT;
-        }
-        timeout_ms = (int)((timeout_us - elapsed_us) / 1000ULL);
-        if (timeout_ms < 1) {
-            timeout_ms = 1;
-        }
-        pfd.fd = fd;
-        pfd.events = POLLIN;
-        pret = poll(&pfd, 1, timeout_ms);
-        if (pret < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        if (pret == 0) {
-            continue;
-        }
-        {
-            ssize_t n = recv(fd, sync_response + got,
-                             sizeof(sync_response) - got, 0);
-            if (n < 0) {
-                if (errno == EINTR || errno == EAGAIN) {
-                    continue;
-                }
-                return -1;
-            }
-            if (n == 0) {
-                return -ECONNRESET;
-            }
-            got += (size_t)n;
-        }
-    }
-
-    {
-        int fence_err = 0;
-
-        memcpy(&fence_err, sync_response, sizeof(fence_err));
-        if (fence_err != 0) {
-            static int fence_err_log;
-            if (fence_err_log < 40) {
-                fprintf(stderr,
-                        "[WaveVM-User] push fence FAILED fd=%d err=%d "
-                        "slave=%d\n",
-                        fd, fence_err, g_is_slave ? 1 : 0);
-                fence_err_log++;
-            }
-            return fence_err < 0 ? fence_err : -fence_err;
-        }
-    }
-    {
-        static int fence_ok_log;
-        if (fence_ok_log < 40) {
-            fprintf(stderr,
-                    "[WaveVM-User] push fence ok fd=%d rtt=%lluus slave=%d\n",
-                    fd, (unsigned long long)(get_us_time() - start_us),
-                    g_is_slave ? 1 : 0);
-            fence_ok_log++;
-        }
-    }
-    return (long)(get_us_time() - start_us);
+    result = memory_push_fence(fd, timeout_us ? timeout_us : 1000000ULL, false);
+    return result != 0 ? result : (long)(get_us_time() - start);
 }
 
-/*
- * Same fence on an explicit IPC fd (FE handoff uses vcpu_sock so commit-before-
- * run ordering shares the stream with the following CPU_RUN).
- */
+/* FE handoff commits and CPU_RUN share this explicit vCPU stream. */
 int wavevm_user_mem_ipc_push_fence(int ipc_fd, uint64_t timeout_us)
 {
-    wvm_ipc_header_t header;
-    uint8_t sync_request[16] = {0};
-    uint8_t sync_response[16];
-    struct pollfd pfd;
-    int pret;
-    int timeout_ms;
-    uint64_t start_us, now_us, elapsed_us;
-    size_t got = 0;
-
-    if (ipc_fd < 0) {
-        return -EINVAL;
-    }
-    if (timeout_us == 0) {
-        timeout_us = 5000000ULL;
-    }
-
-    sync_request[0] = 0x02; /* also barrier local helpers */
-    header.type = WVM_IPC_TYPE_COMMIT_DIFF_SYNC;
-    header.len = sizeof(sync_request);
-    if (write_all_fd(ipc_fd, &header, sizeof(header)) < 0 ||
-        write_all_fd(ipc_fd, sync_request, sizeof(sync_request)) < 0) {
-        return -1;
-    }
-
-    start_us = get_us_time();
-    while (got < sizeof(sync_response)) {
-        now_us = get_us_time();
-        elapsed_us = now_us - start_us;
-        if (elapsed_us >= timeout_us) {
-            return -ETIMEDOUT;
-        }
-        timeout_ms = (int)((timeout_us - elapsed_us) / 1000ULL);
-        if (timeout_ms < 1) {
-            timeout_ms = 1;
-        }
-        pfd.fd = ipc_fd;
-        pfd.events = POLLIN;
-        pret = poll(&pfd, 1, timeout_ms);
-        if (pret < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        if (pret == 0) {
-            continue;
-        }
-        {
-            ssize_t n = recv(ipc_fd, sync_response + got,
-                             sizeof(sync_response) - got, 0);
-            if (n < 0) {
-                if (errno == EINTR || errno == EAGAIN) {
-                    continue;
-                }
-                return -1;
-            }
-            if (n == 0) {
-                return -ECONNRESET;
-            }
-            got += (size_t)n;
-        }
-    }
-    {
-        int fence_err = 0;
-
-        memcpy(&fence_err, sync_response, sizeof(fence_err));
-        if (fence_err != 0) {
-            return fence_err < 0 ? fence_err : -fence_err;
-        }
-    }
-    return 0;
+    return memory_push_fence(ipc_fd, timeout_us ? timeout_us : 5000000ULL, true);
 }
 
 static long wait_for_directory_ack_safe(void)
@@ -2914,7 +3435,8 @@ static void process_push_net_packet(struct wvm_header *hdr, void *payload,
                                     uint16_t p_len)
 {
     uint16_t msg_type = ntohs(hdr->msg_type);
-
+    bool backing_already_applied =
+        (hdr->flags & WVM_FLAG_SHARED_BACKING) != 0;
     if (msg_type == MSG_PAGE_PUSH_DIFF) {
         if (p_len < sizeof(struct wvm_diff_log)) {
             return;
@@ -2926,12 +3448,13 @@ static void process_push_net_packet(struct wvm_header *hdr, void *payload,
         uint64_t local_ver = get_local_page_version(gpa);
 
         if (is_next_version(local_ver, push_ver)) {
-            wvm_apply_remote_push(msg_type, payload);
+            wvm_apply_push(msg_type, payload, backing_already_applied);
             while (check_and_apply_next(gpa, 0)) ;
         } else if (is_newer_version(local_ver, push_ver) &&
                    !is_next_version(local_ver, push_ver)) {
             if (!is_newer_version(local_ver + REORDER_WIN_SIZE, push_ver)) {
-                buffer_future_packet(gpa, push_ver, msg_type, payload, p_len);
+                buffer_future_packet(gpa, push_ver, msg_type, payload, p_len,
+                                     backing_already_applied);
             } else {
                 if (!kvm_enabled() && g_fault_hook_enabled) {
                     void *inv_hva = gpa_to_hva_safe(gpa);
@@ -2946,9 +3469,9 @@ static void process_push_net_packet(struct wvm_header *hdr, void *payload,
             }
         }
     } else if (msg_type == MSG_PAGE_PUSH_FULL || msg_type == MSG_FORCE_SYNC) {
-        wvm_apply_remote_push(msg_type, payload);
+        wvm_apply_push(msg_type, payload, backing_already_applied);
     } else if (msg_type == MSG_RPC_BATCH_MEMSET) {
-        wvm_apply_remote_push(msg_type, payload);
+        wvm_apply_push(msg_type, payload, backing_already_applied);
     } else if (msg_type == MSG_MEM_ACK &&
                WVM_NTOHLL(hdr->req_id) == SYNC_MAGIC) {
         pthread_mutex_lock(&g_sync_lock);
@@ -3195,6 +3718,28 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         g_fd_req = atoi(env_req);
         g_fd_push = atoi(env_push);
         g_slave_id = env_id ? atoi(env_id) : 0;
+
+        /*
+         * The helper is launched with -S and therefore may not issue a guest
+         * memory or vCPU request yet.  Register the admitted QEMU frontend at
+         * startup instead of making readiness depend on first guest progress.
+         * Keep this connection open for the lifetime of the helper; closing it
+         * would revoke the frontend registration while the helper is alive.
+         */
+        if (wavevm_qemu_runtime_gate_enabled()) {
+            g_runtime_registration_fd =
+                internal_connect_master_role(WVM_IPC_ROLE_SYNC);
+            if (g_runtime_registration_fd < 0) {
+                fprintf(stderr,
+                        "[WaveVM-User] FATAL: QEMU frontend registration "
+                        "failed errno=%d (%s)\n",
+                        errno, strerror(errno));
+                _exit(1);
+            }
+            fprintf(stderr,
+                    "[WaveVM-User] QEMU frontend registration active fd=%d\n",
+                    g_runtime_registration_fd);
+        }
 
         printf("[WaveVM-User] V29 Wavelet Engine Active (Slave ID: %d)\n", g_slave_id);
 

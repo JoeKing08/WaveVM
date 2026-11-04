@@ -294,9 +294,9 @@ echo "multi-ACTIVE confirmed before CREATE_VM"
 
 create_out=""
 for ((attempt = 0; attempt < 80; attempt++)); do
-    # SPREAD with pin-local-memory-on-vCPU-nodes: 2 vCPUs across 2 ACTIVE compute
-    # nodes, each getting a co-located memory chunk (remote-only vCPU still
-    # fail-closed). Real executor (tcg stub) + gateway FLAT — no RUNNING stub.
+    # SPREAD: 2 vCPUs across ACTIVE compute nodes. CPU and memory reservations
+    # are independent; the admitted manifest carries explicit directory and
+    # executor identities. Real executor (tcg stub) + gateway FLAT.
     create_out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" \
         multi-node-spread 2 spread || true)
     echo "attempt=$attempt $create_out"

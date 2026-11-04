@@ -1,0 +1,2 @@
+EVID kvm_cohort: members=2 preparations=1 single_harvester=1 input_conflict_fails_all=1 byte_install_guarded=1
+KVM page-cache tests: PASS

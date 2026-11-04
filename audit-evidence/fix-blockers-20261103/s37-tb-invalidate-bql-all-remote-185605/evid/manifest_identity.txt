@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.pVPFph/runtime/vm-256-1-1.manifest
+ef257b22705a76bb80b516f82520456c9f46007351c2e1ecf5a477c2b072ab40  /tmp/wavevm-create-vm-single.pVPFph/runtime/vm-256-1-1.manifest
+6b0ad4f7552bd73a0608f2fdb44377ae9b00abdb74126d8cda2b6c40d4af1c16  /tmp/wavevm-create-vm-single.pVPFph/runtime/vm-256-1-1.manifest.dispatch
+ffc9d0fc88c19b23867ca88611c72315ab32b8d95de4a06b91ce6b26231531af  /tmp/wavevm-create-vm-single.pVPFph/runtime/vm-256-1-1.manifest.route

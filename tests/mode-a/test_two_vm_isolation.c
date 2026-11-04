@@ -23,6 +23,8 @@
 #include <errno.h>
 #include <assert.h>
 #include <stdint.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 #include "../../common_include/wavevm_ioctl.h"
 
@@ -38,6 +40,72 @@ static int g_dev_fd2 = -1;
 static void *g_vm1_mapping = NULL;
 static void *g_vm2_mapping = NULL;
 
+struct memory_responder {
+    int fd;
+    uint8_t fill;
+    uint64_t version;
+    atomic_int stop;
+    pthread_t thread;
+    int started;
+};
+
+static struct memory_responder g_responder1;
+static struct memory_responder g_responder2;
+
+static void *memory_responder_main(void *opaque)
+{
+    struct memory_responder *responder = opaque;
+
+    while (!atomic_load_explicit(&responder->stop, memory_order_acquire)) {
+        struct wvm_ioctl_memory_operation operation = {0};
+
+        if (ioctl(responder->fd, IOCTL_WVM_MEMORY_DEQUEUE, &operation) < 0) {
+            if (errno == EAGAIN || errno == EINTR)
+                continue;
+            break;
+        }
+        if (operation.kind == WVM_KERNEL_MEMORY_READ) {
+            memset(operation.data, responder->fill,
+                   WVM_KERNEL_MEMORY_PAGE_BYTES);
+            operation.data_bytes = WVM_KERNEL_MEMORY_PAGE_BYTES;
+            operation.result_version = responder->version;
+        } else if (operation.kind == WVM_KERNEL_MEMORY_COMMIT) {
+            operation.result_version = ++responder->version;
+        } else {
+            operation.status = -EINVAL;
+        }
+        if (ioctl(responder->fd, IOCTL_WVM_MEMORY_COMPLETE, &operation) < 0)
+            break;
+    }
+    return NULL;
+}
+
+static int memory_responder_start(struct memory_responder *responder, int fd,
+                                  uint8_t fill)
+{
+    memset(responder, 0, sizeof(*responder));
+    responder->fd = fd;
+    responder->fill = fill;
+    responder->version = 1;
+    atomic_init(&responder->stop, 0);
+    if (pthread_create(&responder->thread, NULL, memory_responder_main,
+                       responder) != 0)
+        return -1;
+    responder->started = 1;
+    return 0;
+}
+
+static void memory_responder_stop(struct memory_responder *responder)
+{
+    if (!responder->started)
+        return;
+    (void)ioctl(responder->fd, IOCTL_WVM_MEMORY_DRAIN);
+    atomic_store_explicit(&responder->stop, 1, memory_order_release);
+    (void)ioctl(responder->fd, IOCTL_WVM_MEMORY_STOP);
+    pthread_join(responder->thread, NULL);
+    responder->started = 0;
+}
+
 static void cleanup_test(void)
 {
     if (g_vm1_mapping && g_vm1_mapping != MAP_FAILED) {
@@ -46,6 +114,8 @@ static void cleanup_test(void)
     if (g_vm2_mapping && g_vm2_mapping != MAP_FAILED) {
         munmap(g_vm2_mapping, TEST_MEMORY_SIZE);
     }
+    memory_responder_stop(&g_responder1);
+    memory_responder_stop(&g_responder2);
     if (g_dev_fd1 >= 0) {
         struct wvm_ioctl_context_bind unbind = {0};
         unbind.magic = WVM_KERNEL_CONTEXT_MAGIC;
@@ -62,6 +132,23 @@ static void cleanup_test(void)
         ioctl(g_dev_fd2, IOCTL_WVM_UNBIND_CONTEXT, &unbind);
         close(g_dev_fd2);
     }
+}
+
+static int register_memory_owner(int fd,
+                                 const struct wvm_ioctl_context_bind *identity)
+{
+    struct wvm_ioctl_memory_config config = {0};
+
+    config.identity = *identity;
+    config.guest_physical_limit = 0x300000000ULL;
+    config.range_count = 1;
+    config.ranges[0].size = config.guest_physical_limit;
+    if (ioctl(fd, IOCTL_WVM_MEMORY_OWNER, &config) < 0) {
+        fprintf(stderr, "Failed to register memory owner: %s\n",
+                strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 static int bind_vm_context(int fd, uint32_t vm_id, const char *vm_name)
@@ -94,6 +181,8 @@ static int bind_vm_context(int fd, uint32_t vm_id, const char *vm_name)
                 vm_id, vm_name, strerror(errno));
         return -1;
     }
+    if (register_memory_owner(fd, &bind) != 0)
+        return -1;
 
     printf("[OK] Bound fd %d to VM %u (%s)\n", fd, vm_id, vm_name);
     return 0;
@@ -382,6 +471,12 @@ int main(int argc, char **argv)
             ret = 1;
             goto cleanup;
         }
+    }
+    if (memory_responder_start(&g_responder1, g_dev_fd1, 0x11) != 0 ||
+        memory_responder_start(&g_responder2, g_dev_fd2, 0x22) != 0) {
+        fprintf(stderr, "[FAIL] could not start memory responders\n");
+        ret = 1;
+        goto cleanup;
     }
 
     if (test_memory_isolation() < 0) {

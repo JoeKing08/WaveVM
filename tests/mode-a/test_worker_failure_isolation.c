@@ -30,6 +30,69 @@
 #define VM_KEEP         2101U  /* G1: production U32 range; local path must not need 8-bit wire */
 #define VM_PEER         2102U
 
+struct memory_responder {
+    int fd;
+    uint8_t fill;
+    uint64_t version;
+    atomic_int stop;
+    pthread_t thread;
+    int started;
+};
+
+static void *memory_responder_main(void *opaque)
+{
+    struct memory_responder *responder = opaque;
+
+    while (!atomic_load_explicit(&responder->stop, memory_order_acquire)) {
+        struct wvm_ioctl_memory_operation operation = {0};
+
+        if (ioctl(responder->fd, IOCTL_WVM_MEMORY_DEQUEUE, &operation) < 0) {
+            if (errno == EAGAIN || errno == EINTR)
+                continue;
+            break;
+        }
+        if (operation.kind == WVM_KERNEL_MEMORY_READ) {
+            memset(operation.data, responder->fill,
+                   WVM_KERNEL_MEMORY_PAGE_BYTES);
+            operation.data_bytes = WVM_KERNEL_MEMORY_PAGE_BYTES;
+            operation.result_version = responder->version;
+        } else if (operation.kind == WVM_KERNEL_MEMORY_COMMIT) {
+            operation.result_version = ++responder->version;
+        } else {
+            operation.status = -EINVAL;
+        }
+        if (ioctl(responder->fd, IOCTL_WVM_MEMORY_COMPLETE, &operation) < 0)
+            break;
+    }
+    return NULL;
+}
+
+static int memory_responder_start(struct memory_responder *responder, int fd,
+                                  uint8_t fill)
+{
+    memset(responder, 0, sizeof(*responder));
+    responder->fd = fd;
+    responder->fill = fill;
+    responder->version = 1;
+    atomic_init(&responder->stop, 0);
+    if (pthread_create(&responder->thread, NULL, memory_responder_main,
+                       responder) != 0)
+        return -1;
+    responder->started = 1;
+    return 0;
+}
+
+static void memory_responder_stop(struct memory_responder *responder)
+{
+    if (!responder->started)
+        return;
+    (void)ioctl(responder->fd, IOCTL_WVM_MEMORY_DRAIN);
+    atomic_store_explicit(&responder->stop, 1, memory_order_release);
+    (void)ioctl(responder->fd, IOCTL_WVM_MEMORY_STOP);
+    pthread_join(responder->thread, NULL);
+    responder->started = 0;
+}
+
 /* Per-thread jmp: stress thread and main must not share one buf. */
 static __thread sigjmp_buf g_jmp;
 static __thread int g_jmp_ready;
@@ -65,6 +128,22 @@ static void fill_bind(struct wvm_ioctl_context_bind *b, uint32_t vm,
     memset(b->route_snapshot_key.snapshot_digest, tag, WVM_KERNEL_DIGEST_BYTES);
 }
 
+static int register_memory_owner(int fd,
+                                 const struct wvm_ioctl_context_bind *identity)
+{
+    struct wvm_ioctl_memory_config config = {0};
+
+    config.identity = *identity;
+    config.guest_physical_limit = 0x200000000ULL;
+    config.range_count = 1;
+    config.ranges[0].size = config.guest_physical_limit;
+    if (ioctl(fd, IOCTL_WVM_MEMORY_OWNER, &config) < 0) {
+        fprintf(stderr, "MEMORY_OWNER: %s\n", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
 static int open_bind(uint32_t vm, uint64_t inst, uint8_t tag)
 {
     int fd = open("/dev/wavevm", O_RDWR);
@@ -77,6 +156,10 @@ static int open_bind(uint32_t vm, uint64_t inst, uint8_t tag)
     if (ioctl(fd, IOCTL_WVM_BIND_CONTEXT, &b) < 0) {
         fprintf(stderr, "BIND vm=%u inst=%llu: %s\n", vm,
                 (unsigned long long)inst, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    if (register_memory_owner(fd, &b) != 0) {
         close(fd);
         return -1;
     }
@@ -190,6 +273,8 @@ static int test_concurrent_detach_destroy(void)
     pthread_t thr;
     int i, rc = -1;
     struct wvm_ioctl_context_caps caps;
+    struct memory_responder keep_responder = {0};
+    struct memory_responder peer_responder = {0};
     uint64_t peer_inst = 1;
     uint64_t keep_inst = 1;
 
@@ -207,6 +292,9 @@ static int test_concurrent_detach_destroy(void)
     printf("... layout\n");
     if (set_layout(fd_keep, SAME_GPA, MEM_SIZE) < 0 ||
         set_layout(fd_peer, SAME_GPA, MEM_SIZE) < 0)
+        goto out;
+    if (memory_responder_start(&keep_responder, fd_keep, 0x11) != 0 ||
+        memory_responder_start(&peer_responder, fd_peer, 0x22) != 0)
         goto out;
     printf("... mmap keep\n");
     map_keep = map_gpa(fd_keep, SAME_GPA, MEM_SIZE);
@@ -245,6 +333,7 @@ static int test_concurrent_detach_destroy(void)
         usleep(1500);
         munmap(map_peer, MEM_SIZE);
         map_peer = NULL;
+        memory_responder_stop(&peer_responder);
         unbind_close(fd_peer, VM_PEER, peer_inst, 0xB2);
         fd_peer = -1;
         /* keep still bound → expect active_contexts <= 1 once peer gone */
@@ -259,6 +348,12 @@ static int test_concurrent_detach_destroy(void)
         fd_peer = open_bind(VM_PEER, peer_inst, 0xB2);
         if (fd_peer < 0 || set_layout(fd_peer, SAME_GPA, MEM_SIZE) < 0) {
             fprintf(stderr, "[FAIL] re-BIND peer cycle %d\n", i);
+            atomic_store(&stop, 1);
+            pthread_join(thr, NULL);
+            goto out;
+        }
+        if (memory_responder_start(&peer_responder, fd_peer, 0x22) != 0) {
+            fprintf(stderr, "[FAIL] peer authority cycle %d\n", i);
             atomic_store(&stop, 1);
             pthread_join(thr, NULL);
             goto out;
@@ -327,6 +422,8 @@ out:
         munmap(map_keep, MEM_SIZE);
     if (map_peer)
         munmap(map_peer, MEM_SIZE);
+    memory_responder_stop(&keep_responder);
+    memory_responder_stop(&peer_responder);
     if (fd_keep >= 0)
         unbind_close(fd_keep, VM_KEEP, keep_inst, 0xA1);
     if (fd_peer >= 0)
@@ -341,6 +438,7 @@ static int test_mutual_destroy(void)
     int i;
     struct wvm_ioctl_context_caps caps;
     uint64_t keep_inst, peer_inst;
+    struct memory_responder responder_a = {0}, responder_b = {0};
 
     printf("\n=== Mutual destroy churn ===\n");
     for (i = 0; i < 10; i++) {
@@ -352,6 +450,9 @@ static int test_mutual_destroy(void)
             return -1;
         if (set_layout(a, SAME_GPA, MEM_SIZE) < 0 ||
             set_layout(b, SAME_GPA, MEM_SIZE) < 0)
+            return -1;
+        if (memory_responder_start(&responder_a, a, 0x11) != 0 ||
+            memory_responder_start(&responder_b, b, 0x22) != 0)
             return -1;
         ma = map_gpa(a, SAME_GPA, MEM_SIZE);
         mb = map_gpa(b, SAME_GPA, MEM_SIZE);
@@ -369,6 +470,8 @@ static int test_mutual_destroy(void)
         }
         munmap(ma, MEM_SIZE);
         munmap(mb, MEM_SIZE);
+        memory_responder_stop(&responder_a);
+        memory_responder_stop(&responder_b);
         unbind_close(a, VM_KEEP, keep_inst, 0xA1);
         unbind_close(b, VM_PEER, peer_inst, 0xB2);
         a = b = -1;

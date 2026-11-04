@@ -93,8 +93,6 @@ int main(void)
     uint8_t bytes[8192];
     size_t encoded = 0;
     char error[256] = {0};
-    uint32_t i;
-    int saw_remote_reject = 0;
 
     if (wvm_admission_snapshot_init(&snapshot, 2) != 0) {
         return 1;
@@ -128,10 +126,8 @@ int main(void)
         expect(proposed.reservation_count == 2,
                "spread uses both eligible nodes") ||
         expect(proposed.reservations[0].guest_vcpu_slots != 0 &&
-                   proposed.reservations[0].guest_memory_bytes != 0 &&
-                   proposed.reservations[1].guest_vcpu_slots != 0 &&
-                   proposed.reservations[1].guest_memory_bytes != 0,
-               "every vCPU reservation carries local guest memory")) {
+                   proposed.reservations[1].guest_vcpu_slots != 0,
+               "spread uses both CPU reservations")) {
         fprintf(stderr, " error: %s\n", error);
         cleanup_plan(&proposed);
         wvm_admission_snapshot_cleanup(&snapshot);
@@ -168,15 +164,6 @@ int main(void)
         cleanup_plan(&proposed);
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
-    }
-    for (i = 0; i < placement.memory_assignments.count; i++) {
-        if (placement.memory_assignments.entries[i].directory_physical_node_id !=
-            placement.memory_assignments.entries[i].executor_physical_node_id) {
-            fprintf(stderr, "placement-spread test: split directory/executor\n");
-            cleanup_plan(&proposed);
-            wvm_admission_snapshot_cleanup(&snapshot);
-            return 1;
-        }
     }
     if (expect(placement.reservation_requirements.entries[0]
                        .exclusive_leases.count >= 2 &&
@@ -223,7 +210,7 @@ int main(void)
         return 1;
     }
 
-    /* Fail-closed: hand-built vCPU without local memory. */
+    /* A vCPU reservation may be memory-free; memory is validated separately. */
     bad = proposed;
     bad.reservations = calloc(2, sizeof(*bad.reservations));
     if (!bad.reservations) {
@@ -241,10 +228,8 @@ int main(void)
     bad.reservations[0].guest_memory_bytes +=
         proposed.reservations[1].guest_memory_bytes;
     if (expect(wvm_admission_plan_validate(&snapshot, &request, &bad, error,
-                                           sizeof(error)) != 0,
-               "reject vCPU without local guest memory") ||
-        expect(strstr(error, "remote memory") != NULL,
-               "rejection names remote memory honesty")) {
+                                           sizeof(error)) == 0,
+               "allow vCPU reservation without local guest memory")) {
         fprintf(stderr, " got error: %s\n", error);
         cleanup_plan(&bad);
         cleanup_plan(&proposed);
@@ -252,19 +237,14 @@ int main(void)
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
     }
-    saw_remote_reject = 1;
     cleanup_plan(&bad);
 
-    /* Fail-closed propose: second node has CPU but zero guest memory capacity. */
+    /* A CPU node with no memory remains usable when another node owns memory. */
     cleanup_plan(&proposed);
     snapshot.nodes[1] = make_node(99, 202, 23, 2, 0);
     if (expect(wvm_admission_plan_propose(&snapshot, &request, tx, &proposed,
-                                          error, sizeof(error)) != 0,
-               "reject spread that would leave a vCPU without local memory") ||
-        expect(strstr(error, "remote memory") != NULL ||
-                   strstr(error, "insufficient eligible memory") != NULL ||
-                   strstr(error, "without local") != NULL,
-               "honest rejection for unsatisfiable remote/local memory")) {
+                                          error, sizeof(error)) == 0,
+               "allow CPU reservation without local guest memory")) {
         fprintf(stderr, " got error: %s\n", error);
         cleanup_plan(&proposed);
         cleanup_plan(&proposed_again);
@@ -272,7 +252,7 @@ int main(void)
         return 1;
     }
 
-    /* Fail-closed: split directory/executor in placement validate. */
+    /* Split directory/executor is a valid pooled-memory placement. */
     snapshot.nodes[1] = make_node(99, 202, 23, 2, 8 * 1024 * 1024);
     cleanup_plan(&proposed);
     if (wvm_admission_plan_propose(&snapshot, &request, tx, &proposed, error,
@@ -294,13 +274,13 @@ int main(void)
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
     }
-    placement.memory_assignments.entries[0].directory_physical_node_id = 17;
-    placement.memory_assignments.entries[0].executor_physical_node_id = 99;
-    if (expect(wvm_placement_plan_validate(&placement, error, sizeof(error)) !=
+    placement.memory_assignments.entries[0].executor_physical_node_id =
+        placement.memory_assignments.entries[0].directory_physical_node_id == 17
+            ? 99
+            : 17;
+    if (expect(wvm_placement_plan_validate(&placement, error, sizeof(error)) ==
                    0,
-               "reject split memory directory/executor") ||
-        expect(strstr(error, "remote memory") != NULL,
-               "split rejection names remote memory")) {
+               "accept split memory directory/executor")) {
         fprintf(stderr, " got error: %s\n", error);
         cleanup_plan(&proposed);
         cleanup_plan(&proposed_again);
@@ -356,13 +336,61 @@ int main(void)
         return 1;
     }
 
+    /* CPU-only executor plus memory-only directory closes the production
+     * placement path that the old local-memory gate rejected. */
+    cleanup_plan(&proposed);
+    snapshot.nodes[0] = make_node(17, 101, 19, 3, 0);
+    snapshot.nodes[1] = make_node(99, 202, 23, 0, 8 * 1024 * 1024);
+    request.host_overhead_memory_bytes = 0;
+    build_listeners(listeners, leases, 19100, 19200);
+    if (expect(wvm_admission_plan_propose(&snapshot, &request, tx, &proposed,
+                                          error, sizeof(error)) == 0,
+               "propose CPU-only and memory-only reservations") ||
+        expect(proposed.reservation_count == 2,
+               "retain both CPU and memory participants") ||
+        expect(proposed.reservations[0].guest_vcpu_slots != 0 &&
+                   proposed.reservations[0].guest_memory_bytes == 0 &&
+                   proposed.reservations[1].guest_vcpu_slots == 0 &&
+                   proposed.reservations[1].guest_memory_bytes != 0,
+               "separate CPU and memory reservation accounting")) {
+        fprintf(stderr, " got error: %s\n", error);
+        cleanup_plan(&proposed);
+        cleanup_plan(&proposed_again);
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+    memset(&placement, 0, sizeof(placement));
+    placement.vcpu_assignments.entries = vcpus;
+    placement.vcpu_assignments.capacity = 4;
+    placement.memory_assignments.entries = memory;
+    placement.memory_assignments.capacity = 8;
+    placement.reservation_requirements.entries = requirements;
+    placement.reservation_requirements.capacity = 2;
+    if (expect(wvm_admission_placement_plan_build(
+                   &snapshot, &request, &proposed, fence, &options, &placement,
+                   error, sizeof(error)) == 0,
+               "materialize CPU-only pooled-memory placement") ||
+        expect(wvm_placement_plan_validate(&placement, error, sizeof(error)) ==
+                   0,
+               "validate CPU-only pooled-memory placement") ||
+        expect(placement.memory_assignments.count != 0 &&
+                   placement.memory_assignments.entries[0]
+                           .directory_physical_node_id == 99 &&
+                   placement.memory_assignments.entries[0]
+                           .executor_physical_node_id == 17,
+               "bind memory directory to CPU executor explicitly")) {
+        fprintf(stderr, " got error: %s\n", error);
+        cleanup_plan(&proposed);
+        cleanup_plan(&proposed_again);
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+
     cleanup_plan(&proposed);
     cleanup_plan(&proposed_again);
     wvm_admission_snapshot_cleanup(&snapshot);
-    (void)saw_remote_reject;
     puts("placement-spread tests: PASS");
-    puts("NOTE: SPREAD co-locates guest memory with vCPUs; fail-closed when");
-    puts("      remote memory would be required; exclusive listener leases");
-    puts("      must not double-book on one node. No invent HA/guest E2E.");
+    puts("NOTE: CPU and memory reservations may be split; directory/executor");
+    puts("      identity and exclusive listener leases remain fail-closed.");
     return 0;
 }

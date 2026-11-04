@@ -74,9 +74,9 @@ struct wvm_coordinator_node_launch_plan {
 };
 
 /*
- * Execution-profile selection is a prior capability-control decision. This
- * coordinator verifies that the selected profile is compatible with the
- * canonical request, then binds it immutably into the candidate manifest.
+ * The template supplies schema/policy/output storage. The coordinator resolves
+ * backend and fault engines against a feasible role-aware resource plan, then
+ * binds the resolved profile immutably into the candidate manifest.
  */
 struct wvm_coordinator_prepare_options {
     struct wvm_machine_config guest_machine;

@@ -102,6 +102,7 @@ struct wvm_header {
  * Heartbeats keep legacy pack + real epoch; do not set this flag on HB.
  */
 #define WVM_FLAG_FULL_VMID 0x20
+#define WVM_FLAG_SHARED_BACKING 0x40 /* local push: RAM backing already updated */
 
 // --- 3. Payload 结构体 (Data Structures) ---
 
@@ -193,6 +194,12 @@ typedef struct wvm_ipc_header_t {
 #define WVM_IPC_TYPE_REGISTER         11
 #define WVM_IPC_TYPE_TYPED_MEM_FAULT  12
 #define WVM_IPC_TYPE_TYPED_MEM_COMMIT 13
+#define WVM_IPC_TYPE_KERNEL_ATTACHMENT 16
+
+struct wvm_ipc_kernel_attachment {
+    int32_t status;
+    uint8_t capability[32];
+};
 
 /* Local IPC connection roles.  Registration removes any dependency on
  * connection arrival order when a QEMU instance opens several sockets. */
@@ -342,6 +349,19 @@ struct wvm_ipc_write_req {
 
 #define WVM_EXIT_PREEMPT 0x10000u
 
+#define WVM_KVM_MAX_CPUID_ENTRIES 256U
+#define WVM_KVM_MAX_PROFILE_MSRS 256U
+
+typedef struct {
+    uint32_t function, index, flags;
+    uint32_t eax, ebx, ecx, edx;
+} wvm_kvm_cpuid_entry_t;
+
+typedef struct {
+    uint32_t index;
+    uint64_t value;
+} wvm_kvm_msr_entry_t;
+
 typedef struct {
     uint64_t rax, rbx, rcx, rdx, rsi, rdi, rsp, rbp;
     uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
@@ -403,6 +423,19 @@ typedef struct {
     uint64_t sfmask;        /* SFMASK 0xC0000084 */
     uint32_t msr_ext_valid; /* bit0=gs bit1=apic bit2=syscall */
     uint32_t _pad5;
+    uint32_t cpuid_count;
+    wvm_kvm_cpuid_entry_t cpuid[WVM_KVM_MAX_CPUID_ENTRIES];
+    uint64_t debug_address[4];
+    uint64_t debug_status;
+    uint64_t debug_control;
+    uint32_t debug_valid;
+    uint64_t sysenter_cs;
+    uint64_t sysenter_esp;
+    uint64_t sysenter_eip;
+    uint64_t pat;
+    uint32_t system_msrs_valid;
+    uint32_t profile_msr_count;
+    wvm_kvm_msr_entry_t profile_msrs[WVM_KVM_MAX_PROFILE_MSRS];
 } wvm_kvm_context_t;
 
 /* Per-segment descriptor state (mirrors QEMU SegmentCache / KVM kvm_segment) */
@@ -423,6 +456,9 @@ typedef struct {
  */
 #ifndef WVM_TCG_EXCP_NEED_LOCAL
 #define WVM_TCG_EXCP_NEED_LOCAL 0x10010
+#endif
+#ifndef WVM_TCG_EXCP_ATOMIC
+#define WVM_TCG_EXCP_ATOMIC 0x10011
 #endif
 
 #define WVM_TCG_XSAVE_AREA_SIZE 0xB00U

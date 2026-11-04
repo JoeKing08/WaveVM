@@ -12,6 +12,7 @@
  * - 严禁在 QEMU 建立连接前提前释放资源。
  * ---------------------------------------------------------------------------
  */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -43,6 +44,7 @@
 #include "../common_include/wavevm_memory.h"
 #include "../node_runtime/block_client.h"
 #include "../node_runtime/memory_service.h"
+#include "../node_runtime/kernel_memory.h"
 #include "../node_runtime/vcpu_service.h"
 #include "../node_runtime/runtime_context.h"
 
@@ -62,6 +64,8 @@ uint32_t g_my_vm_id = 0;
 static const struct wvm_runtime_manifest_storage *g_runtime_storage_ptr;
 static struct wvm_runtime_gate *g_runtime_gate_ptr;
 static int g_runtime_gate_active = 0;
+static int g_runtime_requires_qemu_frontend = 0;
+static int g_runtime_ready_published = 0;
 static const struct wvm_runtime_dispatch_storage *g_runtime_dispatch_storage_ptr;
 static int g_runtime_dispatch_active = 0;
 static pthread_mutex_t g_runtime_gate_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -74,6 +78,22 @@ static volatile sig_atomic_t g_master_listen_fd = -1;
 #define g_runtime_storage (*g_runtime_storage_ptr)
 #define g_runtime_gate (*g_runtime_gate_ptr)
 #define g_runtime_dispatch_storage (*g_runtime_dispatch_storage_ptr)
+
+static int publish_runtime_ready(char *error, size_t error_len)
+{
+    if (g_runtime_ready_published) {
+        return 0;
+    }
+    if (!g_runtime_gate_active ||
+        wvm_runtime_ready_publish(
+            &g_runtime_storage.manifest,
+            g_runtime_storage.manifest.expected_node_instance_id, error,
+            error_len) != 0) {
+        return -1;
+    }
+    g_runtime_ready_published = 1;
+    return 0;
+}
 
 static int runtime_route_key_equal(const struct wvm_route_snapshot_key *left,
                                    const struct wvm_route_snapshot_key *right)
@@ -175,6 +195,10 @@ static int bind_runtime_context(
     }
     g_runtime_dispatch_active = 1;
     g_runtime_gate_active = 1;
+    g_runtime_requires_qemu_frontend =
+        (g_runtime_storage.manifest.local_role_bits &
+         WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_QEMU_FRONTEND)) != 0;
+    g_runtime_ready_published = 0;
     return 0;
 }
 
@@ -297,14 +321,20 @@ static int runtime_dispatch_local_reservation(uint32_t *local_vcpus,
 }
 
 static int runtime_gate_register_qemu(
+    int peer_fd,
     const struct wvm_ipc_runtime_registration *wire_registration,
     uint64_t *connection_id_out)
 {
     struct wvm_runtime_registration registration;
+    struct ucred peer;
+    socklen_t peer_bytes = sizeof(peer);
     char error[256] = {0};
     int result;
 
     if (!wire_registration ||
+        getsockopt(peer_fd, SOL_SOCKET, SO_PEERCRED, &peer, &peer_bytes) != 0 ||
+        peer_bytes != sizeof(peer) || peer.uid != geteuid() || peer.pid <= 0 ||
+        wire_registration->caller_process_instance_id != (uint64_t)peer.pid ||
         wire_registration->magic != WVM_IPC_REGISTRATION_MAGIC ||
         wire_registration->version != WVM_IPC_REGISTRATION_VERSION ||
         wire_registration->connection_role != WVM_MANIFEST_ROLE_QEMU_FRONTEND) {
@@ -334,6 +364,13 @@ static int runtime_gate_register_qemu(
     result = wvm_runtime_gate_register(&g_runtime_gate, &registration,
                                        connection_id_out, error,
                                        sizeof(error));
+    if (result == 0 && g_runtime_requires_qemu_frontend &&
+        publish_runtime_ready(error, sizeof(error)) != 0) {
+        (void)wvm_runtime_gate_revoke(&g_runtime_gate, *connection_id_out,
+                                      NULL, 0);
+        *connection_id_out = 0;
+        result = -1;
+    }
     pthread_mutex_unlock(&g_runtime_gate_lock);
     if (result != 0) {
         fprintf(stderr, "[RuntimeGate] QEMU registration rejected: %s\n",
@@ -355,7 +392,7 @@ static int runtime_gate_authorize_connection(uint64_t connection_id)
         return 0;
     }
     /* R04: refuse new work once Mode A has a retained permanent diff failure. */
-    if (poll_mode_a_diff_status() > 0 || g_mode_a_diff_paused) {
+    if (poll_mode_a_diff_status() != 0 || g_mode_a_diff_paused) {
         fprintf(stderr,
                 "[R04] runtime authorize refused: Mode A paused after diff "
                 "failure count=%u gpa=%#llx\n",
@@ -413,10 +450,6 @@ static int poll_mode_a_diff_status(void)
     }
     memset(&st, 0, sizeof(st));
     if (ioctl(g_dev_fd, IOCTL_WVM_QUERY_DIFF_STATUS, &st) != 0) {
-        if (errno == ENOTTY || errno == EINVAL) {
-            /* Older ko without the ioctl — do not invent success. */
-            return 0;
-        }
         fprintf(stderr,
                 "[R04] QUERY_DIFF_STATUS failed errno=%d (%s)\n", errno,
                 strerror(errno));
@@ -442,6 +475,9 @@ static int poll_mode_a_diff_status(void)
     }
     return 0;
 }
+
+static struct wvm_ioctl_memory_config g_kernel_memory_config;
+static int g_kernel_memory_active;
 
 static int bind_kernel_context_from_manifest(uint32_t physical_node_id)
 {
@@ -508,6 +544,33 @@ static int bind_kernel_context_from_manifest(uint32_t physical_node_id)
                 errno, strerror(errno));
         return -1;
     }
+    memset(&g_kernel_memory_config, 0, sizeof(g_kernel_memory_config));
+    g_kernel_memory_config.identity = request;
+    g_kernel_memory_config.local_vnode =
+        g_runtime_dispatch_storage.projection.local_primary.destination_vnode;
+    for (size_t i = 0;
+         i < g_runtime_dispatch_storage.projection.memory_dispatch.count; i++) {
+        const struct wvm_runtime_memory_dispatch *memory =
+            &g_runtime_dispatch_storage.projection.memory_dispatch.entries[i];
+        if (memory->bytes > UINT64_MAX - memory->gpa_start)
+            return -EINVAL;
+        uint64_t end = memory->gpa_start + memory->bytes;
+        uint32_t count = g_kernel_memory_config.range_count;
+        if (count && g_kernel_memory_config.ranges[count - 1].start +
+                         g_kernel_memory_config.ranges[count - 1].size ==
+                         memory->gpa_start) {
+            g_kernel_memory_config.ranges[count - 1].size += memory->bytes;
+        } else {
+            if (count >= sizeof(g_kernel_memory_config.ranges) /
+                             sizeof(g_kernel_memory_config.ranges[0]))
+                return -E2BIG;
+            g_kernel_memory_config.ranges[count].start = memory->gpa_start;
+            g_kernel_memory_config.ranges[count].size = memory->bytes;
+            g_kernel_memory_config.range_count++;
+        }
+        if (end > g_kernel_memory_config.guest_physical_limit)
+            g_kernel_memory_config.guest_physical_limit = end;
+    }
     fprintf(stderr,
             "[KernelContext] bound VM=%u incarnation=%" PRIu64
             " node=%u instance=%" PRIu64 " (Mode A gate)\n",
@@ -516,101 +579,6 @@ static int bind_kernel_context_from_manifest(uint32_t physical_node_id)
     return 0;
 }
 
-static void inject_cpu_route_table(void) {
-    if (g_dev_fd < 0) return;
-    const uint32_t *table = wvm_get_cpu_route_table();
-    if (!table) return;
-
-    const uint32_t chunk_size = 1024;
-    size_t buf_size = sizeof(struct wvm_ioctl_route_update) + chunk_size * sizeof(uint32_t);
-    struct wvm_ioctl_route_update *payload = malloc(buf_size);
-    if (!payload) {
-        fprintf(stderr, "[CPU-ROUTE] malloc failed\n");
-        return;
-    }
-
-    for (uint32_t i = 0; i < WVM_CPU_ROUTE_TABLE_SIZE; i += chunk_size) {
-        uint32_t count = chunk_size;
-        if (i + count > WVM_CPU_ROUTE_TABLE_SIZE) count = WVM_CPU_ROUTE_TABLE_SIZE - i;
-
-        payload->start_index = i;
-        payload->count = count;
-        memcpy(payload->entries, &table[i], count * sizeof(uint32_t));
-
-        if (ioctl(g_dev_fd, IOCTL_UPDATE_CPU_ROUTE, payload) < 0) {
-            fprintf(stderr, "[CPU-ROUTE] inject failed at %u (errno=%d)\n", i, errno);
-            free(payload);
-            return;
-        }
-    }
-
-    fprintf(stderr, "[CPU-ROUTE] injected %u entries\n", (unsigned)WVM_CPU_ROUTE_TABLE_SIZE);
-    free(payload);
-}
-
-static void inject_memory_route_table(void) {
-    const uint32_t *table;
-    const uint32_t chunk_size = 1024;
-    size_t buf_size;
-    struct wvm_ioctl_route_update *payload;
-
-    if (g_dev_fd < 0) return;
-    table = wvm_get_memory_route_table();
-    if (!table) return;
-
-    buf_size = sizeof(*payload) + chunk_size * sizeof(uint32_t);
-    payload = malloc(buf_size);
-    if (!payload) {
-        fprintf(stderr, "[MEM-ROUTE] malloc failed\n");
-        return;
-    }
-
-    for (uint32_t i = 0; i < WVM_MEMORY_ROUTE_TABLE_SIZE; i += chunk_size) {
-        uint32_t count = chunk_size;
-
-        if (i + count > WVM_MEMORY_ROUTE_TABLE_SIZE) {
-            count = WVM_MEMORY_ROUTE_TABLE_SIZE - i;
-        }
-        payload->start_index = i;
-        payload->count = count;
-        memcpy(payload->entries, &table[i], count * sizeof(uint32_t));
-        if (ioctl(g_dev_fd, IOCTL_UPDATE_MEMORY_PLACEMENT, payload) < 0) {
-            fprintf(stderr, "[MEM-ROUTE] inject failed at %u (errno=%d)\n",
-                    i, errno);
-            free(payload);
-            return;
-        }
-    }
-
-    fprintf(stderr, "[MEM-ROUTE] injected %u entries\n",
-            (unsigned)WVM_MEMORY_ROUTE_TABLE_SIZE);
-    free(payload);
-}
-
-static void inject_mem_global(uint32_t slot, uint32_t value) {
-    size_t buf_size = sizeof(struct wvm_ioctl_route_update) + sizeof(uint32_t);
-    struct wvm_ioctl_route_update *payload;
-
-    if (g_dev_fd < 0) return;
-    payload = malloc(buf_size);
-    if (!payload) {
-        fprintf(stderr, "[MEM-GLOBAL] malloc failed\n");
-        return;
-    }
-    payload->start_index = slot;
-    payload->count = 1;
-    payload->entries[0] = value;
-    if (ioctl(g_dev_fd, IOCTL_UPDATE_MEM_ROUTE, payload) < 0) {
-        fprintf(stderr, "[MEM-GLOBAL] inject slot %u failed (errno=%d)\n",
-                slot, errno);
-    }
-    free(payload);
-}
-
-/* IOCTL_SET_VM_ID retired; production uses IOCTL_WVM_BIND_CONTEXT only. */
-static void inject_vm_id(uint32_t vm_id) {
-    (void)vm_id;
-}
 #define NUM_BCAST_WORKERS 8
 
 /* [FIX-G2] 坚如磐石的循环读取，处理 Partial Read 和 EINTR */
@@ -822,11 +790,13 @@ static void handle_ipc_commit(int qemu_fd, const uint8_t *payload,
             payload, payload_bytes, &request, error, sizeof(error)) != 0) {
         status = -EPROTO;
     } else {
-        status = wvm_memory_service_global_request_commit(
+        status = wvm_memory_service_global_request_commit_from_shared_backing(
             request.commit.gpa, request.commit.base_version,
             request.commit.offset, request.commit.data,
             request.commit.data_bytes, request.operation_id,
-            request.delivery_attempt_id, &result.ack, error, sizeof(error));
+            request.delivery_attempt_id,
+            (request.flags & WVM_LOCAL_MEMORY_COMMIT_FLAG_SHARED_BACKING) != 0,
+            &result.ack, error, sizeof(error));
         memcpy(result.operation_id, request.operation_id,
                sizeof(result.operation_id));
     }
@@ -860,8 +830,13 @@ static void handle_ipc_cpu_run(int qemu_fd,
      * the same QEMU IPC connection. The node-runtime service therefore owns
      * the following typed memory fence and the exact asynchronous reply path.
      */
-    result = wvm_vcpu_service_global_submit(qemu_fd, req, error,
-                                             sizeof(error));
+    if (g_dev_fd >= 0 && ioctl(g_dev_fd, IOCTL_WVM_MEMORY_DRAIN) != 0) {
+        result = -errno;
+        snprintf(error, sizeof(error), "kernel dirty fence is incomplete");
+    } else {
+        result = wvm_vcpu_service_global_submit(qemu_fd, req, error,
+                                                sizeof(error));
+    }
     if (result == 0) {
         return;
     }
@@ -1229,6 +1204,36 @@ int wait_local_qemu_push_barrier(uint64_t timeout_us)
     return wait_for_push_barrier_cookie(cookie, timeout_us);
 }
 
+static int invalidate_kernel_cache(uint16_t msg_type, const void *payload, int len)
+{
+    struct wvm_ioctl_memory_invalidate invalidate;
+
+    if (!__atomic_load_n(&g_kernel_memory_active, __ATOMIC_ACQUIRE))
+        return 0;
+    if (msg_type == MSG_PAGE_PUSH_FULL &&
+        len >= (int)sizeof(struct wvm_full_page_push)) {
+        const struct wvm_full_page_push *push = payload;
+        invalidate.gpa = WVM_NTOHLL(push->gpa);
+        invalidate.result_version = WVM_NTOHLL(push->version);
+    } else if (msg_type == MSG_PAGE_PUSH_DIFF &&
+               len >= (int)sizeof(struct wvm_diff_log)) {
+        const struct wvm_diff_log *diff = payload;
+        invalidate.gpa = WVM_NTOHLL(diff->gpa);
+        invalidate.result_version = WVM_NTOHLL(diff->version);
+    } else {
+        return 0;
+    }
+    if (ioctl(g_dev_fd, IOCTL_WVM_MEMORY_INVALIDATE, &invalidate) != 0) {
+        int result = -errno;
+        fprintf(stderr, "[kernel-memory] invalidation failed: %s\n",
+                strerror(errno));
+        g_mode_a_diff_paused = 1;
+        request_shutdown(0);
+        return result;
+    }
+    return 0;
+}
+
 int broadcast_push_to_qemu_fenced(uint16_t msg_type, void* payload, int len,
                                   uint64_t timeout_us)
 {
@@ -1236,6 +1241,9 @@ int broadcast_push_to_qemu_fenced(uint16_t msg_type, void* payload, int len,
     int ret;
     int sent;
 
+    ret = invalidate_kernel_cache(msg_type, payload, len);
+    if (ret != 0)
+        return ret;
     pthread_mutex_lock(&g_client_lock);
     sent = broadcast_push_to_qemu_locked(msg_type, payload, len);
     if (sent <= 0) {
@@ -1257,6 +1265,9 @@ int broadcast_push_to_qemu_fenced(uint16_t msg_type, void* payload, int len,
 }
 
 int broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len) {
+    int result = invalidate_kernel_cache(msg_type, payload, len);
+    if (result != 0)
+        return result;
     pthread_mutex_lock(&g_client_lock);
     int sent = broadcast_push_to_qemu_locked(msg_type, payload, len);
     pthread_mutex_unlock(&g_client_lock);
@@ -1381,7 +1392,7 @@ void* client_handler(void *socket_desc) {
                                 qemu_fd, (unsigned)role);
                         break;
                     }
-                    if (runtime_gate_register_qemu(
+                    if (runtime_gate_register_qemu(qemu_fd,
                             (const struct wvm_ipc_runtime_registration *)
                                 payload_buf,
                             &runtime_connection_id) != 0) {
@@ -1421,6 +1432,21 @@ void* client_handler(void *socket_desc) {
                     fprintf(stderr, "[IPC] fd=%d registered as sync role=%u\n",
                             qemu_fd, (unsigned)role);
                 }
+                break;
+            }
+            case WVM_IPC_TYPE_KERNEL_ATTACHMENT: {
+                struct wvm_ipc_kernel_attachment response = {.status = -EPERM};
+
+                if (ipc_hdr.len == 0 && g_runtime_gate_active &&
+                    runtime_connection_id && !is_push_client &&
+                    __atomic_load_n(&g_kernel_memory_active, __ATOMIC_ACQUIRE)) {
+                    response.status = 0;
+                    memcpy(response.capability,
+                           g_kernel_memory_config.identity.attach_capability,
+                           sizeof(response.capability));
+                }
+                if (write_exact(qemu_fd, &response, sizeof(response)) < 0)
+                    goto client_done;
                 break;
             }
             case WVM_IPC_TYPE_PUSH_BARRIER_ACK: {
@@ -1768,6 +1794,7 @@ void* client_handler(void *socket_desc) {
                 break;
         }
     }
+client_done:
     {
         int drain_failed = drain_pending_commits(&commit_queue, NULL) < 0;
 
@@ -1786,6 +1813,21 @@ void* client_handler(void *socket_desc) {
                 fprintf(stderr,
                         "[RuntimeGate] revoke failed fd=%d: %s\n", qemu_fd,
                         error[0] ? error : "unknown error");
+            } else if (g_runtime_requires_qemu_frontend &&
+                       g_runtime_ready_published &&
+                       !wvm_runtime_gate_has_registered_role(
+                           &g_runtime_gate,
+                           WVM_MANIFEST_ROLE_QEMU_FRONTEND)) {
+                if (wvm_runtime_ready_remove(
+                        &g_runtime_storage.manifest, error, sizeof(error)) !=
+                    0) {
+                    fprintf(stderr,
+                            "[RuntimeGate] cannot withdraw QEMU readiness fd=%d: %s\n",
+                            qemu_fd, error[0] ? error : "unknown error");
+                    g_shutdown_requested = 1;
+                } else {
+                    g_runtime_ready_published = 0;
+                }
             }
             pthread_mutex_unlock(&g_runtime_gate_lock);
         }
@@ -1817,6 +1859,7 @@ void* client_handler(void *socket_desc) {
 int wavevm_master_runtime_main(
     const struct wvm_node_runtime_context *runtime) {
     int stop_result = 0;
+    struct wvm_kernel_memory_bridge kernel_memory = {.fd = -1};
 
     // Prevent process-wide termination on EPIPE when a peer disconnects.
     signal(SIGPIPE, SIG_IGN);
@@ -1829,8 +1872,8 @@ int wavevm_master_runtime_main(
         runtime->physical_node_id == 0 ||
         runtime->physical_node_id > INT_MAX ||
         runtime->manifest->vm_id == 0 ||
-        runtime->local_memory_bytes == 0 ||
-        runtime->local_memory_bytes % (1024ULL * 1024ULL) != 0) {
+        runtime->guest_memory_bytes == 0 ||
+        runtime->guest_memory_bytes % (1024ULL * 1024ULL) != 0) {
         fprintf(stderr,
                 "[Runtime] admitted node-runtime context is invalid\n");
         return 1;
@@ -1845,8 +1888,8 @@ int wavevm_master_runtime_main(
 
 
     // 1. Bind all local resources to the admitted context.
-    size_t ram_mb = runtime->local_memory_bytes / (1024ULL * 1024ULL);
-    g_shm_size = runtime->local_memory_bytes;
+    size_t ram_mb = runtime->guest_memory_bytes / (1024ULL * 1024ULL);
+    g_shm_size = runtime->guest_memory_bytes;
     int local_port = runtime->node_runtime_data_port;
     int my_phys_id = (int)runtime->physical_node_id;
     g_ctrl_port = runtime->node_runtime_control_port;
@@ -1889,7 +1932,7 @@ int wavevm_master_runtime_main(
      */
     int my_virtual_id;
     uint32_t my_local_cores = runtime->local_vcpu_count;
-    uint64_t required_memory_bytes = runtime->local_memory_bytes;
+    uint64_t required_memory_bytes = runtime->guest_memory_bytes;
     uint32_t total_vnodes;
     int flat_route_cache_enabled =
         runtime->dispatch->route_topology_kind == WVM_ROUTE_TOPOLOGY_FLAT;
@@ -1968,18 +2011,6 @@ int wavevm_master_runtime_main(
     // Logic Core 将根据此 ID 判断是否拥有某个 GPA 的管理权 (Directory Owner)
     wvm_set_my_node_id(my_virtual_id);
     printf("[Init] Identity Mapped: PhysID %d -> VirtualID %d (Primary)\n", my_phys_id, my_virtual_id);
-    // Mode A owns a separate Logic Core instance inside wavevm.ko.
-    if (flat_route_cache_enabled) {
-        /* VM identity comes from BIND_CONTEXT; do not call SET_VM_ID. */
-        inject_mem_global(0, total_vnodes);
-        inject_mem_global(1, (uint32_t)my_virtual_id);
-        inject_cpu_route_table();
-        inject_memory_route_table();
-    } else {
-        fprintf(stderr,
-                "[RuntimeDispatch] fractal projection uses typed node-runtime "
-                "dispatch; legacy route caches are disabled\n");
-    }
     {
         char split_buf[32];
         snprintf(split_buf, sizeof(split_buf), "%u", my_local_cores);
@@ -2095,24 +2126,39 @@ int wavevm_master_runtime_main(
         return 1;
     }
 
-    /* Publish identity-bound readiness only after the endpoint is listening. */
-    {
+    if (g_dev_fd >= 0 &&
+        wvm_kernel_memory_start(&kernel_memory, g_dev_fd,
+                                &g_kernel_memory_config) != 0) {
+        fprintf(stderr, "[kernel-memory] cannot start authoritative bridge\n");
+        close(listen_fd);
+        unlink(sock_path);
+        return 1;
+    }
+
+    __atomic_store_n(&g_kernel_memory_active, g_dev_fd >= 0, __ATOMIC_RELEASE);
+
+    /* Memory-only participants have no QEMU frontend to register. */
+    if (!g_runtime_requires_qemu_frontend) {
         char ready_error[256] = {0};
 
-        if (wvm_runtime_ready_publish(
-                &g_runtime_storage.manifest,
-                g_runtime_storage.manifest.expected_node_instance_id,
-                ready_error, sizeof(ready_error)) != 0) {
+        if (publish_runtime_ready(ready_error, sizeof(ready_error)) != 0) {
             fprintf(stderr, "[System] cannot publish runtime readiness: %s\n",
                     ready_error[0] ? ready_error : "invalid readiness state");
+            (void)wvm_kernel_memory_stop(&kernel_memory);
             close(listen_fd);
             return 1;
         }
+    } else {
+        fprintf(stderr,
+                "[System] runtime socket listening; waiting for manifest-bound "
+                "QEMU frontend registration\n");
     }
 
-    printf("[+] WaveVM V29 Node Ready. Waiting for QEMU...\n");
+    printf("[+] WaveVM V29 Node endpoint ready. Waiting for QEMU...\n");
     fflush(stdout);
-    fprintf(stderr, "[System] runtime readiness published; listening for QEMU\n");
+    if (g_runtime_ready_published) {
+        fprintf(stderr, "[System] runtime readiness published\n");
+    }
 
     // 10. Backend/Logic Core 已在前面初始化并注入拓扑。
     // 此处严禁重复初始化，否则会重置 CPU 路由表为 AUTO_ROUTE。
@@ -2195,6 +2241,10 @@ int wavevm_master_runtime_main(
     if (stop_and_wait_clients() != 0) {
         stop_result = 1;
     }
+    if (wvm_kernel_memory_stop(&kernel_memory) != 0 || g_mode_a_diff_paused) {
+        stop_result = 1;
+    }
+    __atomic_store_n(&g_kernel_memory_active, 0, __ATOMIC_RELEASE);
 
     /* Only the main thread performs teardown.  The signal handler above only
      * changes the stop flag, so these calls remain outside signal context. */
@@ -2233,6 +2283,8 @@ int wavevm_master_runtime_main(
     /* Manifest, dispatch, and gate storage belong to node_runtime. */
     g_runtime_dispatch_active = 0;
     g_runtime_gate_active = 0;
+    g_runtime_requires_qemu_frontend = 0;
+    g_runtime_ready_published = 0;
     g_runtime_storage_ptr = NULL;
     g_runtime_dispatch_storage_ptr = NULL;
     g_runtime_gate_ptr = NULL;
