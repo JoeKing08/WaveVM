@@ -1,0 +1,7 @@
+A/B clean HEAD wavevm-user-mem.c (no F05/F06)
+cell=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/ab-clean-usermem/ctrl-split2-220450
+guest_login=PASS guest_ssh=PASS guest_cpu_smoke=PASS serial=31715
+OVERALL=FAIL_g9_remote_attribution (expected: all-local remote_done=0)
+coherent=ON
+CONCLUSION: dirty F05/F06 user-mem REGRESSED tip all-local vs clean HEAD
+recorded 2026-11-04 22:08:26 CST

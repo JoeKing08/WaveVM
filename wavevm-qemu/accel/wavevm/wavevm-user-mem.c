@@ -76,6 +76,31 @@ static atomic_bool g_tcg_dirty_baseline_ready = false;
 
 void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
 {
+    /*
+     * F05: SHM join/attach only proves this process mapped a local backing.
+     * Coherent fast-path (skip fault-hook) requires FE and executor to share
+     * that backing on the same physical host. When both host ids are known
+     * and differ, refuse coherent and keep the real fault/sync path.
+     * Missing host ids keep the prior same-host join behavior (local tests)
+     * but do not claim cross-host shared RAM.
+     */
+    if (enabled) {
+        const char *fe_host = getenv("WVM_FE_PHYSICAL_HOST_ID");
+        const char *ex_host = getenv("WVM_EXECUTOR_PHYSICAL_HOST_ID");
+        if (fe_host && *fe_host && ex_host && *ex_host) {
+            char *fe_end = NULL, *ex_end = NULL;
+            unsigned long long fe = strtoull(fe_host, &fe_end, 10);
+            unsigned long long ex = strtoull(ex_host, &ex_end, 10);
+            if (fe_end && *fe_end == '\0' && ex_end && *ex_end == '\0' &&
+                fe != 0 && ex != 0 && fe != ex) {
+                fprintf(stderr,
+                        "[WaveVM-User] F05 coherent REFUSED: FE host=%llu "
+                        "executor host=%llu (cross-host; fault path kept)\n",
+                        fe, ex);
+                enabled = 0;
+            }
+        }
+    }
     g_tcg_shm_coherent = enabled ? 1 : 0;
     if (g_tcg_shm_coherent) {
         /* The local runtime installs canonical pages in this shared backing. */
@@ -90,8 +115,11 @@ void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
         fprintf(stderr,
                 "[WaveVM-User] TCG SHM coherent mode ON "
                 "(skip fault-hook / local RAM copies; directory commit stays)\n");
+    } else if (!enabled) {
+        /* leave fault hook policy to its existing init path */
     }
 }
+
 
 int wavevm_user_mem_tcg_shm_coherent(void)
 {
@@ -150,6 +178,7 @@ static void flush_aggregator(void);
 typedef struct WritablePage {
     uint64_t gpa;
     void* pre_image_snapshot;
+    /* F06: slot index is (wp - g_page_pool); keep struct size == HEAD. */
     struct WritablePage *next;
 } WritablePage;
 
@@ -157,6 +186,59 @@ typedef struct WritablePage {
 static WritablePage g_page_pool[PAGE_POOL_SIZE];
 static void* g_image_pool[PAGE_POOL_SIZE]; // 预分配快照空间
 static atomic_uint g_pool_idx = 0; /* [FIX] 必须无符号，防止 21 亿次写缺页后有符号溢出导致负数取模越界 */
+/* F06: occupancy — never wrap-reuse a slot still on the writable list / in flight. */
+static atomic_uint g_page_pool_occupied[PAGE_POOL_SIZE];
+static atomic_uint g_page_pool_in_use = 0;
+
+static int page_pool_claim(void)
+{
+    for (int n = 0; n < PAGE_POOL_SIZE; n++) {
+        unsigned idx = atomic_fetch_add_explicit(&g_pool_idx, 1,
+                                                 memory_order_relaxed) %
+                       PAGE_POOL_SIZE;
+        unsigned expected = 0;
+        if (atomic_compare_exchange_strong_explicit(
+                &g_page_pool_occupied[idx], &expected, 1,
+                memory_order_acq_rel, memory_order_acquire)) {
+            atomic_fetch_add_explicit(&g_page_pool_in_use, 1,
+                                      memory_order_relaxed);
+            return (int)idx;
+        }
+    }
+    return -1;
+}
+
+static void page_pool_release(int idx)
+{
+    if (idx < 0 || idx >= PAGE_POOL_SIZE) {
+        return;
+    }
+    unsigned was = atomic_exchange_explicit(&g_page_pool_occupied[idx], 0,
+                                            memory_order_acq_rel);
+    if (was) {
+        atomic_fetch_sub_explicit(&g_page_pool_in_use, 1, memory_order_relaxed);
+    }
+}
+
+static void writable_page_release_chain(WritablePage *head,
+                                        WritablePage *stop_before)
+{
+    /*
+     * F06: capture next BEFORE release. Pool slots ARE the WritablePage
+     * nodes; clearing occupancy allows another claim to overwrite next.
+     * Index is (curr - g_page_pool) so sizeof(WritablePage) stays at HEAD.
+     */
+    WritablePage *curr = head;
+    while (curr && curr != stop_before) {
+        WritablePage *next = curr->next;
+        int idx = (int)(curr - g_page_pool);
+        curr->next = NULL;
+        if (idx >= 0 && idx < PAGE_POOL_SIZE) {
+            page_pool_release(idx);
+        }
+        curr = next;
+    }
+}
 
 static volatile bool g_threads_running = false;
 static pthread_t g_listen_thread;
@@ -911,7 +993,7 @@ typedef struct WVMHandoffDirtyJournal {
 // 线程局部
 static __thread int t_com_sock = -1;
 static __thread uint64_t t_memory_deadline_us;
-#define WVM_MEMORY_IPC_TIMEOUT_US 5000000ULL
+#define WVM_MEMORY_IPC_TIMEOUT_US 120000000ULL /* F05 cross-host fence */
 #define WVM_MEMORY_DIRTY_BATCH_TIMEOUT_US 60000000ULL
 
 // --- 辅助函数 ---
@@ -1849,9 +1931,31 @@ static int resolve_fault_on_worker(uintptr_t fault_addr, uint64_t gpa, bool is_w
             }
         }
 
-        int idx = atomic_fetch_add(&g_pool_idx, 1) % PAGE_POOL_SIZE;
-        WritablePage *wp = &g_page_pool[idx];
-        void *snapshot = g_image_pool[idx];
+        int idx = page_pool_claim();
+        WritablePage *wp;
+        void *snapshot;
+
+        if (idx < 0) {
+            /*
+             * F06: pool full - bounded fail, do not overwrite in-flight
+             * pre-images / list nodes. Leave page RO so the store retries or
+             * fails closed via the fault worker.
+             */
+            static int pool_exh_log;
+            if (pool_exh_log < 20) {
+                fprintf(stderr,
+                        "[WaveVM-User] F06 write page pool exhausted "
+                        "in_use=%u cap=%u gpa=%#llx; bounded fail\n",
+                        atomic_load_explicit(&g_page_pool_in_use,
+                                             memory_order_relaxed),
+                        (unsigned)PAGE_POOL_SIZE,
+                        (unsigned long long)gpa);
+                pool_exh_log++;
+            }
+            return -ENOMEM;
+        }
+        wp = &g_page_pool[idx];
+        snapshot = g_image_pool[idx];
 
         /*
          * A13: snapshot BEFORE RW mprotect. Capture pre-image while the page
@@ -1859,10 +1963,12 @@ static int resolve_fault_on_worker(uintptr_t fault_addr, uint64_t gpa, bool is_w
          * Only then arm WRITE for the faulting store to retire.
          */
         if (mprotect(aligned_addr, 4096, PROT_READ) != 0) {
+            page_pool_release(idx);
             return -1;
         }
         memcpy(snapshot, aligned_addr, 4096);
         if (mprotect(aligned_addr, 4096, PROT_READ | PROT_WRITE) != 0) {
+            page_pool_release(idx);
             return -1;
         }
         wp->gpa = gpa;
@@ -2704,6 +2810,8 @@ static int process_writable_batch(WritablePage *batch_head,
     }
 
     flush_aggregator();
+    /* F06: slots leave the in-flight list — return them to the free pool. */
+    writable_page_release_chain(batch_head, NULL);
     return committed;
 }
 
@@ -2763,6 +2871,7 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
             uint64_t *new_seen = realloc(seen, new_capacity * sizeof(*seen));
             if (!new_seen) {
                 first_error = -ENOMEM;
+                writable_page_release_chain(batch_head, curr);
                 requeue_writable_page_chain(curr);
                 break;
             }
@@ -2774,6 +2883,7 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
         void *page_addr = gpa_to_hva_safe(curr->gpa);
         if (!page_addr) {
             first_error = -EFAULT;
+            writable_page_release_chain(batch_head, curr);
             requeue_writable_page_chain(curr);
             break;
         }
@@ -2877,6 +2987,7 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
                         ra, 4096, 1 << DIRTY_MEMORY_MIGRATION);
                 }
                 first_error = commit_ret;
+                writable_page_release_chain(batch_head, curr);
                 requeue_writable_page_chain(curr);
                 break;
             }
@@ -2892,6 +3003,10 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
     free(seen);
     if (!use_commit) {
         flush_aggregator();
+    }
+    /* F06: completed prefix (or whole batch) returns to the free pool. */
+    if (first_error == 0) {
+        writable_page_release_chain(batch_head, NULL);
     }
     return first_error != 0 ? first_error : committed;
 }
@@ -3369,7 +3484,7 @@ static int memory_push_fence(int fd, uint64_t timeout_us, bool include_helpers)
     uint8_t request[16] = {0};
     uint8_t response[16];
     uint64_t now = get_us_time();
-    uint64_t deadline = now + MIN(timeout_us, 5000000ULL);
+    uint64_t deadline = now + MIN(timeout_us, 120000000ULL); /* F05 cross-host */
     int result;
 
     if (fd < 0) {
@@ -3710,7 +3825,10 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
 
     for(int i=0; i<PAGE_POOL_SIZE; i++) {
         g_image_pool[i] = mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+        g_page_pool[i].next = NULL;
+        atomic_store_explicit(&g_page_pool_occupied[i], 0, memory_order_relaxed);
     }
+    atomic_store_explicit(&g_page_pool_in_use, 0, memory_order_relaxed);
 
     size_t num_pages = ram_size / 4096;
 

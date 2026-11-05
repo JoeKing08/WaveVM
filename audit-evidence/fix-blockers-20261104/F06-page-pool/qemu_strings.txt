@@ -1,0 +1,2 @@
+[WaveVM-User] F06 write page pool exhausted in_use=%u cap=%u gpa=%#llx; bounded fail
+[WaveVM-User] F05 coherent REFUSED: FE host=%llu executor host=%llu (cross-host; fault path kept)

@@ -287,34 +287,37 @@ int main(void)
     memset(storage_templates[1].device_contract_digest, 0x72, 32);
     options.storage_templates = storage_templates;
     options.storage_template_count = 2;
+    /* Q01: multi-device templates fail closed (chunk store has no device map). */
+    if (expect(wvm_admission_placement_plan_build(
+                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
+                   &options, &placement_plan, error, sizeof(error)) != 0,
+               "Q01 reject second WaveVM block device template")) {
+        wvm_admission_snapshot_cleanup(&snapshot);
+        return 1;
+    }
+    options.storage_template_count = 1;
     if (expect(wvm_admission_placement_plan_build(
                    &snapshot, &request, &proposed_plan, eligibility_fence_digest,
                    &options, &placement_plan, error, sizeof(error)) == 0,
-               "place storage device contracts") ||
-        expect(placement_plan.storage_assignments.count == 2 &&
+               "place a single storage device contract") ||
+        expect(placement_plan.storage_assignments.count == 1 &&
                    placement_plan.storage_assignments.entries[0].device_index ==
-                       0 &&
-                   placement_plan.storage_assignments.entries[1].device_index ==
-                       1,
-               "preserve storage device order") ||
+                       0,
+               "preserve the single storage device") ||
         expect(placement_plan.storage_assignments.entries[0]
-                       .storage_physical_node_id ==
-                   placement_plan.host_node &&
-                   placement_plan.storage_assignments.entries[1]
-                           .storage_physical_node_id ==
-                       placement_plan.host_node,
-               "pin storage devices to the VM host") ||
+                       .storage_physical_node_id == placement_plan.host_node,
+               "pin storage device to the VM host") ||
         expect(memcmp(placement_plan.storage_assignments.entries[0]
                           .reservation_id,
                       placement_plan.reservation_requirements.entries[0]
                           .reservation_id,
                       WVM_IDENTITY_ID_BYTES) == 0,
-               "bind storage devices to the host reservation") ||
+               "bind storage device to the host reservation") ||
         expect(wvm_placement_plan_encode(
                    &placement_plan, placement_bytes, sizeof(placement_bytes),
                    &placement_bytes_used, placement_digest, error,
                    sizeof(error)) == 0,
-               "encode plan with storage assignments")) {
+               "encode plan with storage assignment")) {
         wvm_admission_snapshot_cleanup(&snapshot);
         return 1;
     }
@@ -327,24 +330,6 @@ int main(void)
         return 1;
     }
     storage_templates[0].storage_physical_node_id = 0;
-    storage_templates[0].device_index = 2;
-    if (expect(wvm_admission_placement_plan_build(
-                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
-                   &options, &placement_plan, error, sizeof(error)) != 0,
-               "reject unordered storage device contracts")) {
-        wvm_admission_snapshot_cleanup(&snapshot);
-        return 1;
-    }
-    storage_templates[0].device_index = 0;
-    placement_plan.storage_assignments.capacity = 1;
-    if (expect(wvm_admission_placement_plan_build(
-                   &snapshot, &request, &proposed_plan, eligibility_fence_digest,
-                   &options, &placement_plan, error, sizeof(error)) != 0,
-               "reject short storage assignment buffers")) {
-        wvm_admission_snapshot_cleanup(&snapshot);
-        return 1;
-    }
-    placement_plan.storage_assignments.capacity = 2;
     storage_templates[0].backend_kind = 0;
     if (expect(wvm_admission_placement_plan_build(
                    &snapshot, &request, &proposed_plan, eligibility_fence_digest,

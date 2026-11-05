@@ -2626,6 +2626,17 @@ kvm_state_rejected:;
         uint8_t tx[sizeof(ack_hdr) + sizeof(ack)];
         memcpy(tx, &ack_hdr, sizeof(ack_hdr));
         memcpy(tx + sizeof(ack_hdr), &ack, sizeof(ack));
+        {
+            static int __errack = 0;
+            if (__errack < 16) {
+                fprintf(stderr,
+                        "[Slave ErrorAck] vcpu init/state failed state=%d "
+                        "vcpu_fd=%d kvm_run=%p req=%llu\n",
+                        state_import_result, t_vcpu_fd, (void *)t_kvm_run,
+                        (unsigned long long)hdr->req_id);
+                __errack++;
+            }
+        }
         if (capture_local_executor_ack(&ack)) {
             return;
         }
@@ -4798,10 +4809,62 @@ static int spawn_tcg_processes(int base_id) {
             if (shm_path) {
                 setenv("WVM_SHM_FILE", shm_path, 1);
             }
+            /*
+             * F05: inherit physical host proof into helper env. Same-host
+             * CREATE sets FE==executor; cross-host placement must set them
+             * distinctly so coherent is refused and the fault path stays.
+             */
+            {
+                const char *ph = getenv("WVM_PHYSICAL_HOST_ID");
+                const char *fe = getenv("WVM_FE_PHYSICAL_HOST_ID");
+                const char *ex = getenv("WVM_EXECUTOR_PHYSICAL_HOST_ID");
+                if (ph && *ph) {
+                    if (!fe || !*fe)
+                        setenv("WVM_FE_PHYSICAL_HOST_ID", ph, 0);
+                    if (!ex || !*ex)
+                        setenv("WVM_EXECUTOR_PHYSICAL_HOST_ID", ph, 0);
+                }
+            }
 
             cpu_set_t cpuset; CPU_ZERO(&cpuset); CPU_SET(i, &cpuset); sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
-            
-            char *qemu_argv[20];
+
+            /*
+             * F05 cross-host: FE q35 NUMA places ram1 above 4GiB (GPA
+             * 0x100000000). Helper -m alone keeps all RAM below 4GiB, so
+             * PAGE_PUSH for high GPAs hits gpa_to_hva_safe=NULL and the
+             * FE push-fence times out. Optional WVM_TCG_QEMU_NUMA=mb0:mb1
+             * mirrors FE's two-memdev layout.
+             */
+            const char *tcg_numa = getenv("WVM_TCG_QEMU_NUMA");
+            char numa_ram0[64] = {0};
+            char numa_ram1[64] = {0};
+            char numa_obj0[128] = {0};
+            char numa_obj1[128] = {0};
+            char numa_node0[128] = {0};
+            char numa_node1[128] = {0};
+            int use_numa = 0;
+            if (tcg_numa && *tcg_numa) {
+                int mb0 = 0, mb1 = 0;
+                if (sscanf(tcg_numa, "%d:%d", &mb0, &mb1) == 2 &&
+                    mb0 > 0 && mb1 > 0) {
+                    snprintf(numa_ram0, sizeof(numa_ram0), "%dM", mb0);
+                    snprintf(numa_ram1, sizeof(numa_ram1), "%dM", mb1);
+                    snprintf(numa_obj0, sizeof(numa_obj0),
+                             "memory-backend-ram,id=ram0,size=%s", numa_ram0);
+                    snprintf(numa_obj1, sizeof(numa_obj1),
+                             "memory-backend-ram,id=ram1,size=%s", numa_ram1);
+                    snprintf(numa_node0, sizeof(numa_node0),
+                             "node,memdev=ram0,nodeid=0");
+                    snprintf(numa_node1, sizeof(numa_node1),
+                             "node,memdev=ram1,nodeid=1");
+                    use_numa = 1;
+                    fprintf(stderr,
+                            "[Hybrid] TCG NUMA helper layout ram0=%s ram1=%s\n",
+                            numa_ram0, numa_ram1);
+                }
+            }
+
+            char *qemu_argv[48];
             int ai = 0;
 
             qemu_argv[ai++] = (char *)qemu_bin;
@@ -4811,12 +4874,27 @@ static int spawn_tcg_processes(int base_id) {
             }
             qemu_argv[ai++] = "-accel";
             qemu_argv[ai++] = "wavevm,backend=tcg";
-            if (tcg_machine && *tcg_machine) {
+            if (use_numa) {
                 qemu_argv[ai++] = "-machine";
-                qemu_argv[ai++] = (char *)tcg_machine;
+                qemu_argv[ai++] = "q35";
+                qemu_argv[ai++] = "-m";
+                qemu_argv[ai++] = (char *)tcg_ram_mb;
+                qemu_argv[ai++] = "-object";
+                qemu_argv[ai++] = numa_obj0;
+                qemu_argv[ai++] = "-object";
+                qemu_argv[ai++] = numa_obj1;
+                qemu_argv[ai++] = "-numa";
+                qemu_argv[ai++] = numa_node0;
+                qemu_argv[ai++] = "-numa";
+                qemu_argv[ai++] = numa_node1;
+            } else {
+                if (tcg_machine && *tcg_machine) {
+                    qemu_argv[ai++] = "-machine";
+                    qemu_argv[ai++] = (char *)tcg_machine;
+                }
+                qemu_argv[ai++] = "-m";
+                qemu_argv[ai++] = (char *)tcg_ram_mb;
             }
-            qemu_argv[ai++] = "-m";
-            qemu_argv[ai++] = (char *)tcg_ram_mb;
             qemu_argv[ai++] = "-nographic";
             qemu_argv[ai++] = "-S";
             qemu_argv[ai++] = "-nodefaults";
@@ -5561,6 +5639,12 @@ int wavevm_executor_runtime_main(
                 executor_publish_startup_state(EXECUTOR_FAILED);
                 return 1;
             }
+            fprintf(stderr,
+                    "[RuntimeGate] KVM page cache installed records=%llu "
+                    "timeout_ms=%llu active=%d\n",
+                    (unsigned long long)cache_config.max_page_records,
+                    (unsigned long long)cache_config.completion_timeout_ms,
+                    wvm_kvm_page_cache_global_active());
         }
         printf("[Hybrid] Mode: KVM FAST PATH. Listening on %s:%d\n",
                g_executor_local_only ? "127.0.0.1" : "0.0.0.0",

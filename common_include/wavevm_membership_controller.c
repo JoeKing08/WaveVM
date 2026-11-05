@@ -2334,6 +2334,71 @@ static int replay_journal_frame(struct wvm_membership_controller *controller,
     }
 }
 
+/*
+ * Strong definition lives in node_runtime/memory_service.c. Binaries that do
+ * not link the memory service keep this weak NULL and skip directory invalidate.
+ */
+void wvm_memory_service_membership_failure_invalidate_hook(
+    void *context, uint32_t physical_node_id, uint64_t node_instance_id,
+    uint16_t desired_state, uint16_t health_state)
+    __attribute__((weak));
+
+static void maybe_invalidate_subscribers_locked(
+    struct wvm_membership_controller *controller,
+    const struct wvm_membership_controller_member_entry *entry,
+    enum wvm_manifest_member_state state,
+    enum wvm_membership_health_state health)
+{
+    uint32_t physical_node_id = 0;
+    uint64_t node_instance_id = 0;
+    wvm_membership_subscriber_invalidate_fn fn;
+    void *ctx;
+
+    if (!controller || !entry) {
+        return;
+    }
+    fn = controller->subscriber_invalidate;
+    ctx = controller->subscriber_invalidate_context;
+    if (!fn && wvm_memory_service_membership_failure_invalidate_hook) {
+        fn = wvm_memory_service_membership_failure_invalidate_hook;
+        ctx = NULL;
+    }
+    if (!fn) {
+        return;
+    }
+    if (entry->kind == WVM_MEMBERSHIP_COMPUTE) {
+        physical_node_id = entry->node.physical_node_id;
+        node_instance_id = entry->node.node_instance_id;
+    } else if (entry->kind == WVM_MEMBERSHIP_GATEWAY) {
+        physical_node_id = entry->gateway.hosting_physical_node_id;
+        node_instance_id = entry->gateway.gateway_instance_id;
+    }
+    if (physical_node_id == 0 || node_instance_id == 0) {
+        return;
+    }
+    /*
+     * Invoke without holding the controller lock so a directory/memory
+     * callback cannot deadlock against membership apply paths.
+     */
+    pthread_mutex_unlock(&controller->lock);
+    fn(ctx, physical_node_id, node_instance_id, (uint16_t)state,
+       (uint16_t)health);
+    pthread_mutex_lock(&controller->lock);
+}
+
+void wvm_membership_controller_set_subscriber_invalidate_hook(
+    struct wvm_membership_controller *controller,
+    wvm_membership_subscriber_invalidate_fn fn, void *context)
+{
+    if (!controller) {
+        return;
+    }
+    pthread_mutex_lock(&controller->lock);
+    controller->subscriber_invalidate = fn;
+    controller->subscriber_invalidate_context = context;
+    pthread_mutex_unlock(&controller->lock);
+}
+
 void wvm_membership_controller_init(
     struct wvm_membership_controller *controller,
     struct wvm_membership_controller_member_entry *members,
@@ -4243,6 +4308,11 @@ int wvm_membership_controller_remove(
         result = persist_member_state_locked(
             controller, entry, WVM_MANIFEST_MEMBER_REMOVED, entry_health(entry),
             1, error, error_len);
+        if (result == 0) {
+            maybe_invalidate_subscribers_locked(
+                controller, entry, WVM_MANIFEST_MEMBER_REMOVED,
+                entry_health(entry));
+        }
     }
     pthread_mutex_unlock(&controller->lock);
     return result;
@@ -4349,6 +4419,11 @@ int wvm_membership_controller_mark_monitor_health(
         result = persist_member_state_locked(controller, entry,
                                              entry_state(entry), health_state,
                                              0, error, error_len);
+        /* F07: membership failure (UNREACHABLE) → subscriber STALE. */
+        if (result == 0 && health_state == WVM_MEMBERSHIP_UNREACHABLE) {
+            maybe_invalidate_subscribers_locked(
+                controller, entry, entry_state(entry), health_state);
+        }
     }
     pthread_mutex_unlock(&controller->lock);
     return result;

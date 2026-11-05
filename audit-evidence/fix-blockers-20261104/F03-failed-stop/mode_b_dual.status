@@ -1,0 +1,9 @@
+run_id=s6-20261104-210200-11262
+cell=mode_b_dual
+rc=0
+elapsed_s=28
+class=ok
+cleanup_ok=1
+log=/tmp/wavevm-s6-matrix-f03-failed-stop-11246/mode_b_dual.log
+note=ok
+invoked=1

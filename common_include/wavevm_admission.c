@@ -1375,6 +1375,14 @@ int wvm_admission_placement_plan_build(
         const struct wvm_reservation_requirement *host_requirement = NULL;
         uint32_t previous_device = 0;
 
+        /* Q01: block chunk store has no device→backend map; refuse multi-disk. */
+        if (options->storage_template_count > 1) {
+            set_error(error, error_len,
+                      "Minimum admits at most one WaveVM block device; "
+                      "multi-disk needs device-to-backend mapping");
+            return -1;
+        }
+
         for (i = 0; i < placement_plan->reservation_requirements.count; i++) {
             if (placement_plan->reservation_requirements.entries[i]
                     .physical_node_id ==

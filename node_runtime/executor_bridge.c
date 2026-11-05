@@ -286,6 +286,12 @@ static int execute_typed_task(struct bridge_state *state,
 
     if (request.backend == WVM_VCPU_BACKEND_KVM &&
         !wvm_kvm_page_cache_global_active()) {
+        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 32U) {
+            fprintf(stderr,
+                    "[WVM-EXECUTOR-BRIDGE] KVM handoff rejected: page cache "
+                    "inactive vm=%u vcpu=%u\n",
+                    request.vm_id, request.vcpu_index);
+        }
         handoff_result_from_request(
             &request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, &result);
         return cache_terminal_and_send(state, &task->envelope, &request,
@@ -455,8 +461,18 @@ int wvm_executor_bridge_dispatch(
     size_t replay_bytes = 0;
     int cache_result;
 
-    if (!state || !envelope ||
-        wvm_vcpu_handoff_request_decode(
+    if (!state || !envelope) {
+        set_error(error, error_len, "typed vCPU handoff input is invalid");
+        return -EINVAL;
+    }
+    if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 32U) {
+        fprintf(stderr,
+                "[WVM-EXECUTOR-BRIDGE] dispatch enter msg=%u payload=%zu "
+                "vm=%u\n",
+                (unsigned)envelope->message_type,
+                (size_t)envelope->payload_bytes, envelope->vm_id);
+    }
+    if (wvm_vcpu_handoff_request_decode(
             envelope->payload, envelope->payload_bytes, &request, error,
             error_len) != 0 ||
         wvm_vcpu_handoff_request_validate_envelope(
@@ -464,6 +480,11 @@ int wvm_executor_bridge_dispatch(
         if (!error || error[0] == '\0') {
             set_error(error, error_len,
                       "typed vCPU handoff input is invalid");
+        }
+        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 48U) {
+            fprintf(stderr,
+                    "[WVM-EXECUTOR-BRIDGE] decode/validate failed: %s\n",
+                    error && error[0] ? error : "unknown");
         }
         return -EINVAL;
     }
@@ -479,6 +500,16 @@ int wvm_executor_bridge_dispatch(
     }
     if (authorize_local_handoff(state, &request, envelope, error,
                                 error_len) != 0) {
+        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 48U) {
+            fprintf(stderr,
+                    "[WVM-EXECUTOR-BRIDGE] authorize_local failed: %s "
+                    "dest_exec=%llu route=%u/%llu/%llu\n",
+                    error && error[0] ? error : "unknown",
+                    (unsigned long long)request.destination_executor_id,
+                    (unsigned)envelope->route.destination_kind,
+                    (unsigned long long)envelope->route.destination_scope,
+                    (unsigned long long)envelope->route.destination_vnode_or_endpoint);
+        }
         return -EPERM;
     }
 
@@ -510,6 +541,11 @@ int wvm_executor_bridge_dispatch(
            sizeof(operation.identity.activation_fence));
     operation.message_type = WVM_EXECUTOR_ABI_CPU_RUN;
     if (authorize_cpu_run(state, &operation, error, error_len) != 0) {
+        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 48U) {
+            fprintf(stderr,
+                    "[WVM-EXECUTOR-BRIDGE] authorize_cpu_run failed: %s\n",
+                    error && error[0] ? error : "unknown");
+        }
         return -EPERM;
     }
 

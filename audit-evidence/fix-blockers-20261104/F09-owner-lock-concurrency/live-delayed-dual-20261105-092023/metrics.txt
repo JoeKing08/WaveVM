@@ -1,0 +1,12 @@
+guest_dual_create_vm1=FAIL
+guest_dual_create_vm2=FAIL
+vm1_id=0
+vm2_id=257
+rpc_delay_lines=1
+delay_ms=600
+wall_s=12.524
+vm2_wall_s=12.413
+route_prepare_after_delay=1
+client_threads_after_delay=40
+overlap_heuristic=True
+overall=FAIL

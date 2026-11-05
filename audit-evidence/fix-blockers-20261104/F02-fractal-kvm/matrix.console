@@ -1,0 +1,13 @@
+s6 matrix run_id=f02-fractal-kvm-203449 out_dir=/tmp/wavevm-f02-fractal-kvm-203449 have_kvm=1 have_wavevm=0
+cells_selected=fractal_kvm
+cell_deadline_s=120 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=620cd762b
+2026年 11月 04日 星期三 20:34:49 CST
+=== CELL fractal_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_kvm FAIL rc=1 class=start cleanup_ok=1 note=ok elapsed=31s
+==== SUMMARY ====
+FAIL fractal_kvm rc=1
+totals pass=0 fail=1 skip=0 blocked=0 orphans_ignored=0 out=/tmp/wavevm-f02-fractal-kvm-203449 run_id=f02-fractal-kvm-203449
+selected=1 invoked=1
+MATRIX_RESULT=FAIL

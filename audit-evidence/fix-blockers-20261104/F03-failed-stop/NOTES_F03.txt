@@ -1,0 +1,17 @@
+F03 failed-identity STOP reverify (Asia/Shanghai 2026-11-04)
+tip=620cd762b dirty (includes wavevm_admission_runtime_agent.c F03 compensating STOP)
+
+Result: PASS
+- VM1 intentional-kill STOP: status=0 recorded_state=17 cleanup_ok=1
+- VM2 healthy STOP: status=0 recorded_state=17 cleanup_ok=1
+- Sibling isolation preserved (matrix cell PASS)
+- Agent log shows F03 compensating teardown path (not clean quiesce claim; not RECOVERY_REBIND)
+- N1 SIGKILL-during-healthy-STOP fail-closed path retained
+
+Fix: common_include/wavevm_admission_runtime_agent.c stop_one_runtime
+- pid<=0 + stop_incomplete + has_required_child_failed → allow compensating STOP
+- WIFSIGNALED during SIGTERM wait → mark failed + allow compensating
+- ECHILD after required failure → allow compensating
+- Our SIGKILL-after-timeout path still returns -EAGAIN (N1)
+
+Prior dirty (still needed): ctl resolve_member + QUERY_RUNTIME_READY no longer marks membership SUSPECT

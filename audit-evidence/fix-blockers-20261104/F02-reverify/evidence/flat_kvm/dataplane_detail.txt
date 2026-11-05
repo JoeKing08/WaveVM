@@ -1,0 +1,44 @@
+cell=flat_kvm
+backend=require-kvm
+vm_id=256
+vm_incarnation=1
+manifest_generation=1
+create_out=status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=9101559420505306187
+marker=0x5266
+shm=/dev/shm/wavevm_ram_wvm-v256-i1-g1-n801-5d28c3aa7c1d1ecb
+manifest=/tmp/wavevm-create-vm-single.rAMjRq/runtime/vm-256-1-1.manifest
+gw_data_port=none
+mode_line=[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:32951
+tcg_helper=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+node_runtime_data_port=32948
+local_executor_service_port=32951
+typed_send_port=32948 via_gateway=0 backend=kvm
+guest SHM store timeout: got=0x90909090 want=0x5266 (typed path did not complete guest store)
+production_typed_dispatch=1
+dispatch_path=typed_WVM1_ingress
+via_gateway=0
+ingress_port=32948
+manifest=/tmp/wavevm-create-vm-single.rAMjRq/runtime/vm-256-1-1.manifest
+node_runtime_data_port=32948
+local_executor_service_port=32951
+vm_id=256 incarnation=1 generation=1
+local_primary kind=1 scope=0 vnode=1
+topology_kind=1 physical_node=801 instance=802
+cpu0_executor kind=1 scope=0 vnode=1
+code_at_gpa=0x2000 store_gpa=0x2020 marker=0x5266
+sent_typed_vcpu_run ingress_port=32948 payload_bytes=12781
+guest SHM store timeout: got=0x90909090 want=0x5266 (typed path did not complete guest store)
+production_typed_dispatch=1
+dispatch_path=typed_WVM1_ingress
+via_gateway=0
+ingress_port=32948
+manifest=/tmp/wavevm-create-vm-single.rAMjRq/runtime/vm-256-1-1.manifest
+node_runtime_data_port=32948
+local_executor_service_port=32951
+vm_id=256 incarnation=1 generation=1
+local_primary kind=1 scope=0 vnode=1
+topology_kind=1 physical_node=801 instance=802
+cpu0_executor kind=1 scope=0 vnode=1
+code_at_gpa=0x2000 store_gpa=0x2020 marker=0x5266
+sent_typed_vcpu_run ingress_port=32948 payload_bytes=12781
+dataplane FAIL: production typed short-exec (WVM1 ingress/gateway)

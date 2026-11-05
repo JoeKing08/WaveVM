@@ -1,0 +1,20 @@
+s6 matrix run_id=s6-20261104-210200-11262 out_dir=/tmp/wavevm-s6-matrix-f03-failed-stop-11246 have_kvm=1 have_wavevm=0
+cells_selected=mode_b_dual
+cell_deadline_s=180 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=620cd762b
+2026年 11月 04日 星期三 21:02:00 CST
+=== CELL mode_b_dual ===
+cmd: bash tests/control-plane/test_create_vm_dual_mode_b.sh
+RESULT mode_b_dual PASS elapsed=28s cleanup_ok=1
+==== SUMMARY ====
+PASS mode_b_dual
+totals pass=1 fail=0 skip=0 blocked=0 orphans_ignored=0 out=/tmp/wavevm-s6-matrix-f03-failed-stop-11246 run_id=s6-20261104-210200-11262
+selected=1 invoked=1
+R1_PRODUCTION_DISPATCH=PASS (evidence=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem/R1_PRODUCTION_DISPATCH.txt)
+R1_LIVE_CREATE_SHORT_EXEC=PASS_SELECTED_CELLS (1/7)
+REMOTE_MEM_FENCE_VERSION_DIRTY=PASS (evidence=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem/REMOTE_MEM_FENCE_VERSION_DIRTY.txt)
+COMPONENT_EVIDENCE=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem
+MATRIX_RESULT=PASS
+MINIMUM_COMPLETE=NOT_CLAIMED_BY_MATRIX (requires all Minimum bars + honest R1_LIVE + Mode A dual)
+NOTE: MATRIX_RESULT=PASS means selected cells exited 0 under current gates; every live claim above is derived from this run's cell evidence.
+EXIT=0

@@ -1,0 +1,134 @@
+[guest-smoke 21:58:46] art=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/ctrl-split2-alllocal-215845 qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=16777216 file_limit=33554432
+[guest-smoke 21:58:46] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-tcg (production + live helpers)
+[guest-smoke 21:59:26] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.sLR0zS agent=34703 ctl=34696
+[guest-smoke 21:59:26] CREATE backend=require-tcg accel=disabled
+[guest-smoke 21:59:26] live wavevm-accel QEMU processes≈2
+[guest-smoke 21:59:26] manifest=/tmp/wavevm-create-vm-single.sLR0zS/runtime/vm-256-1-1.manifest node_instance=802 child=34729
+[guest-smoke 21:59:26] start Cirros frontend -m 256 -smp 2 split=2 machine=pc-i440fx-5.2
+[guest-smoke 21:59:26] log_cap_bytes=16777216 file_limit_bytes=33554432
+[guest-smoke 21:59:29] frontend_pid=34880 serial=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/ctrl-split2-alllocal-215845/vm-serial.log
+[guest-smoke 21:59:29] waiting up to 180s for 'cirros login:'
+[guest-smoke 21:59:49] boot poll 64s serial_bytes=21259
+[guest-smoke 22:00:49] boot poll 124s serial_bytes=21259
+[guest-smoke 22:01:49] boot poll 184s serial_bytes=21259
+[guest-smoke 22:02:29] ERROR: cirros login not reached within 180s
+[    2.197436] ACPI: bus type USB registered
+[    2.197436] usbcore: registered new interface driver usbfs
+[    2.197436] usbcore: registered new interface driver hub
+[    2.197436] usbcore: registered new device driver usb
+[    2.197436] pps_core: LinuxPPS API ver. 1 registered
+[    2.197436] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    2.197436] PTP clock support registered
+[    2.197436] EDAC MC: Ver: 3.0.0
+[    2.197436] NetLabel: Initializing
+[    2.197436] NetLabel:  domain hash size = 128
+[    2.197436] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    2.197436] NetLabel:  unlabeled traffic allowed by default
+[    2.197436] PCI: Using ACPI for IRQ routing
+[    2.197436] hpet: 3 channels of 0 reserved for per-cpu timers
+[    2.197436] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    2.197436] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    2.197436] clocksource: Switched to clocksource hpet
+[    2.605708] VFS: Disk quotas dquot_6.6.0
+[    2.607747] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    2.624818] AppArmor: AppArmor Filesystem Enabled
+[    2.626746] pnp: PnP ACPI init
+[    2.650028] pnp: PnP ACPI: found 6 devices
+[    2.745320] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    2.750971] NET: Registered PF_INET protocol family
+[    2.753397] IP idents hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    2.783969] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 4096 bytes, linear)
+[    2.784802] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    2.785268] TCP established hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    2.788079] TCP bind hash table entries: 2048 (order: 3, 32768 bytes, linear)
+[    2.788695] TCP: Hash tables configured (established 2048 bind 2048)
+[    2.795841] MPTCP token hash table entries: 256 (order: 0, 6144 bytes, linear)
+[    2.801726] UDP hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    2.802656] UDP-Lite hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    2.810807] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    2.813460] NET: Registered PF_XDP protocol family
+[    2.820289] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    2.821118] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    2.824170] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    2.824725] pci_bus 0000:00: resource 7 [mem 0x10000000-0xfebfffff window]
+[    2.825113] pci_bus 0000:00: resource 8 [mem 0x100000000-0x17fffffff window]
+[    2.826714] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    2.827559] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    2.828615] pci 0000:00:01.0: Activating ISA DMA hang workarounds
+[    2.829160] PCI: CLS 0 bytes, default 64
+[    2.834729] Trying to unpack rootfs image as initramfs...
+[    2.852903] Initialise system trusted keyrings
+[    2.861394] Key type blacklist registered
+[    2.866259] workingset: timestamp_bits=36 max_order=16 bucket_order=0
+[    2.917131] zbud: loaded
+[    2.927102] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    2.934352] fuse: init (API version 7.34)
+[    2.951242] integrity: Platform Keyring initialized
+[    3.026128] Key type asymmetric registered
+[    3.026697] Asymmetric key parser 'x509' registered
+[    3.029251] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 243)
+[    3.039708] io scheduler mq-deadline registered
+[    3.045753] shpchp: Standard Hot Plug PCI Controller Driver version: 0.4
+[    3.061577] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    3.074037] ACPI: button: Power Button [PWRF]
+[    4.067493] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[    4.084943] Serial: 8250/16550 driver, 32 ports, IRQ sharing enabled
+[    4.124088] 00:04: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    4.235585] Linux agpgart interface v0.103
+[    4.344884] loop: module loaded
+[    4.395125] scsi host0: ata_piix
+[    4.412978] scsi host1: ata_piix
+[    4.415381] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc0c0 irq 14
+[    4.415762] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc0c8 irq 15
+[    4.438613] tun: Universal TUN/TAP device driver, 1.6
+[    4.441479] PPP generic driver version 2.4.2
+[    4.444966] VFIO - User Level meta-driver version: 0.3
+[    4.458245] ehci_hcd: USB 2.0 'Enhanced' Host Controller (EHCI) Driver
+[    4.459062] ehci-pci: EHCI PCI platform driver
+[    4.459933] ehci-platform: EHCI generic platform driver
+[    4.460549] ohci_hcd: USB 1.1 'Open' Host Controller (OHCI) Driver
+[    4.461047] ohci-pci: OHCI PCI platform driver
+[    4.462578] ohci-platform: OHCI generic platform driver
+[    4.463539] uhci_hcd: USB Universal Host Controller Interface driver
+[    4.471256] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    4.446003] Freeing initrd memory: 8744K
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=32512 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=32768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33024 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33536 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=33792 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34048 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34304 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34560 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=34816 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35072 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35328 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35584 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=35840 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36096 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36352 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36608 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=36864 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37120 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37376 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37632 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=37888 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38144 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38400 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38656 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=38912 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39168 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39424 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39680 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=39936 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40192 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40448 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40704 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=40960 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41216 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41472 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41728 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=41984 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=42240 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=42496 force_local_used=0

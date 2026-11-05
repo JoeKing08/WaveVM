@@ -1,0 +1,26 @@
+F01 triage correlate (Asia/Shanghai 2026-11-04 ~22:05 CST)
+
+Serial diff vs anchors:
+  s55: scheduling-while-atomic + NULL in copy_process (~0.5s)
+  s56: NX instruction-fetch → panic kill init (~15s)
+  s56-repro-214218 (tip dirty F05/F06, split=1): NULL in process_one_work+0x34 (~11s);
+    Workqueue: 0x0 (events); R13=0 CR2=8 — NOT exact s56 NX text
+  Common remote FAIL: guest_login=MISSING on flat/require-tcg -smp2 split=1
+
+Controls (tip dirty, before code change):
+  ctrl-vcpus1-214659: serial=0; SeaBIOS stick rip~0xff53; guest_login=MISSING
+  ctrl-split0-215259: serial=0; early real-mode RIPs (0x17f/0xef570); remote_done advances;
+    guest_login=MISSING
+  ctrl-split2-alllocal-215845: serial frozen ~21259B at i8042/Freeing initrd; NO BUG printed;
+    local_done advances; cpu1 HLT rip=*603b intreq=0; cpu0 spin rip=*8cab77f7;
+    guest_login=MISSING — tip all-local REGRESSED vs s32 PASS (31573B + login)
+
+vm.log WVM-TCG vs guest RIP (s56-repro split=1):
+  Pre-handoff: cpu1 master-local-wake halt rip=*99fb603b apic_pending=1; wake ret=EXCP_HLT
+    interrupts=0; eflags IF cleared 0x216→0x202
+  HANDOFF: TB-INVALIDATE low GPA + PUSH-APPLY ~20k + PUSH-BARRIER; APIC-OWNER pause;
+    CR3=0xa010000 ok; IMPORT rip=*992825a9 rflags=0x6; NEED-LOCAL; APIC resume; back HLT
+  Guest BUG on CPU0 kworker while cpu1 remote/local; CR3 same 0xa010000
+
+A/B in flight: rebuild qemu with HEAD wavevm-user-mem.c (F05/F06 stripped) →
+  ab-clean-usermem/ctrl-split2-* all-local to see if dirty user-mem caused all-local hang.

@@ -1,0 +1,14 @@
+Q01 close: Option B refuse-second-disk
+date: 2026-11-05 10:14:24 CST
+tip: 620cd762b dirty
+production:
+  - common_include/wavevm_manifest.c storage_device_plan_validate_common count>1
+  - common_include/wavevm_manifest.c assignment_lists_validate count>1
+  - common_include/wavevm_manifest.c wvm_vm_request_validate preserves nested refuse text
+  - common_include/wavevm_admission.c storage_template_count>1
+  - node_runtime/main.c execute_local_block local_storage_assignments.count>1
+  - docs/specs/storage-device-authority.md §2.1
+tests: test_q01_single_device_index PASS; test_storage_placement PASS; test_admission_plan PASS
+evidence: console.txt chunk-store-no-device-index.txt NOTES_Q01.txt
+not done: Option A device→backend mapping; ordinary QEMU local disks unchanged
+F01: not started (deferred)

@@ -1,0 +1,20 @@
+WaveVM Minimum status 20261105-095248 Asia/Shanghai
+tip: 620cd762b dirty — NO commit/push — NO MINIMUM_COMPLETE
+
+DONE / PASS this session:
+- F09 live delayed dual: PASS (both RUNNING + overlap; /workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F09-owner-lock-concurrency/live-delayed-dual-20261105-095219)
+- F09 directed yield: PASS (prior)
+- Dual Mode B baseline: PASS (clean env; capacity pollution unset)
+- F08 QUIESCE_RUNTIME receiver restored + directed recheck: see below
+- F02–F04 prior PASS not regressed this turn (dual Mode B still PASS)
+
+PARTIAL / DEFERRED (stop condition met):
+- F01 distributed TCG guest: PARTIAL deferred (Joe 撤退) — all-local PASS / distributed FAIL
+- F05 coherent host-scope: PARTIAL — unit+placement PASS; live dual-host needs second physical host (not F01)
+
+STOP reason (Joe steering): only remaining open Minimum items are F01 (deferred)
+plus work that cannot finish without a second host (F05 cross-host). Not grinding.
+
+F08 recheck: see command output captured with this note.
+==== F08 recheck ====
+test_f08_execution_fail_closed: PASS

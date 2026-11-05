@@ -514,9 +514,12 @@ prove all of the following for both flat and fractal topology:
     mechanics differing.
 11. VM A's page, request ID, subscriber update, or force-sync packet cannot
     alter VM B.
-12. Test success includes SSH/login plus evidence of remote memory use and
-    remote vCPU execution; process survival or listening sockets are
-    insufficient.
+12. Minimum KVM guest tests include SSH/login plus evidence of remote memory
+    use and remote vCPU execution. Minimum TCG contract tests check bounded
+    real instruction execution and remote memory bytes/versions and completed
+    commits/fences; TCG guest boot/login/SSH belongs to Extended as defined in
+    `vcpu-handoff.md` Section 8.1. Process survival or listening sockets are
+    insufficient for either gate.
 13. A failed/rejoined subscriber, VM stop, route-scope retirement, and node
    instance replacement leave bounded directory metadata. A rejoined receiver
    obtains a full authoritative page before dependent execution.

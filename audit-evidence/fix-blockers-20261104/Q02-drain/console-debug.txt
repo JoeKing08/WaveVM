@@ -1,0 +1,404 @@
+aggregator.c: In function ‘push_to_aggregator’:
+aggregator.c:1927:16: warning: unused variable ‘g_my_node_id’ [-Wunused-variable]
+ 1927 |     extern int g_my_node_id;
+      |                ^~~~~~~~~~~~
+aggregator.c: At top level:
+aggregator.c:1794:13: warning: ‘smart_backoff’ defined but not used [-Wunused-function]
+ 1794 | static void smart_backoff(int attempts) {
+      |             ^~~~~~~~~~~~~
+aggregator.c:534:12: warning: ‘parse_hex_digest_env’ defined but not used [-Wunused-function]
+  534 | static int parse_hex_digest_env(const char *name, uint8_t digest[32])
+      |            ^~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c: In function ‘candidate_record_matches_transaction’:
+../common_include/wavevm_control_plane.c:2761:12: warning: ‘manifest_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2761 |     return memcmp(manifest_id.value, transaction->manifest_id,
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2762 |                   sizeof(transaction->manifest_id)) == 0 &&
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2698:32: note: ‘manifest_id.value’ was declared here
+ 2698 |     struct wvm_canonical_field manifest_id;
+      |                                ^~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2753:31: warning: ‘manifest_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2753 |         !have_admission_tx_id ||
+../common_include/wavevm_control_plane.c:2698:32: note: ‘manifest_id.value_bytes’ was declared here
+ 2698 |     struct wvm_canonical_field manifest_id;
+      |                                ^~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2763:20: warning: ‘manifest_digest.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2763 |                    memcmp(manifest_digest.value, candidate_manifest_digest,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2764 |                           WVM_SHA256_DIGEST_BYTES) == 0 &&
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2699:32: note: ‘manifest_digest.value’ was declared here
+ 2699 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2754:58: warning: ‘manifest_digest.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2754 |         manifest_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2699:32: note: ‘manifest_digest.value_bytes’ was declared here
+ 2699 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2700:32: warning: ‘vm_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2700 |     struct wvm_canonical_field vm_id;
+      |                                ^~~~~
+../common_include/wavevm_control_plane.c:2755:64: warning: ‘vm_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2751 |     if (next < 0 || !have_manifest_id || !have_manifest_digest ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2752 |         !have_vm_id || !have_vm_incarnation || !have_request_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2753 |         !have_admission_tx_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~                                
+ 2754 |         manifest_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~     
+ 2755 |         manifest_digest.value_bytes != WVM_SHA256_DIGEST_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+ 2756 |         vm_id.value_bytes != 4 || vm_incarnation.value_bytes != 8 ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~                                  
+../common_include/wavevm_control_plane.c:2700:32: note: ‘vm_id.value_bytes’ was declared here
+ 2700 |     struct wvm_canonical_field vm_id;
+      |                                ^~~~~
+../common_include/wavevm_control_plane.c:2766:20: warning: ‘vm_incarnation.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2766 |                    read_be64(vm_incarnation.value) ==
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2701:32: note: ‘vm_incarnation.value’ was declared here
+ 2701 |     struct wvm_canonical_field vm_incarnation;
+      |                                ^~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2756:32: warning: ‘vm_incarnation.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2751 |     if (next < 0 || !have_manifest_id || !have_manifest_digest ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2752 |         !have_vm_id || !have_vm_incarnation || !have_request_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2753 |         !have_admission_tx_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~
+ 2754 |         manifest_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2755 |         manifest_digest.value_bytes != WVM_SHA256_DIGEST_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2756 |         vm_id.value_bytes != 4 || vm_incarnation.value_bytes != 8 ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2701:32: note: ‘vm_incarnation.value_bytes’ was declared here
+ 2701 |     struct wvm_canonical_field vm_incarnation;
+      |                                ^~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2768:20: warning: ‘request_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2768 |                    memcmp(request_id.value, transaction->request_id,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2769 |                           sizeof(transaction->request_id)) == 0 &&
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2702:32: note: ‘request_id.value’ was declared here
+ 2702 |     struct wvm_canonical_field request_id;
+      |                                ^~~~~~~~~~
+../common_include/wavevm_control_plane.c:2756:67: warning: ‘request_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2756 |         vm_id.value_bytes != 4 || vm_incarnation.value_bytes != 8 ||
+../common_include/wavevm_control_plane.c:2702:32: note: ‘request_id.value_bytes’ was declared here
+ 2702 |     struct wvm_canonical_field request_id;
+      |                                ^~~~~~~~~~
+../common_include/wavevm_control_plane.c:2770:20: warning: ‘admission_tx_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2770 |                    memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2771 |                           sizeof(transaction->admission_tx_id)) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2757:57: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2757 |         request_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c: In function ‘activation_record_matches_transaction’:
+../common_include/wavevm_control_plane.c:2814:12: warning: ‘admission_tx_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2814 |     return memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2815 |                   sizeof(transaction->admission_tx_id)) == 0 &&
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2809:68: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2809 |     if (next < 0 || !have_admission_tx_id || !have_manifest_digest ||
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2816:20: warning: ‘manifest_digest.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2816 |                    memcmp(manifest_digest.value, candidate_manifest_digest,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2817 |                           WVM_SHA256_DIGEST_BYTES) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2810:62: warning: ‘manifest_digest.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2810 |         admission_tx_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value_bytes’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+COMMIT without PREPARE: status=6 recorded_state=0 applied_revision=0
+CREATE_VM attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=1 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=2 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=3 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=4 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=5 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=6 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=7 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=8 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=9 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=10 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=11 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=12 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=13 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=14 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=15 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=16 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=17 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=18 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM attempt=19 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887
+CREATE_VM did not reach SUCCESS(0)/RUNNING (got: status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=13514618750721208887)
+--- ctl.log (tail) ---
+wvm_ctl: mid-flight admission recovery scan complete
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_ctl: queued after-membership hook type=0x101
+wvm_ctl: flushing after-membership hook type=0x101 pending_was=1
+wvm_ctl: admission submit type=0x701 peer=901:902 port=24057 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=901:902 port=24057 rc=0 err=no resumable enrollment for member
+wvm_ctl: cluster enrollment after REGISTER reached ACTIVE
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_ctl: queued after-membership hook type=0x101
+wvm_ctl: flushing after-membership hook type=0x101 pending_was=1
+wvm_ctl: admission submit type=0x701 peer=901:902 port=24057 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x701 peer=911:912 port=24060 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=901:902 port=24057 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=911:912 port=24060 rc=0 err=no resumable enrollment for member
+wvm_ctl: cluster enrollment after REGISTER reached ACTIVE
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_ctl: queued after-membership hook type=0x101
+wvm_ctl: flushing after-membership hook type=0x101 pending_was=1
+wvm_ctl: admission submit type=0x701 peer=801:802 port=24062 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x701 peer=901:902 port=24057 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x701 peer=911:912 port=24060 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=801:802 port=24062 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=901:902 port=24057 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=911:912 port=24060 rc=0 err=no resumable enrollment for member
+wvm_ctl: cluster enrollment after REGISTER reached ACTIVE
+wvm_control_owner: client thread start tls=0
+wvm_ctl: queued after-membership hook type=0x103
+wvm_ctl: flushing after-membership hook type=0x103 pending_was=1
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x401 peer=801:802 port=24062 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x401 peer=901:902 port=24057 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x201 peer=801:802 port=24062 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x301 peer=801:802 port=24062 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x202 peer=801:802 port=24062 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x302 peer=801:802 port=24062 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x402 peer=801:802 port=24062 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x402 peer=901:902 port=24057 rc=0 err=cannot construct route snapshot
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=24062 rc=-11 err=admitted runtime is starting
+--- agent.log (full if short) ---
+96 /tmp/wavevm-gateway-drain-pc.av2tV6/agent.log
+[node-runtime] host probe published 5 records to /tmp/wavevm-gateway-drain-pc.av2tV6/node-state/host_capabilities.report (tcg=3 kvm=3 kern=3 tcg_bits=1)
+[node-runtime] A10: registration accel digest replaced with probed_accel_digest
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[node-runtime] admitted vm=256 incarnation=1 generation=1 physical_node=801
+[Runtime] chunk identity=vm256_inc1_vol0 dir=/var/lib/wavevm/chunks
+[RuntimeGate] executor registered connection=2
+[Slave KVM] split LAPIC enabled; devices stay in frontend
+[Slave KVM] immediate_exit=1 numa_nodes=0 device_ram=0
+[Hybrid] BIOS ROM slot 3: GPA [0xffff0000, 0x100000000) -> HVA 0x72f93b0f0000
+[SLAVE-BIND] port=24069 ok
+[Hybrid] TCG helper runtime gate=1 socket=/tmp/wvm_user_wvm-v256-i1-g1-n801-e54e2b0a7d9640c0.sock namespace=wvm-v256-i1-g1-n801-e54e2b0a7d9640c0
+[Hybrid] TCG helper runtime gate=1 socket=/tmp/wvm_user_wvm-v256-i1-g1-n801-e54e2b0a7d9640c0.sock namespace=wvm-v256-i1-g1-n801-e54e2b0a7d9640c0
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[Hybrid] TCG install notify fd=9 -> push port 20322
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[GW-FINAL] id=1 ip=127.0.0.1 port=9000
+[V30-Init] rx_threads=4 poll_timeout=100ms (shared socket)
+[V30-RX] Thread 0: bound port=24066, shared socket fd=10
+[V30-RX] Thread 1: sharing socket fd=10
+[V30-RX] Thread 2: sharing socket fd=10
+[V30-RX] Thread 3: sharing socket fd=10
+[GW-SET] id=1 ip=127.0.0.1 port=24056
+[GW-SET] id=1 ip=127.0.0.1 port=24056
+[GW-SET] id=1 ip=127.0.0.1 port=24056
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=24069, Cores=2, RAM=16 MB, BaseID=1, VM=256
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-e54e2b0a7d9640c0
+[Hybrid] KVM Hardware Acceleration Active (RAM: 16 MB).
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:24069
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 801, VM: 256)
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 16 MB >= Reservation 16777216 bytes.
+[Init] Identity Mapped: PhysID 801 -> VirtualID 1 (Primary)
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-e54e2b0a7d9640c0 (Size: 16 MB)
+[+] Memory Ready at 0x72f903000000 (attached executor backing store)
+[System] Control Socket: /tmp/wvm_user_wvm-v256-i1-g1-n801-e54e2b0a7d9640c0.sock
+[+] WaveVM V29 Node endpoint ready. Waiting for QEMU...
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+--- gw1.log ---
+[Gateway] authenticated route control socket=/tmp/wavevm-gateway-drain-pc.av2tV6/gw1-state/control.sock port=24057
+[Gateway] REGISTER accepted; cluster enrollment continues on controller
+[Gateway] sockfd=10 reuseport=0
+[Gateway] bind ok port=24056 fd=10 local=0.0.0.0:24056
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[Gateway] active V1 route snapshot via control scope=13514618750721208887 generation=1
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+--- gw2.log ---
+[Gateway] authenticated route control socket=/tmp/wavevm-gateway-drain-pc.av2tV6/gw2-state/control.sock port=24060
+[Gateway] REGISTER accepted; cluster enrollment continues on controller
+[Gateway] sockfd=10 reuseport=0
+[Gateway] bind ok port=24059 fd=10 local=0.0.0.0:24059
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+--- runtime dir ---
+/tmp/wavevm-gateway-drain-pc.av2tV6/runtime/vm-256-1-1.manifest
+/tmp/wavevm-gateway-drain-pc.av2tV6/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-gateway-drain-pc.av2tV6/runtime/vm-256-1-1.manifest.route
+--- ready files ---
+/tmp/wvm-v256-i1-g1-n801-527647f36d77888c-ready
+/tmp/wvm-v256-i1-g1-n801-b96ec3a22f3efe8c-ready.lock
+/tmp/wvm-v256-i1-g1-n801-56dcabbda29f5035-ready.lock
+/tmp/wvm-v257-i1-g1-n801-d839f1266228e842-ready.lock
+/tmp/wvm-v257-i1-g1-n801-58967adf9688cf89-ready.lock
+/tmp/wvm-v256-i1-g1-n801-b2f36bb7dcf00287-ready.lock
+/tmp/wvm-v256-i1-g1-n801-d3a1e76a6a3ccbbe-ready.lock
+/tmp/wvm-v256-i1-g1-n801-527647f36d77888c-ready.lock
+/tmp/wvm-v256-i1-g1-n801-4a54b180d545b07f-ready.lock
+/tmp/wvm-v257-i1-g1-n801-0cc4ab7f0b68fff3-ready.lock
+/tmp/wvm-v256-i1-g1-n801-1935e23536b297d4-ready.lock
+/tmp/wvm-v256-i1-g1-n801-9454b64b024be581-ready.lock
+/tmp/wvm-v257-i1-g1-n801-f911348eb6f66a53-ready.lock
+/tmp/wvm-v256-i1-g1-n801-1991a1bfc4e61c69-ready.lock
+/tmp/wvm-v257-i1-g1-n801-8f63bac0a5a77819-ready.lock
+/tmp/wvm-v256-i1-g1-n801-0582cedfc4bcb53f-ready.lock
+/tmp/wvm_user_wvm-v256-i1-g1-n801-527647f36d77888c.sock
+/tmp/wvm_user_wvm-v256-i1-g1-n801-e54e2b0a7d9640c0.sock
+63030 /workspaces/WaveVM/ctl_tool/wvm_ctl serve --state-dir /tmp/wavevm-gateway-drain-pc.av2tV6/ctl-state --socket /tmp/wavevm-gateway-drain-pc.av2tV6/ctl.sock --local-node-id 701 --local-instance-id 702 --principals /tmp/wavevm-gateway-drain-pc.av2tV6/principals --capacity 8 --control-address 127.0.0.1 --control-port 24055 --control-ca /tmp/wavevm-gateway-drain-pc.av2tV6/ca.crt --control-cert /tmp/wavevm-gateway-drain-pc.av2tV6/controller.crt --control-key /tmp/wavevm-gateway-drain-pc.av2tV6/controller.key
+63033 /workspaces/WaveVM/gateway_service/wavevm_gateway 24056 127.0.0.1 9 /tmp/wavevm-gateway-drain-pc.av2tV6/gw-empty.conf 24058
+63057 /workspaces/WaveVM/gateway_service/wavevm_gateway 24059 127.0.0.1 9 /tmp/wavevm-gateway-drain-pc.av2tV6/gw-empty.conf 24061
+63097 /workspaces/WaveVM/wavevm_node_runtime agent --state-dir /tmp/wavevm-gateway-drain-pc.av2tV6/node-state --runtime-dir /tmp/wavevm-gateway-drain-pc.av2tV6/runtime --socket /tmp/wavevm-gateway-drain-pc.av2tV6/node.sock --node-id 801 --instance-id 802 --inventory-revision 1 --vcpu-slots 2 --memory-bytes 1073741824 --controller-node-id 701 --controller-instance-id 702 --controller-uid 1000 --slots 2 --max-vcpus 2 --max-memory-chunks 2 --max-storage 1 --max-members 8 --max-leases 2 --control-address 127.0.0.1 --control-port 24062 --data-port 24063 --tls-ca /tmp/wavevm-gateway-drain-pc.av2tV6/ca.crt --tls-cert /tmp/wavevm-gateway-drain-pc.av2tV6/node.crt --tls-key /tmp/wavevm-gateway-drain-pc.av2tV6/node.key --register-controller-address 127.0.0.1 --register-controller-port 24055 --failure-domain-id 1 --pod-id 1 --vnode-first 1 --vnode-count 16 --sidecar-address 127.0.0.1 --sidecar-data-port 24064 --sidecar-control-port 24065 --role-bits 1 --capability-profile-generation 1 --capability-profile-digest f974e7499a1f71833c1986ea84a93f316470fae13dddd943f6ff5192a6e2d641 --storage-capabilities-digest 2222222222222222222222222222222222222222222222222222222222222222 --accelerator-fault-capabilities-digest 3333333333333333333333333333333333333333333333333333333333333333 --exclusive-resource-digest 4444444444444444444444444444444444444444444444444444444444444444
+63173 /workspaces/WaveVM/wavevm_node_runtime child --parent-pid 63097 --manifest /tmp/wavevm-gateway-drain-pc.av2tV6/runtime/vm-256-1-1.manifest --node-instance 802
+63179 /tmp/wavevm-gateway-drain-pc.av2tV6/tcg_helper_stub -accel wavevm,backend=tcg -machine pc-i440fx-5.2 -m 16 -nographic -S -nodefaults -smp 1
+63180 /tmp/wavevm-gateway-drain-pc.av2tV6/tcg_helper_stub -accel wavevm,backend=tcg -machine pc-i440fx-5.2 -m 16 -nographic -S -nodefaults -smp 1
+KEEP tmpdir=/tmp/wavevm-gateway-drain-pc.av2tV6

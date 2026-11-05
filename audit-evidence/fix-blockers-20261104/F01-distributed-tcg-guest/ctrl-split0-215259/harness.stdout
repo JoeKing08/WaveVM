@@ -1,0 +1,55 @@
+[guest-smoke 21:52:59] art=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/ctrl-split0-215259 qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=16777216 file_limit=33554432
+[guest-smoke 21:52:59] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-tcg (production + live helpers)
+[guest-smoke 21:53:34] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.gEsGmg agent=29217 ctl=29210
+[guest-smoke 21:53:34] CREATE backend=require-tcg accel=disabled
+[guest-smoke 21:53:34] live wavevm-accel QEMU processes≈2
+[guest-smoke 21:53:34] manifest=/tmp/wavevm-create-vm-single.gEsGmg/runtime/vm-256-1-1.manifest node_instance=802 child=29245
+[guest-smoke 21:53:34] start Cirros frontend -m 256 -smp 2 split=0 machine=pc-i440fx-5.2
+[guest-smoke 21:53:34] log_cap_bytes=16777216 file_limit_bytes=33554432
+[guest-smoke 21:53:37] frontend_pid=29395 serial=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/ctrl-split0-215259/vm-serial.log
+[guest-smoke 21:53:37] waiting up to 240s for 'cirros login:'
+[guest-smoke 21:54:07] boot poll 68s serial_bytes=0
+[guest-smoke 21:55:07] boot poll 128s serial_bytes=0
+[guest-smoke 21:56:07] boot poll 188s serial_bytes=0
+[guest-smoke 21:57:07] boot poll 248s serial_bytes=0
+[guest-smoke 21:57:37] ERROR: cirros login not reached within 240s
+[WVM-TCG-STATS] cpu=0 remote_done=2896 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=2912 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=2928 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=2944 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=2960 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=2976 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=2992 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3008 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3024 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3040 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3056 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3072 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3088 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3104 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3120 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3136 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3152 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3168 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3184 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3200 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3216 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3232 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3248 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3264 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3280 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3296 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3312 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3328 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3344 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3360 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3376 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3392 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3408 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3424 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3440 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3456 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3472 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3488 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3504 local_done=4 force_local_used=12
+[WVM-TCG-STATS] cpu=0 remote_done=3520 local_done=4 force_local_used=12

@@ -1,0 +1,4 @@
+cell=ctrl-split2-alllocal-215845 vcpus=2 split=2 (all local) tip+dirty F05/F06 qemu
+guest_login=MISSING serial_bytes=21259 frozen at i8042/Freeing initrd (~guest 4.4s)
+No BUG/Oops; local_done~42k; cpu1 HLT *603b; cpu0 spin *8cab77f7
+Contrast s32 PASS (same shape harness) reached cirros login serial=31573

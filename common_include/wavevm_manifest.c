@@ -1448,6 +1448,13 @@ static int assignment_lists_validate(const struct wvm_placement_plan *plan,
         expected_gpa += assignment->bytes;
     }
 
+    /* Q01: same single-device Minimum bound as storage_device_plan_validate. */
+    if (plan->storage_assignments.count > 1) {
+        set_error(error, error_len,
+                  "Minimum admits at most one WaveVM block device; "
+                  "multi-disk needs device-to-backend mapping");
+        return -1;
+    }
     for (i = 0; i < plan->storage_assignments.count; i++) {
         const struct wvm_storage_assignment *assignment =
             &plan->storage_assignments.entries[i];
@@ -2502,6 +2509,18 @@ static int storage_device_plan_validate_common(
         bytes_are_zero(plan->qemu_device_configuration_digest,
                        sizeof(plan->qemu_device_configuration_digest))) {
         set_error(error, error_len, "storage device plan is invalid");
+        return -1;
+    }
+    /*
+     * Q01 / Minimum: WaveVM block chunk store is process-level identity+LBA
+     * only (no device→backend map). Multi-device templates would alias the
+     * same chunk files. Refuse a second disk on every plan entry point;
+     * ordinary QEMU-local disks outside this path remain valid Minimum.
+     */
+    if (plan->assignments.count > 1) {
+        set_error(error, error_len,
+                  "Minimum admits at most one WaveVM block device; "
+                  "multi-disk needs device-to-backend mapping");
         return -1;
     }
     for (i = 0; i < plan->assignments.count; i++) {
@@ -3783,7 +3802,10 @@ int wvm_vm_request_validate(const struct wvm_vm_request *request, char *error,
                                              error, error_len) != 0 ||
         wvm_lifecycle_policy_validate(&request->lifecycle_policy, error,
                                       error_len) != 0) {
-        set_error(error, error_len, "VM request is invalid");
+        /* Keep nested validator text (e.g. Q01 multi-disk refuse). */
+        if (!(error && error_len != 0 && error[0] != '\0')) {
+            set_error(error, error_len, "VM request is invalid");
+        }
         return -1;
     }
     memset(&topology, 0, sizeof(topology));

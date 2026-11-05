@@ -1,0 +1,16 @@
+WaveVM Minimum status 20261105-102322 Asia/Shanghai
+tip: 620cd762b dirty — NO commit/push — NO MINIMUM_COMPLETE
+
+Fresh gap audit (post Q01/Q02):
+  audit-evidence/grok-minimum-gap-cross-audit-2026-11-05-b.txt
+  (morning baseline retained: grok-minimum-gap-cross-audit-2026-11-05.txt)
+
+Scoreboard delta vs morning:
+  Q01 OPEN → PASS (Option B refuse-second-disk)
+  Q02 OPEN/FAIL → PASS (Q02-drain prepare/commit)
+  F01 remains DEFERRED PARTIAL (Joe 撤退)
+  F05 PARTIAL (need 2nd host); F10 PARTIAL (guest criteria/matrix)
+  F02–F04, F06–F09 remain directed PASS
+
+COMPLETE=No. Top blockers: F01/M3 deferred, F10/M9/M12 guest matrix,
+F05 2nd host, full S6/guest re-run honesty after today's fixes.

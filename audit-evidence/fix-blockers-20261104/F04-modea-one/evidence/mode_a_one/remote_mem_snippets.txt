@@ -1,0 +1,6 @@
+=== remote_mem / fence / dirty snippets ===
+/tmp/wavevm-create-vm-single.xEmwf7/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-single.xEmwf7/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-single.xEmwf7/agent.log:[WVM-PUSH-APPLY] pid=17056 n=1 type=26 gpa=0x2000 version=0x3 local=0x2 t=1178350625
+/tmp/wavevm-create-vm-single.xEmwf7/agent.log:[WVM-PUSH-APPLY] pid=17057 n=1 type=26 gpa=0x2000 version=0x3 local=0 t=1178350686
+/tmp/wavevm-create-vm-single.xEmwf7/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=0 rtt=299us coherent=0

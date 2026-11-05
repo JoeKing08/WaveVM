@@ -1,0 +1,17 @@
+knob=production default STW (no WVM_TCG_SHM_CONCURRENT env)
+split=1 rebuilt qemu after wavevm_tcg_shm_allow_concurrent return 0
+2026年 11月 05日 星期四 08:55:39 CST
+
+RESULT 2026-11-05 08:57:48 CST
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=19
+local_done_before=4096
+force_local_used_before=91316
+remote_memory_before=0
+remote_memory_after=0
+remote_memory_delta=0
+guest_cpu_smoke=PASS
+Production default STW (no env): guest_login=PASS guest_ssh=PASS remote_done=19
+force_local_used high (NEED_LOCAL softlock_hold 30s) — G3 ratio weak; boot/SSH correct
+FE had no CONCURRENT env

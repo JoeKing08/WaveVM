@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "wavevm_lifecycle.h"
 #include "wavevm_sha256.h"
@@ -204,12 +205,27 @@ static int resolve_member_target(
     struct wvm_admission_transport_target *target, char *error,
     size_t error_len)
 {
+    char resolve_error[256];
+
+    resolve_error[0] = '\0';
     if (transport_validate(transport, error, error_len) != 0 || !expected_member ||
         wvm_member_key_validate(expected_member, error, error_len) != 0 ||
-        !target ||
-        transport->resolve_member(transport->context, expected_member, target,
-                                  error, error_len) != 0 ||
-        target_validate(target, error, error_len) != 0 ||
+        !target) {
+        if (error && error_len && error[0] == '\0') {
+            set_error(error, error_len,
+                      "control target does not match the membership snapshot");
+        }
+        return -1;
+    }
+    if (transport->resolve_member(transport->context, expected_member, target,
+                                  resolve_error, sizeof(resolve_error)) != 0) {
+        set_error(error, error_len, "%s",
+                  resolve_error[0]
+                      ? resolve_error
+                      : "control target does not match the membership snapshot");
+        return -1;
+    }
+    if (target_validate(target, error, error_len) != 0 ||
         target->member_key.role_type != expected_member->role_type ||
         target->member_key.role_id != expected_member->role_id ||
         target->member_key.instance_id != expected_member->instance_id ||
@@ -298,8 +314,44 @@ static int submit_record(struct wvm_admission_transport *transport,
         set_error(error, error_len, "admission control stage was not durable");
         return -1;
     }
+    if (transport->before_network) {
+        transport->before_network(transport->network_hook_opaque);
+    }
+    /*
+     * F09 live-cell knob: optional sleep AFTER owner-lock yield / BEFORE the
+     * RPC returns, so a concurrent CREATE can prove admission progress while
+     * this client is mid-flight. Cap firings; gate to QUERY_RUNTIME_READY so reservation/activate
+     * complete and CREATE cannot hang on every readiness poll.
+     */
+    {
+        const char *delay_ms_env = getenv("WVM_F09_RPC_DELAY_MS");
+        if (delay_ms_env && delay_ms_env[0] &&
+            message_type == WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY) {
+            long delay_ms = strtol(delay_ms_env, NULL, 10);
+            long max_fire = 8;
+            const char *max_env = getenv("WVM_F09_RPC_DELAY_MAX");
+            static long fired;
+            if (max_env && max_env[0]) {
+                max_fire = strtol(max_env, NULL, 10);
+            }
+            if (delay_ms > 0 && fired < max_fire) {
+                struct timespec ts;
+                fired++;
+                ts.tv_sec = delay_ms / 1000;
+                ts.tv_nsec = (delay_ms % 1000) * 1000000L;
+                fprintf(stderr,
+                        "[WVM-F09-RPC-DELAY] ms=%ld msg=QUERY_RUNTIME_READY "
+                        "after_yield=1 fired=%ld max=%ld type=0x%x\n",
+                        delay_ms, fired, max_fire, (unsigned)message_type);
+                nanosleep(&ts, NULL);
+            }
+        }
+    }
     result = transport->submit(transport->context, target, &envelope, error,
                                error_len);
+    if (transport->after_network) {
+        transport->after_network(transport->network_hook_opaque);
+    }
     free(payload);
     if (result != 0) {
         if (error && error[0] == '\0') {
@@ -838,6 +890,38 @@ int wvm_admission_transport_query_runtime_ready(
                          encode_participant_stage, &stage, error, error_len);
 }
 
+int wvm_admission_transport_quiesce_runtime(
+    struct wvm_admission_transport *transport,
+    const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len)
+{
+    struct wvm_admission_transport_target target;
+    struct wvm_admission_participant_stage stage;
+
+    if (candidate_matches_runtime(candidate, runtime_manifest, error,
+                                  error_len) != 0 ||
+        !runtime_manifest->has_activation_fence ||
+        resolve_node_target(transport, runtime_manifest->physical_node_id,
+                            runtime_manifest->expected_node_instance_id,
+                            &target, error, error_len) != 0) {
+        set_error(error, error_len,
+                  "runtime quiesce does not bind an activated participant");
+        return -1;
+    }
+    memset(&stage, 0, sizeof(stage));
+    stage.message_type = WVM_ENVELOPE_MSG_QUIESCE_RUNTIME;
+    stage.candidate = candidate;
+    stage.runtime_manifest = runtime_manifest;
+    return submit_record(transport, &target,
+                         WVM_ENVELOPE_MSG_QUIESCE_RUNTIME,
+                         candidate->admission_tx_id, candidate->vm_id,
+                         candidate->vm_incarnation,
+                         candidate->manifest_generation,
+                         &runtime_manifest->required_route_snapshot_key,
+                         encode_participant_stage, &stage, error, error_len);
+}
+
 int wvm_admission_transport_init(
     struct wvm_admission_transport *transport,
     uint32_t controller_physical_node_id, uint64_t controller_instance_id,
@@ -855,6 +939,20 @@ int wvm_admission_transport_init(
     transport->resolve_member = resolve_member;
     transport->submit = submit;
     return transport_validate(transport, error, error_len);
+}
+
+
+void wvm_admission_transport_set_network_hooks(
+    struct wvm_admission_transport *transport,
+    wvm_admission_transport_network_hook_fn before_network,
+    wvm_admission_transport_network_hook_fn after_network, void *opaque)
+{
+    if (!transport) {
+        return;
+    }
+    transport->before_network = before_network;
+    transport->after_network = after_network;
+    transport->network_hook_opaque = opaque;
 }
 
 int wvm_admission_transport_callbacks(

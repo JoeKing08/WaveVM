@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -35,6 +36,7 @@
 #include "wavevm_runtime_gate.h"
 #include "wavevm_vcpu_handoff.h"
 #include "wavevm_x86_context.h"
+#include "wavevm_kvm_state.h"
 
 /* QEMU DESC_* for real-mode TCG segments. */
 #define DESC_P_MASK (1u << 15)
@@ -101,10 +103,120 @@ static void plant_guest_store(uint8_t *page, uint32_t marker, uint32_t store_gpa
     }
 }
 
-static void fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
+/*
+ * Page-cache RAM snapshot fetches authoritative directory bytes before
+ * KVM_RUN. Planting only into SHM is not a versioned commit (memory-
+ * consistency: directory owns page bytes). Publish the planted page via
+ * production MSG_MEM_WRITE to the node data ingress so the subsequent
+ * snapshot installs real instruction bytes instead of implicit zeros.
+ */
+static int publish_planted_page_to_directory(
+    const uint8_t *ram, unsigned long gpa, unsigned directory_port,
+    uint32_t vm_id, uint32_t local_vnode)
+{
+    uint8_t tx[sizeof(struct wvm_header) + sizeof(uint64_t) + WVM_PAGE_BYTES];
+    struct wvm_header *hdr = (struct wvm_header *)tx;
+    uint64_t *gpa_be;
+    struct sockaddr_in dst;
+    int sock = -1;
+    ssize_t sent;
+    uint64_t page_gpa = (uint64_t)gpa & ~(uint64_t)(WVM_PAGE_BYTES - 1U);
+
+    /* Directory/MSG_MEM_WRITE lands on node_runtime_data_port — never the
+     * gateway typed-ingress used for vCPU_RUN when via_gateway=1. */
+    if (!ram || directory_port == 0 || directory_port > 65535) {
+        fprintf(stderr, "publish_planted_page: bad args\n");
+        return -1;
+    }
+    memset(tx, 0, sizeof(tx));
+    hdr->magic = htonl(WVM_MAGIC);
+    hdr->msg_type = htons(MSG_MEM_WRITE);
+    hdr->payload_len = htons((uint16_t)(sizeof(uint64_t) + WVM_PAGE_BYTES));
+    if (wvm_header_pack_src(hdr, vm_id, local_vnode) != 0) {
+        fprintf(stderr, "publish_planted_page: pack_src failed\n");
+        return -1;
+    }
+    hdr->target_id = htonl(wvm_wire_target(vm_id, local_vnode));
+    hdr->req_id = WVM_HTONLL(0x534D505542ULL ^ (uint64_t)getpid()); /* 'SMPUB' */
+    hdr->qos_level = 0;
+    hdr->flags = (uint8_t)(hdr->flags | WVM_FLAG_NEED_ACK);
+    gpa_be = (uint64_t *)(tx + sizeof(*hdr));
+    *gpa_be = WVM_HTONLL(page_gpa);
+    memcpy(tx + sizeof(*hdr) + sizeof(uint64_t), ram + page_gpa, WVM_PAGE_BYTES);
+    hdr->crc32 = 0;
+    hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("publish_planted_page socket");
+        return -1;
+    }
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    dst.sin_port = htons((uint16_t)directory_port);
+    sent = sendto(sock, tx, sizeof(tx), MSG_NOSIGNAL, (struct sockaddr *)&dst,
+                  sizeof(dst));
+    close(sock);
+    if (sent != (ssize_t)sizeof(tx)) {
+        fprintf(stderr, "publish_planted_page: sendto failed sent=%zd errno=%d\n",
+                sent, errno);
+        return -1;
+    }
+    printf("published_planted_page gpa=0x%llx bytes=%u directory_port=%u "
+           "vm=%u vnode=%u\n",
+           (unsigned long long)page_gpa, (unsigned)WVM_PAGE_BYTES, directory_port,
+           vm_id, local_vnode);
+    /* Directory commit is sync before ACK; allow local PAGE_PUSH to settle. */
+    sleep_ms(50);
+    return 0;
+}
+
+/*
+ * Production KVM handoff requires a schema-complete extended state (FPU/
+ * LAPIC/events/MP/debug/system MSRs + CPUID). A zeroed architectural-only
+ * stub encodes on the wire but fails wvm_kvm_extended_state_validate on the
+ * executor — the Oct28 2864-byte probe predated that gate.
+ */
+static int fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
 {
     struct kvm_sregs sregs;
+    struct kvm_enable_cap cap = { .cap = KVM_CAP_SPLIT_IRQCHIP };
+    int kvm_fd = -1, vm_fd = -1, cpu_fd = -1;
+    int result = -1;
+
     memset(ctx, 0, sizeof(*ctx));
+    cap.args[0] = 24;
+    kvm_fd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
+    if (kvm_fd < 0 || (vm_fd = ioctl(kvm_fd, KVM_CREATE_VM, 0)) < 0 ||
+        ioctl(vm_fd, KVM_ENABLE_CAP, &cap) < 0 ||
+        (cpu_fd = ioctl(vm_fd, KVM_CREATE_VCPU, 0)) < 0) {
+        fprintf(stderr,
+                "fill_kvm_prot32: cannot open ephemeral KVM vCPU errno=%d\n",
+                errno);
+        goto out;
+    }
+    /* Minimal host-legal CPUID; capture fills the rest of extended state. */
+    ctx->cpuid_count = 2;
+    ctx->cpuid[0].function = 0;
+    ctx->cpuid[0].eax = 1;
+    ctx->cpuid[0].ebx = 0x756e6547;
+    ctx->cpuid[0].edx = 0x49656e69;
+    ctx->cpuid[0].ecx = 0x6c65746e;
+    ctx->cpuid[1].function = 1;
+    ctx->cpuid[1].eax = 0x663;
+    ctx->cpuid[1].edx = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 8) |
+                        (1U << 9) | (1U << 11) | (1U << 15) | (1U << 16) |
+                        (1U << 23) | (1U << 24) | (1U << 25) | (1U << 26);
+    if (wvm_kvm_cpuid_check_host(kvm_fd, ctx) != 0 ||
+        wvm_kvm_cpuid_import(cpu_fd, ctx) != 0 ||
+        wvm_kvm_extended_state_capture(cpu_fd, ctx) != 0) {
+        fprintf(stderr,
+                "fill_kvm_prot32: cpuid/extended capture failed errno=%d\n",
+                errno);
+        goto out;
+    }
+    ctx->mp_state = KVM_MP_STATE_RUNNABLE;
     ctx->rip = gpa;
     ctx->rsp = gpa + 0x1000;
     ctx->rflags = 0x2;
@@ -137,9 +249,19 @@ static void fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
     sregs.idt.base = 0;
     sregs.idt.limit = 0xffff;
     sregs.cr0 = 0x60000011ULL;
+    sregs.apic_base = 0xfee00900ULL;
     memcpy(ctx->sregs_data, &sregs,
            sizeof(sregs) < sizeof(ctx->sregs_data) ? sizeof(sregs)
                                                    : sizeof(ctx->sregs_data));
+    result = 0;
+out:
+    if (cpu_fd >= 0)
+        close(cpu_fd);
+    if (vm_fd >= 0)
+        close(vm_fd);
+    if (kvm_fd >= 0)
+        close(kvm_fd);
+    return result;
 }
 
 static void fill_tcg_realmode(wvm_tcg_context_t *ctx, uint64_t gpa)
@@ -352,9 +474,23 @@ int main(int argc, char **argv)
                       backend == WVM_VCPU_BACKEND_TCG);
     printf("code_at_gpa=0x%lx store_gpa=0x%x marker=0x%lx\n", gpa, store_gpa,
            marker);
+    /*
+     * KVM page-cache snapshot would otherwise fault-materialize implicit
+     * directory zeros over this SHM plant. Publish first (same page as
+     * code+store at 0x2000/0x2020).
+     */
+    if (publish_planted_page_to_directory(
+            ram, gpa, (unsigned)man->launch_plan.node_runtime_data_port,
+            man->vm_id, disp->local_primary.destination_vnode) != 0) {
+        fprintf(stderr, "directory publish of planted page failed\n");
+        goto out;
+    }
 
     if (backend == WVM_VCPU_BACKEND_KVM) {
-        fill_kvm_prot32(&kvm_ctx, gpa);
+        if (fill_kvm_prot32(&kvm_ctx, gpa) != 0) {
+            fprintf(stderr, "kvm context fill failed\n");
+            goto out;
+        }
         if (wvm_x86_context_encode(backend, fields, &kvm_ctx, sizeof(kvm_ctx),
                                    context, sizeof(context), &context_bytes,
                                    error, sizeof(error)) != 0) {

@@ -178,6 +178,7 @@ static int stage_message_type(uint16_t message_type)
     case WVM_ENVELOPE_MSG_PREPARE_MANIFEST:
     case WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST:
     case WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY:
+    case WVM_ENVELOPE_MSG_QUIESCE_RUNTIME:
     case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
     case WVM_ENVELOPE_MSG_ROUTE_PREPARE:
     case WVM_ENVELOPE_MSG_ROUTE_COMMIT:
@@ -1366,6 +1367,50 @@ static int apply_participant_stage(
         result->status_code = WVM_CONTROL_RESULT_SUCCESS;
         return 0;
     }
+
+    if (request->message_type == WVM_ENVELOPE_MSG_QUIESCE_RUNTIME) {
+        struct wvm_admission_participant_stage committed_stage = scratch;
+
+        /*
+         * F08: fail-close execution for an identity-bound activated runtime.
+         * Quiesce the slot gate, then signal the admitted child via callback.
+         * STOP still performs identity cleanup later; this path must not retire
+         * reservations or wipe durable identity.
+         */
+        committed_stage.activation = &slot->prepared_storage.activation;
+        if (!slot->has_activation_decision || slot->has_aborted ||
+            !slot->has_prepared ||
+            canonical_equal(encode_candidate,
+                            &slot->prepared_storage.candidate,
+                            scratch.candidate, error, error_len) != 1 ||
+            runtime_projection_equal(
+                &slot->prepared_storage.runtime_manifest,
+                scratch.runtime_manifest, 0, error, error_len) != 1 ||
+            !activation_matches_route(
+                &slot->prepared_storage.activation,
+                &slot->prepared_storage.candidate) ||
+            memcmp(slot->prepared_storage.activation.activation_fence,
+                   scratch.runtime_manifest->activation_fence,
+                   WVM_IDENTITY_ID_BYTES) != 0 ||
+            !local_reservation_matches_stage(
+                receiver, &committed_stage, WVM_RESERVATION_COMMITTED)) {
+            set_error(error, error_len,
+                      "participant has not reached identity-bound runtime for quiesce");
+            return -1;
+        }
+        if (wvm_runtime_gate_quiesce(&slot->gate, error, error_len) != 0) {
+            return -1;
+        }
+        if (receiver->config.quiesce_runtime &&
+            receiver->config.quiesce_runtime(
+                receiver->config.context, slot, scratch.runtime_manifest, error,
+                error_len) != 0) {
+            return -1;
+        }
+        result->recorded_state = WVM_LIFECYCLE_COMMITTED;
+        result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+        return 0;
+    }
     if (request->message_type == WVM_ENVELOPE_MSG_PREPARE_MANIFEST) {
         if (slot->has_activation_decision || slot->has_aborted) {
             set_error(error, error_len,
@@ -1776,6 +1821,7 @@ int wvm_admission_receiver_apply(
     case WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST:
     case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
     case WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY:
+    case WVM_ENVELOPE_MSG_QUIESCE_RUNTIME:
         apply_result = apply_participant_stage(receiver, request, result, error,
                                                error_len);
         break;

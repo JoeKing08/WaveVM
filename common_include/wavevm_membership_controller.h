@@ -130,6 +130,10 @@ typedef int (*wvm_membership_controller_authorize_fn)(
     const struct wvm_member_key *actor,
     const struct wvm_member_key *subject, char *error, size_t error_len);
 
+typedef void (*wvm_membership_subscriber_invalidate_fn)(
+    void *context, uint32_t physical_node_id, uint64_t node_instance_id,
+    uint16_t desired_state, uint16_t health_state);
+
 struct wvm_membership_controller {
     pthread_mutex_t lock;
     int journal_fd;
@@ -151,6 +155,12 @@ struct wvm_membership_controller {
     struct wvm_membership_controller_gateway_drain gateway_drain;
     wvm_membership_controller_authorize_fn authorize;
     void *authorize_context;
+    /*
+     * F07: optional hook when a member becomes UNREACHABLE or leaves service
+     * (REMOVED/FAILED). Directory owners register memory-service invalidate.
+     */
+    wvm_membership_subscriber_invalidate_fn subscriber_invalidate;
+    void *subscriber_invalidate_context;
 };
 
 /*
@@ -172,6 +182,10 @@ int wvm_membership_controller_open(
 
 void wvm_membership_controller_close(
     struct wvm_membership_controller *controller);
+
+void wvm_membership_controller_set_subscriber_invalidate_hook(
+    struct wvm_membership_controller *controller,
+    wvm_membership_subscriber_invalidate_fn fn, void *context);
 
 /*
  * Registration always records PENDING/RECOVERING state.  Registration is

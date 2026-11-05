@@ -1,0 +1,18 @@
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+seed evidence: live-probe tcg=3 kvm=3 kern=3 records=5
+vm=mode-a-vm1 attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14313816060913762246
+vm=mode-a-vm1 attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14313816060913762246
+vm=mode-a-vm2 attempt=0 status=14 recorded_state=9 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=8557022527404791487
+vm=mode-a-vm2 attempt=1 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=8557022527404791487
+node_runtime_data_port=29615
+local_executor_service_port=29618
+s6 dataplane probe PASS_PRODUCTION_TYPED cell=mode_a_dual backend=require-tcg vm_id=256
+s6 STOP: status=0 recorded_state=17 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14313816060913762246
+N6: sibling VM2 still live at /dev/shm/wavevm_ram_wvm-v257-i1-g1-n801-b9ecffbb28aaabd7 after VM1 STOP
+node_runtime_data_port=29616
+local_executor_service_port=29667
+s6 dataplane probe PASS_PRODUCTION_TYPED cell=mode_a_dual backend=require-tcg vm_id=257
+s6 STOP: status=0 recorded_state=17 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=8557022527404791487
+Mode A dual CREATE RUNNING: PASS
+  vm1=status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=14313816060913762246
+  vm2=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=8557022527404791487

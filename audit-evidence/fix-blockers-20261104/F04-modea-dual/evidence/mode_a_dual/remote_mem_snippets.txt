@@ -1,0 +1,19 @@
+=== remote_mem / fence / dirty snippets ===
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WVM-PUSH-APPLY] pid=18034 n=1 type=26 gpa=0x2000 version=0x3 local=0x2 t=1272824454
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WVM-PUSH-APPLY] pid=18035 n=1 type=26 gpa=0x2000 version=0x3 local=0 t=1272824598
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=0 rtt=23us coherent=0
+=== remote_mem / fence / dirty snippets ===
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WVM-PUSH-APPLY] pid=18034 n=1 type=26 gpa=0x2000 version=0x3 local=0x2 t=1272824454
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WVM-PUSH-APPLY] pid=18035 n=1 type=26 gpa=0x2000 version=0x3 local=0 t=1272824598
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=0 rtt=23us coherent=0
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WVM-PUSH-APPLY] pid=18093 n=1 type=26 gpa=0x2000 version=0x3 local=0 t=1297883473
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WVM-PUSH-APPLY] pid=18092 n=1 type=26 gpa=0x2000 version=0x3 local=0x2 t=1297884446
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/agent.log:[WaveVM-User] slave TCG slice dirty flush pages=1 bitmap=0 rtt=679us coherent=0

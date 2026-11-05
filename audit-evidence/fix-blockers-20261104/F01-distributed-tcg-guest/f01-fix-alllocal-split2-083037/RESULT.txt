@@ -1,0 +1,12 @@
+F01 all-local reconfirm after user-mem fix (Asia/Shanghai)
+cell=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/f01-fix-alllocal-split2-083037
+tip=620cd762b dirty
+qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mtime=2026-11-05 08:30:24 CST
+fix: writable_page_release_chain capture next before release; drop WritablePage.pool_idx (index via pointer arith) — keep F05 coherent gate + F06 claim/occupy/exhaust
+config: WVM_GUEST_SPLIT=2 WVM_CREATE_VCPUS=2 require-tcg flat boot_timeout=240 ssh_port=2231
+guest_login=PASS
+guest_ssh=PASS
+guest_cpu_smoke=PASS
+remote_done_delta=0 (expected all-local)
+OVERALL=FAIL_g9_remote_attribution (expected; remote_done=0)
+COMPARE: prior ab-dirty-reconfirm guest_login=MISSING; ab-clean-usermem guest_login=PASS — dirty tip now matches clean on all-local

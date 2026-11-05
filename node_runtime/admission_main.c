@@ -835,6 +835,27 @@ int wavevm_admission_agent_main(int argc, char **argv)
                 argv[0]);
         return 2;
     }
+    /*
+     * F05: advertise this agent's physical host to admitted children. Same-host
+     * CREATE inherits one id into FE+executor env; cross-host placement must
+     * set WVM_FE_PHYSICAL_HOST_ID / WVM_EXECUTOR_PHYSICAL_HOST_ID distinctly
+     * before helper spawn so coherent is refused.
+     */
+    {
+        char host_text[32];
+        uint64_t host = options.physical_host_id != 0
+                            ? options.physical_host_id
+                            : (uint64_t)options.node_id;
+        if (host != 0) {
+            snprintf(host_text, sizeof(host_text), "%" PRIu64, host);
+            if (setenv("WVM_PHYSICAL_HOST_ID", host_text, 0) != 0) {
+                fprintf(stderr,
+                        "[node-runtime] cannot export WVM_PHYSICAL_HOST_ID\n");
+            }
+            /* Local executor host defaults to this agent host when unset. */
+            (void)setenv("WVM_EXECUTOR_PHYSICAL_HOST_ID", host_text, 0);
+        }
+    }
     {
         const char *override_exe = getenv("WVM_NODE_RUNTIME_EXE");
         ssize_t executable_bytes;

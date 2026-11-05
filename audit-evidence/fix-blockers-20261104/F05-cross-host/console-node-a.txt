@@ -1,0 +1,48 @@
+A start 2026-11-05 17:57:28 CST host=b9d31200e9414d3e9e6379c8a2df4312
+[17:57:28] [tcg/A] cleanup
+[17:57:28] [tcg/A] ART_DIR=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F05-cross-host/dual-node-tcg-20261105-175728
+[17:57:28] [tcg/A] TCG Mode B/B: do not load wavevm.ko; temporarily hide /dev/kvm for pure TCG
+[sudo] joeking 的密码： [17:57:28] [tcg/A] tailscale reuse host=wavevm-f05-a ip=100.71.167.85 peer=wavevm-f05-b
+[17:57:29] [tcg/A] peer wavevm-f05-b selected at 100.102.127.79
+[17:57:29] [tcg/A] peer ip 100.102.127.79
+[17:57:29] [tcg/A] start gateway gw_l2 listen=19520 upstream=127.0.0.1:19599 ctrl=19521
+[17:57:29] [tcg/A] start gateway gw_l1a listen=19320 upstream=127.0.0.1:19520 ctrl=19321
+[17:57:29] [tcg/A] start gateway gw_sidecar_a listen=19120 upstream=127.0.0.1:19320 ctrl=19121
+[17:57:29] [tcg/A] start slave0/master0
+[17:57:29] [tcg/A] node-b tailscale peer selected at 100.102.127.79; WaveVM ports are UDP, so QEMU/RPC logs are the readiness check
+[17:57:37] [tcg/A] start QEMU accel=tcg local_split=2
+[17:58:28] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[17:58:37] [tcg/A] 1m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[17:59:28] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[17:59:37] [tcg/A] 2m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:00:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:00:37] [tcg/A] 3m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:01:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:01:37] [tcg/A] 4m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:02:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:02:37] [tcg/A] 5m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:03:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:03:37] [tcg/A] 6m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:04:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:04:37] [tcg/A] 7m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:05:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:05:37] [tcg/A] 8m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:06:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:06:37] [tcg/A] 9m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:07:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:07:37] [tcg/A] 10m elapsed Q=yes master0_timeouts=0 master1_timeouts=0
+[18:08:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[18:08:34] [tcg/A] cleanup
+已终止
+已终止

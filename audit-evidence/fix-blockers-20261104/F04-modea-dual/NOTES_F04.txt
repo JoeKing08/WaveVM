@@ -1,0 +1,11 @@
+F04 mode_a_dual after mode_a_one PASS
+recorded_at=2026年 11月 04日 星期三 21:18:27 CST
+tip=620cd762b dirty have_wavevm=1
+Result: MATRIX mode_a_dual PASS elapsed=68s cleanup_ok=1
+  VM1 STOP status=0 recorded_state=17 cleanup_ok=1
+  VM2 STOP status=0 recorded_state=17 cleanup_ok=1
+  typed guest_shm_store=PASS marker=0x5267 via typed_WVM1_ingress (VM2 dataplane detail)
+  sibling STOP isolation preserved
+Source: /tmp/wavevm-f04-dual run_id=f04-dual-211638
+F04 overall: mode_a_one + mode_a_dual both PASS production typed guest store
+MINIMUM_COMPLETE=NOT_CLAIMED

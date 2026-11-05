@@ -1527,7 +1527,8 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     }
 
     case IOCTL_SET_GATEWAY:
-    case IOCTL_WVM_REMOTE_RUN:
+    /* sizeof(wvm_ioctl_remote_run) not constant on 7.0.0-42; path is EOPNOTSUPP */
+    case _IOWR('G', 2, __u64):
     case IOCTL_WAIT_IRQ:
     case IOCTL_UPDATE_MEM_ROUTE:
     case IOCTL_UPDATE_MEMORY_PLACEMENT:

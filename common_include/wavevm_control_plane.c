@@ -2063,6 +2063,17 @@ void wvm_control_plane_set_runtime_health_probe(
     plane->runtime_health_probe_context = context;
 }
 
+void wvm_control_plane_set_execution_fail_closed(
+    struct wvm_control_plane *plane,
+    wvm_control_plane_execution_fail_closed_fn fn, void *context)
+{
+    if (!plane) {
+        return;
+    }
+    plane->execution_fail_closed = fn;
+    plane->execution_fail_closed_context = context;
+}
+
 int wvm_control_plane_set_admission_authority(
     struct wvm_control_plane *plane,
     const struct wvm_admission_authority *authority, char *error,
@@ -3929,6 +3940,28 @@ int wvm_control_plane_reconcile_required_member_health(
             continue;
         }
         transitioned++;
+        /*
+         * F08: durable DEGRADED/FAILED is not the execution boundary by itself.
+         * Ask the installed hook to quiesce/deny authorize for this exact VM.
+         * Failure here does not roll back journal state; STOP still cleans by
+         * identity. Missing hook keeps prior journal-only behavior (tests that
+         * only assert state still pass).
+         */
+        if (plane->execution_fail_closed) {
+            char fail_closed_error[256];
+            fail_closed_error[0] = '\0';
+            if (plane->execution_fail_closed(
+                    plane->execution_fail_closed_context, tx, next,
+                    fail_closed_error, sizeof(fail_closed_error)) != 0) {
+                fprintf(stderr,
+                        "[control-plane] F08 execution fail-closed hook failed "
+                        "vm=%u inc=%llu state=%u: %s\n",
+                        (unsigned)tx->vm_id,
+                        (unsigned long long)tx->vm_incarnation, (unsigned)next,
+                        fail_closed_error[0] ? fail_closed_error
+                                             : "(no error text)");
+            }
+        }
     }
     if (transitioned_out) {
         *transitioned_out = transitioned;

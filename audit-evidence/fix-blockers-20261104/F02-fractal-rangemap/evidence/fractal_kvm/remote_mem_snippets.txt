@@ -1,0 +1,2 @@
+=== remote_mem / fence / dirty snippets ===
+/tmp/wavevm-create-vm-fractal.A9OZeo/agent.log:[WaveVM] dirty log tracking enabled (kvm=1 slave=0 coherent=0).

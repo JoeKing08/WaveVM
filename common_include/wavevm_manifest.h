@@ -547,6 +547,10 @@ int wvm_storage_device_plan_decode(
  * backend_kind=1, contract digest = qemu digest). Intentionally empty plans
  * with a zero digest remain empty. STORAGE_PHYSICAL_NODE_ID 0 means "place on
  * VM host" for the admission planner.
+ *
+ * Q01 / Minimum: at most one WaveVM block-service device assignment. The
+ * chunk store keys by process identity + LBA only; a second device_index
+ * would alias the same backend. Ordinary QEMU-local disks remain valid.
  */
 int wvm_storage_device_plan_ensure_default_local(
     struct wvm_storage_device_plan *plan, char *error, size_t error_len);

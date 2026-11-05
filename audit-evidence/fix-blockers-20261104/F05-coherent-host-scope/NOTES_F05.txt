@@ -1,0 +1,28 @@
+F05 coherent SHM vs cross-host scope — unit + placement export (Asia/Shanghai 2026-11-04 21:41:28 CST)
+
+Proven this turn:
+  - wavevm_user_mem_set_tcg_shm_coherent refuse when FE!=executor host ids
+    (unit tests/unit/test_f05_coherent_host_scope.sh → PASS)
+  - Placement/export writes host ids for helpers:
+      node_runtime/admission_main.c → setenv WVM_PHYSICAL_HOST_ID +
+        WVM_EXECUTOR_PHYSICAL_HOST_ID (physical_host_id or node_id)
+      node_runtime/main.c export_runtime_identity → FE/EXECUTOR host env
+      slave_hybrid inherits WVM_PHYSICAL_HOST_ID into FE/executor when unset
+  - Evidence: unit_f05.log, qemu_strings (F05 coherent REFUSED)
+
+Still bounded / not claimed:
+  - Live two-physical-host remote fault/version/sync proof not run on this
+    single-VM closeout (no second host). Cross-host refuse is unit-proven;
+    remote fault path remains the non-coherent path when refuse fires.
+
+Status: PARTIAL (guard+placement PASS; live dual-host remote proof deferred).
+No MINIMUM_COMPLETE. tip=620cd762b dirty; no commit/push.
+
+--- refresh 20261105-095248 Asia/Shanghai ---
+Single-VM closeout unchanged: no second physical host available this turn.
+Cross-host live refuse/remote-fault still deferred. Status remains PARTIAL.
+No work blocked on F01; blocked on second host only.
+
+--- refresh 20261105-154122 Asia/Shanghai ---
+BLOCKED: Tailscale auth key invalid (API key does not exist). Live dual-host deferred pending Joe key refresh. Evidence: /workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F05-cross-host
+No COMPLETE.

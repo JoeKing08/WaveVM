@@ -1,0 +1,9 @@
+run_id=s6-20261104-195951-12527
+cell=mode_b_dual
+rc=0
+elapsed_s=18
+class=ok
+cleanup_ok=1
+log=/tmp/wavevm-s6-matrix-20261104-195951/mode_b_dual.log
+note=ok
+invoked=1

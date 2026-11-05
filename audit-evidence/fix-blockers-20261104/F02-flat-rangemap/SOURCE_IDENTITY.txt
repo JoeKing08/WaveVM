@@ -1,0 +1,31 @@
+captured_at_asia_shanghai=2026-11-04T21:09:43+08:00
+user=joeking uid=1000 groups=joeking,adm,cdrom,sudo,dip,plugdev,users,lpadmin,kvm
+head=620cd762b34ec309d7dac1b6822ddeff34fe59be
+head_short=620cd762b
+dirty_tracked:
+  a5fcbecf456e6b8479c487cd44e024dccbdae587a683a68d1e60ad9c30459306  common_include/wavevm_admission_runtime_agent.c
+  f99f20a856fe6c89b9ec3eb314d99804ebc14f7d2d68037d86ce7092e549c045  common_include/wavevm_admission_transport.c
+  c1a0b66c988e1d652d06d77e9160fe00696057ace75defc64228ee196a55cc75  ctl_tool/main.c
+  892e256411cd93c9a9d62c930f441bffe0938b44fb4ef96a54d8a434cd6b70fc  master_core/main_wrapper.c
+  54378950d17ee22b6a5df0f09838d35b542de677df37918a293fc4671e6ba58f  master_core/user_backend.c
+  e8e73d6b78013bef417f628cadab770af23a780a07fd3aaad533056f8863ed8a  node_runtime/executor_bridge.c
+  136e63d0964d1e9a1425731dd7129ea88df729b13b43ff73db34564d4be5c441  scripts/bot_to_grok_build.py
+  0e366e6f5e04b2303d06c486df5f5f0e6c39d0e7f8052e3b010c96192cb07f70  scripts/bot_to_grok_build_README.txt
+  6ec234089d55dbdec9d1e512367b69cbd7dc5d0cc0fe3f4ede4f338cb1386264  slave_daemon/slave_hybrid.c
+  16fab3e74c1cae181967ad2e04404d4201e7457af35a3e4da49eac8baa5f0fcb  tests/control-plane/s6_cell_common.sh
+  d3283f70034ae3453b71cc7f8804fc2fd06411df3ae196361a299507e019c776  tests/control-plane/s6_dataplane_typed_run.c
+  fb4e4df98609e5a6ea0f5dea687fd22038f98b124f3f37ebd508e83919144ebb  tests/control-plane/test_coordinator.sh
+  c7ccaff6536ede628bf94fec74f8ae1783a525e48723abdc6f6d051ec55a41c7  tests/control-plane/test_goal4_executor_remote_memory.c
+untracked_relevant:
+  e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  master_core/Module.symvers
+  bd893878f034038191080641e248bac978abc87720118b8c2aa96ff63c9e7fbe  master_core/modules.order
+  8e66e656be3cb526aec528103baf4cc5148c3f105e08c0a58b4c8628393e81db  master_core/wavevm.mod.c
+  1433c5ef73a86edf838796b0d806cfe227f44759c08b72e4406400dffb9eeacd  scripts/__pycache__/bot_to_grok_build.cpython-312.pyc
+  6a2edb749315bf7f43d6b66c8f3c7dd26726daa942542db0234901db2896cb81  tests/control-plane/s6_dataplane_probe.sh.bak
+devices:
+  /dev/kvm=crw-rw----+ 1 root kvm 10, 232 11月  4 21:09 /dev/kvm 
+  /dev/wavevm=ls: 无法访问 '/dev/wavevm': 没有那个文件或目录 
+  wavevm_ko=not_loaded
+dirty_patch=/tmp/wavevm-f02-flat-rm/SOURCE_IDENTITY.patch
+untracked_list=/tmp/wavevm-f02-flat-rm/SOURCE_IDENTITY.untracked
+dirty_patch_bytes=48596

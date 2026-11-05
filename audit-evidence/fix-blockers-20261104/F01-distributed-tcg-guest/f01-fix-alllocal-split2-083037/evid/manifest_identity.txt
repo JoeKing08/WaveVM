@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.ujiRTM/runtime/vm-256-1-1.manifest
+903a2986a658c83bf9b136b681c4f6a1ec11bf7ecedbede4f3568034e6e3423c  /tmp/wavevm-create-vm-single.ujiRTM/runtime/vm-256-1-1.manifest
+45e1064cb96becd1d3543cbce5e8377e21bce6359b869a571f705cc0672ebdb2  /tmp/wavevm-create-vm-single.ujiRTM/runtime/vm-256-1-1.manifest.dispatch
+0076d2bf5323be3a363dbd1337ba1bce93497612346de925df7c5aef7d3a71f6  /tmp/wavevm-create-vm-single.ujiRTM/runtime/vm-256-1-1.manifest.route

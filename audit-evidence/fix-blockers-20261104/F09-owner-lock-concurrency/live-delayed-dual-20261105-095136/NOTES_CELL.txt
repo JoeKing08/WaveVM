@@ -1,0 +1,43 @@
+F09 live cell art=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F09-owner-lock-concurrency/live-delayed-dual-20261105-095136 delay_ms=2000
+vm1 not RUNNING: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+wvm_ctl: mid-flight admission recovery scan complete
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_ctl: queued after-membership hook type=0x101
+wvm_ctl: flushing after-membership hook type=0x101 pending_was=1
+wvm_ctl: admission submit type=0x701 peer=801:802 port=41165 rc=0 err=no resumable enrollment for member
+wvm_ctl: admission submit type=0x702 peer=801:802 port=41165 rc=0 err=no resumable enrollment for member
+wvm_ctl: cluster enrollment after REGISTER reached ACTIVE
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x401 peer=801:802 port=41165 rc=0 err=
+[WVM-F09-RPC-DELAY] ms=2000 msg=PREPARE_RESERVATION after_yield=1 fired=1 max=1 type=0x201
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x401 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x201 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x301 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x202 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x302 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x402 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x305 peer=801:802 port=41165 rc=-11 err=admitted runtime is starting
+wvm_control_owner: client thread start tls=0
+wvm_ctl: admission submit type=0x305 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x305 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x305 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: admission submit type=0x201 peer=801:802 port=41165 rc=0 err=
+wvm_ctl: CREATE_VM precondition failed admission_result=-1 state=6 error=cannot decide abort
+RESULT 2026-11-05 09:51:44 CST
+WVM_F09_RPC_DELAY_MS=2000
+vm1=status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+vm2=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=9529602730293642100
+guest_dual_create_vm1=FAIL
+guest_dual_create_vm2=PASS
+vm1_id=0
+vm2_id=257
+rpc_delay_lines=1
+delay_ms=2000
+wall_s=2.099
+vm2_wall_s=0.634
+route_prepare_after_delay=1
+client_threads_after_delay=2
+overlap_heuristic=True
+overall=PASS_OVERLAP

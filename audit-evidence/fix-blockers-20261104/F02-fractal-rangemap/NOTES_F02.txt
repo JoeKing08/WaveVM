@@ -1,0 +1,13 @@
+F02 fractal_kvm reverify after apply_runtime_dispatch range-map fix
+Asia/Shanghai: see matrix SUMMARY tip=620cd762b
+Root cause: fractal path skipped wvm_set_memory_range_mapping / cpu range maps → ownership fell to zeroed hash ring (node0≠vnode1) → MSG_MEM_WRITE non-owner ignore; planted page stayed 0x90909090.
+Fix: master_core/main_wrapper.c apply_runtime_dispatch — fractal no longer early-returns without setting cpu+memory range maps and sidecar gateways (same as flat).
+Result this run:
+  create status=0 recorded_state=11
+  guest_shm_store=PASS marker=0x5267 store_gpa=0x2020 waited_ms=580
+  typed_short_exec=PASS backend=kvm via_gateway=1
+  stop status=0 recorded_state=17 cleanup_ok=1
+  MATRIX fractal_kvm PASS elapsed=44s
+Evidence source: /tmp/wavevm-f02-fractal-rm run_id=f02-fractal-rm-210831
+MINIMUM_COMPLETE=NOT_CLAIMED
+recorded_at=2026年 11月 04日 星期三 21:09:55 CST

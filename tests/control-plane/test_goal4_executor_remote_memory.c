@@ -443,6 +443,7 @@ static int commit_page(void *opaque, uint64_t gpa, uint64_t base_version,
 {
     struct remote_state *state = opaque;
 
+    (void)source_shared_backing;
     if (!state || !state->directory_store_initialized) {
         return -EINVAL;
     }
@@ -490,7 +491,6 @@ static int complete_remote_fault(
     (void)directory_node_instance_id;
     (void)data;
     (void)data_bytes;
-    (void)source_shared_backing;
     (void)error;
     (void)error_len;
     return 0;

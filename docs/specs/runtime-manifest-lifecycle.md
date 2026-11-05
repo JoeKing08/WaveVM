@@ -672,6 +672,11 @@ first correct distributed VM.
   required member identity changes visibly pause/fail rather than rebind.
 - **Minimum usable:** VM A route-scope retirement while VM B shares a gateway leaves VM B's current
   and draining routes, local names, reservations, and subscriber state intact.
-- **Minimum usable:** Success means a guest reaches its declared readiness condition, plus
-  instrumentation proves the admitted remote vCPU and remote memory paths were
-  exercised; it does not mean only that processes remained alive.
+- **Minimum usable:** KVM guest acceptance requires login or SSH and proof that
+  admitted remote vCPU and remote memory paths were exercised. TCG contract
+  acceptance requires bounded actual instruction execution with checked CPU
+  and remote memory results, plus clean STOP. TCG guest OS boot/login/SSH and
+  sustained multi-vCPU guest usability belong to Extended (`vcpu-handoff.md`
+  Section 8.1). Neither gate is satisfied by process survival. Runtime readiness
+  and lifecycle `RUNNING` remain manifest-bound service states; they must not
+  be relabeled as proof of guest OS login for either backend.

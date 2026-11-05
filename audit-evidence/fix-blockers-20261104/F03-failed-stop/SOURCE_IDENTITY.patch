@@ -1,0 +1,1012 @@
+diff --git a/common_include/wavevm_admission_runtime_agent.c b/common_include/wavevm_admission_runtime_agent.c
+index c2ad5d585..cbebead79 100644
+--- a/common_include/wavevm_admission_runtime_agent.c
++++ b/common_include/wavevm_admission_runtime_agent.c
+@@ -385,9 +385,22 @@ static int stop_one_runtime(
+         if (owned->runtime_stop_incomplete[index]) {
+             /*
+              * PID death is cleanup evidence, not proof of quiesce/fence/flush.
+-             * Keep the failed semantic result across retries so a second STOP
+-             * cannot turn a SIGKILL/abnormal exit into normal completion.
++             * N1: a STOP that itself required SIGKILL must not become SUCCESS on
++             * retry via "pid already gone". Keep fail-closed there.
++             *
++             * F03: when the required child already failed before STOP
++             * (has_required_child_failed → durable DEGRADED/FAILED), exact-
++             * identity STOP/retire must still complete compensating teardown.
++             * That is not transparent RECOVERY_REBIND and not a clean quiesce
++             * claim — only permission to retire the failed identity.
+              */
++            if (slot->has_required_child_failed) {
++                fprintf(stderr,
++                        "[runtime-agent] F03: admitted child already failed; "
++                        "allowing compensating STOP teardown (not clean "
++                        "quiesce/fence proof)\n");
++                return 0;
++            }
+             set_error(error, error_len,
+                       "previous admitted runtime STOP remains incomplete "
+                       "(quiesce/fence/flush not proven)");
+@@ -417,6 +430,23 @@ static int stop_one_runtime(
+                 clear_stale_admitted_endpoints(runtime_manifest);
+                 if (!runtime_exit_was_clean(status)) {
+                     owned->runtime_stop_incomplete[index] = 1;
++                    /*
++                     * External SIGKILL/crash before graceful STOP completes:
++                     * mark required-child-failed and allow compensating
++                     * teardown (F03). This is not the N1 path where *we*
++                     * escalate to SIGKILL after the SIGTERM window.
++                     */
++                    if (WIFSIGNALED(status) && agent->slots &&
++                        index < agent->slot_capacity) {
++                        agent->slots[index].has_required_child_failed = 1;
++                        agent->slots[index].has_activated = 0;
++                        fprintf(stderr,
++                                "[runtime-agent] F03: child pid=%d died by "
++                                "signal %d during STOP; compensating teardown "
++                                "allowed\n",
++                                (int)pid, WTERMSIG(status));
++                        return 0;
++                    }
+                     if (error && error_len != 0) {
+                         (void)snprintf(
+                             error, error_len,
+@@ -431,6 +461,17 @@ static int stop_one_runtime(
+             if (r < 0 && errno == ECHILD) {
+                 owned->runtime_pids[index] = 0;
+                 clear_stale_admitted_endpoints(runtime_manifest);
++                /*
++                 * Already reaped (often by reap_runtime_children after an
++                 * intentional kill). If that path marked required-child-
++                 * failed, allow F03 compensating STOP; otherwise keep N1.
++                 */
++                if (slot->has_required_child_failed) {
++                    fprintf(stderr,
++                            "[runtime-agent] F03: child already reaped after "
++                            "required failure; compensating STOP teardown\n");
++                    return 0;
++                }
+                 return mark_stop_incomplete(
+                     owned, index, error, error_len,
+                     "admitted runtime was reaped before STOP could prove "
+@@ -453,6 +494,17 @@ static int stop_one_runtime(
+             clear_stale_admitted_endpoints(runtime_manifest);
+             if (!runtime_exit_was_clean(status)) {
+                 owned->runtime_stop_incomplete[index] = 1;
++                if (WIFSIGNALED(status) && agent->slots &&
++                    index < agent->slot_capacity) {
++                    agent->slots[index].has_required_child_failed = 1;
++                    agent->slots[index].has_activated = 0;
++                    fprintf(stderr,
++                            "[runtime-agent] F03: child pid=%d died by "
++                            "signal %d after SIGTERM window wait; "
++                            "compensating teardown allowed\n",
++                            (int)pid, WTERMSIG(status));
++                    return 0;
++                }
+                 if (error && error_len != 0) {
+                     (void)snprintf(
+                         error, error_len,
+@@ -467,6 +519,12 @@ static int stop_one_runtime(
+         if (r < 0 && errno == ECHILD) {
+             owned->runtime_pids[index] = 0;
+             clear_stale_admitted_endpoints(runtime_manifest);
++            if (slot->has_required_child_failed) {
++                fprintf(stderr,
++                        "[runtime-agent] F03: child already reaped after "
++                        "required failure; compensating STOP teardown\n");
++                return 0;
++            }
+             return mark_stop_incomplete(
+                 owned, index, error, error_len,
+                 "admitted runtime was reaped before STOP could prove "
+diff --git a/common_include/wavevm_admission_transport.c b/common_include/wavevm_admission_transport.c
+index bc48abca2..157fb94a3 100644
+--- a/common_include/wavevm_admission_transport.c
++++ b/common_include/wavevm_admission_transport.c
+@@ -204,12 +204,27 @@ static int resolve_member_target(
+     struct wvm_admission_transport_target *target, char *error,
+     size_t error_len)
+ {
++    char resolve_error[256];
++
++    resolve_error[0] = '\0';
+     if (transport_validate(transport, error, error_len) != 0 || !expected_member ||
+         wvm_member_key_validate(expected_member, error, error_len) != 0 ||
+-        !target ||
+-        transport->resolve_member(transport->context, expected_member, target,
+-                                  error, error_len) != 0 ||
+-        target_validate(target, error, error_len) != 0 ||
++        !target) {
++        if (error && error_len && error[0] == '\0') {
++            set_error(error, error_len,
++                      "control target does not match the membership snapshot");
++        }
++        return -1;
++    }
++    if (transport->resolve_member(transport->context, expected_member, target,
++                                  resolve_error, sizeof(resolve_error)) != 0) {
++        set_error(error, error_len, "%s",
++                  resolve_error[0]
++                      ? resolve_error
++                      : "control target does not match the membership snapshot");
++        return -1;
++    }
++    if (target_validate(target, error, error_len) != 0 ||
+         target->member_key.role_type != expected_member->role_type ||
+         target->member_key.role_id != expected_member->role_id ||
+         target->member_key.instance_id != expected_member->instance_id ||
+diff --git a/ctl_tool/main.c b/ctl_tool/main.c
+index 6a7e9c1f9..886b822ee 100644
+--- a/ctl_tool/main.c
++++ b/ctl_tool/main.c
+@@ -1271,21 +1271,47 @@ static int admission_workspace_reset(
+     return 0;
+ }
+ 
++static int member_still_owns_control_endpoint(
++    enum wvm_manifest_member_state desired_state)
++{
++    /*
++     * Exact-identity control RPCs (STOP/abort/retire/ready query) must reach
++     * the registered instance while it still owns cluster resources. ACTIVE
++     * is the common case; CORDONED/DRAINING members remain addressable so
++     * existing VMs can stop. REMOVED/FAILED membership rows are not reused
++     * as live control targets — that would be a new incarnation.
++     */
++    return desired_state == WVM_MANIFEST_MEMBER_ACTIVE ||
++           desired_state == WVM_MANIFEST_MEMBER_CORDONED ||
++           desired_state == WVM_MANIFEST_MEMBER_DRAINING;
++}
++
+ static int admission_transport_resolve_member(
+     void *context, const struct wvm_member_key *member_key,
+     struct wvm_admission_transport_target *target, char *error,
+     size_t error_len)
+ {
+     struct admission_workspace *workspace = context;
+-    const struct wvm_membership_controller_capture *capture;
++    struct wvm_membership_controller_capture *capture;
+     size_t i;
+ 
+     if (!workspace || !member_key || !target ||
++        !workspace->membership_controller ||
+         wvm_member_key_validate(member_key, error, error_len) != 0) {
+         snprintf(error, error_len, "invalid transport resolve arguments");
+         return -1;
+     }
+     capture = &workspace->membership_capture;
++    /*
++     * Always resolve against a fresh membership snapshot. STOP/abort must
++     * still project the exact role/instance/endpoint even when observed
++     * health is SUSPECT/UNREACHABLE — new placement excludes those members
++     * via eligibility fences, not by erasing STOP identity.
++     */
++    if (wvm_membership_controller_capture(workspace->membership_controller,
++                                          capture, error, error_len) != 0) {
++        return -1;
++    }
+     memset(target, 0, sizeof(*target));
+     if (member_key->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
+         for (i = 0; i < capture->node_count; i++) {
+@@ -1295,10 +1321,13 @@ static int admission_transport_resolve_member(
+                 node->node_instance_id != member_key->instance_id) {
+                 continue;
+             }
+-            if (node->desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
+-                node->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
++            if (!member_still_owns_control_endpoint(
++                    node->desired_membership_state)) {
+                 snprintf(error, error_len,
+-                         "node runtime is not an active healthy member");
++                         "node runtime membership no longer owns control "
++                         "endpoint (desired_state=%u health=%u)",
++                         (unsigned)node->desired_membership_state,
++                         (unsigned)node->observed_health_state);
+                 return -1;
+             }
+             target->member_key = *member_key;
+@@ -1313,11 +1342,13 @@ static int admission_transport_resolve_member(
+                 gateway->gateway_instance_id != member_key->instance_id) {
+                 continue;
+             }
+-            if (gateway->desired_membership_state !=
+-                    WVM_MANIFEST_MEMBER_ACTIVE ||
+-                gateway->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
++            if (!member_still_owns_control_endpoint(
++                    gateway->desired_membership_state)) {
+                 snprintf(error, error_len,
+-                         "gateway is not an active healthy member");
++                         "gateway membership no longer owns control "
++                         "endpoint (desired_state=%u health=%u)",
++                         (unsigned)gateway->desired_membership_state,
++                         (unsigned)gateway->observed_health_state);
+                 return -1;
+             }
+             target->member_key = *member_key;
+@@ -1387,10 +1418,6 @@ static int probe_remote_runtime_health(
+     char *error, size_t error_len)
+ {
+     struct runtime_health_probe_context *probe = opaque;
+-    struct wvm_member_key member_key;
+-    struct wvm_membership_controller_member_status status;
+-    char monitor_error[256];
+-    enum wvm_membership_health_state next_health;
+     int result;
+ 
+     if (!probe || !probe->plane || !probe->workspace ||
+@@ -1407,36 +1434,14 @@ static int probe_remote_runtime_health(
+     result = wvm_ctl_probe_runtime_ready(
+         probe->plane, transaction, runtime_entry, probe->member_capacity,
+         probe->max_vcpus, &probe->workspace->transport, error, error_len);
+-    if (result == 0) {
+-        return 0;
+-    }
+-
+     /*
+-     * A failed authenticated probe is monitor evidence, not a self-health
+-     * report.  Keep recovery under the member's authenticated self-report;
+-     * the monitor only escalates repeated failures from SUSPECT to
+-     * UNREACHABLE.  The VM reconcile in the caller remains fail-closed even
+-     * if this durable evidence update itself cannot be persisted.
++     * F03: QUERY_RUNTIME_READY is per-VM lifecycle readiness (admitted child /
++     * frontend ready), not a membership heartbeat. A single VM's dead child or
++     * Mode-A store miss must DEGRADE/FAIL that VM via the caller — it must not
++     * mark the whole node SUSPECT/UNREACHABLE, or sibling VMs lose STOP
++     * identity resolution and can no longer be retired by exact instance.
++     * Membership monitor health stays on real member contact/heartbeat paths.
+      */
+-    memset(&member_key, 0, sizeof(member_key));
+-    member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+-    member_key.role_id = runtime_entry->physical_node_id;
+-    member_key.instance_id = runtime_entry->expected_node_instance_id;
+-    monitor_error[0] = '\0';
+-    if (wvm_member_key_validate(&member_key, monitor_error,
+-                                sizeof(monitor_error)) == 0 &&
+-        wvm_membership_controller_member_status(
+-            probe->workspace->membership_controller, &member_key, &status,
+-            monitor_error, sizeof(monitor_error)) == 0) {
+-        next_health = status.observed_health_state == WVM_MEMBERSHIP_SUSPECT ||
+-                              status.observed_health_state ==
+-                                  WVM_MEMBERSHIP_UNREACHABLE
+-                          ? WVM_MEMBERSHIP_UNREACHABLE
+-                          : WVM_MEMBERSHIP_SUSPECT;
+-        (void)wvm_membership_controller_mark_monitor_health(
+-            probe->workspace->membership_controller, &member_key, next_health,
+-            monitor_error, sizeof(monitor_error));
+-    }
+     return result;
+ }
+ 
+diff --git a/master_core/main_wrapper.c b/master_core/main_wrapper.c
+index 75ef01fea..19a07f868 100644
+--- a/master_core/main_wrapper.c
++++ b/master_core/main_wrapper.c
+@@ -29,6 +29,8 @@
+ #include <signal.h>
+ #include <string.h>
+ #include <inttypes.h>
++#include <sys/prctl.h>
++#include <sys/wait.h>
+ 
+ #include "logic_core.h"
+ #include "../common_include/wavevm_protocol.h"
+@@ -66,6 +68,7 @@ static struct wvm_runtime_gate *g_runtime_gate_ptr;
+ static int g_runtime_gate_active = 0;
+ static int g_runtime_requires_qemu_frontend = 0;
+ static int g_runtime_ready_published = 0;
++static pid_t g_frontend_pid = -1;
+ static const struct wvm_runtime_dispatch_storage *g_runtime_dispatch_storage_ptr;
+ static int g_runtime_dispatch_active = 0;
+ static pthread_mutex_t g_runtime_gate_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -95,6 +98,185 @@ static int publish_runtime_ready(char *error, size_t error_len)
+     return 0;
+ }
+ 
++/*
++ * Placement host owns the QEMU frontend. TCG helpers already connect and
++ * register as QEMU_FRONTEND while executing; KVM FAST PATH never spawned a
++ * helper, so CREATE stayed IN_PROGRESS waiting for readiness. Spawn a
++ * manifest-bound FE after the runtime socket listens and before RUNNING.
++ * Keep identity checks — registration still goes through the runtime gate.
++ */
++static void stop_manifest_bound_qemu_frontend(void)
++{
++    int status = 0;
++    pid_t waited;
++
++    if (g_frontend_pid <= 0) {
++        return;
++    }
++    if (kill(g_frontend_pid, SIGTERM) != 0 && errno != ESRCH) {
++        fprintf(stderr,
++                "[System] cannot signal QEMU frontend pid=%d: %s\n",
++                (int)g_frontend_pid, strerror(errno));
++    }
++    waited = waitpid(g_frontend_pid, &status, 0);
++    if (waited < 0 && errno != ECHILD) {
++        fprintf(stderr,
++                "[System] waitpid QEMU frontend pid=%d failed: %s\n",
++                (int)g_frontend_pid, strerror(errno));
++        (void)kill(g_frontend_pid, SIGKILL);
++        (void)waitpid(g_frontend_pid, &status, 0);
++    }
++    fprintf(stderr,
++            "[System] QEMU frontend pid=%d stopped status=%d\n",
++            (int)g_frontend_pid, status);
++    g_frontend_pid = -1;
++}
++
++static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
++{
++    const char *qemu_bin = getenv("WVM_TCG_QEMU_BIN");
++    const char *tcg_machine = getenv("WVM_TCG_QEMU_MACHINE");
++    const char *tcg_ram_mb = getenv("WVM_TCG_QEMU_MEM_MB");
++    const char *tcg_datadir = getenv("WVM_TCG_QEMU_DATADIR");
++    const char *disable = getenv("WVM_FRONTEND_DISABLE");
++    enum wvm_manifest_backend backend =
++        g_runtime_storage.manifest.negotiated_profile.backend;
++    char ram_buf[32];
++    char smp_buf[32];
++    char accel_buf[64];
++    char *qemu_argv[24];
++    int ai = 0;
++    pid_t parent_pid;
++    pid_t child;
++    uint32_t smp;
++    uint64_t ram_mb;
++
++    if (disable && disable[0] != '\0' && strcmp(disable, "0") != 0) {
++        snprintf(error, error_len,
++                 "WVM_FRONTEND_DISABLE set; refusing to forge readiness");
++        return -1;
++    }
++    if (backend != WVM_MANIFEST_BACKEND_KVM) {
++        /* TCG helpers register as the frontend; do not race a second FE. */
++        return 0;
++    }
++    if (g_frontend_pid > 0) {
++        return 0;
++    }
++    if (!qemu_bin || !*qemu_bin) {
++        qemu_bin = "qemu-system-x86_64";
++    }
++
++    ram_mb = g_shm_size / (1024ULL * 1024ULL);
++    if (ram_mb == 0 || ram_mb > UINT32_MAX) {
++        snprintf(error, error_len, "invalid guest memory for QEMU frontend");
++        return -1;
++    }
++    if (!tcg_ram_mb || !*tcg_ram_mb) {
++        snprintf(ram_buf, sizeof(ram_buf), "%" PRIu64, ram_mb);
++        tcg_ram_mb = ram_buf;
++    }
++    smp = (uint32_t)g_runtime_storage.manifest.local_vcpu_assignments.count;
++    if (smp == 0) {
++        smp = 1;
++    }
++    snprintf(smp_buf, sizeof(smp_buf), "%u", smp);
++
++    {
++        const char *fe_accel = getenv("WVM_FRONTEND_ACCEL");
++        if (fe_accel && fe_accel[0] != '\0') {
++            /* Test/ops override only; default remains admitted-backend KVM FE. */
++            snprintf(accel_buf, sizeof(accel_buf), "%s", fe_accel);
++        } else if (g_runtime_storage.manifest.negotiated_profile
++                       .kernel_accelerator_bits != 0) {
++            snprintf(accel_buf, sizeof(accel_buf),
++                     "wavevm,backend=kvm,mode=kernel");
++        } else {
++            snprintf(accel_buf, sizeof(accel_buf),
++                     "wavevm,backend=kvm,mode=user");
++        }
++    }
++
++    parent_pid = getpid();
++    child = fork();
++    if (child == 0) {
++        if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || getppid() != parent_pid) {
++            _exit(127);
++        }
++        /*
++         * FE must not inherit executor/helper slave identity. Clear only the
++         * roles that would make wavevm treat this process as a TCG helper.
++         */
++        unsetenv("WVM_ROLE");
++        unsetenv("WVM_SOCK_CMD");
++        unsetenv("WVM_SOCK_REQ");
++        unsetenv("WVM_SOCK_PUSH");
++        unsetenv("WVM_EXECUTOR_SESSION_FD");
++        unsetenv("WVM_SLAVE_ID");
++        unsetenv("WVM_SLAVE_VCPU_COUNT");
++        unsetenv("WVM_EXECUTOR_ID");
++        unsetenv("WVM_EXECUTOR_VCPU_INDEX");
++
++        qemu_argv[ai++] = (char *)qemu_bin;
++        if (tcg_datadir && *tcg_datadir) {
++            qemu_argv[ai++] = "-L";
++            qemu_argv[ai++] = (char *)tcg_datadir;
++        }
++        qemu_argv[ai++] = "-accel";
++        qemu_argv[ai++] = accel_buf;
++        if (tcg_machine && *tcg_machine) {
++            qemu_argv[ai++] = "-machine";
++            qemu_argv[ai++] = (char *)tcg_machine;
++        }
++        qemu_argv[ai++] = "-m";
++        qemu_argv[ai++] = (char *)tcg_ram_mb;
++        qemu_argv[ai++] = "-smp";
++        qemu_argv[ai++] = smp_buf;
++        qemu_argv[ai++] = "-nographic";
++        qemu_argv[ai++] = "-S";
++        qemu_argv[ai++] = "-nodefaults";
++        qemu_argv[ai] = NULL;
++
++        execvp(qemu_bin, qemu_argv);
++        fprintf(stderr, "[System] exec QEMU frontend '%s' failed: %s\n",
++                qemu_bin, strerror(errno));
++        _exit(127);
++    }
++    if (child < 0) {
++        snprintf(error, error_len, "fork QEMU frontend failed: %s",
++                 strerror(errno));
++        return -1;
++    }
++
++    /* Bound early-exit check: missing binary must not leave CREATE hung. */
++    {
++        int status = 0;
++        pid_t waited;
++
++    usleep(100000);
++    waited = waitpid(child, &status, WNOHANG);
++    if (waited == child) {
++        snprintf(error, error_len,
++                 "QEMU frontend exited immediately status=%d bin=%s", status,
++                 qemu_bin);
++        return -1;
++    }
++    if (waited < 0 && errno != ECHILD) {
++        snprintf(error, error_len, "waitpid QEMU frontend failed: %s",
++                 strerror(errno));
++        (void)kill(child, SIGKILL);
++        return -1;
++    }
++    }
++
++    g_frontend_pid = child;
++    fprintf(stderr,
++            "[System] spawned manifest-bound QEMU frontend pid=%d accel=%s "
++            "bin=%s mem_mb=%s smp=%s\n",
++            (int)child, accel_buf, qemu_bin, tcg_ram_mb, smp_buf);
++    return 0;
++}
++
+ static int runtime_route_key_equal(const struct wvm_route_snapshot_key *left,
+                                    const struct wvm_route_snapshot_key *right)
+ {
+@@ -2149,9 +2331,20 @@ int wavevm_master_runtime_main(
+             return 1;
+         }
+     } else {
++        char fe_error[256] = {0};
++
+         fprintf(stderr,
+                 "[System] runtime socket listening; waiting for manifest-bound "
+                 "QEMU frontend registration\n");
++        if (spawn_manifest_bound_qemu_frontend(fe_error, sizeof(fe_error)) !=
++            0) {
++            fprintf(stderr,
++                    "[System] cannot start manifest-bound QEMU frontend: %s\n",
++                    fe_error[0] ? fe_error : "spawn failed");
++            (void)wvm_kernel_memory_stop(&kernel_memory);
++            close(listen_fd);
++            return 1;
++        }
+     }
+ 
+     printf("[+] WaveVM V29 Node endpoint ready. Waiting for QEMU...\n");
+@@ -2233,6 +2426,8 @@ int wavevm_master_runtime_main(
+             "[System] control accept loop ended (shutdown=%d)\n",
+             (int)g_shutdown_requested);
+ 
++    stop_manifest_bound_qemu_frontend();
++
+     /*
+      * R1: stopping the accept loop is not STOP completion.  Wake every
+      * accepted IPC handler, let it drain its own pending commit queue, and
+diff --git a/master_core/user_backend.c b/master_core/user_backend.c
+index 89eb944c2..56cd2df88 100644
+--- a/master_core/user_backend.c
++++ b/master_core/user_backend.c
+@@ -238,18 +238,26 @@ static void report_typed_ingress_result(int status, size_t frame_bytes,
+                                         const char *error)
+ {
+     unsigned int occurrence;
++    static atomic_uint g_typed_ingress_all;
+ 
+-    if (status == WVM_INGRESS_ACCEPTED ||
+-        status == WVM_INGRESS_INCOMPLETE ||
+-        status < 0 || status > WVM_INGRESS_UNSUPPORTED) {
++    /* F02 diag: ACCEPTED/INCOMPLETE were silent, hiding whether WVM1 arrived.
++     * Cap total lines; keep REJECTED/BACKPRESSURE/UNSUPPORTED visible. */
++    if (status < 0 || status > WVM_INGRESS_UNSUPPORTED) {
+         return;
+     }
+     occurrence = atomic_fetch_add_explicit(
+         &g_typed_ingress_diagnostics[status], 1, memory_order_relaxed);
+-    if (occurrence < 8) {
+-        u_log("[Typed Ingress] status=%d bytes=%zu reason=%s",
+-              status, frame_bytes, (error && error[0]) ? error : "none");
++    if (status == WVM_INGRESS_ACCEPTED || status == WVM_INGRESS_INCOMPLETE) {
++        unsigned int all = atomic_fetch_add_explicit(
++            &g_typed_ingress_all, 1, memory_order_relaxed);
++        if (all >= 32) {
++            return;
++        }
++    } else if (occurrence >= 8) {
++        return;
+     }
++    u_log("[Typed Ingress] status=%d bytes=%zu reason=%s",
++          status, frame_bytes, (error && error[0]) ? error : "none");
+ }
+ 
+ static uint32_t local_slave_req_idx(uint64_t req_id) {
+diff --git a/node_runtime/executor_bridge.c b/node_runtime/executor_bridge.c
+index fb5a178b4..bad61d8e0 100644
+--- a/node_runtime/executor_bridge.c
++++ b/node_runtime/executor_bridge.c
+@@ -286,6 +286,12 @@ static int execute_typed_task(struct bridge_state *state,
+ 
+     if (request.backend == WVM_VCPU_BACKEND_KVM &&
+         !wvm_kvm_page_cache_global_active()) {
++        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 32U) {
++            fprintf(stderr,
++                    "[WVM-EXECUTOR-BRIDGE] KVM handoff rejected: page cache "
++                    "inactive vm=%u vcpu=%u\n",
++                    request.vm_id, request.vcpu_index);
++        }
+         handoff_result_from_request(
+             &request, WVM_VCPU_HANDOFF_RESULT_MEMORY_FAILURE, &result);
+         return cache_terminal_and_send(state, &task->envelope, &request,
+@@ -455,8 +461,18 @@ int wvm_executor_bridge_dispatch(
+     size_t replay_bytes = 0;
+     int cache_result;
+ 
+-    if (!state || !envelope ||
+-        wvm_vcpu_handoff_request_decode(
++    if (!state || !envelope) {
++        set_error(error, error_len, "typed vCPU handoff input is invalid");
++        return -EINVAL;
++    }
++    if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 32U) {
++        fprintf(stderr,
++                "[WVM-EXECUTOR-BRIDGE] dispatch enter msg=%u payload=%zu "
++                "vm=%u\n",
++                (unsigned)envelope->message_type,
++                (size_t)envelope->payload_bytes, envelope->vm_id);
++    }
++    if (wvm_vcpu_handoff_request_decode(
+             envelope->payload, envelope->payload_bytes, &request, error,
+             error_len) != 0 ||
+         wvm_vcpu_handoff_request_validate_envelope(
+@@ -465,6 +481,11 @@ int wvm_executor_bridge_dispatch(
+             set_error(error, error_len,
+                       "typed vCPU handoff input is invalid");
+         }
++        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 48U) {
++            fprintf(stderr,
++                    "[WVM-EXECUTOR-BRIDGE] decode/validate failed: %s\n",
++                    error && error[0] ? error : "unknown");
++        }
+         return -EINVAL;
+     }
+     if (wvm_x86_context_validate(
+@@ -479,6 +500,16 @@ int wvm_executor_bridge_dispatch(
+     }
+     if (authorize_local_handoff(state, &request, envelope, error,
+                                 error_len) != 0) {
++        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 48U) {
++            fprintf(stderr,
++                    "[WVM-EXECUTOR-BRIDGE] authorize_local failed: %s "
++                    "dest_exec=%llu route=%u/%llu/%llu\n",
++                    error && error[0] ? error : "unknown",
++                    (unsigned long long)request.destination_executor_id,
++                    (unsigned)envelope->route.destination_kind,
++                    (unsigned long long)envelope->route.destination_scope,
++                    (unsigned long long)envelope->route.destination_vnode_or_endpoint);
++        }
+         return -EPERM;
+     }
+ 
+@@ -510,6 +541,11 @@ int wvm_executor_bridge_dispatch(
+            sizeof(operation.identity.activation_fence));
+     operation.message_type = WVM_EXECUTOR_ABI_CPU_RUN;
+     if (authorize_cpu_run(state, &operation, error, error_len) != 0) {
++        if (__sync_fetch_and_add(&g_executor_bridge_diag_count, 1U) < 48U) {
++            fprintf(stderr,
++                    "[WVM-EXECUTOR-BRIDGE] authorize_cpu_run failed: %s\n",
++                    error && error[0] ? error : "unknown");
++        }
+         return -EPERM;
+     }
+ 
+diff --git a/scripts/bot_to_grok_build.py b/scripts/bot_to_grok_build.py
+old mode 100755
+new mode 100644
+index 4b13288b4..9b424ed7a
+--- a/scripts/bot_to_grok_build.py
++++ b/scripts/bot_to_grok_build.py
+@@ -10,6 +10,11 @@ Usage:
+       --title "My session title"
+ 
+ Also accepts a directory of ReadTranscript page dumps via --from-pages.
++
++Paging (tail→head, then one tip refetch) is NOT done by this script: the main
++Grok Bot agent must call ReadTranscript with before=<firstIndex> until start,
++dump each page, tip once, then pass the directory here. See
++bot_to_grok_build_README.txt section 二½.
+ """
+ 
+ from __future__ import annotations
+diff --git a/scripts/bot_to_grok_build_README.txt b/scripts/bot_to_grok_build_README.txt
+index 26c21cc75..8edde9fcb 100644
+--- a/scripts/bot_to_grok_build_README.txt
++++ b/scripts/bot_to_grok_build_README.txt
+@@ -50,19 +50,35 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
+   - 也可以把每一页 dump 存进一个目录，用脚本的 --from-pages 自动拼成 oldest-first。
+ 
+ 
+-二½、分页 dump 规则（--from-pages）
+---------------------------------
+-拉全量 transcript 时请连续翻页，避免 dump 自身留下空洞：
+-
+-  1. 用 ReadTranscript + before=<本页 firstIndex> 一直翻到出现
+-     “This is the start of the transcript.”（覆盖到最旧）。
+-  2. 翻页结束后，**再拉一次最新 tip**（不带 before，或等价拿到当前最新一页）。
+-  3. 不要在「最后一页 mid-page 的 end」和「tip 页的 start」之间留洞；
+-     若 tip 从 S 起而上一页只到 E 且 E+1 < S，assembler 会报 uncovered，
+-     并提示：dump incomplete: re-fetch ReadTranscript with before=<tip_start>。
+-
+-关于 header 与缺位语义：
+-
++二½、翻页操作（主 Agent 做；本脚本不调 ReadTranscript）
++----------------------------------------------------
++本脚本只消费已落盘的页 dump / JSONL，**不会**自己翻会话。
++翻页必须在 Grok Bot **主 Agent**（非 executor）里用 cursor/ReadTranscript 完成。
++
++标准流程（从尾翻到头，再补 tip）——备份前照此做：
++
++  0. 准备空目录，例如 /workspace/grok-transcript-pages-<date>/。
++  1. 第一页：ReadTranscript（不带 before）+ write_to_file:true。
++     把返回的整页文件拷进上述目录（记下页头 positions A–B of N，
++     以及本页 firstIndex = A）。默认最新在前。
++  2. 向旧翻：再调 ReadTranscript，arguments 带 before=<上一页 firstIndex>，
++     write_to_file:true；每页都落盘。重复直到正文出现
++     “This is the start of the transcript.”（已覆盖到最旧）。
++  3. tip 再取一次：翻页全部结束后，**再拉一次不带 before 的最新 tip**，
++     落盘。不要在翻页循环里反复 tip；整轮只 tip 这一次
++     （push 轮在最终 assemble/redact 前再 tip 一次也可以）。
++  4. 交给本脚本拼页+转换：
++       python3 bot_to_grok_build.py \
++         --from-pages <pages_dir> \
++         --transcript <out.jsonl> \
++         --out <parent> --cwd /home/joeking --title "..."
++  5. 对转换产物再跑 redact_session.py，再进 session-backup/Grok Bot/。
++
++缺口自检（assemble 会查）：
++
++  - 不要在「最后一页 mid-page 的 end」和「tip 页的 start」之间留洞；
++    若 tip 从 S 起而上一页只到 E 且 E+1 < S，assembler 会报 uncovered，
++    并提示：dump incomplete: re-fetch ReadTranscript with before=<tip_start>。
+   - 页头 `positions A–B of N` 可能比正文 JSONL 行数多报（常见 ok = claimed−1..−17）。
+     转换器把 A+ok..B 当作 **phantom tail**，不计入 missing/uncovered。
+   - 重叠页（重复 dump）：优先采用 header `of N` 更大的页（更新快照），已填槽不覆盖。
+@@ -70,6 +86,9 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
+     （stderr：assembled N messages, positions contiguous 0..max）。
+   - 若仍有 uncovered，那是 dump 真缺页（本脚本不会凭空发明消息），请补拉后再拼。
+ 
++可复用旧 page cache：若同会话曾完整翻过，可保留旧页目录，只补 tip 缺口
++（再带 before 拉 mid→tip 缺段），不必每轮从 0 重翻。
++
+ 
+ 
+ 三、怎么跑转换脚本
+@@ -155,7 +174,8 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
+ 
+ 八、给写项目 AI 的最短操作清单
+ ----------------------------
+-  [ ] 拿到 oldest-first 的 grokbot-transcript.jsonl（或 pages 目录）
++  [ ] 主 Agent 按二½ 翻页：尾→头（before=firstIndex）→ tip 再取一次 → pages 目录
++  [ ] 拿到 oldest-first 的 grokbot-transcript.jsonl（或直接 --from-pages）
+   [ ] python3 bot_to_grok_build.py --transcript ... --out ... --cwd /home/joeking --title "..."
+   [ ] 记下 stdout 里的 session_id
+   [ ] 只把 summary.json + updates.jsonl 拷进
+diff --git a/slave_daemon/slave_hybrid.c b/slave_daemon/slave_hybrid.c
+index c4a88bdf3..db99e7a6b 100644
+--- a/slave_daemon/slave_hybrid.c
++++ b/slave_daemon/slave_hybrid.c
+@@ -2626,6 +2626,17 @@ kvm_state_rejected:;
+         uint8_t tx[sizeof(ack_hdr) + sizeof(ack)];
+         memcpy(tx, &ack_hdr, sizeof(ack_hdr));
+         memcpy(tx + sizeof(ack_hdr), &ack, sizeof(ack));
++        {
++            static int __errack = 0;
++            if (__errack < 16) {
++                fprintf(stderr,
++                        "[Slave ErrorAck] vcpu init/state failed state=%d "
++                        "vcpu_fd=%d kvm_run=%p req=%llu\n",
++                        state_import_result, t_vcpu_fd, (void *)t_kvm_run,
++                        (unsigned long long)hdr->req_id);
++                __errack++;
++            }
++        }
+         if (capture_local_executor_ack(&ack)) {
+             return;
+         }
+@@ -5561,6 +5572,12 @@ int wavevm_executor_runtime_main(
+                 executor_publish_startup_state(EXECUTOR_FAILED);
+                 return 1;
+             }
++            fprintf(stderr,
++                    "[RuntimeGate] KVM page cache installed records=%llu "
++                    "timeout_ms=%llu active=%d\n",
++                    (unsigned long long)cache_config.max_page_records,
++                    (unsigned long long)cache_config.completion_timeout_ms,
++                    wvm_kvm_page_cache_global_active());
+         }
+         printf("[Hybrid] Mode: KVM FAST PATH. Listening on %s:%d\n",
+                g_executor_local_only ? "127.0.0.1" : "0.0.0.0",
+diff --git a/tests/control-plane/s6_cell_common.sh b/tests/control-plane/s6_cell_common.sh
+index aef17c0a6..7fbf24803 100755
+--- a/tests/control-plane/s6_cell_common.sh
++++ b/tests/control-plane/s6_cell_common.sh
+@@ -228,12 +228,27 @@ note=probe exited 0; see dataplane_detail.txt for path honesty"
+ production_typed_dispatch=FAIL
+ note=see dataplane_detail.txt"
+                 echo "s6: dataplane probe FAILED" >&2
++                # Re-harvest agent.log so typed ingress / VCPU-RUN lines are visible.
++                s6_copy_evidence "$agent_log" "agent.log"
++                if [[ -f "$agent_log" ]]; then
++                    grep -E 'Typed Ingress|VCPU-RUN|WVM-EXECUTOR-BRIDGE|page cache|RuntimeGate|Mode:' \
++                        "$agent_log" 2>/dev/null | tail -n 80 \
++                        >"${s6_evidence_dir:-$tmpdir}/agent_typed_snippets.txt" || true
++                fi
+                 return 1
+             fi
+         else
+             s6_write_evidence_file "dataplane.txt" "dataplane_probe=SKIP_no_helper
+ note=N4/R3: SKIP is not full dataplane PASS"
+         fi
++        # Re-harvest after dataplane so typed-era stderr is in evidence (create-time
++        # copy above is intentionally early for manifest/identity harvest).
++        s6_copy_evidence "$agent_log" "agent.log"
++        if [[ -f "$agent_log" ]]; then
++            grep -E 'Typed Ingress|VCPU-RUN|WVM-EXECUTOR-BRIDGE|page cache|RuntimeGate|Mode:' \
++                "$agent_log" 2>/dev/null | tail -n 80 \
++                >"${s6_evidence_dir:-$tmpdir}/agent_typed_snippets.txt" || true
++        fi
+     fi
+ 
+     if [[ "$s6_require_stop" != "1" ]]; then
+diff --git a/tests/control-plane/s6_dataplane_typed_run.c b/tests/control-plane/s6_dataplane_typed_run.c
+index 75fd54012..bb79c48e2 100644
+--- a/tests/control-plane/s6_dataplane_typed_run.c
++++ b/tests/control-plane/s6_dataplane_typed_run.c
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/ioctl.h>
+ #include <sys/mman.h>
+ #include <sys/socket.h>
+ #include <sys/stat.h>
+@@ -35,6 +36,7 @@
+ #include "wavevm_runtime_gate.h"
+ #include "wavevm_vcpu_handoff.h"
+ #include "wavevm_x86_context.h"
++#include "wavevm_kvm_state.h"
+ 
+ /* QEMU DESC_* for real-mode TCG segments. */
+ #define DESC_P_MASK (1u << 15)
+@@ -101,10 +103,120 @@ static void plant_guest_store(uint8_t *page, uint32_t marker, uint32_t store_gpa
+     }
+ }
+ 
+-static void fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
++/*
++ * Page-cache RAM snapshot fetches authoritative directory bytes before
++ * KVM_RUN. Planting only into SHM is not a versioned commit (memory-
++ * consistency: directory owns page bytes). Publish the planted page via
++ * production MSG_MEM_WRITE to the node data ingress so the subsequent
++ * snapshot installs real instruction bytes instead of implicit zeros.
++ */
++static int publish_planted_page_to_directory(
++    const uint8_t *ram, unsigned long gpa, unsigned directory_port,
++    uint32_t vm_id, uint32_t local_vnode)
++{
++    uint8_t tx[sizeof(struct wvm_header) + sizeof(uint64_t) + WVM_PAGE_BYTES];
++    struct wvm_header *hdr = (struct wvm_header *)tx;
++    uint64_t *gpa_be;
++    struct sockaddr_in dst;
++    int sock = -1;
++    ssize_t sent;
++    uint64_t page_gpa = (uint64_t)gpa & ~(uint64_t)(WVM_PAGE_BYTES - 1U);
++
++    /* Directory/MSG_MEM_WRITE lands on node_runtime_data_port — never the
++     * gateway typed-ingress used for vCPU_RUN when via_gateway=1. */
++    if (!ram || directory_port == 0 || directory_port > 65535) {
++        fprintf(stderr, "publish_planted_page: bad args\n");
++        return -1;
++    }
++    memset(tx, 0, sizeof(tx));
++    hdr->magic = htonl(WVM_MAGIC);
++    hdr->msg_type = htons(MSG_MEM_WRITE);
++    hdr->payload_len = htons((uint16_t)(sizeof(uint64_t) + WVM_PAGE_BYTES));
++    if (wvm_header_pack_src(hdr, vm_id, local_vnode) != 0) {
++        fprintf(stderr, "publish_planted_page: pack_src failed\n");
++        return -1;
++    }
++    hdr->target_id = htonl(wvm_wire_target(vm_id, local_vnode));
++    hdr->req_id = WVM_HTONLL(0x534D505542ULL ^ (uint64_t)getpid()); /* 'SMPUB' */
++    hdr->qos_level = 0;
++    hdr->flags = (uint8_t)(hdr->flags | WVM_FLAG_NEED_ACK);
++    gpa_be = (uint64_t *)(tx + sizeof(*hdr));
++    *gpa_be = WVM_HTONLL(page_gpa);
++    memcpy(tx + sizeof(*hdr) + sizeof(uint64_t), ram + page_gpa, WVM_PAGE_BYTES);
++    hdr->crc32 = 0;
++    hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
++
++    sock = socket(AF_INET, SOCK_DGRAM, 0);
++    if (sock < 0) {
++        perror("publish_planted_page socket");
++        return -1;
++    }
++    memset(&dst, 0, sizeof(dst));
++    dst.sin_family = AF_INET;
++    dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
++    dst.sin_port = htons((uint16_t)directory_port);
++    sent = sendto(sock, tx, sizeof(tx), MSG_NOSIGNAL, (struct sockaddr *)&dst,
++                  sizeof(dst));
++    close(sock);
++    if (sent != (ssize_t)sizeof(tx)) {
++        fprintf(stderr, "publish_planted_page: sendto failed sent=%zd errno=%d\n",
++                sent, errno);
++        return -1;
++    }
++    printf("published_planted_page gpa=0x%llx bytes=%u directory_port=%u "
++           "vm=%u vnode=%u\n",
++           (unsigned long long)page_gpa, (unsigned)WVM_PAGE_BYTES, directory_port,
++           vm_id, local_vnode);
++    /* Directory commit is sync before ACK; allow local PAGE_PUSH to settle. */
++    sleep_ms(50);
++    return 0;
++}
++
++/*
++ * Production KVM handoff requires a schema-complete extended state (FPU/
++ * LAPIC/events/MP/debug/system MSRs + CPUID). A zeroed architectural-only
++ * stub encodes on the wire but fails wvm_kvm_extended_state_validate on the
++ * executor — the Oct28 2864-byte probe predated that gate.
++ */
++static int fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
+ {
+     struct kvm_sregs sregs;
++    struct kvm_enable_cap cap = { .cap = KVM_CAP_SPLIT_IRQCHIP };
++    int kvm_fd = -1, vm_fd = -1, cpu_fd = -1;
++    int result = -1;
++
+     memset(ctx, 0, sizeof(*ctx));
++    cap.args[0] = 24;
++    kvm_fd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
++    if (kvm_fd < 0 || (vm_fd = ioctl(kvm_fd, KVM_CREATE_VM, 0)) < 0 ||
++        ioctl(vm_fd, KVM_ENABLE_CAP, &cap) < 0 ||
++        (cpu_fd = ioctl(vm_fd, KVM_CREATE_VCPU, 0)) < 0) {
++        fprintf(stderr,
++                "fill_kvm_prot32: cannot open ephemeral KVM vCPU errno=%d\n",
++                errno);
++        goto out;
++    }
++    /* Minimal host-legal CPUID; capture fills the rest of extended state. */
++    ctx->cpuid_count = 2;
++    ctx->cpuid[0].function = 0;
++    ctx->cpuid[0].eax = 1;
++    ctx->cpuid[0].ebx = 0x756e6547;
++    ctx->cpuid[0].edx = 0x49656e69;
++    ctx->cpuid[0].ecx = 0x6c65746e;
++    ctx->cpuid[1].function = 1;
++    ctx->cpuid[1].eax = 0x663;
++    ctx->cpuid[1].edx = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 8) |
++                        (1U << 9) | (1U << 11) | (1U << 15) | (1U << 16) |
++                        (1U << 23) | (1U << 24) | (1U << 25) | (1U << 26);
++    if (wvm_kvm_cpuid_check_host(kvm_fd, ctx) != 0 ||
++        wvm_kvm_cpuid_import(cpu_fd, ctx) != 0 ||
++        wvm_kvm_extended_state_capture(cpu_fd, ctx) != 0) {
++        fprintf(stderr,
++                "fill_kvm_prot32: cpuid/extended capture failed errno=%d\n",
++                errno);
++        goto out;
++    }
++    ctx->mp_state = KVM_MP_STATE_RUNNABLE;
+     ctx->rip = gpa;
+     ctx->rsp = gpa + 0x1000;
+     ctx->rflags = 0x2;
+@@ -137,9 +249,19 @@ static void fill_kvm_prot32(wvm_kvm_context_t *ctx, uint64_t gpa)
+     sregs.idt.base = 0;
+     sregs.idt.limit = 0xffff;
+     sregs.cr0 = 0x60000011ULL;
++    sregs.apic_base = 0xfee00900ULL;
+     memcpy(ctx->sregs_data, &sregs,
+            sizeof(sregs) < sizeof(ctx->sregs_data) ? sizeof(sregs)
+                                                    : sizeof(ctx->sregs_data));
++    result = 0;
++out:
++    if (cpu_fd >= 0)
++        close(cpu_fd);
++    if (vm_fd >= 0)
++        close(vm_fd);
++    if (kvm_fd >= 0)
++        close(kvm_fd);
++    return result;
+ }
+ 
+ static void fill_tcg_realmode(wvm_tcg_context_t *ctx, uint64_t gpa)
+@@ -352,9 +474,23 @@ int main(int argc, char **argv)
+                       backend == WVM_VCPU_BACKEND_TCG);
+     printf("code_at_gpa=0x%lx store_gpa=0x%x marker=0x%lx\n", gpa, store_gpa,
+            marker);
++    /*
++     * KVM page-cache snapshot would otherwise fault-materialize implicit
++     * directory zeros over this SHM plant. Publish first (same page as
++     * code+store at 0x2000/0x2020).
++     */
++    if (publish_planted_page_to_directory(
++            ram, gpa, (unsigned)man->launch_plan.node_runtime_data_port,
++            man->vm_id, disp->local_primary.destination_vnode) != 0) {
++        fprintf(stderr, "directory publish of planted page failed\n");
++        goto out;
++    }
+ 
+     if (backend == WVM_VCPU_BACKEND_KVM) {
+-        fill_kvm_prot32(&kvm_ctx, gpa);
++        if (fill_kvm_prot32(&kvm_ctx, gpa) != 0) {
++            fprintf(stderr, "kvm context fill failed\n");
++            goto out;
++        }
+         if (wvm_x86_context_encode(backend, fields, &kvm_ctx, sizeof(kvm_ctx),
+                                    context, sizeof(context), &context_bytes,
+                                    error, sizeof(error)) != 0) {
+diff --git a/tests/control-plane/test_coordinator.sh b/tests/control-plane/test_coordinator.sh
+old mode 100755
+new mode 100644
+index 722de931b..77b693067
+--- a/tests/control-plane/test_coordinator.sh
++++ b/tests/control-plane/test_coordinator.sh
+@@ -41,6 +41,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L "${extra_flags[@]}"
+     "$repo_root/common_include/wavevm_membership_control.c" \
+     "$repo_root/common_include/wavevm_envelope.c" \
+     "$repo_root/ctl_tool/admission_workspace.c" \
++    "$repo_root/common_include/wavevm_admission_transport.c" \
+     "$repo_root/ctl_tool/admission_readiness.c" \
+     "$repo_root/tests/control-plane/test_coordinator.c" \
+     -pthread -Wl,--wrap=fsync -Wl,--wrap=write -o "$tmpdir/test_coordinator"
+diff --git a/tests/control-plane/test_goal4_executor_remote_memory.c b/tests/control-plane/test_goal4_executor_remote_memory.c
+index 102bda2c9..2e31dac9c 100644
+--- a/tests/control-plane/test_goal4_executor_remote_memory.c
++++ b/tests/control-plane/test_goal4_executor_remote_memory.c
+@@ -443,6 +443,7 @@ static int commit_page(void *opaque, uint64_t gpa, uint64_t base_version,
+ {
+     struct remote_state *state = opaque;
+ 
++    (void)source_shared_backing;
+     if (!state || !state->directory_store_initialized) {
+         return -EINVAL;
+     }
+@@ -490,7 +491,6 @@ static int complete_remote_fault(
+     (void)directory_node_instance_id;
+     (void)data;
+     (void)data_bytes;
+-    (void)source_shared_backing;
+     (void)error;
+     (void)error_len;
+     return 0;

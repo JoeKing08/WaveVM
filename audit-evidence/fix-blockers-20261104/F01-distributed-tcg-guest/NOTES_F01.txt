@@ -1,0 +1,29 @@
+F01 concurrent distributed TCG guest correctness (Asia/Shanghai 2026-11-04 21:44:55 CST)
+
+Repro this turn (post F05/F06/F07):
+  Path: /workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/s56-repro-214218
+  Harness: tests/e2e/test_guest_smoke.sh flat/require-tcg -smp 2 split=1
+  result.txt: guest_login=MISSING 
+  Serial: BUG kernel NULL pointer dereference @ ~11s (null_deref_snip.txt)
+  Not the exact s56 NX-fetch panic this run; still fails before cirros login.
+  F05–F07 memory/lease fixes did not clear guest boot failure.
+
+Prior anchors (20261103):
+  s55: scheduling while atomic + NULL in copy_process
+  s56: NX instruction-fetch → panic; guest_login=MISSING
+
+Next exact step:
+  1) Diff this serial/snip vs s55/s56 for common bad GPA / TB / APIC owner path
+  2) Correlate WVM-TCG-* lines in vm.log around null deref (APIC-OWNER pause/resume,
+     PUSH-BARRIER, CR3) with guest RIP
+  3) Narrow with vcpus=1 vs split=0 control cell before deeper code change
+
+Status: FAIL (reproduced; guest_login MISSING). No MINIMUM_COMPLETE.
+tip=620cd762b dirty; no commit/push.
+
+=== JOE DEFER 2026-11-05 09:00:28 CST ===
+Joe: 撤退 — stop F01 triage/fix/code; leave PARTIAL.
+STATUS: PARTIAL — all-local PASS (f01-fix-alllocal-split2-083037 +
+  reconfirm-085750); distributed split=1 FAIL (f01-fix-split1-083257
+  stack-protector). STW experiment cells exist but F01 not closed.
+In-flight STW default patch in wavevm-cpu.c left dirty; not pursued.

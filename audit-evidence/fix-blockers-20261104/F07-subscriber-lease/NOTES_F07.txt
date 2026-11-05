@@ -1,0 +1,20 @@
+F07 subscriber lease + membership invalidate wiring (Asia/Shanghai 2026-11-04 21:41:28 CST)
+
+Proven this turn:
+  - ACTIVE→STALE via wvm_memory_service_invalidate_subscriber_instance
+  - membership UNREACHABLE/REMOVED → maybe_invalidate_subscribers_locked →
+    weak/auto wvm_memory_service_membership_failure_invalidate_hook →
+    global_invalidate_subscriber_instance (all runtimes)
+  - route_runtime retire hook → invalidate_subscribers_for_scope
+  - lease horizon: last_validated_at + completion_timeout → STALE/freed on reap
+  - tests/control-plane/test_memory_service.sh → PASS with EVID F07_* lines
+  - nm: T wvm_memory_service_invalidate_* + membership_failure_invalidate_hook
+
+Files: memory_service.c/.h, wavevm_membership_controller.c/.h,
+       wavevm_route_runtime.c/.h, test_memory_service.c
+
+Bound: ctl process without linked memory_service gets weak NULL / -ENOTCONN
+on global invalidate (by design). Same-process directory/node_runtime path PASS.
+
+Status: PASS (same-process membership→STALE + lease reap). No MINIMUM_COMPLETE.
+tip=620cd762b dirty; no commit/push.

@@ -1865,6 +1865,173 @@ int main(void)
         puts("EVID memory_service_subscriber: leaf_instance=303 next_hop_instance=202");
     }
 
+    /* F07: ACTIVE lease → STALE via invalidate API + membership hook + lease reap. */
+    {
+        struct wvm_memory_subscriber *target = NULL;
+        uint64_t rev_before = 0;
+        int found_active = 0;
+        int found_stale = 0;
+
+        for (size_t i = 0; i < service.subscriber_bucket_count && !target; i++) {
+            for (struct wvm_memory_subscriber *s = service.subscriber_buckets[i];
+                 s; s = s->next) {
+                if (s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE &&
+                    s->subscriber_physical_node_id == 99 &&
+                    s->subscriber_node_instance_id == 303 &&
+                    s->subscriber_runtime_instance_id == 2020) {
+                    target = s;
+                    break;
+                }
+            }
+        }
+        if (expect(target != NULL, "F07 precondition: ACTIVE leaf subscriber"))
+            return 1;
+        rev_before = target->qualification_revision;
+        if (expect(wvm_memory_service_invalidate_subscriber_instance(
+                       &service, 99, 303, 2020, NULL, error,
+                       sizeof(error)) == 0 &&
+                       target->state == WVM_MEMORY_SUBSCRIBER_STALE &&
+                       target->qualification_revision == rev_before + 1,
+                   "F07 invalidate_subscriber_instance ACTIVE→STALE"))
+            return 1;
+        puts("EVID F07_invalidate_instance: ACTIVE_to_STALE=1");
+
+        /* Re-qualify same leaf via typed read on local directory GPA 0. */
+        {
+            uint8_t operation_id[WVM_IDENTITY_ID_BYTES] = {0xf7};
+            state.send_count = 0;
+            memset(&read, 0, sizeof(read));
+            read.gpa = 0;
+            read.reply_destination_kind =
+                WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
+            read.reply_destination_scope = 99;
+            read.reply_destination_vnode = 1;
+            read.reply_node_instance_id = 303;
+            if (expect(wvm_mem_read_encode(&read, read_payload, error,
+                                           sizeof(error)) == 0,
+                       "F07 encode read for membership invalidate"))
+                return 1;
+            fill_remote_read_request(&projection, operation_id, read_payload,
+                                     sizeof(read_payload), &inbound);
+            if (expect(wvm_memory_service_dispatch(&service, &inbound, error,
+                                                   sizeof(error)) == 0,
+                       "F07 read re-qualifies subscriber for membership hook"))
+                return 1;
+        }
+        found_active = 0;
+        for (size_t i = 0; i < service.subscriber_bucket_count; i++) {
+            for (const struct wvm_memory_subscriber *s =
+                     service.subscriber_buckets[i];
+                 s; s = s->next) {
+                if (s->subscriber_physical_node_id == 99 &&
+                    s->subscriber_node_instance_id == 303 &&
+                    s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE) {
+                    found_active = 1;
+                }
+            }
+        }
+        if (expect(found_active, "F07 re-qualified ACTIVE before membership hook"))
+            return 1;
+
+        /* Global service already installed earlier in main for QEMU boundary. */
+        wvm_memory_service_membership_failure_invalidate_hook(
+            NULL, 99, 303, /*desired*/ 0, /*health*/ 0);
+        found_active = 0;
+        found_stale = 0;
+        for (size_t i = 0; i < service.subscriber_bucket_count; i++) {
+            for (const struct wvm_memory_subscriber *s =
+                     service.subscriber_buckets[i];
+                 s; s = s->next) {
+                if (s->subscriber_physical_node_id != 99 ||
+                    s->subscriber_node_instance_id != 303) {
+                    continue;
+                }
+                if (s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||
+                    s->state == WVM_MEMORY_SUBSCRIBER_READING) {
+                    found_active = 1;
+                }
+                if (s->state == WVM_MEMORY_SUBSCRIBER_STALE) {
+                    found_stale = 1;
+                }
+            }
+        }
+        if (expect(!found_active && found_stale,
+                   "F07 membership_failure_invalidate_hook → STALE"))
+            return 1;
+        puts("EVID F07_membership_hook: global_invalidate_all_runtimes=1");
+
+        /* Lease expire: re-qualify, force last_validated past horizon, scope-invalidate+reap. */
+        {
+            struct wvm_memory_subscriber *lease = NULL;
+            struct wvm_vm_route_scope_key scope_key;
+            uint8_t operation_id[WVM_IDENTITY_ID_BYTES] = {0xf8};
+            uint32_t short_timeout;
+            int still_active = 0;
+            int saw_stale_or_gone = 0;
+
+            state.send_count = 0;
+            memset(&read, 0, sizeof(read));
+            read.gpa = 0;
+            read.reply_destination_kind =
+                WVM_ENVELOPE_ROUTE_DESTINATION_FRACTAL_VNODE;
+            read.reply_destination_scope = 99;
+            read.reply_destination_vnode = 1;
+            read.reply_node_instance_id = 303;
+            if (wvm_mem_read_encode(&read, read_payload, error, sizeof(error)))
+                return 1;
+            fill_remote_read_request(&projection, operation_id, read_payload,
+                                     sizeof(read_payload), &inbound);
+            if (wvm_memory_service_dispatch(&service, &inbound, error,
+                                            sizeof(error)))
+                return 1;
+            for (size_t i = 0; i < service.subscriber_bucket_count && !lease;
+                 i++) {
+                for (struct wvm_memory_subscriber *s =
+                         service.subscriber_buckets[i];
+                     s; s = s->next) {
+                    if (s->gpa == 0 &&
+                        s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE &&
+                        s->subscriber_physical_node_id == 99) {
+                        lease = s;
+                        break;
+                    }
+                }
+            }
+            if (expect(lease != NULL, "F07 lease subject ACTIVE"))
+                return 1;
+            scope_key = lease->route_scope_key;
+            short_timeout = service.config.completion_timeout_ms;
+            lease->last_validated_at = 1;
+            service.config.completion_timeout_ms = 1;
+            if (expect(wvm_memory_service_invalidate_subscribers_for_scope(
+                           &service, &scope_key, error, sizeof(error)) == 0,
+                       "F07 scope invalidate + reap path"))
+                return 1;
+            for (size_t i = 0; i < service.subscriber_bucket_count; i++) {
+                for (const struct wvm_memory_subscriber *s =
+                         service.subscriber_buckets[i];
+                     s; s = s->next) {
+                    if (s->gpa != 0 || s->subscriber_physical_node_id != 99)
+                        continue;
+                    if (s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||
+                        s->state == WVM_MEMORY_SUBSCRIBER_READING)
+                        still_active = 1;
+                    if (s->state == WVM_MEMORY_SUBSCRIBER_STALE)
+                        saw_stale_or_gone = 1;
+                }
+            }
+            if (!still_active)
+                saw_stale_or_gone = 1;
+            if (expect(saw_stale_or_gone && !still_active,
+                       "F07 lease horizon ACTIVE→STALE/freed"))
+                return 1;
+            service.config.completion_timeout_ms = short_timeout;
+            puts("EVID F07_lease_reap: ACTIVE_past_horizon_STALE_or_freed=1");
+        }
+        puts("EVID F07_subscriber_lease: invalidate=1 membership_hook=1 "
+             "lease_reap=1");
+    }
+
     if (test_subscriber_capacity(&config, error, sizeof(error))) {
         fprintf(stderr, "subscriber capacity: %s\n", error);
         return 1;

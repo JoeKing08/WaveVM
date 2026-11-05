@@ -2412,7 +2412,8 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
         if (wavevm_user_mode_enabled() && start_gpa == 0 &&
             g_user_shm_fd >= 0) {
             if (g_user_shm_join_only) {
-                int jrc = wavevm_join_shared_ram_ptr(hva, g_user_shm_size,
+                /* F05 local: NUMA primary section size, not full ms->ram_size */
+                int jrc = wavevm_join_shared_ram_ptr(hva, size,
                                                      g_user_shm_fd);
                 /*
                  * G2: only proven shared MAP_FIXED join may enable coherent.
@@ -2430,7 +2431,8 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
                     wavevm_user_mem_set_tcg_shm_coherent(0);
                 }
             } else {
-                int arc = wavevm_attach_shared_ram_ptr(hva, g_user_shm_size,
+                /* F05 local: NUMA primary section size, not full ms->ram_size */
+                int arc = wavevm_attach_shared_ram_ptr(hva, size,
                                                       g_user_shm_fd);
                 /*
                  * G2: coherent only after attach succeeds. Same-host helpers

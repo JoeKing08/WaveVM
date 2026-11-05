@@ -1,0 +1,9 @@
+F01 CURRENT (Asia/Shanghai deferred by Joe 2026-11-05)
+tip=620cd762b dirty; no commit/push; no MINIMUM_COMPLETE
+
+STATUS: PARTIAL — Joe deferred further F01 work (撤退).
+  all-local: PASS (f01-fix-alllocal-split2-083037, reconfirm-085750)
+  distributed split=1: FAIL (f01-fix-split1-083257 stack-protector ~0.62s)
+  STW cells (f01-stw-*/f01-fix-split1-stwdefault-*) not used to close F01.
+
+NEXT: F09 live dual-VM delayed cell; then F05 dual-host if feasible.

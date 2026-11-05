@@ -1,0 +1,14 @@
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+seed evidence: live-probe tcg=3 kvm=3 kern=4 records=4
+s6 seed flags='--live-probe' digest_prefix=b759eefa82d1b33c...
+compute-only ACTIVE; probing FRACTAL fail-closed without gateway
+fail-closed probe: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+FRACTAL without gateway fail-closed: PASS
+gateway+compute ACTIVE; submitting FRACTAL CREATE_VM
+attempt=0 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=16828080187727473030
+status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=16828080187727473030
+node_runtime_data_port=46041
+local_executor_service_port=46092
+s6 dataplane probe PASS_PRODUCTION_TYPED cell=fractal_kvm backend=require-kvm vm_id=257
+s6 STOP: status=0 recorded_state=17 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=16828080187727473030
+FRACTAL CREATE_VM prepare→activate→commit→RUNNING: PASS backend=require-kvm (status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=16828080187727473030)

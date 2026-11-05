@@ -1,0 +1,11 @@
+F01 split=1 distributed TCG reconfirm after user-mem fix (Asia/Shanghai)
+cell=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/f01-fix-split1-083257
+tip=620cd762b dirty
+qemu mtime=2026-11-05 08:30:24 CST (same fixed binary as all-local PASS)
+config: WVM_GUEST_SPLIT=1 WVM_CREATE_VCPUS=2 require-tcg flat boot_timeout=240 ssh_port=2232
+guest_login=MISSING
+serial_bytes=10162 frozen after early panic (~0.62s guest)
+panic: Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: schedule_timeout+0x10e/0x140
+COMPARE prior s56-repro-214218: NULL in process_one_work+0x34 ~11s — different failure mode after fix; still FAIL before login
+remote_done advances (cpu1 remote_done=2 seen in harness tail) — distributed path exercised
+F01 status after this cell: PARTIAL (all-local PASS restored; distributed split=1 still FAIL)

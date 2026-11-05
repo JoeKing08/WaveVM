@@ -1,0 +1,25 @@
+F09 owner-lock concurrency evidence 20261105-095248 Asia/Shanghai
+tip: 620cd762b dirty (no commit/push)
+
+== Directed yield oracle ==
+test_f09_owner_lock_yield: PASS (prior)
+
+== Baseline dual Mode B (no delay, clean CREATE env) ==
+baseline-dual-mode-b-20261105-095035: PASS (vm1+vm2 RUNNING status=0/11)
+
+== Live delayed dual cell ==
+art: /workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F09-owner-lock-concurrency/live-delayed-dual-20261105-095219
+WVM_F09_RPC_DELAY_MS=1500 MAX=1 gated to QUERY_RUNTIME_READY after owner-lock yield
+guest_dual_create_vm1=PASS vm_id=256 RUNNING
+guest_dual_create_vm2=PASS vm_id=257 RUNNING
+rpc_delay_lines=1 overlap_heuristic=True overall=PASS
+marker: [WVM-F09-RPC-DELAY] ms=1500 msg=QUERY_RUNTIME_READY after_yield=1
+
+WHAT CHANGED (dirty tree):
+- ctl_tool: __thread control_owner_tls_yield_depth (fixes dual hang)
+- admission_transport: before/after_network + F09 delay knob (QUERY_RUNTIME_READY gated, capped)
+- log marker [WVM-F09-RPC-DELAY] for live-cell overlap detect
+- admission_receiver: restored F08 QUIESCE_RUNTIME path (wiped by checkout; reconstructed)
+
+STATUS: live delayed dual PASS (both RUNNING + overlap under yield delay).
+No MINIMUM_COMPLETE. F01 left PARTIAL deferred.

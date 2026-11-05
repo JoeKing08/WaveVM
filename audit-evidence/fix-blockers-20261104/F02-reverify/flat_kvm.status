@@ -1,0 +1,9 @@
+run_id=f02-flat-200654
+cell=flat_kvm
+rc=1
+elapsed_s=27
+class=unknown
+cleanup_ok=1
+log=/tmp/wavevm-f02-flat-kvm/flat_kvm.log
+note=ok
+invoked=1

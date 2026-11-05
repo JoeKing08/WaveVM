@@ -1,0 +1,60 @@
+[    0.110889] 	Rude variant of Tasks RCU enabled.
+[    0.110897] 	Tracing variant of Tasks RCU enabled.
+[    0.110958] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[    0.110980] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=2
+[    0.128501] NR_IRQS: 524544, nr_irqs: 440, preallocated irqs: 16
+[    0.136479] Console: colour *CGA 80x25
+[    0.137710] printk: console [tty1] enabled
+[    0.143745] printk: console [ttyS0] enabled
+[    0.144606] ACPI: Core revision 20210730
+[    0.148154] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    0.149584] APIC: Switch to symmetric I/O mode setup
+[    0.152592] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    0.169327] tsc: Marking TSC unstable due to TSCs unsynchronized
+[    0.169890] Calibrating delay loop (skipped), value calculated using timer frequency.. 6143.93 BogoMIPS (lpj=12287868)
+[    0.170156] pid_max: default: 32768 minimum: 301
+[    0.170847] LSM: Security Framework initializing
+[    0.171544] landlock: Up and running.
+[    0.171603] Yama: becoming mindful.
+[    0.173126] AppArmor: AppArmor initialized
+[    0.175050] Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.175176] Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.188094] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    0.188258] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    0.188520] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    0.188726] Spectre V2 : Mitigation: Retpolines
+[    0.188782] Spectre V2 : Spectre v2 / SpectreRSB mitigation: Filling RSB on context switch
+[    0.188886] Spectre V2 : Spectre v2 / SpectreRSB : Filling RSB on VMEXIT
+[    0.189598] Speculative Store Bypass: Vulnerable
+[    0.306562] Freeing SMP alternatives memory: 44K
+[    0.426017] smpboot: CPU0: AMD QEMU Virtual CPU version 2.5+ (family: 0x6, model: 0x6, stepping: 0x3)
+[    0.430765] Performance Events: PMU not available due to virtualization, using software events only.
+[    0.432341] rcu: Hierarchical SRCU implementation.
+[    0.437096] NMI watchdog: Perf NMI watchdog permanently disabled
+[    0.440229] smp: Bringing up secondary CPUs ...
+[    0.441922] x86: Booting SMP configuration:
+[    0.442023] .... node  #0, CPUs:      #1
+[    0.019865] calibrate_delay_direct() dropping min bogoMips estimate 3 = 10308253
+[    0.538290] smp: Brought up 1 node, 2 CPUs
+[    0.538487] smpboot: Max logical packages: 2
+[    0.538578] smpboot: Total of 2 processors activated (12208.96 BogoMIPS)
+[    0.622601] Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: schedule_timeout+0x10e/0x140
+[    0.624764] CPU: 0 PID: 14 Comm: rcu_sched Not tainted 5.15.0-71-generic #78-Ubuntu
+[    0.625012] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.14.0-0-g155821a1990b-prebuilt.qemu.org 04/01/2014
+[    0.625211] Call Trace:
+[    0.625533]  <TASK>
+[    0.625543]  show_stack+0x52/0x5c
+[    0.625543]  dump_stack_lvl+0x4a/0x63
+[    0.625543]  dump_stack+0x10/0x16
+[    0.625543]  panic+0x15c/0x334
+[    0.625543]  ? schedule_timeout+0x10e/0x140
+[    0.625543]  __stack_chk_fail+0x14/0x20
+[    0.625543]  schedule_timeout+0x10e/0x140
+[    0.625543]  ? __bpf_trace_tick_stop+0x20/0x20
+[    0.625543]  rcu_gp_fqs_loop+0xe5/0x330
+[    0.625543]  rcu_gp_kthread+0xa7/0x130
+[    0.625543]  ? rcu_gp_init+0x5f0/0x5f0
+[    0.625543]  kthread+0x12a/0x150
+[    0.625543]  ? set_kthread_struct+0x50/0x50
+[    0.625543]  ret_from_fork+0x22/0x30
+[    0.625543]  </TASK>

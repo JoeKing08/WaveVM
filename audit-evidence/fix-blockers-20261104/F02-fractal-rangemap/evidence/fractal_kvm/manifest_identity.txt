@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-fractal.A9OZeo/runtime/vm-257-1-1.manifest
+4adb4150cd36f61df8c780063e83f7ec36d238c98de6d104555d222bcfba4994  /tmp/wavevm-create-vm-fractal.A9OZeo/runtime/vm-257-1-1.manifest
+a76653237f5029ba897cb3bb5de17a8cf13f7ffb064dadb0589930ba6d7b9358  /tmp/wavevm-create-vm-fractal.A9OZeo/runtime/vm-257-1-1.manifest.dispatch
+95420f2ec51e46d8aa7700f864e05f7430e8e6010bc865fc882d0294e0f00a02  /tmp/wavevm-create-vm-fractal.A9OZeo/runtime/vm-257-1-1.manifest.route

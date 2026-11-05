@@ -12,6 +12,15 @@ int wvm_ctl_probe_runtime_ready(
     struct wvm_admission_transport *transport, char *error,
     size_t error_len);
 
+/* F08: QUIESCE_RUNTIME for one durable runtime entry of a failing VM. */
+int wvm_ctl_quiesce_runtime_execution(
+    struct wvm_control_plane *plane,
+    const struct wvm_admission_transaction_record *transaction,
+    const struct wvm_control_plane_runtime_manifest_entry *runtime_entry,
+    size_t member_capacity, uint32_t max_vcpus,
+    struct wvm_admission_transport *transport, char *error,
+    size_t error_len);
+
 int wvm_ctl_resume_runtime_readiness(
     struct wvm_control_plane *plane,
     const struct wvm_coordinator_transaction *transaction,

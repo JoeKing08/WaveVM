@@ -1,0 +1,20 @@
+[qemu-tcg-numa-wrapper] NUMA ram0=2048M ram1=1024M shm0=/dev/shm/wvm_fract_node0 shm1=/dev/shm/wvm_fract_node1
+[qemu-tcg-numa-wrapper] NUMA ram0=2048M ram1=1024M shm0=/dev/shm/wvm_fract_node0 shm1=/dev/shm/wvm_fract_node1
+[WaveVM-SHM] slave will attempt JOIN SHM '/wvm_fract_node0' size=0xc0000000 (coherent after proven map)
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x80000000 hva=0x7efa221d1000
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM] dedup region_add gpa=0 size=0x80000000 count=1
+[WaveVM-SHM] slave will attempt JOIN SHM '/wvm_fract_node0' size=0xc0000000 (coherent after proven map)
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x80000000 hva=0x77dfb61d1000
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM] dedup region_add gpa=0 size=0x80000000 count=1
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5

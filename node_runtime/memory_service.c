@@ -999,6 +999,24 @@ static void subscriber_reap_bucket_locked(struct wvm_memory_service *service,
     while (*cursor) {
         struct wvm_memory_subscriber *subscriber = *cursor;
 
+        /*
+         * F07: last_validated_at + completion_timeout_ms is the lease horizon.
+         * lease_or_observed_epoch is stamped at upsert for diagnostics and for
+         * wvm_memory_service_invalidate_subscriber_instance / scope retire.
+         * ACTIVE/READING past the horizon become STALE (must re-read to
+         * re-qualify). STALE/REMOVED past the horizon are freed so old
+         * incarnations cannot occupy the table forever.
+         */
+        if ((subscriber->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||
+             subscriber->state == WVM_MEMORY_SUBSCRIBER_READING) &&
+            horizon != 0 && subscriber->last_validated_at != 0 &&
+            now >= subscriber->last_validated_at &&
+            now - subscriber->last_validated_at >= horizon) {
+            subscriber->state = WVM_MEMORY_SUBSCRIBER_STALE;
+            if (subscriber->qualification_revision != UINT64_MAX)
+                subscriber->qualification_revision++;
+        }
+
         if ((subscriber->state == WVM_MEMORY_SUBSCRIBER_STALE ||
              subscriber->state == WVM_MEMORY_SUBSCRIBER_REMOVED) &&
             subscriber->last_validated_at != 0 && now >=
@@ -1162,6 +1180,112 @@ static void subscriber_mark_stale(struct wvm_memory_service *service,
         subscriber->last_validated_at = monotonic_milliseconds();
     }
     pthread_mutex_unlock(&service->subscriber_lock);
+}
+
+int wvm_memory_service_invalidate_subscriber_instance(
+    struct wvm_memory_service *service, uint32_t physical_node,
+    uint64_t node_instance, uint64_t runtime_instance,
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len)
+{
+    size_t i;
+    uint64_t now;
+
+    if (!service || physical_node == 0 || node_instance == 0) {
+        set_error(error, error_len,
+                  "V1 subscriber invalidate identity is invalid");
+        return -EINVAL;
+    }
+    now = monotonic_milliseconds();
+    pthread_mutex_lock(&service->subscriber_lock);
+    for (i = 0; i < service->subscriber_bucket_count; ++i) {
+        for (struct wvm_memory_subscriber *s = service->subscriber_buckets[i];
+             s; s = s->next) {
+            if (s->state == WVM_MEMORY_SUBSCRIBER_EMPTY ||
+                s->state == WVM_MEMORY_SUBSCRIBER_REMOVED) {
+                continue;
+            }
+            if (s->subscriber_physical_node_id != physical_node ||
+                s->subscriber_node_instance_id != node_instance) {
+                continue;
+            }
+            /* runtime_instance==0 → every runtime on this member instance. */
+            if (runtime_instance != 0 &&
+                s->subscriber_runtime_instance_id != runtime_instance) {
+                continue;
+            }
+            if (scope_key &&
+                !route_scope_key_equal(&s->route_scope_key, scope_key)) {
+                continue;
+            }
+            if (s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||
+                s->state == WVM_MEMORY_SUBSCRIBER_READING ||
+                s->state == WVM_MEMORY_SUBSCRIBER_STALE) {
+                s->state = WVM_MEMORY_SUBSCRIBER_STALE;
+                if (s->qualification_revision != UINT64_MAX)
+                    s->qualification_revision++;
+                s->last_validated_at = now;
+            }
+        }
+        subscriber_reap_bucket_locked(service, i, now);
+    }
+    pthread_mutex_unlock(&service->subscriber_lock);
+    return 0;
+}
+
+int wvm_memory_service_invalidate_subscribers_for_scope(
+    struct wvm_memory_service *service,
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len)
+{
+    size_t i;
+    uint64_t now;
+
+    if (!service || !scope_key || scope_key->vm_id == 0 ||
+        scope_key->vm_incarnation == 0) {
+        set_error(error, error_len,
+                  "V1 subscriber scope invalidate key is invalid");
+        return -EINVAL;
+    }
+    now = monotonic_milliseconds();
+    pthread_mutex_lock(&service->subscriber_lock);
+    for (i = 0; i < service->subscriber_bucket_count; ++i) {
+        for (struct wvm_memory_subscriber *s = service->subscriber_buckets[i];
+             s; s = s->next) {
+            if (s->state == WVM_MEMORY_SUBSCRIBER_EMPTY ||
+                s->state == WVM_MEMORY_SUBSCRIBER_REMOVED) {
+                continue;
+            }
+            if (!route_scope_key_equal(&s->route_scope_key, scope_key)) {
+                continue;
+            }
+            if (s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||
+                s->state == WVM_MEMORY_SUBSCRIBER_READING ||
+                s->state == WVM_MEMORY_SUBSCRIBER_STALE) {
+                s->state = WVM_MEMORY_SUBSCRIBER_STALE;
+                if (s->qualification_revision != UINT64_MAX)
+                    s->qualification_revision++;
+                s->last_validated_at = now;
+            }
+        }
+        subscriber_reap_bucket_locked(service, i, now);
+    }
+    pthread_mutex_unlock(&service->subscriber_lock);
+    return 0;
+}
+
+static void memory_service_on_route_scope_retired(
+    void *context, const struct wvm_route_snapshot_key *key)
+{
+    struct wvm_memory_service *service = context;
+    char error[128];
+
+    if (!service || !key) {
+        return;
+    }
+    error[0] = '\0';
+    (void)wvm_memory_service_invalidate_subscribers_for_scope(
+        service, &key->scope_key, error, sizeof(error));
 }
 
 static int subscriber_matches_writer(
@@ -2910,6 +3034,12 @@ int wvm_memory_service_global_install(
     }
     g_global_memory_service.service = service;
     pthread_mutex_unlock(&g_global_memory_service.lock);
+    /*
+     * F07: when this process's route_runtime retires a scope, mark matching
+     * directory subscribers STALE before a successor can be treated as current.
+     */
+    wvm_route_runtime_set_retire_hook(memory_service_on_route_scope_retired,
+                                      service);
     return 0;
 }
 
@@ -2921,6 +3051,7 @@ void wvm_memory_service_global_uninstall(
     pthread_mutex_lock(&g_global_memory_service.lock);
     if (g_global_memory_service.service == service) {
         g_global_memory_service.service = NULL;
+        wvm_route_runtime_set_retire_hook(NULL, NULL);
         pthread_cond_broadcast(&g_global_memory_service.capacity_changed);
         for (i = 0; i < WVM_MEMORY_SERVICE_MAX_PENDING; i++) {
             struct local_waiter_entry *waiter =
@@ -3438,6 +3569,63 @@ int wvm_memory_service_global_request_commit(
     return wvm_memory_service_global_request_commit_from_shared_backing(
         gpa, base_version, offset, data, data_bytes, operation_id,
         delivery_attempt_id, 0, ack, error, error_len);
+}
+
+int wvm_memory_service_global_invalidate_subscriber_instance(
+    uint32_t physical_node, uint64_t node_instance, uint64_t runtime_instance,
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len)
+{
+    struct wvm_memory_service *service;
+
+    pthread_mutex_lock(&g_global_memory_service.lock);
+    service = g_global_memory_service.service;
+    pthread_mutex_unlock(&g_global_memory_service.lock);
+    if (!service) {
+        set_error(error, error_len, "memory service is not installed");
+        return -ENOTCONN;
+    }
+    return wvm_memory_service_invalidate_subscriber_instance(
+        service, physical_node, node_instance, runtime_instance, scope_key,
+        error, error_len);
+}
+
+int wvm_memory_service_global_invalidate_subscribers_for_scope(
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len)
+{
+    struct wvm_memory_service *service;
+
+    pthread_mutex_lock(&g_global_memory_service.lock);
+    service = g_global_memory_service.service;
+    pthread_mutex_unlock(&g_global_memory_service.lock);
+    if (!service) {
+        set_error(error, error_len, "memory service is not installed");
+        return -ENOTCONN;
+    }
+    return wvm_memory_service_invalidate_subscribers_for_scope(
+        service, scope_key, error, error_len);
+}
+
+void wvm_memory_service_membership_failure_invalidate_hook(
+    void *context, uint32_t physical_node_id, uint64_t node_instance_id,
+    uint16_t desired_state, uint16_t health_state)
+{
+    char error[128];
+
+    (void)context;
+    (void)desired_state;
+    (void)health_state;
+    if (physical_node_id == 0 || node_instance_id == 0) {
+        return;
+    }
+    error[0] = '\0';
+    /*
+     * Membership failure/UNREACHABLE/REMOVED: drop every runtime lease for
+     * that member instance. -ENOTCONN is fine when ctl has no local directory.
+     */
+    (void)wvm_memory_service_global_invalidate_subscriber_instance(
+        physical_node_id, node_instance_id, 0, NULL, error, sizeof(error));
 }
 
 int wvm_memory_service_global_complete_commit(

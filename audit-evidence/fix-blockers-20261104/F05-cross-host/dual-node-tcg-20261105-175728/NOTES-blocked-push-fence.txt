@@ -1,0 +1,15 @@
+Asia/Shanghai 2026-11-05 ~18:08
+Result: FAIL/BLOCKED mid-run (pre-NUMA-fix restart)
+
+Evidence:
+- WVM-REMOTE cpu=2 x10 present
+- No [WVM-TCG-IPC] write CPU_RUN / IPC VCPU_RUN / RET
+- First handoff: flush=31812 then push-fence ret=-110 (ETIMEDOUT)
+- Subsequent flush ret=-5 (EIO) loop
+- master0: COMMIT_SYNC window-full drain; timeout gpa=0x13fdda000 dir=1 (ram1 high GPA)
+- B slave1: no guest_vcpu=2; only low 1G region_add at gpa=0
+
+Root cause hypothesis (acted on):
+FE q35 NUMA places ram1 at GPA 0x100000000; TCG helpers used -m NODE_MEM only
+(1G/2G at GPA 0). High-GPA PAGE_PUSH -> gpa_to_hva_safe=NULL; fence cannot complete.
+Fix staged: qemu-tcg-numa-wrapper + ci f05_export WVM_TCG_QEMU_NUMA=2048:1024.

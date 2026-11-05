@@ -1,0 +1,4 @@
+FE failed: devices/images/cirros missing (only artifacts/images had it).
+Fixed: ln -sfn artifacts/images/cirros-0.6.2-x86_64-disk.img -> devices/images/...
+Relaunching A with live Tailscale reuse; B hold left running.
+Timestamp: 2026-11-05 18:12:18 CST

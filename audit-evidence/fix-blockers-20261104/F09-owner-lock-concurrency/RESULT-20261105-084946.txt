@@ -1,0 +1,18 @@
+F09 owner-lock concurrency evidence 20261105-084946 Asia/Shanghai
+tip: 620cd762b dirty
+
+WHAT CHANGED:
+- wavevm_admission_transport: before_network/after_network around submit
+- ctl_tool: control_owner_* + yield drops owner lock during admission RPC
+- nested yield depth; per-VM fence on STOP + post-orch CREATE
+
+== Directed yield oracle ==
+test_f09_owner_lock_yield: PASS
+
+== Reservation four-concurrent ==
+rm-p7-concurrent-create: PASS
+NOTE: 4-way capacity + exclusive port/SHM lease fail-closed.
+
+STATUS: directed PASS (yield lets health in; no-yield blocks).
+Production wvm_ctl rebuilt with hooks installed.
+Full dual-VM delayed-participant live cell not run this turn → clear PARTIAL.

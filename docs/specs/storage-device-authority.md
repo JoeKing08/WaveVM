@@ -51,6 +51,18 @@ QEMU device authority -> local node runtime -> sidecar/gateway fabric
 No remote storage executor sends a guest completion directly to QEMU or a
 remote executor.
 
+### 2.1 Minimum WaveVM block-service device cardinality (Q01)
+
+The WaveVM block chunk store keys durable files by process identity prefix and
+LBA chunk id only. It does not map `device_index` onto distinct backends.
+Therefore Minimum admits **at most one** WaveVM block-service device assignment
+per VM (`storage_device_plan` / placement storage templates / local runtime
+assignments). A second `device_index` is rejected at plan validation, admission
+placement, and local block execution rather than silently aliasing the same
+chunk files. Ordinary QEMU-local disks that never enter this block-service path
+remain valid Minimum; remote multi-disk backend mapping is out of Minimum scope
+until a device→backend map exists.
+
 ## 3. Block Request Model
 
 The semantic request is:

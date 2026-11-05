@@ -1,0 +1,15 @@
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+vm=mode-b-vm1 attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15099064638885154220
+vm=mode-b-vm1 attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15099064638885154220
+vm=mode-b-vm2 attempt=0 status=14 recorded_state=9 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17840530999346380010
+vm=mode-b-vm2 attempt=1 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17840530999346380010
+killing Mode B vm1 admitted child=55857 (preserve vm2 child=55911)
+vm2_replay status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17840530999346380010
+N6: sibling VM2 still live at /dev/shm/wavevm_ram_wvm-v257-i1-g1-n801-58967adf9688cf89 after VM1 STOP attempt
+dual Mode B CREATE + isolation/teardown (distinct names; one-VM kill preserves other): PASS
+  vm1=status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=15099064638885154220
+  vm2=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17840530999346380010
+  shm1=/wavevm_ram_wvm-v256-i1-g1-n801-b2f36bb7dcf00287 shm2=/wavevm_ram_wvm-v257-i1-g1-n801-58967adf9688cf89
+  sock1=/tmp/wvm_user_wvm-v256-i1-g1-n801-b2f36bb7dcf00287.sock sock2=/tmp/wvm_user_wvm-v257-i1-g1-n801-58967adf9688cf89.sock
+  killed_child=55857 preserved_child=55911
+  vm2_replay=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=17840530999346380010

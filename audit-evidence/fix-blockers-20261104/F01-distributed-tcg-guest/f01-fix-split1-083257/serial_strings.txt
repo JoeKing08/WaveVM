@@ -1,0 +1,150 @@
+[    0.000000] Linux version 5.15.0-71-generic (buildd@lcy02-amd64-044) (gcc (Ubuntu 11.3.0-1ubuntu1~22.04.1) 11.3.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #78-Ubuntu SMP Tue Apr 18 09:00:29 UTC 2023 (Ubuntu 5.15.0-71.78-generic 5.15.92)
+[    0.000000] Command line: LABEL=cirros-rootfs ro console=tty1 console=ttyS0
+[    0.000000] KERNEL supported cpus:
+[    0.000000]   Intel GenuineIntel
+[    0.000000]   AMD AuthenticAMD
+[    0.000000]   Hygon HygonGenuine
+[    0.000000]   Centaur CentaurHauls
+[    0.000000]   zhaoxin   Shanghai  
+[    0.000000] x86/fpu: x87 FPU will use FXSAVE
+[    0.000000] signal: max sigframe size: 1440
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000000ffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000ffdd000-0x000000000fffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] SMBIOS 2.8 present.
+[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.14.0-0-g155821a1990b-prebuilt.qemu.org 04/01/2014
+[    0.000000] tsc: Fast TSC calibration using PIT
+[    0.000000] tsc: Detected 3071.967 MHz processor
+[    0.002973] last_pfn = 0xffdd max_arch_pfn = 0x400000000
+[    0.003538] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.012691] found SMP MP-table at [mem 0x000f5a90-0x000f5a9f]
+[    0.017065] RAMDISK: [mem 0x0f743000-0x0ffccfff]
+[    0.017414] ACPI: Early table checksum verification disabled
+[    0.017851] ACPI: RSDP 0x00000000000F5870 000014 (v00 BOCHS )
+[    0.018080] ACPI: RSDT 0x000000000FFE115D 000034 (v01 BOCHS  BXPCRSDT 00000001 BXPC 00000001)
+[    0.018578] ACPI: FACP 0x000000000FFE1009 000074 (v01 BOCHS  BXPCFACP 00000001 BXPC 00000001)
+[    0.019087] ACPI: DSDT 0x000000000FFE0040 000FC9 (v01 BOCHS  BXPCDSDT 00000001 BXPC 00000001)
+[    0.019162] ACPI: FACS 0x000000000FFE0000 000040
+[    0.019218] ACPI: APIC 0x000000000FFE107D 000080 (v01 BOCHS  BXPCAPIC 00000001 BXPC 00000001)
+[    0.019250] ACPI: HPET 0x000000000FFE10FD 000038 (v01 BOCHS  BXPCHPET 00000001 BXPC 00000001)
+[    0.019278] ACPI: WAET 0x000000000FFE1135 000028 (v01 BOCHS  BXPCWAET 00000001 BXPC 00000001)
+[    0.019352] ACPI: Reserving FACP table memory at [mem 0xffe1009-0xffe107c]
+[    0.019376] ACPI: Reserving DSDT table memory at [mem 0xffe0040-0xffe1008]
+[    0.019386] ACPI: Reserving FACS table memory at [mem 0xffe0000-0xffe003f]
+[    0.019393] ACPI: Reserving APIC table memory at [mem 0xffe107d-0xffe10fc]
+[    0.019399] ACPI: Reserving HPET table memory at [mem 0xffe10fd-0xffe1134]
+[    0.019405] ACPI: Reserving WAET table memory at [mem 0xffe1135-0xffe115c]
+[    0.020945] No NUMA configuration found
+[    0.020970] Faking a node at [mem 0x0000000000000000-0x000000000ffdcfff]
+[    0.021419] NODE_DATA(0) allocated [mem 0x0f719000-0x0f742fff]
+[    0.024231] Zone ranges:
+[    0.024275]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.024346]   DMA32    [mem 0x0000000001000000-0x000000000ffdcfff]
+[    0.024362]   Normal   empty
+[    0.024378]   Device   empty
+[    0.024390] Movable zone start for each node
+[    0.024415] Early memory node ranges
+[    0.024434]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.024524]   node   0: [mem 0x0000000000100000-0x000000000ffdcfff]
+[    0.024660] Initmem setup node 0 [mem 0x0000000000001000-0x000000000ffdcfff]
+[    0.025222] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.025466] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.027926] On node 0, zone DMA32: 35 pages in unavailable ranges
+[    0.028489] ACPI: PM-Timer IO Port: 0x608
+[    0.028960] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    0.029272] IOAPIC[0]: apic_id 0, version 32, address 0xfec00000, GSI 0-23
+[    0.029710] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    0.030008] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    0.030051] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    0.030126] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    0.030139] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    0.030487] ACPI: Using ACPI (MADT) for SMP configuration information
+[    0.030536] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    0.030766] smpboot: Allowing 2 CPUs, 0 hotplug CPUs
+[    0.031357] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    0.031397] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x0009ffff]
+[    0.031417] PM: hibernation: Registered nosave memory: [mem 0x000a0000-0x000effff]
+[    0.031425] PM: hibernation: Registered nosave memory: [mem 0x000f0000-0x000fffff]
+[    0.031501] [mem 0x10000000-0xfffbffff] available for PCI devices
+[    0.031529] Booting paravirtualized kernel on bare hardware
+[    0.031745] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+[    0.032129] setup_percpu: NR_CPUS:8192 nr_cpumask_bits:2 nr_cpu_ids:2 nr_node_ids:1
+[    0.035547] percpu: Embedded 60 pages/cpu s208896 r8192 d28672 u1048576
+[    0.037009] Built 1 zonelists, mobility grouping on.  Total pages: 64221
+[    0.037035] Policy zone: DMA32
+[    0.037153] Kernel command line: LABEL=cirros-rootfs ro console=tty1 console=ttyS0
+[    0.037806] Unknown kernel command line parameters "LABEL=cirros-rootfs", will be passed to user space.
+[    0.038221] Dentry cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    0.038399] Inode-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    0.039530] mem auto-init: stack:off, heap alloc:on, heap free:off
+[    0.043188] Memory: 201676K/261612K available (16393K kernel code, 4383K rwdata, 10840K rodata, 3244K init, 6548K bss, 59676K reserved, 0K cma-reserved)
+[    0.047688] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=2, Nodes=1
+[    0.048520] ftrace: allocating 50600 entries in 198 pages
+[    0.104197] ftrace: allocated 198 pages with 4 groups
+[    0.110764] rcu: Hierarchical RCU implementation.
+[    0.110820] rcu: 	RCU restricting CPUs from NR_CPUS=8192 to nr_cpu_ids=2.
+[    0.110889] 	Rude variant of Tasks RCU enabled.
+[    0.110897] 	Tracing variant of Tasks RCU enabled.
+[    0.110958] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[    0.110980] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=2
+[    0.128501] NR_IRQS: 524544, nr_irqs: 440, preallocated irqs: 16
+[    0.136479] Console: colour *CGA 80x25
+[    0.137710] printk: console [tty1] enabled
+[    0.143745] printk: console [ttyS0] enabled
+[    0.144606] ACPI: Core revision 20210730
+[    0.148154] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    0.149584] APIC: Switch to symmetric I/O mode setup
+[    0.152592] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    0.169327] tsc: Marking TSC unstable due to TSCs unsynchronized
+[    0.169890] Calibrating delay loop (skipped), value calculated using timer frequency.. 6143.93 BogoMIPS (lpj=12287868)
+[    0.170156] pid_max: default: 32768 minimum: 301
+[    0.170847] LSM: Security Framework initializing
+[    0.171544] landlock: Up and running.
+[    0.171603] Yama: becoming mindful.
+[    0.173126] AppArmor: AppArmor initialized
+[    0.175050] Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.175176] Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.188094] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    0.188258] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    0.188520] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    0.188726] Spectre V2 : Mitigation: Retpolines
+[    0.188782] Spectre V2 : Spectre v2 / SpectreRSB mitigation: Filling RSB on context switch
+[    0.188886] Spectre V2 : Spectre v2 / SpectreRSB : Filling RSB on VMEXIT
+[    0.189598] Speculative Store Bypass: Vulnerable
+[    0.306562] Freeing SMP alternatives memory: 44K
+[    0.426017] smpboot: CPU0: AMD QEMU Virtual CPU version 2.5+ (family: 0x6, model: 0x6, stepping: 0x3)
+[    0.430765] Performance Events: PMU not available due to virtualization, using software events only.
+[    0.432341] rcu: Hierarchical SRCU implementation.
+[    0.437096] NMI watchdog: Perf NMI watchdog permanently disabled
+[    0.440229] smp: Bringing up secondary CPUs ...
+[    0.441922] x86: Booting SMP configuration:
+[    0.442023] .... node  #0, CPUs:      #1
+[    0.019865] calibrate_delay_direct() dropping min bogoMips estimate 3 = 10308253
+[    0.538290] smp: Brought up 1 node, 2 CPUs
+[    0.538487] smpboot: Max logical packages: 2
+[    0.538578] smpboot: Total of 2 processors activated (12208.96 BogoMIPS)
+[    0.622601] Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: schedule_timeout+0x10e/0x140
+[    0.624764] CPU: 0 PID: 14 Comm: rcu_sched Not tainted 5.15.0-71-generic #78-Ubuntu
+[    0.625012] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.14.0-0-g155821a1990b-prebuilt.qemu.org 04/01/2014
+[    0.625211] Call Trace:
+[    0.625533]  <TASK>
+[    0.625543]  show_stack+0x52/0x5c
+[    0.625543]  dump_stack_lvl+0x4a/0x63
+[    0.625543]  dump_stack+0x10/0x16
+[    0.625543]  panic+0x15c/0x334
+[    0.625543]  ? schedule_timeout+0x10e/0x140
+[    0.625543]  __stack_chk_fail+0x14/0x20
+[    0.625543]  schedule_timeout+0x10e/0x140
+[    0.625543]  ? __bpf_trace_tick_stop+0x20/0x20
+[    0.625543]  rcu_gp_fqs_loop+0xe5/0x330
+[    0.625543]  rcu_gp_kthread+0xa7/0x130
+[    0.625543]  ? rcu_gp_init+0x5f0/0x5f0
+[    0.625543]  kthread+0x12a/0x150
+[    0.625543]  ? set_kthread_struct+0x50/0x50
+[    0.625543]  ret_from_fork+0x22/0x30
+[    0.625543]  </TASK>

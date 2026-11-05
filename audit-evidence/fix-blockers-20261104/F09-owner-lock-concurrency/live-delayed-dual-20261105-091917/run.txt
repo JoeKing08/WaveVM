@@ -1,0 +1,16 @@
+s6: using tcg_helper_stub (real_qemu=0)
+F09 live cell art=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F09-owner-lock-concurrency/live-delayed-dual-20261105-091917 delay_ms=5000
+vm1 not RUNNING: status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2153993831198797750
+vm2 not RUNNING: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+guest_dual_create_vm1=FAIL
+guest_dual_create_vm2=FAIL
+vm1_id=256
+vm2_id=0
+rpc_delay_lines=1
+delay_ms=5000
+wall_s=17.406
+vm2_wall_s=0.234
+route_prepare_after_delay=1
+client_threads_after_delay=40
+overlap_heuristic=True
+overall=FAIL

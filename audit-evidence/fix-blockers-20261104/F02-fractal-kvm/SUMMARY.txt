@@ -1,0 +1,26 @@
+s6 matrix run_id=f02-fractal-kvm-203449 out_dir=/tmp/wavevm-f02-fractal-kvm-203449 have_kvm=1 have_wavevm=0
+cells_selected=fractal_kvm
+cell_deadline_s=120 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=620cd762b
+2026年 11月 04日 星期三 20:34:49 CST
+=== CELL fractal_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm bash tests/control-plane/test_create_vm_fractal.sh
+RESULT fractal_kvm FAIL rc=1 class=start cleanup_ok=1 note=ok elapsed=31s
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+seed evidence: live-probe tcg=3 kvm=3 kern=4 records=4
+s6 seed flags='--live-probe' digest_prefix=088af2d1c50198c4...
+compute-only ACTIVE; probing FRACTAL fail-closed without gateway
+fail-closed probe: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+FRACTAL without gateway fail-closed: PASS
+gateway+compute ACTIVE; submitting FRACTAL CREATE_VM
+attempt=0 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=9107103286855221098
+status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=9107103286855221098
+node_runtime_data_port=48794
+local_executor_service_port=48845
+dataplane FAIL: production typed short-exec (WVM1 ingress/gateway)
+s6: dataplane probe FAILED
+==== SUMMARY ====
+FAIL fractal_kvm rc=1
+totals pass=0 fail=1 skip=0 blocked=0 orphans_ignored=0 out=/tmp/wavevm-f02-fractal-kvm-203449 run_id=f02-fractal-kvm-203449
+selected=1 invoked=1
+MATRIX_RESULT=FAIL

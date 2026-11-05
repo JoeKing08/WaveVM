@@ -1,0 +1,12 @@
+F04 mode_a_one after /dev/wavevm loaded
+recorded_at=2026年 11月 04日 星期三 21:16:38 CST
+tip=620cd762b dirty
+have_kvm=1 have_wavevm=1
+Result: MATRIX mode_a_one PASS elapsed=39s cleanup_ok=1
+  create status=0 recorded_state=11
+  guest_shm_store=PASS marker=0x5266 store_gpa=0x2020 waited_ms=20
+  typed_short_exec=PASS backend=tcg via_gateway=0 dispatch_path=typed_WVM1_ingress
+  ACCEL=require-kernel (Mode A); not direct Hybrid UDP
+  stop status=0 recorded_state=17
+Source: /tmp/wavevm-f04-modea1 run_id=f04-modea1-211508
+MINIMUM_COMPLETE=NOT_CLAIMED

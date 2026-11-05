@@ -380,9 +380,32 @@ bits that would restart an already initialized AP.
 
 ### 8.1 Same-host coherent-SHM concurrent TCG and bounded `force_local`
 
-This subsection is the V1 **Minimum** contract for usable distributed
-multi-vCPU TCG on same-host coherent SHM. It realizes the architecture
-baseline Section 16 Minimum multi-vCPU TCG 应然.
+This subsection separates **Minimum** TCG execution-contract tests from
+**Extended** usable distributed multi-vCPU TCG guest acceptance, following
+architecture baseline Section 16. Minimum does not require a TCG guest OS to
+boot or reach login/SSH. It still requires real bounded execution and the
+shared CPU, memory, device, identity, and lifecycle semantics.
+
+#### Minimum execution-contract acceptance
+
+- Manifest-bound remote TCG executes real instructions and returns checked
+  CPU state and memory results in flat and fractal tests. KVM, a stub, and an
+  all-local replacement cannot stand in for a remote TCG executor.
+- Independent vCPUs make progress in bounded tests with per-vCPU ownership;
+  fences, interrupts, device-authority exits, and atomic-required exits obey
+  the contracts in this specification. A failed operation reports a bounded
+  typed failure rather than success with incorrect state.
+- Remote reads, writes/commits, stale-version resync, queue pressure, and STOP
+  are checked with explicit byte/version/ownership results. Local shared RAM
+  optimizations require proof of the actual participants' shared backing.
+- If `force_local` is used, its per-vCPU scope, 30 s / 90 s / 25 s bounds,
+  device bounce, and ordering below remain testable Minimum constraints.
+  Sustained guest progress and its remote-versus-local distribution are tested
+  by the Extended guest gate, not by requiring login in a contract test.
+
+The remaining guest-usability requirements in this subsection are Extended.
+They preserve the intended concurrent normal path; deferral does not authorize
+permanent global serialization or removal of TCG's semantic checks.
 
 **Contract intent**
 
@@ -397,7 +420,8 @@ baseline Section 16 Minimum multi-vCPU TCG 应然.
   scheduling optimization, or helper-thread MTTCG parity.
 - Fault injection, coordinator HA, live migration, automatic resharding,
   transparent recovery, and a full pluggable fault engine are **out of
-  scope** for this subsection's Minimum acceptance.
+  scope** for this subsection's TCG guest acceptance; they are not prerequisites
+  for either the Minimum contract tests or this Extended guest gate.
 
 Cross-process / full upstream MTTCG that removes the need for this fallback
 remains deferred architecture work (baseline Section 16 deferred list).
@@ -499,9 +523,9 @@ remote slices to resume. Ordinary TCG slices remain concurrent.
 A local interval under `force_local` still returns through the ordinary
 `VCPU_EXIT` / import path when it later hands off again.
 
-#### Acceptance evidence (required shape)
+#### Extended guest acceptance evidence (required shape)
 
-Minimum acceptance evidence for this subsection MUST show the following shape
+Extended TCG guest acceptance evidence MUST show the following shape
 (dated pass/fail tallies belong in the persistent plan or verification
 records, not here):
 
@@ -526,9 +550,9 @@ records, not here):
    solely because `force_local` exists or because the concurrent path passes
    the shape above.
 
-This Minimum acceptance shape does **not** require fault injection matrices,
-coordinator HA, live migration, automatic resharding, transparent recovery,
-or a full pluggable fault engine.
+This Extended TCG guest acceptance shape does **not** require fault injection
+matrices, coordinator HA, live migration, automatic resharding, transparent
+recovery, or a full pluggable fault engine.
 
 Dated run results, guest-image pass/fail tallies, and audit verdict IDs belong
 in the persistent plan or verification records, not in this specification.
@@ -574,9 +598,13 @@ in the persistent plan or verification records, not in this specification.
 - Concurrent independent vCPUs progress without a global handoff lock.
 - Executor overload and completion-cache expiry produce bounded typed failures,
   not a false success or indefinite retry loop.
-- Same-host coherent-SHM concurrent TCG meets the §8.1 Minimum acceptance
-  shape: guest login, CPU stress, remote vCPU/memory evidence, and STOP under
-  the concurrent main path (≥2 vCPUs); `force_local` remains exceptional
+- **Minimum:** TCG meets the Section 8.1 bounded execution-contract acceptance,
+  including actual remote instructions, independent vCPU progress, checked
+  memory/context results, bounded fallback/error behavior, and STOP. TCG
+  guest OS login/SSH is not part of this gate.
+- **Extended:** Same-host coherent-SHM concurrent TCG meets the Section 8.1 guest
+  acceptance shape: guest login, CPU stress, remote vCPU/memory evidence, and
+  STOP under the concurrent main path (≥2 vCPUs); `force_local` remains exceptional
   bounded fallback (arm/renew/cap/cooldown); NEED_LOCAL bounce is per-vCPU;
   disabling the fallback is explicit and withdraws softlock/IPI coverage
   claims; full upstream QEMU MTTCG performance and Extended fault/HA/migration

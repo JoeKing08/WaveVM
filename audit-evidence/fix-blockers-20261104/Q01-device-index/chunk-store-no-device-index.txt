@@ -1,0 +1,19 @@
+common_include/wavevm_block_chunk_store.h:25:int wvm_block_chunk_store_set_identity(const char *identity_prefix,
+common_include/wavevm_block_chunk_store.c:15:static char g_identity_prefix[256] = "";
+common_include/wavevm_block_chunk_store.c:42:int wvm_block_chunk_store_set_identity(const char *identity_prefix,
+common_include/wavevm_block_chunk_store.c:45:    if (!identity_prefix) {
+common_include/wavevm_block_chunk_store.c:46:        g_identity_prefix[0] = '\0';
+common_include/wavevm_block_chunk_store.c:49:    if (strlen(identity_prefix) >= sizeof(g_identity_prefix)) {
+common_include/wavevm_block_chunk_store.c:54:    for (const char *p = identity_prefix; *p; p++) {
+common_include/wavevm_block_chunk_store.c:62:    snprintf(g_identity_prefix, sizeof(g_identity_prefix), "%s",
+common_include/wavevm_block_chunk_store.c:63:             identity_prefix);
+common_include/wavevm_block_chunk_store.c:69:    return g_identity_prefix;
+common_include/wavevm_block_chunk_store.c:72:static int open_chunk(uint64_t chunk_id, int *fd_out, char *error,
+common_include/wavevm_block_chunk_store.c:78:    if (g_identity_prefix[0]) {
+common_include/wavevm_block_chunk_store.c:80:                 g_identity_prefix, (unsigned long long)chunk_id);
+common_include/wavevm_block_chunk_store.c:84:                     g_identity_prefix);
+common_include/wavevm_block_chunk_store.c:168:        if (open_chunk(chunk_id, &fd, error, error_len) != 0)
+common_include/wavevm_block_chunk_store.c:238:        if (open_chunk(chunk_id, &fd, error, error_len) != 0)
+common_include/wavevm_block_chunk_store.c:264:    if (open_chunk(chunk_id, &fd, error, error_len) != 0)
+common_include/wavevm_block_chunk_store.c:306:    if (g_identity_prefix[0])
+common_include/wavevm_block_chunk_store.c:307:        snprintf(dirpath, sizeof(dirpath), "%s/%s", g_chunk_dir, g_identity_prefix);

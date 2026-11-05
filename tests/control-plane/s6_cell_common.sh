@@ -228,11 +228,26 @@ note=probe exited 0; see dataplane_detail.txt for path honesty"
 production_typed_dispatch=FAIL
 note=see dataplane_detail.txt"
                 echo "s6: dataplane probe FAILED" >&2
+                # Re-harvest agent.log so typed ingress / VCPU-RUN lines are visible.
+                s6_copy_evidence "$agent_log" "agent.log"
+                if [[ -f "$agent_log" ]]; then
+                    grep -E 'Typed Ingress|VCPU-RUN|WVM-EXECUTOR-BRIDGE|page cache|RuntimeGate|Mode:' \
+                        "$agent_log" 2>/dev/null | tail -n 80 \
+                        >"${s6_evidence_dir:-$tmpdir}/agent_typed_snippets.txt" || true
+                fi
                 return 1
             fi
         else
             s6_write_evidence_file "dataplane.txt" "dataplane_probe=SKIP_no_helper
 note=N4/R3: SKIP is not full dataplane PASS"
+        fi
+        # Re-harvest after dataplane so typed-era stderr is in evidence (create-time
+        # copy above is intentionally early for manifest/identity harvest).
+        s6_copy_evidence "$agent_log" "agent.log"
+        if [[ -f "$agent_log" ]]; then
+            grep -E 'Typed Ingress|VCPU-RUN|WVM-EXECUTOR-BRIDGE|page cache|RuntimeGate|Mode:' \
+                "$agent_log" 2>/dev/null | tail -n 80 \
+                >"${s6_evidence_dir:-$tmpdir}/agent_typed_snippets.txt" || true
         fi
     fi
 

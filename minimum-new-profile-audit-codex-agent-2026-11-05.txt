@@ -1,0 +1,271 @@
+WaveVM 调整 TCG 交付边界后的 Minimum 独立审计
+日期：2026-11-05
+审计者：Codex agent
+
+一、结论与审计范围
+
+结论：将完整 TCG guest 验收移入 Extended 后，当前源码仍存在阻挡 Minimum
+完成的具体问题。本轮列出 7 项源码问题；不是把 TCG login 换个名字继续作为
+Minimum 门槛，也不是要求完成 HA、热迁移或完整故障矩阵。
+
+这是一次按新纲领进行的独立审计，不依赖其他 agent 的批准。本轮没有读取
+任何先前审计报告，也没有拿旧报告的结论、旧测试结果作为本轮证据。
+只核对现行纲领、当前源码、相关测试源码，并执行三个短测试。
+
+审计基点：HEAD 620cd762b34ec309d7dac1b6822ddeff34fe59be，加当前工作区改动。
+工作区原有大量未提交修改，本报告针对实际文件，不仅针对 HEAD。
+本轮修改仅为纲领边界与本报告，没有修生产代码、提交或推送。
+
+覆盖方式：architecture baseline、refactor roadmap 和 docs/specs 下全部
+11 份规范，按职责/成功语义/生产调用/验收边界逐域核对。每点只追到足以
+判断问题的程度；没有进行全项目逐行安全审计或长时间 guest 回归。
+
+二、本轮已经修改的交付边界
+
+以下文件已同步：
+  docs/wavevm-architecture-baseline.md
+  docs/wavevm-refactor-roadmap.md
+  docs/specs/vcpu-handoff.md
+  docs/specs/memory-consistency.md
+  docs/specs/runtime-manifest-lifecycle.md
+  docs/specs/kernel-accelerator.md
+  docs/specs/capability-fault-engines.md
+
+Minimum 保留：
+  1. KVM 的真实 guest login 或 SSH，且有远端 vCPU 和远端内存证据。
+  2. flat/fractal 的真实 TCG 指令执行、可核对的 CPU/内存结果、独立 vCPU
+     进展、handoff/fence、设备与原子退出、有限错误和 STOP/隔离。
+  3. Mode B 多 VM、同机多计算实例、Mode A 真 per-VM context、基本成员
+     生命周期、重启对账/补偿清理及原有成功语义。
+  4. 已启用 force_local 时的 per-vCPU 范围、时间上限、冷却与顺序约束。
+
+Extended 接收：
+  TCG 完整 guest OS 启动、login/SSH、持续多 vCPU guest 负载，以及在该负载
+  下证明并发远端执行是正常进展主路径。完整上游 MTTCG 性能是另一个后续
+  目标，不能和“TCG guest 可用”混为一谈。
+
+TCG 合同通过不等于 TCG guest OS 可用；包括 AUTO 选择 TCG 时，面向用户的
+能力说明也应明确这一边界。没有删除 TCG，亦没有降低内存字节、版本、
+所有权、隔离、错误报告等共享合同的正确性要求。
+
+三、有源码依据的阻塞项
+
+N01 [P1] 并发 CREATE 在网络让锁期间仍共享可重置的 admission 工作区
+
+位置：
+  ctl_tool/main.c:313，control_owner_before_network/after_network。
+  ctl_tool/main.c:511，CREATE 调用 orchestrator；约 532 行才加入 VM fence。
+  ctl_tool/main.c:1380，admission_workspace_reset。
+  ctl_tool/main.c:2113，单份 admission_workspace 绑定 authority_config。
+  common_include/wavevm_admission_authority_owner.c:47，owner_prepare_input。
+  common_include/wavevm_control_owner.c:229，每连接创建线程。
+
+问题：当前确实会在 RPC 期间释放 owner 锁，因此不再是“长时间持有全局锁”
+的问题。但多个请求仍复用 prepared_vm、prepared_route、activation、route
+transaction/snapshot、plan provider、capture 和 transport。另一个 CREATE
+可在第一个请求等待网络时 reset 同一组对象，释放/替换 capability evidence
+和 runtime profiles。第一个请求继续时可能读取另一 VM 的 manifest/route
+或失效引用。VM fence 的加入又晚于 orchestrator 的 prepare/activate RPC。
+
+影响：多 VM 并发创建、资源预留及 manifest/route 隔离不能因此判通过。
+
+方向：把可变输入及 transport 事务状态归到每次 admission/事务所有；在首次
+网络让锁前建立同 VM 操作 fence；仅在短临界区修改共享 inventory/journal。
+不能用恢复贯穿所有 RPC 的全局大锁代替这一修复。
+最小验证：两个真实生产 CREATE 交叠，一个停在 participant RPC，另一个
+继续；检查两套 manifest、route、reservation、结果身份不串，且无双分配。
+现有 owner-lock-yield 单元测试只证明锁能让出，不能证明工作区隔离。
+
+N02 [P1] TCG coherent SHM 快路仍以缺省环境变量代替实际共享 backing 证明
+
+位置：
+  wavevm-qemu/accel/wavevm/wavevm-user-mem.c:77。
+  node_runtime/main.c:139。
+  slave_daemon/slave_hybrid.c:4819。
+
+问题：coherent setter 只有在 FE/executor host ID 都合法、非零且不同时才拒绝；
+缺失或格式错误仍允许开启，并关闭 fault hook。runtime 导出 FE host 时还会
+退回 directory host 或当前 executor host；physical_host_id 缺失时退回逻辑
+physical_node_id。目录节点不必是 FE，逻辑计算节点也不等于物理宿主。
+相同 host ID 本身亦不证明两个进程映射的是同一共享 backing。
+
+影响：跨宿主参与者可能误走本机 coherent 路径，读到错误/过期页。这是仍在
+Minimum 的远端指令/内存合同问题，与是否要求 TCG OS login 无关。
+
+方向：从已准入身份、真实 FE/executor 位置和 backing 标识建立绑定；未得到
+肯定证明就走真实 fault/read/commit 路径，不能默认“同机”。
+最小验证：缺失/非法 host 证明、同 host 不同 backing 均不打开快路；已证明
+同 backing 才允许；跨 host 的短指令读写核对实际字节与版本。
+test_f05_coherent_host_scope.c 还把“缺 host ID 可 coherent”写成成功断言，
+所以该测试通过也不能关闭本项。
+
+N03 [P1] 必需成员失效的 quiesce 接线不能证明执行已被收住
+
+位置：
+  ctl_tool/main.c:1579，execution_fail_closed_hook。
+  common_include/wavevm_admission_runtime_agent.c:642，quiesce_one_runtime。
+  node_runtime/main.c:1563，child_execution_fail_closed；1598，child 信号安装。
+  common_include/wavevm_control_plane.c 的 execution_fail_closed 调用。
+
+问题：控制面已经有 QUIESCE_RUNTIME RPC，不能说“完全没实现”。但它对首个
+失败 participant 立即返回，后面的健康参与者没有机会被 quiesce。agent 只
+quiesce 自己进程的 slot gate，向 runtime child 发 SIGUSR1 后即回复成功。
+child_execution_fail_closed 已写出，却未注册为 SIGUSR1 handler；child 仅
+安装 SIGTERM/SIGINT。默认信号行为会终止进程，不是注释所称的 runtime gate
+有序 quiesce，也没有 in-flight drain 完成 ACK。
+
+影响：DEGRADED/FAILED 记账不等于存活执行方已停止接受工作。进程被信号杀死
+可以是部分 fail-stop，但不能被记成已完成合同要求的 quiesce/fence。
+
+方向：即使某个成员不可达，也要有界地处理其他可达参与者；让实际执行 gate
+及工作线程参与 quiesce，并在证实停止接单/所需 fence 后 ACK。若采用直接
+fail-stop，必须明确其失败结果和后续补偿，不能把发送信号当成功屏障。
+最小验证：两 participant 中第一个不可达，另一个不再执行新工作；运行中
+quiesce 不能只检查 journal 或 kill() 返回值。
+
+另需补证：roadmap §1.1 还要求 coordinator 消失时 fail closed。抽查到的
+runtime 主要监控 agent 父进程，未查到与实际 coordinator 丢失相连的执行
+资格失效路径。本轮不把“没搜到”另算一条已复现 bug；须以生产连接/租约的
+实际路径和一次有界断开测试给这条验收定论，不要求实现 coordinator HA。
+
+N04 [P1] KVM 自动前端和 guest 启动路径允许同 VM 出现两个 QEMU 前端进程
+
+位置：
+  master_core/main_wrapper.c:137，spawn_manifest_bound_qemu_frontend。
+  master_core/main_wrapper.c:2513，监听后启动 FE。
+  tests/e2e/test_guest_smoke.sh:113、238，先 CREATE RUNNING，再另起 guest FE。
+  common_include/wavevm_runtime_gate.c:736，wvm_runtime_gate_register。
+
+问题：runtime 为 KVM 自动启动一个 -S -nodefaults QEMU，注册后可发布 runtime
+ready；guest 脚本随后用同一 manifest/launch env 再起带磁盘/网卡的 QEMU。
+注册 gate 按连接分配 slot，没有限制 QEMU_FRONTEND 来自同一个进程。
+不能把 runtime READY 等同 guest login，也不能让第二个设备/机器权威不经
+显式所有权交接进入同一 VM。即使 paused FE 不执行 guest，也仍是独立机器
+实例；同一个真实 FE 的多条 IPC 连接与两个 FE 进程必须区分。
+
+方向：确定唯一 FE 的生产启动/配置/所有权流程。可以由 runtime 启动真正
+frontend，也可以先准备、再接收唯一外部 FE；不能靠额外 paused FE 补 readiness
+再启动另一个 guest。限制不同进程争用 FE 权威，同时保留同进程多连接。
+最小验证：同 manifest 第二个不同 FE PID 被拒；唯一 FE 完成 KVM guest
+启动、远端 CPU/内存访问及 STOP。
+
+补充：自动 FE stop 当前 SIGTERM 后直接 waitpid(...,0)，内层没有升级超时。
+外层 agent 已有 STOP 有界等待/失败记录，故不另称“整个 STOP 无超时”。
+修所有权时应一并使 FE 正常退出有界，避免外层只能强杀并留下 STOP incomplete。
+
+N05 [P2] subscriber 成员失效通知仍停留在进程内，过期回收未覆盖 publish
+
+位置：
+  common_include/wavevm_membership_controller.c:2341，weak invalidate hook。
+  ctl_tool/Makefile，控制面未链接 node_runtime/memory_service.c。
+  node_runtime/memory_service.c:993、1300、3574，lease/publish/global invalidate。
+
+问题：实际 membership controller 在 ctl 进程，真实目录 memory service 在
+runtime 进程。weak hook 至多操作本进程 global service，ctl 没有该 service；
+未见生产入口注册跨进程 subscriber 失效投递。新加函数本身不构成接线。
+另外 ACTIVE/READING lease 到期回收只在 upsert/显式 invalidate 等调用触发，
+publish 直接选取 ACTIVE/READING，没有先检查到期。只有更新而没有新 read 的
+页可继续保留并投递给已过期订阅者。
+
+影响：failed/rejoined 实例与退休作用域的 subscriber 生命周期、目录元数据
+有界性尚不能按规范验收。
+
+方向：把带 node/runtime instance 和 VM scope 的成员事件投递到实际目录
+runtime；保持 route-scope retirement 的精确范围；publish 前或定期执行
+过期检查。无需新增庞大事件平台。
+最小验证：ctl 与目录分进程，失败旧实例/重入新实例后，旧订阅不再参与
+投递，新实例必须重新 full read；只有持续 publish 也能让过期记录失效。
+
+N06 [P2] 生产 route 编译静默丢掉第 65 个以后的 ingress listener 覆盖
+
+位置：
+  common_include/wavevm_admission_authority_owner.c:123，owner_compile_route_plan。
+  common_include/wavevm_admission_route.c:216，leaf_next_hop_endpoint。
+
+问题：override_node_ids/data_ports 固定 64，listener_plan_count 超出后静默
+clamp 为 64。其余节点回退到 membership sidecar data_port，而不是已租给
+该 VM runtime 的 ingress port。大拓扑不能只在库里容纳 route 条目，生产
+编译时再悄悄用错 endpoint。
+
+方向：按显式预算提供足够的事务 workspace；若容量确实不支持，必须在
+发布前明确拒绝，不能静默截断。拒绝一个配置不等于已证明规范的规模验收。
+最小验证：65 份 listener plan，不需要 65 台机器；逐一核对生成端口。
+本轮 large-topology PASS 使用两个 NodeRecord、各多个 vnode，不覆盖本项。
+
+N07 [P2] block service READ 结果预算仅检查，执行前没有预留并发额度
+
+位置：
+  node_runtime/block_service.c:130，reserve_entry_locked。
+  node_runtime/block_service.c:584、603，execute 后才增加 retained_bytes。
+
+问题：多个独立队列 READ 可以同时在 retained_bytes 尚未增加时通过预算
+检查，解锁执行后各自保留结果，使 retention_bytes 上限失效。代码注释
+宣称“执行前预留结果预算”，但实际只预留 operation entry。
+
+方向：在接收时原子预占 READ 结果容量，完成时转成 retained，失败/释放时
+退还；无额度在执行前返回明确 backpressure。保留既有多队列并发。
+最小验证：小预算下并发两条 READ，至多一条获得额度；拒绝方的后端执行
+计数不增加，已完成请求仍可在 retention horizon 内正确重放。
+
+范围限定：Minimum 不要求另造远程磁盘，普通 QEMU-local disk 仍合法。
+本项只针对项目已暴露的 WaveVM block-service 路径；该路径使用时必须履行
+自身有界合同。当前已有单设备准入拒绝门，本轮不把多设备 alias 再报成漏洞。
+
+四、全纲领覆盖与尚待实跑的验收
+
+以下是覆盖记录，不是额外添加的架构任务，也不是宣告各域已验收通过。
+
+1. 架构与职责、统一 node runtime：检查 ctl/agent/runtime/executor/gateway
+   入口及 manifest gate。已存在实际接线；跨进程边界问题见 N01/N03/N05。
+2. canonical-record-schema、wire-ipc-abi：检查身份/digest、序列化与 namespace
+   capability 拒绝路径。coordinator 短测通过；未新增独立代码阻塞项。
+3. identity-routing：检查 VM/incarnation/scope 绑定及 flat/fractal 路由生成；
+   大 vnode 路由测试通过。生产 ingress endpoint 缺口见 N06。
+4. resource-placement-admission：检查数量准入、host overhead、physical_host
+   聚合、COMPACT/SPREAD、reservation 和生产并发入口。已有对应实现，N01
+   使并发成功语义不能仅凭顺序库测通过。
+5. cluster-membership-topology-lifecycle：检查注册/ACTIVE、cordon/drain、
+   gateway route 交接与 required-member health；N03/N05 阻挡失效收口。
+   busy drain 应明确拒绝，不要求透明迁移来完成 drain。
+6. runtime-manifest-lifecycle：检查 prepare/activate/readiness、STOP、重放/
+   补偿清理和父子进程；N01/N03/N04 相关。不能仅凭函数/测试存在宣告闭环。
+7. memory-consistency：检查权威读/commit/version、dedup/retention、fence、
+   subscriber、队列和共享 RAM 快路；短测通过，N02/N05 仍需修。
+8. vcpu-handoff：检查 CPU context/ownership、device/atomic exits、fallback
+   和 backend 分离；按新边界只要求 TCG 合同验证，不要求 OS login。
+9. kernel-accelerator：检查 per-context 身份/引用/映射/异步工作与 user-space
+   权威边界。未见应另立“重新实现多 context”的源码理由；本轮未加载模块，
+   不能把静态检查当 /dev/wavevm 双 context 动态验收。
+10. capability-fault-engines：检查能力准入、受限 fallback、KVM dirty/resync
+    和拒绝边界。完整插件化 fault engine、HA、迁移不纳入此次阻塞项。
+11. storage-device-authority：检查普通本地磁盘边界、WaveVM 单设备限制及
+    dedup/queue/retention；确认单设备拒绝门，预算问题见 N07。
+12. Phase 10 验收矩阵：Minimum 需要 flat/fractal 的真实 KVM guest，以及
+    TCG 指令合同、同机多实例、双 Mode B、真双 Mode A 的必要证据。
+    本轮没有重新执行这些完整单元格，不把“本轮未跑”冒充已复现失败。
+    修复后应先重跑受影响单元格，再用有效的当前树证据完成最终验收。
+
+本轮实际执行：
+  tests/control-plane/test_coordinator.sh                    PASS
+  tests/control-plane/test_memory_service.sh                 PASS
+  tests/control-plane/test_membership_large_topology.sh      PASS
+每项设置 45 秒上限，均正常完成。
+本轮日志：/tmp/wavevm-review-20261105.Y1nmss/
+日志目录只存这三个短测输出；没有生成 guest 大日志。
+
+large-topology 的准确含义：
+  flat：capture=2，routes=4100，admission/lookup PASS。
+  fractal：capture=2，routes=4102，admission/lookup PASS。
+它证明多 vnode 捕获/编译可越过 4096 项，不证明 4100 个物理成员完成入群。
+
+五、建议修复与收口顺序
+
+1. N01：先把 CREATE 事务 workspace 隔离，避免后续验证本身被并发串状态。
+2. N03/N04：收住执行失效和唯一 KVM frontend 的生产生命周期。
+3. N02/N05：修真实 backing 证明与目录 subscriber 的生产失效路径。
+4. N06/N07：修静默 endpoint 截断与并发结果预算。
+5. 每完成一条生产路径，编译并做一两个针对性验证，再推进下一条。
+   然后完成上节列出的 Minimum 当前树验收；不因本报告扩建故障平台。
+
+完整 TCG guest boot/login、持续多核 guest 稳定性与 MTTCG 性能后续按 Extended
+处理，不作为以上修复或 Minimum 收口的前置条件。

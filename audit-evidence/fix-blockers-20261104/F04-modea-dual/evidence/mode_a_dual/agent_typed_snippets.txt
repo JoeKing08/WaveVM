@@ -1,0 +1,25 @@
+[RuntimeGate] executor registered connection=2
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:29618
+[RuntimeGate] executor registered connection=2
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:29667
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[WVM-EXECUTOR-BRIDGE] dispatch enter msg=5 payload=4522 vm=256
+[Typed Ingress] status=0 bytes=654 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=2 bytes=646 reason=typed vCPU exit has no matching local handoff
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none[WVM-EXECUTOR-BRIDGE] dispatch enter msg=5 payload=4522 vm=257
+[Typed Ingress] status=0 bytes=654 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=2 bytes=646 reason=typed vCPU exit has no matching local handoff

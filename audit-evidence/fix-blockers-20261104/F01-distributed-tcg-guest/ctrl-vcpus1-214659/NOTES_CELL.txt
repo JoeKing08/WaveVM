@@ -1,0 +1,2 @@
+cell=ctrl-vcpus1-214659 vcpus=1 (no AP)
+guest_login=MISSING serial_bytes=0 SeaBIOS stick rip~0xff53

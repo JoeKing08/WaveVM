@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.gEsGmg/runtime/vm-256-1-1.manifest
+9dc391fd02279144df751fcdc92ca52e4323bc3a3361b0d8ec1839971735ff5e  /tmp/wavevm-create-vm-single.gEsGmg/runtime/vm-256-1-1.manifest
+d07c8637205a1a077a49a556b65e42996b778e2c1ef8ac105649c4cf35964058  /tmp/wavevm-create-vm-single.gEsGmg/runtime/vm-256-1-1.manifest.dispatch
+6cb9986d82ca57c90e579c51109c8708c9dfb23b72ac9f76cd5fa52c42327591  /tmp/wavevm-create-vm-single.gEsGmg/runtime/vm-256-1-1.manifest.route

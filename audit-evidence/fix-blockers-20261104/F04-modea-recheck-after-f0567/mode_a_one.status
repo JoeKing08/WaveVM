@@ -1,0 +1,9 @@
+run_id=s6-20261104-212632-21167
+cell=mode_a_one
+rc=0
+elapsed_s=17
+class=ok
+cleanup_ok=1
+log=/tmp/wavevm-f04-recheck/mode_a_one.log
+note=ok
+invoked=1

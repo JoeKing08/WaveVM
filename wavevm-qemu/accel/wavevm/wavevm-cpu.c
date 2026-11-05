@@ -230,11 +230,14 @@ extern int wavevm_user_mem_ipc_push_fence(int ipc_fd, uint64_t timeout_us);
 extern int wavevm_user_mem_tcg_shm_coherent(void);
 /*
  * SHM join makes RAM visible across FE/helper without page copies.
- * Minimum contract (baseline §16 / vcpu-handoff §8.1): concurrent BSP-local +
- * AP-remote is the MAIN normal path when SHM-coherent; Section 15 force_local
- * is exceptional bounded softlock/NEED_LOCAL coverage only (not normal, must
- * not dominate remote accounting). NOT full upstream QEMU MTTCG perf.
- * Opt-out STW: WVM_TCG_SHM_CONCURRENT=0.
+ * Concurrent BSP-local + AP-remote remains the intended MAIN path when
+ * SHM-coherent (baseline §16 / vcpu-handoff §8.1), but production default is
+ * stop-the-world until FE TB/invalidate + remote IPI visibility is hardened:
+ * concurrent ON with split<smp corrupts guest stacks (stack-protector panic
+ * on rcu_sched ~0.6s; evidence f01-fix-split1-083257). STW (default) boots
+ * Cirros (f01-stw-concurrent0-split1-*). Opt-in concurrent: WVM_TCG_SHM_CONCURRENT=1.
+ * Section 15 force_local stays exceptional and must not dominate remote
+ * accounting. NOT full upstream QEMU MTTCG perf.
  */
 static int wavevm_tcg_shm_allow_concurrent(void)
 {
@@ -244,16 +247,17 @@ static int wavevm_tcg_shm_allow_concurrent(void)
         return 0;
     }
     /*
-     * V1 Minimum (baseline §16 / §8.1): coherent SHM defaults to concurrent
-     * MAIN path. Softlock/IPI uses exceptional per-vCPU force_local hold
-     * (30s/90s/25s) + NEED_LOCAL — not boot sticky, must not dominate.
-     * Opt-out knobs: WVM_TCG_SHM_CONCURRENT / WVM_TCG_DISABLE_FORCE_LOCAL.
+     * Production Minimum: default STW. Concurrent is opt-in until the
+     * coherent+remote race (stale FE TBs / missed shootdown while BSP runs)
+     * is closed. Softlock/IPI still uses exceptional per-vCPU force_local +
+     * NEED_LOCAL — not boot sticky, must not dominate.
+     * Knobs: WVM_TCG_SHM_CONCURRENT / WVM_TCG_DISABLE_FORCE_LOCAL.
      */
     env = getenv("WVM_TCG_SHM_CONCURRENT");
     if (env && env[0] != '\0') {
         return atoi(env) != 0 ? 1 : 0;
     }
-    return 1;
+    return 0;
 }
 extern int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
                                               WVMHandoffDirtyJournal **journal_out);
@@ -957,8 +961,8 @@ static void wavevm_tcg_local_slice_enter(void)
 {
     qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
     /*
-     * §8.1 / baseline §16: coherent SHM defaults to concurrent MAIN.
-     * WVM_TCG_SHM_CONCURRENT=0 selects stop-the-world (wait for remotes here).
+     * §8.1 / baseline §16: concurrent MAIN is opt-in (WVM_TCG_SHM_CONCURRENT=1).
+     * Default STW waits for remotes here before a local slice.
      */
     while (g_wavevm_tcg_atomic_pending ||
            (!wavevm_tcg_shm_allow_concurrent() &&
@@ -1011,7 +1015,7 @@ static void wavevm_tcg_remote_slice_enter(CPUState *owner)
     qemu_mutex_lock(&g_wavevm_tcg_slice_lock);
     if (wavevm_tcg_shm_allow_concurrent()) {
         /*
-         * §8.1 / baseline §16: concurrent MAIN allows arbitrary-N independent
+         * §8.1 / baseline §16: opt-in concurrent MAIN allows arbitrary-N independent
          * remote vCPUs together (not a single global remote_active lock).
          * Per-vCPU ownership exclusion only: wait if THIS vCPU already remote.
          * 2 vCPU is acceptance threshold, not an implementation ceiling.
@@ -2782,7 +2786,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
          * CPU_RUN racing stale remote pages.
          */
         {
-            int fence_ret = wavevm_user_mem_ipc_push_fence(vcpu_sock, 5000000ULL);
+            int fence_ret = wavevm_user_mem_ipc_push_fence(vcpu_sock, 120000000ULL); /* F05 cross-host */
             if (handoff_dbg[ci] < 20) {
                 fprintf(stderr,
                         "[WVM-TCG-HANDOFF] cpu=%d push-fence fd=%d ret=%d flush=%d\n",

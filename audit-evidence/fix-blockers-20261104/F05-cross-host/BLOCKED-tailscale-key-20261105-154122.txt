@@ -1,0 +1,44 @@
+F05 cross-host coherent live test — BLOCKED (Asia/Shanghai)
+Written: 2026-11-05 15:41:22 CST
+Agent: Grok Bot executor subagent
+Tip on Host A: 620cd762b dirty (unchanged; no commit/push)
+NO MINIMUM_COMPLETE / NO F05 COMPLETE claim.
+
+RESULT: BLOCKED
+Reason: Tailscale Auth Key invalid/expired.
+  Host A command: sudo tailscale up --authkey <from SSH Keys & API Tokens/Tailscale Auth Key.txt> --hostname wavevm-ci-a ...
+  Backend error (sanitized): invalid key: API key does not exist
+  State after attempt: Logged out; NeedsLogin; no Tailscale IPs
+Joe rule: if key expired → STOP and ask Joe to refresh. Stopped here before dual-node run.
+
+Hosts:
+  Host A (2404 default everyday VM): machineId 2e4d3ec5-e1b1-4a36-9903-de6309119499
+    path /workspaces/WaveVM ; Ubuntu 24.04 ; hostname joeking
+    Tailscale package installed: yes (1.104.5); systemd tailscaled active; NOT authenticated
+  Host B (2604 test-only): machineId 30b14f91-ba5c-40d4-8af3-ac7f5b4169f1
+    Ubuntu 26.04 ; home /home/joeking
+    WaveVM.zip (~8GB) was present; identical copy kept on /mnt/hgfs/SharedFolder/WaveVM.zip
+    Local zip removed to free disk (now ~16G free on /)
+    Keys extracted to /home/joeking/keys/ (from zip SSH Keys & API Tokens/)
+    Tailscale NOT installed yet (curl apt 403 from tuna mirror blocked install after key failure stop)
+    Full unzip deferred (zip expands ~11GB; prefer rsync of dirty tip from A after Tailscale)
+
+Key source checked (no secret printed):
+  A: /workspaces/WaveVM/SSH Keys & API Tokens/Tailscale Auth Key.txt (len=61, kind=tskey-auth)
+  B: /home/joeking/keys/Tailscale Auth Key.txt (same meta)
+  No other Tailscale key files found under common home/keys paths before stop.
+
+What was NOT run:
+  - Host B full unzip / code sync from A
+  - scripts/ci_dual_node.sh on either host
+  - cross-host physical_host_id / remote TCG markers / SHM JOIN false-proof checks
+F05 intent still open: CPU-only executor + memory-only node across two real hosts;
+same-host SHM must not be treated as F05 PASS.
+
+Residual for Joe:
+  1) Refresh Tailscale Auth Key (replace file on 2404 under SSH Keys & API Tokens/,
+     and/or put in 2604 /home/joeking/keys/); tell agent to resume.
+  2) After key refresh: finish Tailscale on both, confirm mutual status + distinct
+     failure domains, sync dirty tip A→B, run ci_dual_node.sh TCG node-a/node-b.
+  3) Host B apt: tuna mirror 403 on curl package — may need mirror fix or wget
+     of install.sh / .deb when resuming Tailscale install on 2604.

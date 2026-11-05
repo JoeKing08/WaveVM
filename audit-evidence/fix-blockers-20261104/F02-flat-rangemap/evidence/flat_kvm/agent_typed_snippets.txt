@@ -1,0 +1,16 @@
+[RuntimeGate] executor registered connection=2
+[RuntimeGate] KVM page cache installed records=4096 timeout_ms=1000 active=1
+[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:30892
+[Typed Ingress] status=1 bytes=1252 reason=none[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none[Typed Ingress] status=1 bytes=721 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[Typed Ingress] status=1 bytes=1252 reason=none
+[WVM-EXECUTOR-BRIDGE] dispatch enter msg=5 payload=12781 vm=256
+[Typed Ingress] status=0 bytes=1252 reason=none
+[VCPU-RUN] mode=0 vcpu=0 req=1 src=127.0.0.1:30892 target=16777216 slave=16777216

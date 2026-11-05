@@ -1,0 +1,19 @@
+F08 execution fail-closed evidence 20261105-084532 Asia/Shanghai
+tip: 620cd762b dirty
+
+== Directed unit ==
+test_f08_execution_fail_closed: PASS
+
+== What changed ==
+- control_plane: execution_fail_closed hook after DEGRADED/FAILED reconcile
+- runtime_gate_quiesce: idempotent when already QUIESCING
+- envelope QUIESCE_RUNTIME 0x0306 + admission_transport_quiesce_runtime
+- admission_receiver: quiesce slot gate + quiesce_runtime callback
+- admission_runtime_agent: SIGUSR1 child (gate state→QUIESCING)
+- node_runtime child: SIGUSR1 handler fail-closes authorize only
+- wvm_ctl: installs fail-closed hook → QUIESCE_RUNTIME per runtime entry
+
+== Regression ==
+test_running_member_health_reconcile: PASS
+runtime-gate tests: PASS
+--- post-F09 regressions ok at 20261105-084932 ---

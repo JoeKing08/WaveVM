@@ -90,6 +90,14 @@ install_tailscale() {
 
 start_tailscale() {
   install_tailscale
+  # F05 local: reuse live ephemeral daemon so peer IP stays stable across restarts.
+  if sudo tailscale --socket=/tmp/tailscaled.sock ip -4 >/dev/null 2>&1; then
+    TAIL_IP=$(sudo tailscale --socket=/tmp/tailscaled.sock ip -4 | head -n1)
+    echo "$TAIL_IP" >"$ART_DIR/tailscale_ip.txt"
+    sudo tailscale --socket=/tmp/tailscaled.sock status --json >"$ART_DIR/tailscale_status.json" 2>/dev/null || true
+    log "tailscale reuse host=$THIS_HOST ip=$TAIL_IP peer=$PEER_HOST"
+    return
+  fi
   sudo pkill tailscaled 2>/dev/null || true
   sudo rm -f /tmp/tailscaled.sock /tmp/tailscaled.state 2>/dev/null || true
   sudo tailscaled --state=/tmp/tailscaled.state --socket=/tmp/tailscaled.sock >"$ART_DIR/tailscaled.log" 2>&1 &
@@ -199,8 +207,13 @@ EOCFG
 }
 
 load_vm0_plan() {
-  make -C "$ROOT/ctl_tool" >/dev/null
-  "$ROOT/ctl_tool/wvm_ctl" --plan "$CFG" 0 >"$ART_DIR/resource_plan.txt"
+  # F05 local: current wvm_ctl is control-plane-only; use side planner binary.
+  PLANNER="${WVM_CTL_PLAN:-/tmp/wavevm-f05-run/wvm_ctl_plan}"
+  if [ ! -x "$PLANNER" ]; then
+    echo "ERROR: planner binary missing at $PLANNER" >&2
+    return 1
+  fi
+  "$PLANNER" --plan "$CFG" 0 >"$ART_DIR/resource_plan.txt"
 
   plan_value() {
     sed -n "s/^$1=//p" "$ART_DIR/resource_plan.txt" | head -n1
@@ -287,27 +300,57 @@ prepare_mode() {
 }
 
 qemu_memory_args() {
-  if [ "$ACCEL" = "kvm" ]; then
-    cat <<EOF_ARGS
+  # F05: always use shared mem-path backends so FE GPA layout (ram1 above 4GiB)
+  # and helper WVM_NUMA_MAP / SHM names stay aligned across TCG and KVM.
+  cat <<EOF_ARGS
 -object
 memory-backend-file,id=ram0,size=${NODE0_MEM_MB}M,mem-path=/dev/shm/wvm_fract_node0,share=on
 -object
 memory-backend-file,id=ram1,size=${NODE1_MEM_MB}M,mem-path=/dev/shm/wvm_fract_node1,share=on
 EOF_ARGS
+}
+
+# F05 cross-host: helpers must mirror FE q35 NUMA GPAs or high-page
+# COMMIT_SYNC/PAGE_PUSH silently no-ops and push-fence times out.
+f05_export_runtime_env() {
+  local role="$1"  # a|b
+  local host_id
+  host_id="$(cat /etc/machine-id 2>/dev/null | head -c 16)"
+  [ -n "$host_id" ] || host_id="$(hostname)"
+  export WVM_PHYSICAL_HOST_ID="$host_id"
+  if [ "$role" = "a" ]; then
+    export WVM_FE_PHYSICAL_HOST_ID="$host_id"
+    export WVM_EXECUTOR_PHYSICAL_HOST_ID="$host_id"
   else
-    cat <<EOF_ARGS
--object
-memory-backend-ram,id=ram0,size=${NODE0_MEM_MB}M
--object
-memory-backend-ram,id=ram1,size=${NODE1_MEM_MB}M
-EOF_ARGS
+    # Executor on B; FE id comes from peer file when present.
+    if [ -f "$ART_DIR/fe_physical_host_id.txt" ]; then
+      export WVM_FE_PHYSICAL_HOST_ID="$(cat "$ART_DIR/fe_physical_host_id.txt")"
+    else
+      export WVM_FE_PHYSICAL_HOST_ID="wavevm-f05-a"
+    fi
+    export WVM_EXECUTOR_PHYSICAL_HOST_ID="$host_id"
   fi
+  export WVM_TCG_QEMU_MACHINE=q35
+  export WVM_TCG_QEMU_MEM_MB="$TOTAL_MEM_MB"
+  export WVM_TCG_QEMU_NUMA="${NODE0_MEM_MB}:${NODE1_MEM_MB}"
+  export WVM_NUMA_MAP="0:${NODE0_MEM_MB}:/wvm_fract_node0,100000000:${NODE1_MEM_MB}:/wvm_fract_node1"
+  # Prefer in-tree QEMU for helpers (PATH may already point here).
+  if [ -x /tmp/wavevm-f05-run/bin/qemu-tcg-numa-wrapper ]; then
+    export WVM_TCG_QEMU_BIN=/tmp/wavevm-f05-run/bin/qemu-tcg-numa-wrapper
+    export WVM_TCG_QEMU_REAL="$ROOT/wavevm-qemu/build-native/qemu-system-x86_64"
+  elif [ -x "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" ]; then
+    export WVM_TCG_QEMU_BIN="$ROOT/wavevm-qemu/build-native/qemu-system-x86_64"
+  fi
+  export PATH="/tmp/wavevm-f05-run/bin:$PATH"
+  log "F05 env role=$role host=$host_id NUMA=$WVM_TCG_QEMU_NUMA MEM=$WVM_TCG_QEMU_MEM_MB"
 }
 
 start_node_a() {
   local node_b_ip="$1"
   write_common_config
   load_vm0_plan
+  f05_export_runtime_env a
+  echo "$WVM_PHYSICAL_HOST_ID" >"$ART_DIR/fe_physical_host_id.txt"
   cat >"$ART_DIR/sidecar_a_routes.txt" <<'EOF_A_SC'
 ROUTE 0 1 127.0.0.1 19100
 EOF_A_SC
@@ -324,10 +367,10 @@ EOF_A_L2
   start_gateway gw_sidecar_a 19120 127.0.0.1 19320 "$ART_DIR/sidecar_a_routes.txt" 19121
 
   log "start slave0/master0"
-  env WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL \
+  env WVM_SHM_FILE=/wvm_fract_node0 WVM_ENV_SOCK_PATH=/tmp/wvm_user_0.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_0.sock stdbuf -oL -eL \
     "$ROOT/slave_daemon/wavevm_node_slave" 19105 "$NODE0_CORES" "$NODE0_MEM_MB" "$NODE0_VNODE" 19121 \
     >"$ART_DIR/slave0.log" 2>&1 &
-  env WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL \
+  env WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 WVM_ENV_SOCK_PATH=/tmp/wvm_user_0.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_0.sock stdbuf -oL -eL \
     "$ROOT/master_core/wavevm_node_master" "$NODE0_MEM_MB" 19100 "$CFG" 0 19121 19105 1 \
     >"$ART_DIR/master0.log" 2>&1 &
 
@@ -337,13 +380,13 @@ EOF_A_L2
   local -a mem_args
   mapfile -t mem_args < <(qemu_memory_args)
   log "start QEMU accel=$ACCEL local_split=$NODE0_CORES"
-  env WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL \
+  env WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 WVM_ENV_SOCK_PATH=/tmp/wvm_user_0.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_0.sock stdbuf -oL -eL \
     "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" \
     -accel "wavevm,split=$NODE0_CORES" -machine q35 -m "$TOTAL_MEM_MB" -smp "$TOTAL_VCPUS" \
     "${mem_args[@]}" \
     -numa node,memdev=ram0,cpus="$NODE0_CPU_RANGE",nodeid=0 \
     -numa node,memdev=ram1,cpus="$NODE1_CPU_RANGE",nodeid=1 \
-    -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2,snapshot=on \
+    -drive file="$ROOT/devices/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2,snapshot=on \
     -netdev user,id=ne,hostfwd=tcp::2226-:22 -device e1000,netdev=ne \
     -display none -vga none \
     -serial file:"$ART_DIR/vm-serial.log" -monitor none \
@@ -397,6 +440,7 @@ start_node_b() {
   local node_a_ip="$1"
   write_common_config
   load_vm0_plan
+  f05_export_runtime_env b
   cat >"$ART_DIR/sidecar_b_routes.txt" <<'EOF_B_SC'
 ROUTE 1 1 127.0.0.1 19200
 EOF_B_SC
@@ -408,10 +452,10 @@ EOF_B_L1
   start_gateway gw_sidecar_b 19220 127.0.0.1 19420 "$ART_DIR/sidecar_b_routes.txt" 19221
 
   log "start slave1/master1"
-  env WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL \
+  env WVM_SHM_FILE=/wvm_fract_node1 WVM_ENV_SOCK_PATH=/tmp/wvm_user_1.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_1.sock stdbuf -oL -eL \
     "$ROOT/slave_daemon/wavevm_node_slave" 19205 "$NODE1_CORES" "$NODE1_MEM_MB" "$NODE1_VNODE" 19221 \
     >"$ART_DIR/slave1.log" 2>&1 &
-  env WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL \
+  env WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_fract_node1 WVM_ENV_SOCK_PATH=/tmp/wvm_user_1.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_1.sock stdbuf -oL -eL \
     "$ROOT/master_core/wavevm_node_master" "$NODE1_MEM_MB" 19200 "$CFG" 1 19221 19205 1 \
     >"$ART_DIR/master1.log" 2>&1 &
 

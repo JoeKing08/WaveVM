@@ -1,0 +1,9 @@
+run_id=f04-dual-211638
+cell=mode_a_dual
+rc=0
+elapsed_s=68
+class=ok
+cleanup_ok=1
+log=/tmp/wavevm-f04-dual/mode_a_dual.log
+note=ok
+invoked=1

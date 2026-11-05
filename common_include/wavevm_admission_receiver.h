@@ -93,6 +93,16 @@ typedef int (*wvm_admission_receiver_stop_runtime_fn)(
     const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
     size_t error_len);
 
+/*
+ * F08: fail-close execution for this slot without retiring resources. Quiesce
+ * the slot gate and signal the admitted child to quiesce its authorize gate.
+ * STOP still performs identity cleanup later.
+ */
+typedef int (*wvm_admission_receiver_quiesce_runtime_fn)(
+    void *context, struct wvm_admission_receiver_slot *slot,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len);
+
 struct wvm_admission_receiver_config {
     struct wvm_member_key controller_member_key;
     uint32_t controller_physical_node_id;
@@ -128,6 +138,7 @@ struct wvm_admission_receiver_config {
     wvm_admission_receiver_delivery_inputs_fn delivery_inputs;
     wvm_admission_receiver_start_runtime_fn start_runtime;
     wvm_admission_receiver_stop_runtime_fn stop_runtime;
+    wvm_admission_receiver_quiesce_runtime_fn quiesce_runtime;
 };
 
 struct wvm_admission_receiver {

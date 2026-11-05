@@ -1,0 +1,80 @@
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31316
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=-110 flush=31316
+[WVM-TCG-HANDOFF] cpu=2 push-fence failed ret=-110 flush=31316
+[WVM-REMOTE] cpu=2 dispatch #1 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #2 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #3 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #4 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #5 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #6 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #7 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #8 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-REMOTE] cpu=2 dispatch #9 rip=0xffffffff84339281 cs=0x10 cr0=0x80050033 cr3=0x25010000 efer=0xd01 rsp=0xffffa61340727e00 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=-5
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19

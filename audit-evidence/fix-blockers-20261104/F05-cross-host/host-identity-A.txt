@@ -1,0 +1,2 @@
+A_machine_id=b9d31200e9414d3e9e6379c8a2df4312
+A_os=Ubuntu 24.04.4 LTS

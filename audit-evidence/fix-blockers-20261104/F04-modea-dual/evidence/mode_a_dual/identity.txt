@@ -1,0 +1,10 @@
+vm_id=257
+vm_incarnation=1
+manifest_generation=1
+route_scope_id=8557022527404791487
+backend=require-tcg
+accel=
+cap_source=live
+tcg_helper=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+run_id=f04-dual-211638
+cell=mode_a_dual

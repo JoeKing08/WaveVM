@@ -1,0 +1,20 @@
+s6 matrix run_id=s6-20261104-212632-21167 out_dir=/tmp/wavevm-f04-recheck have_kvm=1 have_wavevm=1
+cells_selected=mode_a_one
+cell_deadline_s=180 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=620cd762b
+2026年 11月 04日 星期三 21:26:33 CST
+=== CELL mode_a_one ===
+cmd: WVM_S6_BACKEND=require-tcg WVM_S6_ACCEL=require-kernel bash tests/control-plane/test_create_vm_single_node.sh
+RESULT mode_a_one PASS elapsed=17s cleanup_ok=1
+==== SUMMARY ====
+PASS mode_a_one
+totals pass=1 fail=0 skip=0 blocked=0 orphans_ignored=0 out=/tmp/wavevm-f04-recheck run_id=s6-20261104-212632-21167
+selected=1 invoked=1
+R1_PRODUCTION_DISPATCH=PASS (evidence=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem/R1_PRODUCTION_DISPATCH.txt)
+R1_LIVE_CREATE_SHORT_EXEC=PASS_SELECTED_CELLS (1/7)
+REMOTE_MEM_FENCE_VERSION_DIRTY=PASS (evidence=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem/REMOTE_MEM_FENCE_VERSION_DIRTY.txt)
+COMPONENT_EVIDENCE=/workspaces/WaveVM/audit-evidence/fix-blockers-20261028/remote-mem
+MATRIX_RESULT=PASS
+MINIMUM_COMPLETE=NOT_CLAIMED_BY_MATRIX (requires all Minimum bars + honest R1_LIVE + Mode A dual)
+NOTE: MATRIX_RESULT=PASS means selected cells exited 0 under current gates; every live claim above is derived from this run's cell evidence.
+EXIT=0

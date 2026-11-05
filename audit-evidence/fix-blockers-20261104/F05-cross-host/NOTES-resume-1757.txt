@@ -1,0 +1,6 @@
+F05 resume 2026-11-05 17:57:10 CST
+- Kept ephemeral Tailscale A=100.71.167.85 (wavevm-f05-a-1) B=100.102.127.79 (wavevm-f05-b-2) mutual active
+- Root cause prior segfault: wavevm_attach_shared_ram_ptr used ms->ram_size (3072M) against NUMA ram0 HVA (2048M)
+- Local uncommitted patch in wavevm-qemu/accel/wavevm/wavevm-all.c: attach/join use section size; rebuilt build-native
+- Local repro after patch: qemu survived 20s timeout with [WaveVM-SHM] guest RAM attached size=0x80000000 + ram_block
+- Syncing patched qemu + ci_dual_node.sh to B via SharedFolder; launching clean B then A

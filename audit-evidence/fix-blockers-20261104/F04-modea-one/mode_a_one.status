@@ -1,0 +1,9 @@
+run_id=f04-modea1-211508
+cell=mode_a_one
+rc=0
+elapsed_s=39
+class=ok
+cleanup_ok=1
+log=/tmp/wavevm-f04-modea1/mode_a_one.log
+note=ok
+invoked=1

@@ -1,0 +1,4 @@
+dataplane_probe=PASS_PRODUCTION_TYPED
+dispatch_path=typed_WVM1_ingress_or_gateway
+production_typed_dispatch=FIXED
+note=live CREATE short-exec via production typed handoff; guest SSH remains §7

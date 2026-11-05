@@ -1,0 +1,43 @@
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100316000 dir=1 rid=1
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100319000 dir=1 rid=2
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10031a000 dir=1 rid=3
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10031b000 dir=1 rid=4
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10031d000 dir=1 rid=5
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10031e000 dir=1 rid=6
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100321000 dir=1 rid=7
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100322000 dir=1 rid=8
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100325000 dir=1 rid=9
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100326000 dir=1 rid=10
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100327000 dir=1 rid=11
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10032a000 dir=1 rid=12
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10032b000 dir=1 rid=13
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10032c000 dir=1 rid=14
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10032d000 dir=1 rid=15
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10032e000 dir=1 rid=16
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100336000 dir=1 rid=17
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100338000 dir=1 rid=18
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x100339000 dir=1 rid=19
+[IPC COMMIT_SYNC] window full, draining oldest count=128
+[IPC COMMIT_SYNC] ack gpa=0x10033a000 dir=1 rid=20
+[IPC COMMIT_SYNC] waiting gpa=0x1003a3000 dir=1 rid=51 elapsed_us=1160901
+[IPC COMMIT_SYNC] waiting gpa=0x1003a6000 dir=1 rid=52 elapsed_us=1193137
+[IPC COMMIT_SYNC] timeout gpa=0x13fdda000 dir=1 rid=2071

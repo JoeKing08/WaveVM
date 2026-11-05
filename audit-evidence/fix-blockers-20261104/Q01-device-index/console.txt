@@ -1,0 +1,9 @@
+=== Q01 directed 2026-11-05 10:14:23 CST ===
+Q01 single-device-index: PASS
+=== test_storage_placement ===
+storage-placement tests: PASS
+=== test_admission_plan ===
+admission-plan tests: PASS
+NOTE: RM-P7-origin-not-host oracle included.
+NOTE: Codex A06 sum(ceil(per_node/chunk)) capacity oracle included.
+EXIT=0

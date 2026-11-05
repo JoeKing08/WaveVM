@@ -1,0 +1,10 @@
+F04 Mode A typed short-exec — CLOSED (this host, tip 620cd762b dirty)
+
+Evidence:
+  F04-modea-one/   mode_a_one PASS (39s) — production typed guest store marker path
+  F04-modea-dual/  mode_a_dual PASS (68s) — dual Mode A + STOP isolation cell
+  F04-modea-isol/  four real module isolation binaries EXIT=0 (worker-failure isolation ALL PASS)
+  F04-modea-blocked/ historical: blocked until wavevm.ko /dev/wavevm present
+
+Prereq: sudo insmod wavevm.ko; /dev/wavevm crw-rw---- root:kvm; joeking in kvm.
+Did not bypass ingress with stub/direct UDP. MINIMUM_COMPLETE not claimed.

@@ -1,0 +1,303 @@
+diff --git a/common_include/wavevm_admission_transport.c b/common_include/wavevm_admission_transport.c
+index bc48abca2..157fb94a3 100644
+--- a/common_include/wavevm_admission_transport.c
++++ b/common_include/wavevm_admission_transport.c
+@@ -204,12 +204,27 @@ static int resolve_member_target(
+     struct wvm_admission_transport_target *target, char *error,
+     size_t error_len)
+ {
++    char resolve_error[256];
++
++    resolve_error[0] = '\0';
+     if (transport_validate(transport, error, error_len) != 0 || !expected_member ||
+         wvm_member_key_validate(expected_member, error, error_len) != 0 ||
+-        !target ||
+-        transport->resolve_member(transport->context, expected_member, target,
+-                                  error, error_len) != 0 ||
+-        target_validate(target, error, error_len) != 0 ||
++        !target) {
++        if (error && error_len && error[0] == '\0') {
++            set_error(error, error_len,
++                      "control target does not match the membership snapshot");
++        }
++        return -1;
++    }
++    if (transport->resolve_member(transport->context, expected_member, target,
++                                  resolve_error, sizeof(resolve_error)) != 0) {
++        set_error(error, error_len, "%s",
++                  resolve_error[0]
++                      ? resolve_error
++                      : "control target does not match the membership snapshot");
++        return -1;
++    }
++    if (target_validate(target, error, error_len) != 0 ||
+         target->member_key.role_type != expected_member->role_type ||
+         target->member_key.role_id != expected_member->role_id ||
+         target->member_key.instance_id != expected_member->instance_id ||
+diff --git a/ctl_tool/main.c b/ctl_tool/main.c
+index 6a7e9c1f9..886b822ee 100644
+--- a/ctl_tool/main.c
++++ b/ctl_tool/main.c
+@@ -1271,21 +1271,47 @@ static int admission_workspace_reset(
+     return 0;
+ }
+ 
++static int member_still_owns_control_endpoint(
++    enum wvm_manifest_member_state desired_state)
++{
++    /*
++     * Exact-identity control RPCs (STOP/abort/retire/ready query) must reach
++     * the registered instance while it still owns cluster resources. ACTIVE
++     * is the common case; CORDONED/DRAINING members remain addressable so
++     * existing VMs can stop. REMOVED/FAILED membership rows are not reused
++     * as live control targets — that would be a new incarnation.
++     */
++    return desired_state == WVM_MANIFEST_MEMBER_ACTIVE ||
++           desired_state == WVM_MANIFEST_MEMBER_CORDONED ||
++           desired_state == WVM_MANIFEST_MEMBER_DRAINING;
++}
++
+ static int admission_transport_resolve_member(
+     void *context, const struct wvm_member_key *member_key,
+     struct wvm_admission_transport_target *target, char *error,
+     size_t error_len)
+ {
+     struct admission_workspace *workspace = context;
+-    const struct wvm_membership_controller_capture *capture;
++    struct wvm_membership_controller_capture *capture;
+     size_t i;
+ 
+     if (!workspace || !member_key || !target ||
++        !workspace->membership_controller ||
+         wvm_member_key_validate(member_key, error, error_len) != 0) {
+         snprintf(error, error_len, "invalid transport resolve arguments");
+         return -1;
+     }
+     capture = &workspace->membership_capture;
++    /*
++     * Always resolve against a fresh membership snapshot. STOP/abort must
++     * still project the exact role/instance/endpoint even when observed
++     * health is SUSPECT/UNREACHABLE — new placement excludes those members
++     * via eligibility fences, not by erasing STOP identity.
++     */
++    if (wvm_membership_controller_capture(workspace->membership_controller,
++                                          capture, error, error_len) != 0) {
++        return -1;
++    }
+     memset(target, 0, sizeof(*target));
+     if (member_key->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
+         for (i = 0; i < capture->node_count; i++) {
+@@ -1295,10 +1321,13 @@ static int admission_transport_resolve_member(
+                 node->node_instance_id != member_key->instance_id) {
+                 continue;
+             }
+-            if (node->desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
+-                node->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
++            if (!member_still_owns_control_endpoint(
++                    node->desired_membership_state)) {
+                 snprintf(error, error_len,
+-                         "node runtime is not an active healthy member");
++                         "node runtime membership no longer owns control "
++                         "endpoint (desired_state=%u health=%u)",
++                         (unsigned)node->desired_membership_state,
++                         (unsigned)node->observed_health_state);
+                 return -1;
+             }
+             target->member_key = *member_key;
+@@ -1313,11 +1342,13 @@ static int admission_transport_resolve_member(
+                 gateway->gateway_instance_id != member_key->instance_id) {
+                 continue;
+             }
+-            if (gateway->desired_membership_state !=
+-                    WVM_MANIFEST_MEMBER_ACTIVE ||
+-                gateway->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
++            if (!member_still_owns_control_endpoint(
++                    gateway->desired_membership_state)) {
+                 snprintf(error, error_len,
+-                         "gateway is not an active healthy member");
++                         "gateway membership no longer owns control "
++                         "endpoint (desired_state=%u health=%u)",
++                         (unsigned)gateway->desired_membership_state,
++                         (unsigned)gateway->observed_health_state);
+                 return -1;
+             }
+             target->member_key = *member_key;
+@@ -1387,10 +1418,6 @@ static int probe_remote_runtime_health(
+     char *error, size_t error_len)
+ {
+     struct runtime_health_probe_context *probe = opaque;
+-    struct wvm_member_key member_key;
+-    struct wvm_membership_controller_member_status status;
+-    char monitor_error[256];
+-    enum wvm_membership_health_state next_health;
+     int result;
+ 
+     if (!probe || !probe->plane || !probe->workspace ||
+@@ -1407,36 +1434,14 @@ static int probe_remote_runtime_health(
+     result = wvm_ctl_probe_runtime_ready(
+         probe->plane, transaction, runtime_entry, probe->member_capacity,
+         probe->max_vcpus, &probe->workspace->transport, error, error_len);
+-    if (result == 0) {
+-        return 0;
+-    }
+-
+     /*
+-     * A failed authenticated probe is monitor evidence, not a self-health
+-     * report.  Keep recovery under the member's authenticated self-report;
+-     * the monitor only escalates repeated failures from SUSPECT to
+-     * UNREACHABLE.  The VM reconcile in the caller remains fail-closed even
+-     * if this durable evidence update itself cannot be persisted.
++     * F03: QUERY_RUNTIME_READY is per-VM lifecycle readiness (admitted child /
++     * frontend ready), not a membership heartbeat. A single VM's dead child or
++     * Mode-A store miss must DEGRADE/FAIL that VM via the caller — it must not
++     * mark the whole node SUSPECT/UNREACHABLE, or sibling VMs lose STOP
++     * identity resolution and can no longer be retired by exact instance.
++     * Membership monitor health stays on real member contact/heartbeat paths.
+      */
+-    memset(&member_key, 0, sizeof(member_key));
+-    member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
+-    member_key.role_id = runtime_entry->physical_node_id;
+-    member_key.instance_id = runtime_entry->expected_node_instance_id;
+-    monitor_error[0] = '\0';
+-    if (wvm_member_key_validate(&member_key, monitor_error,
+-                                sizeof(monitor_error)) == 0 &&
+-        wvm_membership_controller_member_status(
+-            probe->workspace->membership_controller, &member_key, &status,
+-            monitor_error, sizeof(monitor_error)) == 0) {
+-        next_health = status.observed_health_state == WVM_MEMBERSHIP_SUSPECT ||
+-                              status.observed_health_state ==
+-                                  WVM_MEMBERSHIP_UNREACHABLE
+-                          ? WVM_MEMBERSHIP_UNREACHABLE
+-                          : WVM_MEMBERSHIP_SUSPECT;
+-        (void)wvm_membership_controller_mark_monitor_health(
+-            probe->workspace->membership_controller, &member_key, next_health,
+-            monitor_error, sizeof(monitor_error));
+-    }
+     return result;
+ }
+ 
+diff --git a/scripts/bot_to_grok_build.py b/scripts/bot_to_grok_build.py
+old mode 100755
+new mode 100644
+index 4b13288b4..9b424ed7a
+--- a/scripts/bot_to_grok_build.py
++++ b/scripts/bot_to_grok_build.py
+@@ -10,6 +10,11 @@ Usage:
+       --title "My session title"
+ 
+ Also accepts a directory of ReadTranscript page dumps via --from-pages.
++
++Paging (tail→head, then one tip refetch) is NOT done by this script: the main
++Grok Bot agent must call ReadTranscript with before=<firstIndex> until start,
++dump each page, tip once, then pass the directory here. See
++bot_to_grok_build_README.txt section 二½.
+ """
+ 
+ from __future__ import annotations
+diff --git a/scripts/bot_to_grok_build_README.txt b/scripts/bot_to_grok_build_README.txt
+index 26c21cc75..8edde9fcb 100644
+--- a/scripts/bot_to_grok_build_README.txt
++++ b/scripts/bot_to_grok_build_README.txt
+@@ -50,19 +50,35 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
+   - 也可以把每一页 dump 存进一个目录，用脚本的 --from-pages 自动拼成 oldest-first。
+ 
+ 
+-二½、分页 dump 规则（--from-pages）
+---------------------------------
+-拉全量 transcript 时请连续翻页，避免 dump 自身留下空洞：
+-
+-  1. 用 ReadTranscript + before=<本页 firstIndex> 一直翻到出现
+-     “This is the start of the transcript.”（覆盖到最旧）。
+-  2. 翻页结束后，**再拉一次最新 tip**（不带 before，或等价拿到当前最新一页）。
+-  3. 不要在「最后一页 mid-page 的 end」和「tip 页的 start」之间留洞；
+-     若 tip 从 S 起而上一页只到 E 且 E+1 < S，assembler 会报 uncovered，
+-     并提示：dump incomplete: re-fetch ReadTranscript with before=<tip_start>。
+-
+-关于 header 与缺位语义：
+-
++二½、翻页操作（主 Agent 做；本脚本不调 ReadTranscript）
++----------------------------------------------------
++本脚本只消费已落盘的页 dump / JSONL，**不会**自己翻会话。
++翻页必须在 Grok Bot **主 Agent**（非 executor）里用 cursor/ReadTranscript 完成。
++
++标准流程（从尾翻到头，再补 tip）——备份前照此做：
++
++  0. 准备空目录，例如 /workspace/grok-transcript-pages-<date>/。
++  1. 第一页：ReadTranscript（不带 before）+ write_to_file:true。
++     把返回的整页文件拷进上述目录（记下页头 positions A–B of N，
++     以及本页 firstIndex = A）。默认最新在前。
++  2. 向旧翻：再调 ReadTranscript，arguments 带 before=<上一页 firstIndex>，
++     write_to_file:true；每页都落盘。重复直到正文出现
++     “This is the start of the transcript.”（已覆盖到最旧）。
++  3. tip 再取一次：翻页全部结束后，**再拉一次不带 before 的最新 tip**，
++     落盘。不要在翻页循环里反复 tip；整轮只 tip 这一次
++     （push 轮在最终 assemble/redact 前再 tip 一次也可以）。
++  4. 交给本脚本拼页+转换：
++       python3 bot_to_grok_build.py \
++         --from-pages <pages_dir> \
++         --transcript <out.jsonl> \
++         --out <parent> --cwd /home/joeking --title "..."
++  5. 对转换产物再跑 redact_session.py，再进 session-backup/Grok Bot/。
++
++缺口自检（assemble 会查）：
++
++  - 不要在「最后一页 mid-page 的 end」和「tip 页的 start」之间留洞；
++    若 tip 从 S 起而上一页只到 E 且 E+1 < S，assembler 会报 uncovered，
++    并提示：dump incomplete: re-fetch ReadTranscript with before=<tip_start>。
+   - 页头 `positions A–B of N` 可能比正文 JSONL 行数多报（常见 ok = claimed−1..−17）。
+     转换器把 A+ok..B 当作 **phantom tail**，不计入 missing/uncovered。
+   - 重叠页（重复 dump）：优先采用 header `of N` 更大的页（更新快照），已填槽不覆盖。
+@@ -70,6 +86,9 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
+     （stderr：assembled N messages, positions contiguous 0..max）。
+   - 若仍有 uncovered，那是 dump 真缺页（本脚本不会凭空发明消息），请补拉后再拼。
+ 
++可复用旧 page cache：若同会话曾完整翻过，可保留旧页目录，只补 tip 缺口
++（再带 before 拉 mid→tip 缺段），不必每轮从 0 重翻。
++
+ 
+ 
+ 三、怎么跑转换脚本
+@@ -155,7 +174,8 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
+ 
+ 八、给写项目 AI 的最短操作清单
+ ----------------------------
+-  [ ] 拿到 oldest-first 的 grokbot-transcript.jsonl（或 pages 目录）
++  [ ] 主 Agent 按二½ 翻页：尾→头（before=firstIndex）→ tip 再取一次 → pages 目录
++  [ ] 拿到 oldest-first 的 grokbot-transcript.jsonl（或直接 --from-pages）
+   [ ] python3 bot_to_grok_build.py --transcript ... --out ... --cwd /home/joeking --title "..."
+   [ ] 记下 stdout 里的 session_id
+   [ ] 只把 summary.json + updates.jsonl 拷进
+diff --git a/tests/control-plane/test_coordinator.sh b/tests/control-plane/test_coordinator.sh
+old mode 100755
+new mode 100644
+index 722de931b..77b693067
+--- a/tests/control-plane/test_coordinator.sh
++++ b/tests/control-plane/test_coordinator.sh
+@@ -41,6 +41,7 @@ gcc -Wall -Wextra -Werror -std=c11 -D_POSIX_C_SOURCE=200809L "${extra_flags[@]}"
+     "$repo_root/common_include/wavevm_membership_control.c" \
+     "$repo_root/common_include/wavevm_envelope.c" \
+     "$repo_root/ctl_tool/admission_workspace.c" \
++    "$repo_root/common_include/wavevm_admission_transport.c" \
+     "$repo_root/ctl_tool/admission_readiness.c" \
+     "$repo_root/tests/control-plane/test_coordinator.c" \
+     -pthread -Wl,--wrap=fsync -Wl,--wrap=write -o "$tmpdir/test_coordinator"
+diff --git a/tests/control-plane/test_goal4_executor_remote_memory.c b/tests/control-plane/test_goal4_executor_remote_memory.c
+index 102bda2c9..2e31dac9c 100644
+--- a/tests/control-plane/test_goal4_executor_remote_memory.c
++++ b/tests/control-plane/test_goal4_executor_remote_memory.c
+@@ -443,6 +443,7 @@ static int commit_page(void *opaque, uint64_t gpa, uint64_t base_version,
+ {
+     struct remote_state *state = opaque;
+ 
++    (void)source_shared_backing;
+     if (!state || !state->directory_store_initialized) {
+         return -EINVAL;
+     }
+@@ -490,7 +491,6 @@ static int complete_remote_fault(
+     (void)directory_node_instance_id;
+     (void)data;
+     (void)data_bytes;
+-    (void)source_shared_backing;
+     (void)error;
+     (void)error_len;
+     return 0;

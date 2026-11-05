@@ -1,0 +1,135 @@
+[guest-smoke 08:32:57] art=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/f01-fix-split1-083257 qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=16777216 file_limit=33554432
+[guest-smoke 08:32:57] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-tcg (production + live helpers)
+[guest-smoke 08:33:06] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.kcKM4z agent=13107 ctl=13100
+[guest-smoke 08:33:06] CREATE backend=require-tcg accel=disabled
+[guest-smoke 08:33:06] live wavevm-accel QEMU processes≈2
+[guest-smoke 08:33:06] manifest=/tmp/wavevm-create-vm-single.kcKM4z/runtime/vm-256-1-1.manifest node_instance=802 child=13132
+[guest-smoke 08:33:06] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 08:33:06] log_cap_bytes=16777216 file_limit_bytes=33554432
+[guest-smoke 08:33:09] frontend_pid=13283 serial=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/f01-fix-split1-083257/vm-serial.log
+[guest-smoke 08:33:09] waiting up to 240s for 'cirros login:'
+[guest-smoke 08:33:59] boot poll 62s serial_bytes=10162
+[guest-smoke 08:34:59] boot poll 122s serial_bytes=10162
+[guest-smoke 08:35:59] boot poll 182s serial_bytes=10162
+[guest-smoke 08:36:59] boot poll 242s serial_bytes=10162
+[guest-smoke 08:37:09] ERROR: cirros login not reached within 240s
+[    0.031417] PM: hibernation: Registered nosave memory: [mem 0x000a0000-0x000effff]
+[    0.031425] PM: hibernation: Registered nosave memory: [mem 0x000f0000-0x000fffff]
+[    0.031501] [mem 0x10000000-0xfffbffff] available for PCI devices
+[    0.031529] Booting paravirtualized kernel on bare hardware
+[    0.031745] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+[    0.032129] setup_percpu: NR_CPUS:8192 nr_cpumask_bits:2 nr_cpu_ids:2 nr_node_ids:1
+[    0.035547] percpu: Embedded 60 pages/cpu s208896 r8192 d28672 u1048576
+[    0.037009] Built 1 zonelists, mobility grouping on.  Total pages: 64221
+[    0.037035] Policy zone: DMA32
+[    0.037153] Kernel command line: LABEL=cirros-rootfs ro console=tty1 console=ttyS0
+[    0.037806] Unknown kernel command line parameters "LABEL=cirros-rootfs", will be passed to user space.
+[    0.038221] Dentry cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    0.038399] Inode-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    0.039530] mem auto-init: stack:off, heap alloc:on, heap free:off
+[    0.043188] Memory: 201676K/261612K available (16393K kernel code, 4383K rwdata, 10840K rodata, 3244K init, 6548K bss, 59676K reserved, 0K cma-reserved)
+[    0.047688] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=2, Nodes=1
+[    0.048520] ftrace: allocating 50600 entries in 198 pages
+[    0.104197] ftrace: allocated 198 pages with 4 groups
+[    0.110764] rcu: Hierarchical RCU implementation.
+[    0.110820] rcu: 	RCU restricting CPUs from NR_CPUS=8192 to nr_cpu_ids=2.
+[    0.110889] 	Rude variant of Tasks RCU enabled.
+[    0.110897] 	Tracing variant of Tasks RCU enabled.
+[    0.110958] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[    0.110980] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=2
+[    0.128501] NR_IRQS: 524544, nr_irqs: 440, preallocated irqs: 16
+[    0.136479] Console: colour *CGA 80x25
+[    0.137710] printk: console [tty1] enabled
+[    0.143745] printk: console [ttyS0] enabled
+[    0.144606] ACPI: Core revision 20210730
+[    0.148154] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    0.149584] APIC: Switch to symmetric I/O mode setup
+[    0.152592] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    0.169327] tsc: Marking TSC unstable due to TSCs unsynchronized
+[    0.169890] Calibrating delay loop (skipped), value calculated using timer frequency.. 6143.93 BogoMIPS (lpj=12287868)
+[    0.170156] pid_max: default: 32768 minimum: 301
+[    0.170847] LSM: Security Framework initializing
+[    0.171544] landlock: Up and running.
+[    0.171603] Yama: becoming mindful.
+[    0.173126] AppArmor: AppArmor initialized
+[    0.175050] Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.175176] Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.188094] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    0.188258] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    0.188520] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    0.188726] Spectre V2 : Mitigation: Retpolines
+[    0.188782] Spectre V2 : Spectre v2 / SpectreRSB mitigation: Filling RSB on context switch
+[    0.188886] Spectre V2 : Spectre v2 / SpectreRSB : Filling RSB on VMEXIT
+[    0.189598] Speculative Store Bypass: Vulnerable
+[    0.306562] Freeing SMP alternatives memory: 44K
+[    0.426017] smpboot: CPU0: AMD QEMU Virtual CPU version 2.5+ (family: 0x6, model: 0x6, stepping: 0x3)
+[    0.430765] Performance Events: PMU not available due to virtualization, using software events only.
+[    0.432341] rcu: Hierarchical SRCU implementation.
+[    0.437096] NMI watchdog: Perf NMI watchdog permanently disabled
+[    0.440229] smp: Bringing up secondary CPUs ...
+[    0.441922] x86: Booting SMP configuration:
+[    0.442023] .... node  #0, CPUs:      #1
+[    0.019865] calibrate_delay_direct() dropping min bogoMips estimate 3 = 10308253
+[    0.538290] smp: Brought up 1 node, 2 CPUs
+[    0.538487] smpboot: Max logical packages: 2
+[    0.538578] smpboot: Total of 2 processors activated (12208.96 BogoMIPS)
+[    0.622601] Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: schedule_timeout+0x10e/0x140
+[    0.624764] CPU: 0 PID: 14 Comm: rcu_sched Not tainted 5.15.0-71-generic #78-Ubuntu
+[    0.625012] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.14.0-0-g155821a1990b-prebuilt.qemu.org 04/01/2014
+[    0.625211] Call Trace:
+[    0.625533]  <TASK>
+[    0.625543]  show_stack+0x52/0x5c
+[    0.625543]  dump_stack_lvl+0x4a/0x63
+[    0.625543]  dump_stack+0x10/0x16
+[    0.625543]  panic+0x15c/0x334
+[    0.625543]  ? schedule_timeout+0x10e/0x140
+[    0.625543]  __stack_chk_fail+0x14/0x20
+[    0.625543]  schedule_timeout+0x10e/0x140
+[    0.625543]  ? __bpf_trace_tick_stop+0x20/0x20
+[    0.625543]  rcu_gp_fqs_loop+0xe5/0x330
+[    0.625543]  rcu_gp_kthread+0xa7/0x130
+[    0.625543]  ? rcu_gp_init+0x5f0/0x5f0
+[    0.625543]  kthread+0x12a/0x150
+[    0.625543]  ? set_kthread_struct+0x50/0x50
+[    0.625543]  ret_from_fork+0x22/0x30
+[    0.625543]  </TASK>
+[WVM-TCG-TSC] phase=export cpu=1 local=0xb8bf132c1 offset=0 guest=0xb8bf12483
+[WVM-TCG-APIC-OWNER] action=pause cpu=1 expiry=16144257249
+[WVM-TCG-CR3] cpu=1 cr3=0x7210000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffb8539281 rsp=0xffff9c68c00bbe00 ret=0 q0=0xffffffffb91b6bf2 q1=0xffff9c68c00bbe20 q2=0xffffffffb8468806 q3=0x1
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=2
+[WVM-PUSH-BARRIER] ack cookie=2
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffb85bb0d2 rsp=0xffff9c68c00bbe60
+[WVM-TCG-TSC] phase=import cpu=1 local=0xb91240b04 guest=0xb8d0dc478 offset=0xfffffffffbe9b974
+[WVM-TCG-IMPORT] pid=13283 cpu=1 eip=0xffffffffb85bb0d2 rsp=0xffff9c68c00bbe60 rflags=0x97 cr0=0x80050033 cr3=0x7210000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffb85bb0d2 env_rsp=0xffff9c68c00bbe60
+[WVM-TCG-APIC-OWNER] action=resume cpu=1 expiry=16174586040
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffb85bb0d2 rsp=0xffff9c68c00bbe60 ret=0 q0=0xffffffffb85bb181 q1=0x282 q2=0x1ffffff00000000 q3=0xffff88a34f123360
+[WVM-TCG-STATS] cpu=1 remote_done=1 local_done=0 force_local_used=0
+[WVM-REMOTE] cpu=1 dispatch #1 rip=0xffffffffb85bb0d2 cs=0x10 cr0=0x80050033 cr3=0x7210000 efer=0xd01 rsp=0xffff9c68c00bbe60 oldex=-1
+[WVM-TCG-HANDOFF] cpu=1 flush begin fd=16
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4 force_local_used=0
+[WaveVM-User] handoff dirty flush pages=91 skipped_zero=0 fd=16
+[WVM-TCG-HANDOFF] cpu=1 flush done fd=16 ret=91
+[WVM-PUSH-BARRIER] rx cookie=3
+[WVM-PUSH-BARRIER] ack cookie=3
+[WVM-TCG-HANDOFF] cpu=1 push-fence fd=16 ret=0 flush=91
+[WVM-TCG-TSC] phase=export cpu=1 local=0xba1190489 offset=0xfffffffffbe9b974 guest=0xb9d02a6df
+[WVM-TCG-APIC-OWNER] action=pause cpu=1 expiry=16262586040
+[WVM-TCG-CR3] cpu=1 cr3=0x7210000 pml4e508=0xffd4067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=1 rip=0xffffffffb85bb0d2 rsp=0xffff9c68c00bbe60 ret=0 q0=0xffffffffb85bb181 q1=0x282 q2=0x1ffffff00000000 q3=0xffff88a34f123360
+[WVM-TCG-IPC] cpu=1 write CPU_RUN begin fd=16
+[WVM-TCG-IPC] cpu=1 write CPU_RUN done, wait ack fd=16
+[WVM-PUSH-BARRIER] rx cookie=4
+[WVM-PUSH-BARRIER] ack cookie=4
+[WVM-TCG-STACK-CTX] phase=master-ack cpu=1 rip=0xffffffffb848a822 rsp=0xffff9c68c00d8fc0
+[WVM-TCG-TSC] phase=import cpu=1 local=0xba2643a42 guest=0xb9e0d4a7f offset=0xfffffffffba9103d
+[WVM-TCG-IMPORT] pid=13283 cpu=1 eip=0xffffffffb848a822 rsp=0xffff9c68c00d8fc0 rflags=0x92 cr0=0x80050033 cr3=0x7210000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffffb848a822 env_rsp=0xffff9c68c00d8fc0
+[WVM-TCG-NEED-LOCAL] cpu=1 rip=0xffffffffb848a822 arm force_local=128 repeat=1 burst=1 (budget-only)
+[WVM-TCG-APIC-OWNER] action=resume cpu=1 expiry=16267967426
+[WVM-TCG-STACK] phase=master-post-import cpu=1 rip=0xffffffffb848a822 rsp=0xffff9c68c00d8fc0 ret=0 q0=0xffffffffb847c611 q1=0 q2=0xffff9c68c009bdc8 q3=0x49ef3387146f8200
+[WVM-TCG-STATS] cpu=1 remote_done=2 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=2 local_done=1 force_local_used=1
+[WVM-TCG-LOCAL] cpu=1 n=0 ret=65537 rip=0xffffffffb844bacf cs=0x10 cr0=0x80050033 rdi=0xffff88a34f119460 rax=0x0 r9=0xffff9c68c00d8fd4 guest_tsc=0xb9e2d18b3 lock=0x3060206/lr=0 halted=1 intreq=0x0 exit_req=0

@@ -1,0 +1,374 @@
+WaveVM Minimum 缺口交叉审计（Grok Bot — post Q01/Q02 refresh）
+======================================================================
+日期：2026-11-05 Asia/Shanghai（写盘约 2026-11-05 10:23:22 CST）
+审计员：Grok Bot（executor subagent；只读审计，未改生产代码、未 commit/push）
+仓库：/workspaces/WaveVM
+machineId：2e4d3ec5-e1b1-4a36-9903-de6309119499
+Tip HEAD：620cd762b34ec309d7dac1b6822ddeff34fe59be（short 620cd762b）
+Dirty：是 — tip + 未提交工作树（common_include / ctl_tool / node_runtime /
+       wavevm-qemu / tests / docs/specs/storage-device-authority.md 等 +
+       构建产物与 audit-evidence ??）。
+       `git diff --stat HEAD` 末行： 43 files changed, 2112 insertions(+), 174 deletions(-)
+前序审计：audit-evidence/grok-minimum-gap-cross-audit-2026-11-05.txt
+         （今早 09:58–10:05；本文件为其 Q01/Q02 收口后刷新，不覆盖原件）
+基线交叉审：minimum-final-cross-audit-2026-11-04.txt（Codex 最终交叉审）
+MINIMUM_COMPLETE：No / NOT_CLAIMED
+硬约束：本轮不修代码、不宣称 COMPLETE、不提交/推送；F01 按 Joe 撤退保持 DEFERRED。
+
+一、中文总结论（给 Joe）
+----------------------------------------------------------------------
+1) Tip+dirty 核实通过（仍为 620cd762b dirty）。相对今早审计，**今日已闭合**：
+   - Q01 Option B（拒第二 WaveVM block device）→ PASS
+   - Q02 gateway DRAIN PREPARE+peer ACK+COMMIT→DRAINING → PASS
+2) 诚实 Minimum COMPLETE **仍不可签**。主缺口仍是：
+   (a) F01 / M3 分布式并发 TCG guest 合同未闭合（Joe DEFERRED；勿打磨）；
+   (b) dirty `wavevm-cpu.c` 默认 STW（WVM_TCG_SHM_CONCURRENT 缺省=0）与纲领
+       §8.1「concurrent 为主路径」张力未收——属 F01 未收口的一部分，不得用
+       默认 STW 冒充 §8.1 完成；
+   (c) F05 跨物理主机 coherent/远端缺页 live 证明缺第二台主机；
+   (d) F10 / M9 / M12 guest 成功判据 + 适用格真实 guest 矩阵尚未最终闭合；
+   (e) F08/F09/Q01/Q02 之后尚未做全适用格 S6/guest 汇总重跑（诚实性）。
+3) 本周可继承为定向 PASS：F02、F03、F04、F06、F07、F08、F09、**Q01、Q02**。
+   F01=DEFERRED PARTIAL；F05=PARTIAL；F10=PARTIAL；Q03=PARTIAL。
+4) **相对今早审计的显式状态翻转（禁止沿用陈旧 FAIL）**：
+   - Q01：OPEN → **PASS**（Option B）
+   - Q02：OPEN/FAIL（Q02-reverify CREATE 未到 RUNNING）→ **PASS**
+     （新证据 `Q02-drain/` 取代 `Q02-reverify/` 作为当前验收）
+
+二、方法
+----------------------------------------------------------------------
+纲领（应然，本轮重读要点）：
+  docs/wavevm-architecture-baseline.md（§1 Minimum；§16 multi-vCPU TCG）
+  docs/wavevm-refactor-roadmap.md（§1.1 Minimum usable → M1–M9；
+    Phase 7/8/10 → M6/M11/M12/M13；Document Maintenance）
+  docs/specs/vcpu-handoff.md §8.1（concurrent MAIN + 有界 force_local）
+  docs/specs/runtime-manifest-lifecycle.md（CREATE/STOP/清理）
+  docs/specs/cluster-membership-topology-lifecycle.md（join/cordon/drain）
+  docs/specs/memory-consistency.md（coherent / subscriber / page pool）
+  docs/specs/storage-device-authority.md §2.1（Q01 Option B 已写入）
+  浅扫：resource-placement-admission / identity-routing / capability-fault-engines
+
+证据根：
+  audit-evidence/fix-blockers-20261104/   （本周定向收口 + 今日 Q01/Q02）
+    MINIMUM_STATUS_20261105-095248.txt（早盘；本轮另刷短状态）
+    F01…F09 / Q01-device-index / Q02-drain
+  audit-evidence/fix-blockers-20261104-audit/（11-04 四方实测基线）
+  minimum-final-cross-audit-2026-11-04.txt
+  今早：audit-evidence/grok-minimum-gap-cross-audit-2026-11-05.txt
+  M1–M13 定义对照：roadmap §1.1 + Oct-28 charter 自审口径（agent-tools r6）
+
+方法：全广度浅扫；每条缺口写纲领章节 + 证据路径或 missing-evidence。
+区分「本轮核对 R」vs「继承既有 NOTES I」——未重跑长测/guest 矩阵。
+风格对齐：今早 grok gap audit + Codex final cross-audit。
+
+三、记分牌 F01–F10 / Q01–Q03
+----------------------------------------------------------------------
+图例：PASS / PARTIAL / FAIL / BLOCKED / DEFERRED
+核验：R=本轮核对证据或源码；I=继承既有 NOTES（未本轮复跑）
+
+F01  分布式并发 TCG guest 正确性（§8.1 / baseline §16）
+     状态：DEFERRED PARTIAL（Joe 2026-11-05 09:00 撤退 — 勿再 triage/fix）
+     核验：R（读 NOTES_F01 / CURRENT_REPRO；核对 dirty STW 默认）
+     证据：
+       all-local PASS：
+         …/F01-distributed-tcg-guest/f01-fix-alllocal-split2-083037/
+         …/f01-fix-alllocal-split2-reconfirm-085750/（login/SSH/cpu-smoke）
+       distributed split=1 FAIL：
+         …/f01-fix-split1-083257/（stack-protector；guest_login=MISSING）
+         …/s56-repro-214218/；历史 fix-blockers-20261103/s55、s56
+       NOTES_F01.txt + CURRENT_REPRO.txt：明确 PARTIAL + Joe defer
+     额外张力（dirty，属 F01 未收口）：
+       wavevm-qemu/accel/wavevm/wavevm-cpu.c::wavevm_tcg_shm_allow_concurrent
+       默认 return 0（STW）；需 WVM_TCG_SHM_CONCURRENT=1 才 concurrent。
+       纲领要求 concurrent 为主路径；STW 实验格不得宣称 §8.1 闭合。
+     纲领：baseline §16；vcpu-handoff.md §8.1；roadmap §1.1 TCG 合同。
+
+F02  KVM CREATE/readiness + flat/fractal typed 数据面
+     状态：PASS（定向；继承）
+     核验：I
+     证据：…/F02-flat-rangemap/；…/F02-fractal-rangemap/
+       flat_kvm / fractal_kvm CREATE→typed store→STOP PASS
+     纲领：roadmap Phase 5/7 readiness；baseline frontend 注册。
+
+F03  双 VM STOP / 失败身份清理
+     状态：PASS（定向；继承）
+     核验：I
+     证据：…/F03-failed-stop/NOTES_F03.txt + SUMMARY
+       mode_b_dual；compensating STOP 0/17；cleanup_ok=1
+     纲领：runtime-manifest-lifecycle.md STOP/退役。
+
+F04  Mode A 生产 typed short-exec + 双 VM 隔离
+     状态：PASS（定向；继承）
+     核验：I
+     证据：…/F04-modea-one/；…/F04-modea-dual/；…/F04-modea-isol/
+       + F04-modea-recheck-after-f0567/
+     纲领：roadmap Phase 8；baseline §13–§14。
+
+F05  coherent SHM 范围 vs 跨主机缺页路径
+     状态：PARTIAL（unit+placement PASS；跨主机 live 缺第二物理机）
+     核验：R（NOTES 刷新段仍成立）
+     证据：…/F05-coherent-host-scope/NOTES_F05.txt + unit_f05.log
+       单机 refuse + host-id export PASS；live dual-host deferred
+     纲领：memory-consistency.md；§8.1 same-host 前提。
+     明确：非 F01；阻塞物是第二台物理主机。
+
+F06  非 coherent 写页池占用/耗尽
+     状态：PASS（定向 unit；继承）
+     核验：I
+     证据：…/F06-page-pool/NOTES_F06.txt + unit_f06.log
+     纲领：memory-consistency 背压。
+
+F07  subscriber lease / 成员失效接线
+     状态：PASS（同进程定向；继承）
+     核验：I
+     证据：…/F07-subscriber-lease/
+     纲领：memory-consistency.md §4.5。
+
+F08  执行 fail-closed（控制面 FAILED ≠ 仍授权执行）
+     状态：PASS（定向；本周 RESULT）
+     核验：R
+     证据：…/F08-execution-fail-closed/RESULT-20261105-084532.txt
+     纲领：roadmap §1.1 fail closed；Phase 7 node-loss。
+
+F09  生产 owner 锁不阻塞无关 VM（网络等待让出）
+     状态：PASS（directed yield + live delayed dual）
+     核验：R
+     证据：…/F09-owner-lock-concurrency/RESULT-20261105-095248.txt
+           …/live-delayed-dual-20261105-095219/RESULT.txt（overall=PASS）
+     纲领：runtime-manifest-lifecycle.md §7；placement §6.3。
+
+F10  测试入口编译 + guest 成功判据 / 矩阵诚实
+     状态：PARTIAL（编译入口已修；guest 判据与全矩阵仍 OPEN）
+     核验：R（源码）+ I
+     证据：
+       编译入口：test_goal4_executor_remote_memory.c 签名自洽；
+         test_coordinator.sh 已链 admission_readiness/transport
+       仍开：
+         test_guest_smoke.sh 以 remote_delta>0 为远程门，**未见**对
+           fl>>remote / fl_dominates 的硬失败（§8.1「非涓流」）
+         REQUIRE_STOP 仍先 kill frontend 再 STOP（~:553）；健康 guest
+           直接 STOP 的独立证据仍薄
+         guest minimum matrix 全适用格 × 真实 login/SSH/远端 未在本 tip
+           作为最终闭合包重跑；脚本自标 NOT_CLAIMED
+     纲领：roadmap §1.1 guest readiness；vcpu-handoff §8.1 Acceptance shape。
+
+Q01  块服务多 device_index 地址空间（Option B）
+     状态：PASS  ← 相对今早 OPEN 翻转
+     核验：R（NOTES + console + 源码浅扫 + spec §2.1）
+     证据：
+       …/Q01-device-index/NOTES_Q01.txt
+       …/Q01-device-index/console.txt
+         test_q01_single_device_index PASS；
+         test_storage_placement PASS；test_admission_plan PASS；EXIT=0
+       …/Q01-device-index/chunk-store-no-device-index.txt（chunk store 无
+         device_index→backend 映射，支撑 Option B 理由）
+       生产拒收点：
+         wavevm_manifest.c storage_device_plan_validate_common count>1
+         wavevm_manifest.c assignment_lists_validate count>1
+         wavevm_admission.c storage_template_count>1
+         node_runtime/main.c execute_local_block local_storage count>1
+       规格：docs/specs/storage-device-authority.md §2.1（已写入）
+     边界：Option A device→backend 映射未做（超出本轮 Option B）；
+           普通 QEMU 本地盘不变、仍为合法 Minimum。
+     纲领：storage-device-authority.md §2.1；Codex final Q01。
+
+Q02  gateway drain prepare/commit 验收链
+     状态：PASS  ← 相对今早 OPEN/FAIL 翻转
+     核验：R（新 console；勿再引用 Q02-reverify 作当前裁决）
+     证据：
+       …/Q02-drain/console.txt（END 2026-11-05 10:11:48 CST）
+         CREATE_VM attempt=1 status=0 recorded_state=11
+         DRAIN PREPARE status=0 recorded_state=4
+         DRAIN COMMIT status=0 recorded_state=6
+         DRAIN COMMIT replay status=0
+         「production gateway DRAIN PREPARE+peer ACK+COMMIT→DRAINING: PASS」
+         EXIT=0
+       …/Q02-drain/console-debug.txt（tmpdir/进程侧证）
+     历史对照（已 superseded，勿当现裁决）：
+       …/Q02-reverify/console.txt — CREATE 未到 RUNNING（今早 FAIL 来源）
+     边界（NOTES 式披露，非本项 FAIL）：Mode A / guest E2E 未由此 harness 启动；
+       cold-recover / successor builder 边界已在 console 披露。
+     纲领：cluster-membership-topology-lifecycle.md §1.1 drain/gateway replacement。
+
+Q03  声明能力的有限补证（Mode A 跨节点 / KVM dirty / >4096 / 异构拒绝）
+     状态：PARTIAL / 条件性
+     核验：I
+     证据：Mode A 四真模块隔离 F04-modea-isol PASS（本机）；
+           >4096 合成拓扑 Codex final 记载 fixture PASS；
+           KVM dirty/resync、异构 CPU 拒绝：有限补证，非本周第一阻塞。
+     说明：最终矩阵前仍需按宣称能力抽检；多数不挡「骨架已通」叙述，
+           但挡「宣称能力已全证」的 COMPLETE。
+
+四、记分牌 M1–M13（roadmap §1.1 + Phase 门）
+----------------------------------------------------------------------
+来源：roadmap §1.1 → M1–M9；Phase 7/8/10 → 并入 M6/M11/M12/M13；
+      baseline §16 / §8.1 → 主要落入 M3/M9/M12。
+与 F/Q 交叉：M3≈F01；M5/M11≈F04；M6⊃Q02；M8≈F03；M9/M12≈F10；M13≈Q03 边。
+
+M1  manifest 绑定分布式 VM：隔离身份/路由/socket/SHM/端口/日志/临时
+    状态：PASS（I）— F02/F03/F04/F09 定向路径均见隔离身份与清理。
+
+M2  flat 与 fractal 路由，同一 VM namespace
+    状态：PASS（I）— F02 flat/fractal rangemap typed PASS（本 tip dirty）。
+
+M3  同一 memory/vCPU 合同下正确的 TCG 与 KVM 执行（含 §8.1）
+    状态：DEFERRED PARTIAL（=F01）— KVM 定向 PASS；分布式 concurrent TCG
+          guest 未闭合；默认 STW 与 concurrent-MAIN 应然冲突。勿打磨。
+
+M4  同一物理机多个 Mode B VM
+    状态：PASS（I）— F03 mode_b_dual + F09 baseline dual Mode B。
+
+M5  显式 per-VM Mode A 上下文；多 VM 前隔离
+    状态：PASS（I）— F04 mode_a_one/dual + modea-isol ALL PASS。
+          （正式 V1 envelope vm>255 全域属残留披露，非本机 Mode A 门失败。）
+
+M6  基础成员：join / cordon / safe drain / gateway 换血经 ack snapshot
+    状态：PASS（R）— 今日 Q02-drain PASS 补上 gateway drain 链；
+          join/cordon 继承既有 membership 定向证据（今早 M6 口径 + Q02 翻转）。
+
+M7  同机多 compute-node：host 聚合 / per-instance 租约 / 相关故障语义
+    状态：PASS（I）— 继承 compute_dual / placement 定向（无本周回归咬回证据）。
+
+M8  create/activate/start/stop/partial-start 清理
+    状态：PASS（主路径 I）/ 残留披露 — F02/F03 CREATE+STOP+compensating
+          cleanup PASS；ACTIVATION_DECIDED recover 归档重跑仍薄（非 P0）。
+
+M9  guest 就绪 + e2e 远端 vCPU/memory 活动证据
+    状态：PARTIAL（=F10 主缺口）— 缺 tip+dirty 下适用格真实 login/SSH/
+          远端进展且拒 fl 主导的最终包；all-local F01 不能顶替分布式合同。
+
+M10 Phase 0–4 规格交付物（应然存在）
+     状态：PASS — docs/specs 齐全；§8.1/§16 已在 tip 合同内；
+           storage §2.1 今日随 Q01 更新（dirty）。
+
+M11 Phase 8 短门：隔离前拒第二 Mode A；过隔离可双
+     状态：PASS（I）— 与 M5/F04 同源。
+
+M12 Phase 10 Minimum smoke 矩阵 + 证据字段
+     状态：PARTIAL — 定向细胞多 PASS，但无 tip+dirty 全适用格最终汇总；
+           矩阵脚本仍 NOT_CLAIMED；§8.1 acceptance shape 未耐久重闭合。
+
+M13 受限 TCG fallback + KVM dirty/resync（非完整故障引擎）
+     状态：PARTIAL — auto_tcg_fallback 等历史定向有证；完整 dirty/resync/
+           异构拒绝仍属有限补证（≈Q03 边）。Extended 故障引擎不挡 Minimum。
+
+五、仍阻挡诚实 Minimum COMPLETE 的缺口（按严重度）
+----------------------------------------------------------------------
+B1 [P0 / DEFERRED] F01 + M3 — 分布式并发 TCG guest 合同未闭合
+    纲领：baseline §16；vcpu-handoff §8.1；roadmap §1.1
+    证据：F01-distributed-tcg-guest/{all-local PASS, split=1 FAIL, NOTES, CURRENT_REPRO}
+    另：dirty STW 默认 ≠ concurrent MAIN；即使 all-local/STW login 也不能冒充 §8.1。
+    建议：按 Joe 撤退暂停；恢复 concurrent 主路径前必须有 split≥1
+          login/SSH/远端进展/STOP。不得 force_local 主导或永久全本地过关。
+
+B2 [P0] F10 + M9 + M12 — guest 成功判据 + 适用格真实 guest 矩阵
+    纲领：§8.1 Acceptance evidence shape；roadmap guest readiness / Phase 10
+    证据：tests/e2e/test_guest_smoke.sh（无 fl_dominates 硬拒绝）；
+          test_guest_minimum_matrix.sh（NOT_CLAIMED）；无 tip+dirty 全格 login 包
+    建议：先硬化判据（拒 fl 主导；健康 STOP；SKIP≠PASS），再跑适用格矩阵。
+          判据小测 PASS ≠ guest 已过；MATRIX_RESULT=PASS ≠ MINIMUM_COMPLETE。
+
+B3 [P1] F05 — 跨物理主机 coherent/远端缺页 live 证明
+    纲领：memory-consistency；§8.1 same-host 前提
+    证据：F05-coherent-host-scope/NOTES_F05.txt（明确缺第二主机）
+    建议：有第二物理机后再做 refuse + remote fault/version/sync；
+          单机 unit 不得升格为跨机完成。
+
+B4 [P1] 全量回归诚实性 — F08/F09/Q01/Q02 之后未做适用格 S6/guest 汇总重跑
+    说明：定向细胞 PASS ≠ 全矩阵在本 dirty 上重跑闭合。最终 COMPLETE 前需一次
+          「适用格」汇总，避免 dirty 回归静默咬回。
+    证据对照：MINIMUM_STATUS_*；F09/F08 RESULT；旧 20261104-audit/S6（tip 代际不同）
+
+B5 [P2] M8/M13/Q03 残留补证 — ACTIVATION_DECIDED recover 归档；
+    KVM dirty/resync / 异构拒绝有限抽检。单独不足挡「骨架」，但最终签署前披露。
+
+已退出 Top blockers（相对今早）：
+  - Q01（今日 Option B PASS）
+  - Q02（今日 drain harness PASS；Q02-reverify 作废为当前裁决）
+
+六、非阻塞项（已关闭或超出 Minimum）
+----------------------------------------------------------------------
+- F02 flat/fractal KVM typed CREATE/store/STOP：定向 PASS
+- F03 failed-identity / dual STOP：定向 PASS
+- F04 Mode A typed + dual + 真模块隔离：定向 PASS
+- F06 page pool：unit PASS
+- F07 subscriber lease：同进程 PASS
+- F08 execution fail-closed：PASS
+- F09 owner-lock yield + live delayed dual：PASS
+- Q01 Option B 单 device 拒收：PASS（今日）
+- Q02 gateway drain prepare/commit：PASS（今日）
+- F10 两个坏掉的测试编译入口：源码侧已修
+- >4096 合成拓扑定向：Codex 记载 PASS（非 4100 台物理机）
+- Extended：HA、迁移、RECOVERY_REBIND、透明恢复、完整故障矩阵、
+  跨平台移植、完整上游 MTTCG 性能 —— 不挡 Minimum
+- 工作区 dirty 本身不是产品 bug；但验收必须记录 tip+dirty 身份
+
+七、Joe 明确约束（本审计强调）
+----------------------------------------------------------------------
+- F01：Joe 撤退 — 停止继续 triage/fix/code；状态保持 DEFERRED PARTIAL。
+- F05：需要第二台物理主机；与 F01 无关。
+- 不以「再磨 F01」或「假装单机=跨机」或「STW 默认=§8.1」推进 COMPLETE。
+- Q01/Q02 今早 FAIL/OPEN 已过时；Codex 请以本文件与 Q01-device-index /
+  Q02-drain 证据为准。
+
+八、交给 Codex agent 的 handoff 要点
+----------------------------------------------------------------------
+请重核（建议）：
+  1) Q01-device-index/{NOTES,console} + storage-device-authority.md §2.1
+     + manifest/admission/main 拒收点 → 是否同意 PASS（Option B）
+  2) Q02-drain/console.txt 末段 PASS/EXIT=0 → 是否同意取代 Q02-reverify
+  3) F01 是否仍 DEFERRED PARTIAL；STW 默认是否与 §8.1 冲突
+     （读 wavevm_tcg_shm_allow_concurrent）
+  4) F05 NOTES 是否仍写明「无第二主机 → PARTIAL」
+  5) F08 RESULT + F09 live-delayed-dual-20261105-095219 是否仍可复读 PASS
+  6) F10：guest_smoke 是否仍缺 fl 主导硬拒绝；矩阵是否仍 NOT_CLAIMED
+  7) tip 仍为 620cd762b + dirty；MINIMUM_COMPLETE 必须仍为 No
+
+请勿再争讼 / 不必重开：
+  - F02/F03/F04 定向 PASS 的「当初根因故事」
+  - Mode A「有没有 u32 准入」旧争论
+  - 把 F06 unit PASS 重打成 guest panic 根因
+  - 要求 HA/迁移/RECOVERY_REBIND/完整故障矩阵才算 Minimum
+  - 用 STW 默认或全本地 login 宣称 §8.1 concurrent 完成
+  - 把选格子 MATRIX_RESULT=PASS 写成 MINIMUM_COMPLETE
+  - 用今早审计里的 Q01=OPEN / Q02=FAIL 覆盖今日新证据
+
+建议 Codex 产出：在本文件之上做交叉确认/异议清单；仍 audit-only，
+除非 Joe 另开修复回合。
+
+九、证据索引（本轮主要引用）
+----------------------------------------------------------------------
+本文件：audit-evidence/grok-minimum-gap-cross-audit-2026-11-05-b.txt
+今早：  audit-evidence/grok-minimum-gap-cross-audit-2026-11-05.txt
+状态：  audit-evidence/fix-blockers-20261104/MINIMUM_STATUS_*.txt
+基线：  minimum-final-cross-audit-2026-11-04.txt
+F01：…/F01-distributed-tcg-guest/
+F02：…/F02-flat-rangemap/  …/F02-fractal-rangemap/
+F03：…/F03-failed-stop/
+F04：…/F04-modea-one/ …/F04-modea-dual/ …/F04-modea-isol/
+F05：…/F05-coherent-host-scope/
+F06：…/F06-page-pool/
+F07：…/F07-subscriber-lease/
+F08：…/F08-execution-fail-closed/RESULT-20261105-084532.txt
+F09：…/F09-owner-lock-concurrency/RESULT-20261105-095248.txt
+      …/live-delayed-dual-20261105-095219/
+Q01：…/Q01-device-index/{NOTES_Q01.txt,console.txt,chunk-store-no-device-index.txt}
+Q02：…/Q02-drain/{console.txt,console-debug.txt}
+      （历史对照：…/Q02-reverify/ — superseded）
+
+十、记分牌速览
+----------------------------------------------------------------------
+F01 DEFERRED PARTIAL | F02 PASS | F03 PASS | F04 PASS | F05 PARTIAL
+F06 PASS | F07 PASS | F08 PASS | F09 PASS | F10 PARTIAL
+Q01 PASS（今日翻转） | Q02 PASS（今日翻转） | Q03 PARTIAL
+
+M1 PASS | M2 PASS | M3 DEFERRED PARTIAL | M4 PASS | M5 PASS
+M6 PASS（含今日 Q02） | M7 PASS | M8 PASS*残留披露 | M9 PARTIAL
+M10 PASS | M11 PASS | M12 PARTIAL | M13 PARTIAL
+
+十一、最终声明
+----------------------------------------------------------------------
+MINIMUM_COMPLETE = No
+本文件仅为缺口审计与 Codex handoff；不修复、不提交、不宣称完成。
+相对 grok-minimum-gap-cross-audit-2026-11-05.txt：仅刷新 Q01/Q02 及
+由其引起的 Top-blocker / M6 连带变化；F01 仍按 Joe 撤退 DEFERRED。

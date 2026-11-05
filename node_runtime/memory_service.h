@@ -210,6 +210,30 @@ int wvm_memory_service_init(
 void wvm_memory_service_destroy(struct wvm_memory_service *service);
 
 /*
+ * F07: drop ACTIVE/READING qualification for matching subscribers.
+ * Match rules (all provided non-zero / non-NULL filters AND together):
+ *   physical_node!=0, node_instance!=0, runtime_instance!=0, optional scope.
+ * runtime_instance==0 with physical_node+node_instance set → every runtime on
+ * that member instance (membership failure / replace).
+ * Does not invent HA/rebind. Normal G→G+1 ROUTE_COMMIT must not call this.
+ */
+int wvm_memory_service_invalidate_subscriber_instance(
+    struct wvm_memory_service *service, uint32_t physical_node,
+    uint64_t node_instance, uint64_t runtime_instance,
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len);
+
+/*
+ * F07: route-scope retirement — mark every ACTIVE/READING subscriber for
+ * SCOPE_KEY STALE. Called from the route_runtime retire hook when the local
+ * memory service owns that scope's directory table.
+ */
+int wvm_memory_service_invalidate_subscribers_for_scope(
+    struct wvm_memory_service *service,
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len);
+
+/*
  * Reject new work, allow pending ACKs to complete, then retire subscribers
  * after callbacks and in-flight fault/commit records finish. Call after the
  * ingress and executor producers stop. A timeout is STOP-incomplete.
@@ -285,6 +309,28 @@ int wvm_memory_service_global_request_commit_from_shared_backing(
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES],
     uint64_t delivery_attempt_id, int source_shared_backing,
     struct wvm_mem_commit_ack *ack, char *error, size_t error_len);
+
+/*
+ * F07: mark ACTIVE/READING subscribers for one member/runtime instance STALE
+ * via the installed global service (member-fail / instance-replace hook).
+ * runtime_instance==0 → all runtimes for that member instance.
+ */
+int wvm_memory_service_global_invalidate_subscriber_instance(
+    uint32_t physical_node, uint64_t node_instance, uint64_t runtime_instance,
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len);
+
+int wvm_memory_service_global_invalidate_subscribers_for_scope(
+    const struct wvm_vm_route_scope_key *scope_key, char *error,
+    size_t error_len);
+
+/*
+ * F07: membership-controller hook target. Marks STALE for physical_node +
+ * node_instance (all runtimes). Safe no-op (-ENOTCONN) if no global service.
+ */
+void wvm_memory_service_membership_failure_invalidate_hook(
+    void *context, uint32_t physical_node_id, uint64_t node_instance_id,
+    uint16_t desired_state, uint16_t health_state);
 
 int wvm_memory_service_global_complete_commit(
     const uint8_t operation_id[WVM_IDENTITY_ID_BYTES], uint64_t gpa,

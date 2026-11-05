@@ -1,0 +1,14 @@
+s6 matrix run_id=f02-pcdiag2 out_dir=/tmp/wavevm-f02-pcdiag have_kvm=1 have_wavevm=0
+cells_selected=flat_kvm
+cell_deadline_s=120 log_cap_bytes=1048576 runtime_file_limit_bytes=67108864
+tip=620cd762b
+2026年 11月 04日 星期三 20:15:45 CST
+=== CELL flat_kvm ===
+cmd: WVM_S6_BACKEND=require-kvm WVM_S6_ACCEL=disabled bash tests/control-plane/test_create_vm_single_node.sh
+RESULT flat_kvm FAIL rc=1 class=unknown cleanup_ok=1 note=ok elapsed=25s
+==== SUMMARY ====
+FAIL flat_kvm rc=1
+totals pass=0 fail=1 skip=0 blocked=0 orphans_ignored=0 out=/tmp/wavevm-f02-pcdiag run_id=f02-pcdiag2
+selected=1 invoked=1
+MATRIX_RESULT=FAIL
+EXIT=1

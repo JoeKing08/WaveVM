@@ -29,6 +29,8 @@
 #include <signal.h>
 #include <string.h>
 #include <inttypes.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
 
 #include "logic_core.h"
 #include "../common_include/wavevm_protocol.h"
@@ -66,6 +68,7 @@ static struct wvm_runtime_gate *g_runtime_gate_ptr;
 static int g_runtime_gate_active = 0;
 static int g_runtime_requires_qemu_frontend = 0;
 static int g_runtime_ready_published = 0;
+static pid_t g_frontend_pid = -1;
 static const struct wvm_runtime_dispatch_storage *g_runtime_dispatch_storage_ptr;
 static int g_runtime_dispatch_active = 0;
 static pthread_mutex_t g_runtime_gate_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -92,6 +95,185 @@ static int publish_runtime_ready(char *error, size_t error_len)
         return -1;
     }
     g_runtime_ready_published = 1;
+    return 0;
+}
+
+/*
+ * Placement host owns the QEMU frontend. TCG helpers already connect and
+ * register as QEMU_FRONTEND while executing; KVM FAST PATH never spawned a
+ * helper, so CREATE stayed IN_PROGRESS waiting for readiness. Spawn a
+ * manifest-bound FE after the runtime socket listens and before RUNNING.
+ * Keep identity checks — registration still goes through the runtime gate.
+ */
+static void stop_manifest_bound_qemu_frontend(void)
+{
+    int status = 0;
+    pid_t waited;
+
+    if (g_frontend_pid <= 0) {
+        return;
+    }
+    if (kill(g_frontend_pid, SIGTERM) != 0 && errno != ESRCH) {
+        fprintf(stderr,
+                "[System] cannot signal QEMU frontend pid=%d: %s\n",
+                (int)g_frontend_pid, strerror(errno));
+    }
+    waited = waitpid(g_frontend_pid, &status, 0);
+    if (waited < 0 && errno != ECHILD) {
+        fprintf(stderr,
+                "[System] waitpid QEMU frontend pid=%d failed: %s\n",
+                (int)g_frontend_pid, strerror(errno));
+        (void)kill(g_frontend_pid, SIGKILL);
+        (void)waitpid(g_frontend_pid, &status, 0);
+    }
+    fprintf(stderr,
+            "[System] QEMU frontend pid=%d stopped status=%d\n",
+            (int)g_frontend_pid, status);
+    g_frontend_pid = -1;
+}
+
+static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
+{
+    const char *qemu_bin = getenv("WVM_TCG_QEMU_BIN");
+    const char *tcg_machine = getenv("WVM_TCG_QEMU_MACHINE");
+    const char *tcg_ram_mb = getenv("WVM_TCG_QEMU_MEM_MB");
+    const char *tcg_datadir = getenv("WVM_TCG_QEMU_DATADIR");
+    const char *disable = getenv("WVM_FRONTEND_DISABLE");
+    enum wvm_manifest_backend backend =
+        g_runtime_storage.manifest.negotiated_profile.backend;
+    char ram_buf[32];
+    char smp_buf[32];
+    char accel_buf[64];
+    char *qemu_argv[24];
+    int ai = 0;
+    pid_t parent_pid;
+    pid_t child;
+    uint32_t smp;
+    uint64_t ram_mb;
+
+    if (disable && disable[0] != '\0' && strcmp(disable, "0") != 0) {
+        snprintf(error, error_len,
+                 "WVM_FRONTEND_DISABLE set; refusing to forge readiness");
+        return -1;
+    }
+    if (backend != WVM_MANIFEST_BACKEND_KVM) {
+        /* TCG helpers register as the frontend; do not race a second FE. */
+        return 0;
+    }
+    if (g_frontend_pid > 0) {
+        return 0;
+    }
+    if (!qemu_bin || !*qemu_bin) {
+        qemu_bin = "qemu-system-x86_64";
+    }
+
+    ram_mb = g_shm_size / (1024ULL * 1024ULL);
+    if (ram_mb == 0 || ram_mb > UINT32_MAX) {
+        snprintf(error, error_len, "invalid guest memory for QEMU frontend");
+        return -1;
+    }
+    if (!tcg_ram_mb || !*tcg_ram_mb) {
+        snprintf(ram_buf, sizeof(ram_buf), "%" PRIu64, ram_mb);
+        tcg_ram_mb = ram_buf;
+    }
+    smp = (uint32_t)g_runtime_storage.manifest.local_vcpu_assignments.count;
+    if (smp == 0) {
+        smp = 1;
+    }
+    snprintf(smp_buf, sizeof(smp_buf), "%u", smp);
+
+    {
+        const char *fe_accel = getenv("WVM_FRONTEND_ACCEL");
+        if (fe_accel && fe_accel[0] != '\0') {
+            /* Test/ops override only; default remains admitted-backend KVM FE. */
+            snprintf(accel_buf, sizeof(accel_buf), "%s", fe_accel);
+        } else if (g_runtime_storage.manifest.negotiated_profile
+                       .kernel_accelerator_bits != 0) {
+            snprintf(accel_buf, sizeof(accel_buf),
+                     "wavevm,backend=kvm,mode=kernel");
+        } else {
+            snprintf(accel_buf, sizeof(accel_buf),
+                     "wavevm,backend=kvm,mode=user");
+        }
+    }
+
+    parent_pid = getpid();
+    child = fork();
+    if (child == 0) {
+        if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || getppid() != parent_pid) {
+            _exit(127);
+        }
+        /*
+         * FE must not inherit executor/helper slave identity. Clear only the
+         * roles that would make wavevm treat this process as a TCG helper.
+         */
+        unsetenv("WVM_ROLE");
+        unsetenv("WVM_SOCK_CMD");
+        unsetenv("WVM_SOCK_REQ");
+        unsetenv("WVM_SOCK_PUSH");
+        unsetenv("WVM_EXECUTOR_SESSION_FD");
+        unsetenv("WVM_SLAVE_ID");
+        unsetenv("WVM_SLAVE_VCPU_COUNT");
+        unsetenv("WVM_EXECUTOR_ID");
+        unsetenv("WVM_EXECUTOR_VCPU_INDEX");
+
+        qemu_argv[ai++] = (char *)qemu_bin;
+        if (tcg_datadir && *tcg_datadir) {
+            qemu_argv[ai++] = "-L";
+            qemu_argv[ai++] = (char *)tcg_datadir;
+        }
+        qemu_argv[ai++] = "-accel";
+        qemu_argv[ai++] = accel_buf;
+        if (tcg_machine && *tcg_machine) {
+            qemu_argv[ai++] = "-machine";
+            qemu_argv[ai++] = (char *)tcg_machine;
+        }
+        qemu_argv[ai++] = "-m";
+        qemu_argv[ai++] = (char *)tcg_ram_mb;
+        qemu_argv[ai++] = "-smp";
+        qemu_argv[ai++] = smp_buf;
+        qemu_argv[ai++] = "-nographic";
+        qemu_argv[ai++] = "-S";
+        qemu_argv[ai++] = "-nodefaults";
+        qemu_argv[ai] = NULL;
+
+        execvp(qemu_bin, qemu_argv);
+        fprintf(stderr, "[System] exec QEMU frontend '%s' failed: %s\n",
+                qemu_bin, strerror(errno));
+        _exit(127);
+    }
+    if (child < 0) {
+        snprintf(error, error_len, "fork QEMU frontend failed: %s",
+                 strerror(errno));
+        return -1;
+    }
+
+    /* Bound early-exit check: missing binary must not leave CREATE hung. */
+    {
+        int status = 0;
+        pid_t waited;
+
+    usleep(100000);
+    waited = waitpid(child, &status, WNOHANG);
+    if (waited == child) {
+        snprintf(error, error_len,
+                 "QEMU frontend exited immediately status=%d bin=%s", status,
+                 qemu_bin);
+        return -1;
+    }
+    if (waited < 0 && errno != ECHILD) {
+        snprintf(error, error_len, "waitpid QEMU frontend failed: %s",
+                 strerror(errno));
+        (void)kill(child, SIGKILL);
+        return -1;
+    }
+    }
+
+    g_frontend_pid = child;
+    fprintf(stderr,
+            "[System] spawned manifest-bound QEMU frontend pid=%d accel=%s "
+            "bin=%s mem_mb=%s smp=%s\n",
+            (int)child, accel_buf, qemu_bin, tcg_ram_mb, smp_buf);
     return 0;
 }
 
@@ -223,37 +405,28 @@ static int apply_runtime_dispatch(void)
     dispatch = &g_runtime_dispatch_storage.projection;
 
     /*
-     * Typed runtime dispatch is now the single authority for routing.
-     * Legacy logic-core route arrays are compatibility shims only needed
-     * for flat topology Mode A kernel acceleration.
-     *
-     * For fractal routes, only configure the local sidecar gateway endpoint.
-     * The immutable route snapshot remains the cross-node routing authority.
+     * Typed runtime dispatch is the routing authority for both topologies.
+     * Legacy logic_core cpu/memory tables remain the local ownership shim used
+     * by MSG_MEM_WRITE / directory fastpath (read_authoritative →
+     * wvm_handle_local_fault_fastpath). Fractal previously only bound the
+     * sidecar gateway and skipped range maps; GPA ownership then fell through
+     * a zero-initialized hash ring (node 0) and silently ignored directory
+     * writes for local vnode != 0 — breaking fractal typed short-exec plant.
+     * Cross-node delivery still uses the immutable route snapshot; these
+     * tables only project admitted local directory/executor placement.
      */
-    if (dispatch->route_topology_kind == WVM_ROUTE_TOPOLOGY_FRACTAL) {
-        memcpy(&sidecar_ip, dispatch->local_sidecar_endpoint.data_address,
-               sizeof(sidecar_ip));
-        if (!u_ops.set_gateway_ip ||
-            dispatch->local_primary.destination_vnode >= WVM_MAX_GATEWAYS ||
-            dispatch->local_sidecar_endpoint.data_port == 0) {
-            return -1;
-        }
-        u_ops.set_gateway_ip(
-            wvm_wire_target(g_my_vm_id,
-                          dispatch->local_primary.destination_vnode),
-            sidecar_ip, htons(dispatch->local_sidecar_endpoint.data_port));
-        return 0;
-    }
-
-    /* Flat topology: configure sidecar and populate legacy route caches */
     memcpy(&sidecar_ip, dispatch->local_sidecar_endpoint.data_address,
            sizeof(sidecar_ip));
+    if (!u_ops.set_gateway_ip ||
+        dispatch->local_primary.destination_vnode >= WVM_MAX_GATEWAYS ||
+        dispatch->local_sidecar_endpoint.data_port == 0) {
+        return -1;
+    }
+    u_ops.set_gateway_ip(
+        wvm_wire_target(g_my_vm_id,
+                        dispatch->local_primary.destination_vnode),
+        sidecar_ip, htons(dispatch->local_sidecar_endpoint.data_port));
 
-    /*
-     * For flat routes, populate legacy logic_core arrays for backward
-     * compatibility. The node runtime has exactly one fabric peer: its
-     * local sidecar. Route lookups use the immutable route snapshot.
-     */
     wvm_clear_cpu_mappings();
     wvm_clear_memory_mappings();
     for (i = 0; i < dispatch->cpu_dispatch.count; i++) {
@@ -266,7 +439,6 @@ static int apply_runtime_dispatch(void)
             (int)dispatch->cpu_dispatch.entries[i].guest_vcpu_index,
             dispatch->cpu_dispatch.entries[i].executor.destination_vnode);
 
-        /* Set gateway for this vnode to local sidecar */
         if (u_ops.set_gateway_ip) {
             u_ops.set_gateway_ip(
                 wvm_wire_target(g_my_vm_id,
@@ -285,7 +457,6 @@ static int apply_runtime_dispatch(void)
             return -1;
         }
 
-        /* Set gateway for memory directory vnode to local sidecar */
         if (u_ops.set_gateway_ip) {
             u_ops.set_gateway_ip(
                 wvm_wire_target(g_my_vm_id, entry->directory.destination_vnode),
@@ -850,7 +1021,7 @@ static void handle_ipc_cpu_run(int qemu_fd,
     (void)write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
-#define WVM_COMMIT_SYNC_WINDOW     128
+#define WVM_COMMIT_SYNC_WINDOW     512  /* F05: larger in-flight over TS */
 #define WVM_COMMIT_SYNC_TIMEOUT_US 5000000ULL
 #define WVM_COMMIT_SYNC_RETRY_US   50000ULL
 
@@ -869,6 +1040,25 @@ struct pending_commit_sync {
 struct pending_commit_queue {
     struct pending_commit_sync entries[WVM_COMMIT_SYNC_WINDOW];
     unsigned head;
+    unsigned count;
+};
+
+/*
+ * F05: bulk handoff flush (~tens of thousands of COMMIT_DIFF_SYNC) must not
+ * stall the IPC reader behind network ACK waits — that buries the empty
+ * push-fence on the same vcpu fd. Overflow holds remote syncs the window
+ * cannot accept yet; fence/CPU_RUN drain overflow+window before proceeding.
+ */
+struct overflow_commit {
+    uint8_t *payload;
+    uint32_t len;
+    uint32_t dir_node;
+    struct overflow_commit *next;
+};
+
+struct commit_overflow_list {
+    struct overflow_commit *head;
+    struct overflow_commit *tail;
     unsigned count;
 };
 
@@ -895,6 +1085,225 @@ static int send_pending_commit(struct pending_commit_sync *entry)
     return ret;
 }
 
+static void cancel_commit_overflow(struct commit_overflow_list *overflow)
+{
+    while (overflow->head) {
+        struct overflow_commit *node = overflow->head;
+        overflow->head = node->next;
+        free(node->payload);
+        free(node);
+        if (overflow->count > 0) {
+            overflow->count--;
+        }
+    }
+    overflow->tail = NULL;
+    overflow->count = 0;
+}
+
+static int overflow_push_commit(struct commit_overflow_list *overflow,
+                                struct wvm_diff_log *log, uint32_t len,
+                                uint32_t dir_node)
+{
+    struct overflow_commit *node = calloc(1, sizeof(*node));
+    if (!node) {
+        return -ENOMEM;
+    }
+    node->payload = malloc(len);
+    if (!node->payload) {
+        free(node);
+        return -ENOMEM;
+    }
+    memcpy(node->payload, log, len);
+    node->len = len;
+    node->dir_node = dir_node;
+    if (overflow->tail) {
+        overflow->tail->next = node;
+    } else {
+        overflow->head = node;
+    }
+    overflow->tail = node;
+    overflow->count++;
+    return 0;
+}
+
+/* Non-blocking poll of FIFO head: 0 ok, <0 error/timeout, -EAGAIN pending. */
+static int poll_oldest_pending_commit(struct pending_commit_queue *queue,
+                                      uint64_t *fail_gpa)
+{
+    struct pending_commit_sync *entry;
+    int status;
+
+    if (queue->count == 0) {
+        return 0;
+    }
+
+    entry = &queue->entries[queue->head];
+    status = u_ops.check_req_status(entry->rid);
+    if (status == 1) {
+        int ret = entry->ack_status == 1 ? 0 : -EIO;
+        static int ack_log_count;
+        if (ret == 0 && ack_log_count < 20) {
+            fprintf(stderr,
+                    "[IPC COMMIT_SYNC] ack gpa=%#llx dir=%u rid=%llu\n",
+                    (unsigned long long)entry->gpa,
+                    (unsigned)entry->dir_node,
+                    (unsigned long long)entry->rid);
+            ack_log_count++;
+        }
+        if (ret < 0) {
+            fprintf(stderr,
+                    "[IPC COMMIT_SYNC] nack gpa=%#llx dir=%u rid=%llu\n",
+                    (unsigned long long)entry->gpa,
+                    (unsigned)entry->dir_node,
+                    (unsigned long long)entry->rid);
+            if (fail_gpa) {
+                *fail_gpa = entry->gpa;
+            }
+        }
+        release_pending_commit(entry);
+        queue->head = (queue->head + 1) % WVM_COMMIT_SYNC_WINDOW;
+        queue->count--;
+        return ret;
+    }
+
+    if (u_ops.time_diff_us(entry->start_us) >= WVM_COMMIT_SYNC_TIMEOUT_US) {
+        fprintf(stderr, "[IPC COMMIT_SYNC] timeout gpa=%#llx dir=%u rid=%llu\n",
+                (unsigned long long)entry->gpa,
+                (unsigned)entry->dir_node,
+                (unsigned long long)entry->rid);
+        if (fail_gpa) {
+            *fail_gpa = entry->gpa;
+        }
+        release_pending_commit(entry);
+        queue->head = (queue->head + 1) % WVM_COMMIT_SYNC_WINDOW;
+        queue->count--;
+        return -ETIMEDOUT;
+    }
+
+    if (u_ops.time_diff_us(entry->last_send_us) > WVM_COMMIT_SYNC_RETRY_US) {
+        send_pending_commit(entry);
+    }
+    return -EAGAIN;
+}
+
+static int enqueue_commit_diff_sync_prepared(struct pending_commit_queue *queue,
+                                             struct wvm_diff_log *log, uint32_t len,
+                                             uint32_t dir_node)
+{
+    unsigned idx;
+    struct pending_commit_sync *entry;
+    struct wvm_header *hdr;
+
+    if (queue->count >= WVM_COMMIT_SYNC_WINDOW) {
+        return -EAGAIN;
+    }
+
+    idx = (queue->head + queue->count) % WVM_COMMIT_SYNC_WINDOW;
+    entry = &queue->entries[idx];
+    memset(entry, 0, sizeof(*entry));
+    entry->rid = (uint64_t)-1;
+    entry->dir_node = dir_node;
+    entry->gpa = WVM_NTOHLL(log->gpa);
+    entry->start_us = u_ops.get_time_us();
+
+    entry->rid = u_ops.alloc_req_id(&entry->ack_status, sizeof(entry->ack_status));
+    if (entry->rid == (uint64_t)-1) {
+        return -EBUSY;
+    }
+
+    entry->pkt_len = sizeof(struct wvm_header) + len;
+    entry->pkt = u_ops.alloc_packet(entry->pkt_len, 0);
+    if (!entry->pkt) {
+        u_ops.free_req_id(entry->rid);
+        entry->rid = (uint64_t)-1;
+        return -ENOMEM;
+    }
+
+    hdr = (struct wvm_header *)entry->pkt;
+    memset(hdr, 0, sizeof(*hdr));
+    hdr->magic = htonl(WVM_MAGIC);
+    hdr->msg_type = htons(MSG_COMMIT_DIFF);
+    hdr->payload_len = htons((uint16_t)len);
+    (void)wvm_header_pack_src(hdr, g_my_vm_id, (uint32_t)g_my_node_id);
+    if (!(hdr->flags & WVM_FLAG_FULL_VMID))
+        hdr->epoch = htonl(g_curr_epoch);
+    hdr->target_id = htonl(dir_node);
+    hdr->req_id = WVM_HTONLL(entry->rid);
+    hdr->qos_level = 1;
+    hdr->flags = (uint8_t)(hdr->flags | WVM_FLAG_NEED_ACK);
+    hdr->node_state = g_my_node_state;
+    memcpy(entry->pkt + sizeof(*hdr), log, len);
+
+    entry->active = 1;
+    if (send_pending_commit(entry) < 0) {
+        release_pending_commit(entry);
+        return -EIO;
+    }
+
+    queue->count++;
+    return 0;
+}
+
+static void fill_window_from_overflow(struct pending_commit_queue *queue,
+                                      struct commit_overflow_list *overflow)
+{
+    while (overflow->head && queue->count < WVM_COMMIT_SYNC_WINDOW) {
+        struct overflow_commit *node = overflow->head;
+        int ret = enqueue_commit_diff_sync_prepared(
+            queue, (struct wvm_diff_log *)node->payload, node->len, node->dir_node);
+        if (ret == -EAGAIN || ret == -EBUSY) {
+            break;
+        }
+        overflow->head = node->next;
+        if (!overflow->head) {
+            overflow->tail = NULL;
+        }
+        if (overflow->count > 0) {
+            overflow->count--;
+        }
+        free(node->payload);
+        free(node);
+        if (ret < 0) {
+            static int ov_fail_log;
+            if (ov_fail_log < 20) {
+                fprintf(stderr,
+                        "[IPC COMMIT_SYNC] overflow enqueue failed ret=%d left=%u\n",
+                        ret, overflow->count);
+                ov_fail_log++;
+            }
+        }
+    }
+}
+
+static int pump_pending_commits(struct pending_commit_queue *queue,
+                                struct commit_overflow_list *overflow,
+                                uint64_t *fail_gpa)
+{
+    int last_err = 0;
+
+    for (;;) {
+        int ret;
+
+        if (queue->count == 0) {
+            fill_window_from_overflow(queue, overflow);
+            if (queue->count == 0) {
+                break;
+            }
+        }
+
+        ret = poll_oldest_pending_commit(queue, fail_gpa);
+        if (ret == -EAGAIN) {
+            fill_window_from_overflow(queue, overflow);
+            break;
+        }
+        if (ret < 0) {
+            last_err = ret;
+        }
+        fill_window_from_overflow(queue, overflow);
+    }
+    return last_err;
+}
+
 static int wait_oldest_pending_commit(struct pending_commit_queue *queue,
                                       uint64_t *fail_gpa)
 {
@@ -902,67 +1311,13 @@ static int wait_oldest_pending_commit(struct pending_commit_queue *queue,
         return 0;
     }
 
-    struct pending_commit_sync *entry = &queue->entries[queue->head];
-    uint64_t last_wait_log_us = entry->start_us;
-    while (u_ops.time_diff_us(entry->start_us) < WVM_COMMIT_SYNC_TIMEOUT_US) {
-        if (u_ops.check_req_status(entry->rid) == 1) {
-            int ret = entry->ack_status == 1 ? 0 : -EIO;
-            static int ack_log_count;
-            if (ret == 0 && ack_log_count < 20) {
-                fprintf(stderr,
-                        "[IPC COMMIT_SYNC] ack gpa=%#llx dir=%u rid=%llu\n",
-                        (unsigned long long)entry->gpa,
-                        (unsigned)entry->dir_node,
-                        (unsigned long long)entry->rid);
-                ack_log_count++;
-            }
-            if (ret < 0) {
-                fprintf(stderr,
-                        "[IPC COMMIT_SYNC] nack gpa=%#llx dir=%u rid=%llu\n",
-                        (unsigned long long)entry->gpa,
-                        (unsigned)entry->dir_node,
-                        (unsigned long long)entry->rid);
-                if (fail_gpa) {
-                    *fail_gpa = entry->gpa;
-                }
-            }
-            release_pending_commit(entry);
-            queue->head = (queue->head + 1) % WVM_COMMIT_SYNC_WINDOW;
-            queue->count--;
+    for (;;) {
+        int ret = poll_oldest_pending_commit(queue, fail_gpa);
+        if (ret != -EAGAIN) {
             return ret;
-        }
-
-        if (u_ops.time_diff_us(last_wait_log_us) > 1000000ULL) {
-            static int slow_wait_log_count;
-            if (slow_wait_log_count < 20) {
-                fprintf(stderr,
-                        "[IPC COMMIT_SYNC] waiting gpa=%#llx dir=%u rid=%llu elapsed_us=%llu\n",
-                        (unsigned long long)entry->gpa,
-                        (unsigned)entry->dir_node,
-                        (unsigned long long)entry->rid,
-                        (unsigned long long)u_ops.time_diff_us(entry->start_us));
-                slow_wait_log_count++;
-            }
-            last_wait_log_us = u_ops.get_time_us();
-        }
-
-        if (u_ops.time_diff_us(entry->last_send_us) > WVM_COMMIT_SYNC_RETRY_US) {
-            send_pending_commit(entry);
         }
         u_ops.yield_cpu_short_time();
     }
-
-    fprintf(stderr, "[IPC COMMIT_SYNC] timeout gpa=%#llx dir=%u rid=%llu\n",
-            (unsigned long long)entry->gpa,
-            (unsigned)entry->dir_node,
-            (unsigned long long)entry->rid);
-    if (fail_gpa) {
-        *fail_gpa = entry->gpa;
-    }
-    release_pending_commit(entry);
-    queue->head = (queue->head + 1) % WVM_COMMIT_SYNC_WINDOW;
-    queue->count--;
-    return -ETIMEDOUT;
 }
 
 static int drain_pending_commits(struct pending_commit_queue *queue,
@@ -987,70 +1342,58 @@ static void cancel_pending_commits(struct pending_commit_queue *queue)
     }
 }
 
+static int drain_commits_with_overflow(struct pending_commit_queue *queue,
+                                       struct commit_overflow_list *overflow,
+                                       uint64_t *fail_gpa)
+{
+    int last_err = 0;
+
+    fill_window_from_overflow(queue, overflow);
+    while (queue->count > 0 || overflow->count > 0) {
+        int pret = pump_pending_commits(queue, overflow, fail_gpa);
+        if (pret < 0) {
+            last_err = pret;
+        }
+        if (queue->count == 0 && overflow->count == 0) {
+            break;
+        }
+        if (queue->count > 0) {
+            int wret = wait_oldest_pending_commit(queue, fail_gpa);
+            if (wret < 0) {
+                last_err = wret;
+            }
+        }
+        fill_window_from_overflow(queue, overflow);
+    }
+    return last_err;
+}
+
 static int enqueue_commit_diff_sync(struct pending_commit_queue *queue,
+                                    struct commit_overflow_list *overflow,
                                     struct wvm_diff_log *log, uint32_t len,
                                     uint32_t dir_node)
 {
-    if (queue->count >= WVM_COMMIT_SYNC_WINDOW) {
+    int ret;
+
+    (void)pump_pending_commits(queue, overflow, NULL);
+
+    ret = enqueue_commit_diff_sync_prepared(queue, log, len, dir_node);
+    if (ret != -EAGAIN) {
+        return ret;
+    }
+
+    {
         static int full_log_count;
         if (full_log_count < 20) {
             fprintf(stderr,
-                    "[IPC COMMIT_SYNC] window full, draining oldest count=%u\n",
-                    queue->count);
+                    "[IPC COMMIT_SYNC] window full, overflow count=%u win=%u\n",
+                    overflow->count, queue->count);
             full_log_count++;
         }
-        int ret = wait_oldest_pending_commit(queue, NULL);
-        if (ret < 0) {
-            return ret;
-        }
     }
-
-    unsigned idx = (queue->head + queue->count) % WVM_COMMIT_SYNC_WINDOW;
-    struct pending_commit_sync *entry = &queue->entries[idx];
-    memset(entry, 0, sizeof(*entry));
-    entry->rid = (uint64_t)-1;
-    entry->dir_node = dir_node;
-    entry->gpa = WVM_NTOHLL(log->gpa);
-    entry->start_us = u_ops.get_time_us();
-
-    entry->rid = u_ops.alloc_req_id(&entry->ack_status, sizeof(entry->ack_status));
-    if (entry->rid == (uint64_t)-1) {
-        return -EBUSY;
-    }
-
-    entry->pkt_len = sizeof(struct wvm_header) + len;
-    entry->pkt = u_ops.alloc_packet(entry->pkt_len, 0);
-    if (!entry->pkt) {
-        u_ops.free_req_id(entry->rid);
-        entry->rid = (uint64_t)-1;
-        return -ENOMEM;
-    }
-
-    struct wvm_header *hdr = (struct wvm_header *)entry->pkt;
-    memset(hdr, 0, sizeof(*hdr));
-    hdr->magic = htonl(WVM_MAGIC);
-    hdr->msg_type = htons(MSG_COMMIT_DIFF);
-    hdr->payload_len = htons((uint16_t)len);
-    (void)wvm_header_pack_src(hdr, g_my_vm_id, (uint32_t)g_my_node_id);
-    /* pack_src may claim epoch for FULL_VMID; restore cluster epoch only on legacy. */
-    if (!(hdr->flags & WVM_FLAG_FULL_VMID))
-        hdr->epoch = htonl(g_curr_epoch);
-    hdr->target_id = htonl(dir_node);
-    hdr->req_id = WVM_HTONLL(entry->rid);
-    hdr->qos_level = 1;
-    hdr->flags = (uint8_t)(hdr->flags | WVM_FLAG_NEED_ACK);
-    hdr->node_state = g_my_node_state;
-    memcpy(entry->pkt + sizeof(*hdr), log, len);
-
-    entry->active = 1;
-    if (send_pending_commit(entry) < 0) {
-        release_pending_commit(entry);
-        return -EIO;
-    }
-
-    queue->count++;
-    return 0;
+    return overflow_push_commit(overflow, log, len, dir_node);
 }
+
 
 /* 
  * [物理意图] 维护 Wavelet 协议的“最后一百米”：将网络推送推入 QEMU 的监听线程。
@@ -1318,6 +1661,7 @@ void* client_handler(void *socket_desc) {
     wvm_ipc_header_t ipc_hdr;
     uint8_t payload_buf[WVM_MAX_PACKET_SIZE];
     struct pending_commit_queue commit_queue = {0};
+    struct commit_overflow_list commit_overflow = {0};
 
     while (1) {
         // [FIX-G2] 使用 read_exact 处理 partial read
@@ -1469,13 +1813,15 @@ void* client_handler(void *socket_desc) {
                 static int cpu_run_rx_log_count;
                 if (cpu_run_rx_log_count < 20) {
                     fprintf(stderr,
-                            "[IPC CPU_RUN RX] fd=%d vcpu=%u mode=%u pending=%u\n",
+                            "[IPC CPU_RUN RX] fd=%d vcpu=%u mode=%u pending=%u overflow=%u\n",
                             qemu_fd, req->vcpu_index, req->mode_tcg,
-                            commit_queue.count);
+                            commit_queue.count, commit_overflow.count);
                 }
 
                 uint64_t fail_gpa = 0;
-                int ret = drain_pending_commits(&commit_queue, &fail_gpa);
+                int ret = drain_commits_with_overflow(&commit_queue,
+                                                      &commit_overflow,
+                                                      &fail_gpa);
                 if (ret < 0) {
                     struct wvm_ipc_cpu_run_ack ack = {0};
                     ack.status = ret;
@@ -1486,8 +1832,9 @@ void* client_handler(void *socket_desc) {
                 }
                 if (cpu_run_rx_log_count < 20) {
                     fprintf(stderr,
-                            "[IPC CPU_RUN RX] fd=%d drain done vcpu=%u pending=%u\n",
-                            qemu_fd, req->vcpu_index, commit_queue.count);
+                            "[IPC CPU_RUN RX] fd=%d drain done vcpu=%u pending=%u overflow=%u\n",
+                            qemu_fd, req->vcpu_index, commit_queue.count,
+                            commit_overflow.count);
                     cpu_run_rx_log_count++;
                 }
                 handle_ipc_cpu_run(qemu_fd, req);
@@ -1506,19 +1853,32 @@ void* client_handler(void *socket_desc) {
                     uint8_t fence_resp[16] = {0};
                     int br;
                     int hr = 0;
+                    int dr;
+                    uint64_t fail_gpa = 0;
                     int need_helpers = (payload_buf[0] == 0x02);
                     static int fence_log_count;
                     /*
-                     * G4: barrier errors must reach the fence waiter. Encoding
-                     * errno in the first 4 bytes (0 == success); never sleep-
-                     * claim success while ignoring br/helpers.
+                     * F05: prioritize fence — drain bulk COMMIT_DIFF_SYNC
+                     * backlog (window + overflow) before local push-barrier so
+                     * remote directory ACKs complete ahead of VCPU_RUN.
+                     * G4: barrier/drain errors reach the fence waiter.
                      */
-                    br = wait_local_qemu_push_barrier(5000000ULL);
-                    if (need_helpers) {
-                        hr = wavevm_proxy_barrier_local_helpers(5000000ULL);
+                    if (fence_log_count < 40) {
+                        fprintf(stderr,
+                                "[IPC FENCE] begin fd=%d pending=%u overflow=%u "
+                                "helpers=%d\n",
+                                qemu_fd, commit_queue.count,
+                                commit_overflow.count, need_helpers);
                     }
-                    if (br != 0 || hr != 0) {
-                        int err = br != 0 ? br : hr;
+                    dr = drain_commits_with_overflow(&commit_queue,
+                                                     &commit_overflow,
+                                                     &fail_gpa);
+                    br = wait_local_qemu_push_barrier(120000000ULL); /* F05 */
+                    if (need_helpers) {
+                        hr = wavevm_proxy_barrier_local_helpers(120000000ULL); /* F05 */
+                    }
+                    if (dr != 0 || br != 0 || hr != 0) {
+                        int err = dr != 0 ? dr : (br != 0 ? br : hr);
                         if (err > 0) {
                             err = -err;
                         }
@@ -1527,8 +1887,12 @@ void* client_handler(void *socket_desc) {
                     if (fence_log_count < 40) {
                         fprintf(stderr,
                                 "[IPC FENCE] push-barrier done br=%d helpers=%d "
-                                "hr=%d fd=%d\n",
-                                br, need_helpers, hr, qemu_fd);
+                                "hr=%d dr=%d fail_gpa=%#llx pending=%u "
+                                "overflow=%u fd=%d\n",
+                                br, need_helpers, hr, dr,
+                                (unsigned long long)fail_gpa,
+                                commit_queue.count, commit_overflow.count,
+                                qemu_fd);
                         fence_log_count++;
                     }
                     if (write_exact(qemu_fd, fence_resp, sizeof(fence_resp)) < 0) {
@@ -1561,8 +1925,8 @@ void* client_handler(void *socket_desc) {
                     wvm_logic_process_packet(&hdr, log,
                                              wvm_wire_target(g_my_vm_id, (uint32_t)g_my_node_id));
                 } else if (ipc_hdr.type == WVM_IPC_TYPE_COMMIT_DIFF_SYNC) {
-                    int ret = enqueue_commit_diff_sync(&commit_queue, log, ipc_hdr.len,
-                                                       dir_node);
+                    int ret = enqueue_commit_diff_sync(&commit_queue, &commit_overflow,
+                                                       log, ipc_hdr.len, dir_node);
                     if (ret < 0) {
                         fprintf(stderr,
                                 "[IPC COMMIT_SYNC] failed gpa=%#llx dir=%u ret=%d\n",
@@ -1796,10 +2160,15 @@ void* client_handler(void *socket_desc) {
     }
 client_done:
     {
-        int drain_failed = drain_pending_commits(&commit_queue, NULL) < 0;
+        int drain_failed = drain_commits_with_overflow(&commit_queue,
+                                                       &commit_overflow,
+                                                       NULL) < 0;
 
         if (drain_failed) {
             cancel_pending_commits(&commit_queue);
+            cancel_commit_overflow(&commit_overflow);
+        } else {
+            cancel_commit_overflow(&commit_overflow);
         }
         fprintf(stderr, "[IPC] client disconnected fd=%d\n", qemu_fd);
 
@@ -2149,9 +2518,20 @@ int wavevm_master_runtime_main(
             return 1;
         }
     } else {
+        char fe_error[256] = {0};
+
         fprintf(stderr,
                 "[System] runtime socket listening; waiting for manifest-bound "
                 "QEMU frontend registration\n");
+        if (spawn_manifest_bound_qemu_frontend(fe_error, sizeof(fe_error)) !=
+            0) {
+            fprintf(stderr,
+                    "[System] cannot start manifest-bound QEMU frontend: %s\n",
+                    fe_error[0] ? fe_error : "spawn failed");
+            (void)wvm_kernel_memory_stop(&kernel_memory);
+            close(listen_fd);
+            return 1;
+        }
     }
 
     printf("[+] WaveVM V29 Node endpoint ready. Waiting for QEMU...\n");
@@ -2232,6 +2612,8 @@ int wavevm_master_runtime_main(
     fprintf(stderr,
             "[System] control accept loop ended (shutdown=%d)\n",
             (int)g_shutdown_requested);
+
+    stop_manifest_bound_qemu_frontend();
 
     /*
      * R1: stopping the accept loop is not STOP completion.  Wake every

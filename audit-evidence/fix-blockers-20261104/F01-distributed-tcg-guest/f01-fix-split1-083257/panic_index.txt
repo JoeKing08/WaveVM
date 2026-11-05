@@ -1,0 +1,2 @@
+131:[    0.622601] Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: schedule_timeout+0x10e/0x140
+134:[    0.625211] Call Trace:

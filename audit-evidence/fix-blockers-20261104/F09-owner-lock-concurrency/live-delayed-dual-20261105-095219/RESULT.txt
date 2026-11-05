@@ -1,0 +1,16 @@
+RESULT 2026-11-05 09:52:28 CST
+WVM_F09_RPC_DELAY_MS=1500
+vm1=status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2894228161520744821
+vm2=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=7254357703519145220
+guest_dual_create_vm1=PASS
+guest_dual_create_vm2=PASS
+vm1_id=256
+vm2_id=257
+rpc_delay_lines=1
+delay_ms=1500
+wall_s=1.830
+vm2_wall_s=0.645
+route_prepare_after_delay=1
+client_threads_after_delay=2
+overlap_heuristic=True
+overall=PASS

@@ -1,0 +1,43 @@
+Asia/Shanghai 2026-11-05 18:24:58 CST
+Result: BLOCKED (FAIL mid-handoff)
+
+ART_A=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F05-cross-host/dual-node-tcg-20261105-182153
+ART_B=.../dual-node-tcg-20261105-182005 (Host B)
+TS: A=100.71.167.85 (wavevm-f05-a-1) B=100.102.127.79 (wavevm-f05-b-2) reuse OK; TUN free both
+
+=== Required markers ===
+WVM-REMOTE cpu=2: 10
+IPC VCPU_RUN: 0
+0
+IPC VCPU_RUN RET: 0
+0
+push-fence failed: 1
+cirros login: 0
+0
+
+=== Progress this resume ===
+1. Cirros path fixed: devices/images -> artifacts/images (symlink)
+2. NUMA GPA layout OK on FE+helpers A/B: ram0@0 2G + ram1@0x100000000 1G
+3. Cross-host COMMIT_SYNC RX on B for high GPAs (not just SHM JOIN)
+4. WVM-REMOTE cpu=2 dispatch present
+5. Fence timeout raised FE-side to 120s (WVM_MEMORY_IPC_TIMEOUT_US + push_fence cap); still -110
+
+=== Residual blocker ===
+push-fence ret=-110 after flush=~31316 dirty pages on same vcpu IPC fd.
+Master still shows COMMIT_SYNC timeout gpa=0x13fdda000 dir=1 (ram1 tail).
+No [IPC FENCE] on master0 => empty fence IPC never completed before FE deadline;
+31k fire-and-forget COMMIT_DIFF_SYNC share the stream with fence; window-full=128;
+cross-host drain + one stuck high-GPA page prevent fence completion.
+After fail: discard_memory_ipc -> flush errno=32 EPIPE / ret=-5 loop.
+SHM JOIN alone != PASS; no B guest_vcpu=2 / IPC VCPU_RUN.
+
+=== Patches staged (NOT committed) ===
+- wavevm-qemu/accel/wavevm/wavevm-cpu.c: fence wait 120s
+- wavevm-qemu/accel/wavevm/wavevm-user-mem.c: deadline cap + WVM_MEMORY_IPC_TIMEOUT_US=120s
+- master_core/main_wrapper.c: barrier waits 120s (legacy wavevm_node_master ELF NOT rebuilt;
+  ci still launches Aug-dated master_core/wavevm_node_master)
+- scripts/ci_dual_node.sh + qemu-tcg-numa-wrapper (from earlier): NUMA/TS reuse
+
+=== Evidence files ===
+vm.log master0.log slave0.log vm-serial.log fract_2node.conf resource_plan.txt
+tailscale_*.txt peer_ip.txt fe_physical_host_id.txt this NOTES

@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-dual-mode-b.LI7Rm1/runtime/vm-257-1-1.manifest
+022427e0c690cf085632019856d4f03cfcec91a8af2ca4f345fa85654e169bfd  /tmp/wavevm-create-vm-dual-mode-b.LI7Rm1/runtime/vm-257-1-1.manifest
+ba7823697500bdec5af080127550f5684cfc0675827604a58ff384b92641dea6  /tmp/wavevm-create-vm-dual-mode-b.LI7Rm1/runtime/vm-257-1-1.manifest.dispatch
+01a577217cca950e06b580580b7dc93a7f3110ce3a5735096edd57af29c2be12  /tmp/wavevm-create-vm-dual-mode-b.LI7Rm1/runtime/vm-257-1-1.manifest.route

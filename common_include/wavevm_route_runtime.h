@@ -71,6 +71,16 @@ int wvm_route_runtime_retire(struct wvm_route_runtime *runtime,
                              char *error, size_t error_len);
 
 /*
+ * F07: optional process-wide hook after a successful retire. Memory service
+ * registers to mark matching subscribers STALE (§4.5 route-scope retirement).
+ * Hook runs without the route_runtime lock held.
+ */
+typedef void (*wvm_route_runtime_retire_hook_fn)(
+    void *context, const struct wvm_route_snapshot_key *key);
+void wvm_route_runtime_set_retire_hook(wvm_route_runtime_retire_hook_fn fn,
+                                       void *context);
+
+/*
  * A05: real in-flight operation refs for ROUTE_RETIRE proof. Pin while a
  * semantic operation uses the scope; put when it completes. Retire fails
  * closed while refs != 0. Query feeds owner ACK fields (no constant 0/1).

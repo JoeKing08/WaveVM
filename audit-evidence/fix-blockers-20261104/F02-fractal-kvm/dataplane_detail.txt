@@ -1,0 +1,47 @@
+cell=fractal_kvm
+backend=require-kvm
+vm_id=257
+vm_incarnation=1
+manifest_generation=1
+create_out=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=9107103286855221098
+marker=0x5267
+shm=/dev/shm/wavevm_ram_wvm-v257-i1-g1-n801-fe4b4277618c77d4
+manifest=/tmp/wavevm-create-vm-fractal.pxRjC3/runtime/vm-257-1-1.manifest
+gw_data_port=48786
+mode_line=[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:48845
+tcg_helper=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+node_runtime_data_port=48794
+local_executor_service_port=48845
+fractal_via_gateway=1 gw_data_port=48786 node_data_port=48794
+typed_send_port=48786 via_gateway=1 backend=kvm
+guest SHM store timeout: got=0x0 want=0x5267 (typed path did not complete guest store)
+production_typed_dispatch=1
+dispatch_path=typed_WVM1_ingress_via_gateway
+via_gateway=1
+ingress_port=48786
+manifest=/tmp/wavevm-create-vm-fractal.pxRjC3/runtime/vm-257-1-1.manifest
+node_runtime_data_port=48794
+local_executor_service_port=48845
+vm_id=257 incarnation=1 generation=1
+local_primary kind=2 scope=7 vnode=1
+topology_kind=2 physical_node=801 instance=802
+cpu0_executor kind=2 scope=7 vnode=1
+code_at_gpa=0x2000 store_gpa=0x2020 marker=0x5267
+published_planted_page gpa=0x2000 bytes=4096 ingress_port=48786 vm=257 vnode=1
+sent_typed_vcpu_run ingress_port=48786 payload_bytes=12781
+guest SHM store timeout: got=0x90909090 want=0x5267 (typed path did not complete guest store)
+production_typed_dispatch=1
+dispatch_path=typed_WVM1_ingress_via_gateway
+via_gateway=1
+ingress_port=48786
+manifest=/tmp/wavevm-create-vm-fractal.pxRjC3/runtime/vm-257-1-1.manifest
+node_runtime_data_port=48794
+local_executor_service_port=48845
+vm_id=257 incarnation=1 generation=1
+local_primary kind=2 scope=7 vnode=1
+topology_kind=2 physical_node=801 instance=802
+cpu0_executor kind=2 scope=7 vnode=1
+code_at_gpa=0x2000 store_gpa=0x2020 marker=0x5267
+published_planted_page gpa=0x2000 bytes=4096 ingress_port=48786 vm=257 vnode=1
+sent_typed_vcpu_run ingress_port=48786 payload_bytes=12781
+dataplane FAIL: production typed short-exec (WVM1 ingress/gateway)

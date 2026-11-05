@@ -1,0 +1,10 @@
+knob=WVM_TCG_SHM_CONCURRENT=0
+split=1
+goal=STW vs concurrent stack-protector triage
+2026年 11月 05日 星期四 08:52:40 CST
+
+RESULT 2026-11-05 08:55:37 CST
+WVM_TCG_SHM_CONCURRENT=0 (STW) split=1: guest_login=PASS guest_ssh=PASS cpu_smoke=PASS
+remote_done=28 (remote path exercised); force_local_used high during softlock hold — G3 ratio weak but boot correct
+Contrast: f01-fix-split1-083257 concurrent default → stack-protector ~0.62s FAIL
+Production fix: wavevm-cpu.c wavevm_tcg_shm_allow_concurrent default return 0

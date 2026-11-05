@@ -1,0 +1,9 @@
+run_id=f02-flat-rm-210943
+cell=flat_kvm
+rc=0
+elapsed_s=38
+class=ok
+cleanup_ok=1
+log=/tmp/wavevm-f02-flat-rm/flat_kvm.log
+note=ok
+invoked=1

@@ -1,0 +1,46 @@
+[    0.811132] NetLabel:  unlabeled traffic allowed by default
+[    0.811534] PCI: Using ACPI for IRQ routing
+[    0.813970] hpet: 3 channels of 0 reserved for per-cpu timers
+[    0.814210] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    0.814403] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[   11.032955] BUG: kernel NULL pointer dereference, address: 0000000000000008
+[   11.035674] #PF: supervisor read access in kernel mode
+[   11.035858] #PF: error_code(0x0000) - not-present page
+[   11.036013] PGD 0 P4D 0 
+[   11.036070] Oops: 0000 [#1] SMP NOPTI
+[   11.036070] CPU: 0 PID: 17 Comm: kworker/0:1 Not tainted 5.15.0-71-generic #78-Ubuntu
+[   11.036070] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.14.0-0-g155821a1990b-prebuilt.qemu.org 04/01/2014
+[   11.036070] Workqueue:  0x0 (events)
+[   11.036070] RIP: 0010:process_one_work+0x34/0x3d0
+[   11.036070] Code: 57 41 56 41 55 41 54 49 89 f4 53 48 89 fb 48 83 ec 18 48 8b 06 4c 8b 7f 48 49 89 c5 45 30 ed a8 04 b8 00 00 00 00 4c 0f 44 e8 <49> 8b 45 08 44 8b b0 00 01 00 00 41 83 e6 20 44 89 75 d4 41 f6 47
+[   11.036070] RSP: 0018:ffffad7c00093e80 EFLAGS: 00000046
+[   11.036070] RAX: 0000000000000000 RBX: ffff9dd90126ccc0 RCX: ffff9dd9012a2f80
+[   11.036070] RDX: 00000000fffee5a0 RSI: ffffffff9b20cda0 RDI: ffff9dd90126ccc0
+[   11.036070] RBP: ffffad7c00093ec0 R08: 0000000000000000 R09: 0000000000000000
+[   11.036070] R10: 0000000000000000 R11: 0000000000000000 R12: ffffffff9b20cda0
+[   11.036070] R13: 0000000000000000 R14: ffffad7c00043db0 R15: ffff9dd90f030500
+[   11.036070] FS:  0000000000000000(0000) GS:ffff9dd90f000000(0000) knlGS:0000000000000000
+[   11.036070] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   11.036070] CR2: 0000000000000008 CR3: 000000000a010000 CR4: 00000000000006f0
+[   11.036070] Call Trace:
+[   11.036070]  <TASK>
+[   11.036070]  worker_thread+0x53/0x420
+[   11.036070]  ? process_one_work+0x3d0/0x3d0
+[   11.036070]  kthread+0x12a/0x150
+[   11.036070]  ? set_kthread_struct+0x50/0x50
+[   11.036070]  ret_from_fork+0x22/0x30
+[   11.036070]  </TASK>
+[   11.036070] Modules linked in:
+[   11.036070] CR2: 0000000000000008
+[   11.036070] ---[ end trace f51e409b2ff17d78 ]---
+[   11.036070] RIP: 0010:process_one_work+0x34/0x3d0
+[   11.036070] Code: 57 41 56 41 55 41 54 49 89 f4 53 48 89 fb 48 83 ec 18 48 8b 06 4c 8b 7f 48 49 89 c5 45 30 ed a8 04 b8 00 00 00 00 4c 0f 44 e8 <49> 8b 45 08 44 8b b0 00 01 00 00 41 83 e6 20 44 89 75 d4 41 f6 47
+[   11.036070] RSP: 0018:ffffad7c00093e80 EFLAGS: 00000046
+[   11.036070] RAX: 0000000000000000 RBX: ffff9dd90126ccc0 RCX: ffff9dd9012a2f80
+[   11.036070] RDX: 00000000fffee5a0 RSI: ffffffff9b20cda0 RDI: ffff9dd90126ccc0
+[   11.036070] RBP: ffffad7c00093ec0 R08: 0000000000000000 R09: 0000000000000000
+[   11.036070] R10: 0000000000000000 R11: 0000000000000000 R12: ffffffff9b20cda0
+[   11.036070] R13: 0000000000000000 R14: ffffad7c00043db0 R15: ffff9dd90f030500
+[   11.036070] FS:  0000000000000000(0000) GS:ffff9dd90f000000(0000) knlGS:0000000000000000
+[   11.036070] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[   11.036070] CR2: 0000000000000008 CR3: 000000000a010000 CR4: 00000000000006f0

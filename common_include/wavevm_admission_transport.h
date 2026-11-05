@@ -29,6 +29,14 @@ typedef int (*wvm_admission_transport_submit_fn)(
     void *context, const struct wvm_admission_transport_target *target,
     const struct wvm_envelope *envelope, char *error, size_t error_len);
 
+/*
+ * F09: optional hooks around the blocking network submit so the production
+ * owner lock can drop while waiting on a participant/route/reservation RPC.
+ * Hooks must be AS-safe only as far as the caller promises; ctl uses them to
+ * unlock/relock the owner mutex. Nested submits on the same thread nest.
+ */
+typedef void (*wvm_admission_transport_network_hook_fn)(void *opaque);
+
 struct wvm_admission_transport {
     uint32_t controller_physical_node_id;
     uint64_t controller_instance_id;
@@ -38,6 +46,9 @@ struct wvm_admission_transport {
     const struct wvm_route_snapshot_record *delivery_route_snapshot;
     wvm_admission_transport_resolve_member_fn resolve_member;
     wvm_admission_transport_submit_fn submit;
+    wvm_admission_transport_network_hook_fn before_network;
+    wvm_admission_transport_network_hook_fn after_network;
+    void *network_hook_opaque;
 };
 
 int wvm_admission_transport_init(
@@ -47,6 +58,12 @@ int wvm_admission_transport_init(
     wvm_admission_transport_submit_fn submit, char *error,
     size_t error_len);
 
+/* F09: install owner-lock yield hooks (NULL clears). Safe to call anytime. */
+void wvm_admission_transport_set_network_hooks(
+    struct wvm_admission_transport *transport,
+    wvm_admission_transport_network_hook_fn before_network,
+    wvm_admission_transport_network_hook_fn after_network, void *opaque);
+
 /* Populate the exact orchestrator stage callback set. */
 int wvm_admission_transport_callbacks(
     struct wvm_admission_transport *transport,
@@ -55,6 +72,17 @@ int wvm_admission_transport_callbacks(
 
 /* Query the exact participant after it has activated and published readiness. */
 int wvm_admission_transport_query_runtime_ready(
+    struct wvm_admission_transport *transport,
+    const struct wvm_candidate_vm_manifest *candidate,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len);
+
+/*
+ * F08: ask the exact activated participant to quiesce its runtime gate so
+ * authorize fails for this VM. Does not retire resources; STOP still cleans by
+ * identity.
+ */
+int wvm_admission_transport_quiesce_runtime(
     struct wvm_admission_transport *transport,
     const struct wvm_candidate_vm_manifest *candidate,
     const struct wvm_node_runtime_manifest *runtime_manifest, char *error,

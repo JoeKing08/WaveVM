@@ -385,9 +385,22 @@ static int stop_one_runtime(
         if (owned->runtime_stop_incomplete[index]) {
             /*
              * PID death is cleanup evidence, not proof of quiesce/fence/flush.
-             * Keep the failed semantic result across retries so a second STOP
-             * cannot turn a SIGKILL/abnormal exit into normal completion.
+             * N1: a STOP that itself required SIGKILL must not become SUCCESS on
+             * retry via "pid already gone". Keep fail-closed there.
+             *
+             * F03: when the required child already failed before STOP
+             * (has_required_child_failed → durable DEGRADED/FAILED), exact-
+             * identity STOP/retire must still complete compensating teardown.
+             * That is not transparent RECOVERY_REBIND and not a clean quiesce
+             * claim — only permission to retire the failed identity.
              */
+            if (slot->has_required_child_failed) {
+                fprintf(stderr,
+                        "[runtime-agent] F03: admitted child already failed; "
+                        "allowing compensating STOP teardown (not clean "
+                        "quiesce/fence proof)\n");
+                return 0;
+            }
             set_error(error, error_len,
                       "previous admitted runtime STOP remains incomplete "
                       "(quiesce/fence/flush not proven)");
@@ -417,6 +430,23 @@ static int stop_one_runtime(
                 clear_stale_admitted_endpoints(runtime_manifest);
                 if (!runtime_exit_was_clean(status)) {
                     owned->runtime_stop_incomplete[index] = 1;
+                    /*
+                     * External SIGKILL/crash before graceful STOP completes:
+                     * mark required-child-failed and allow compensating
+                     * teardown (F03). This is not the N1 path where *we*
+                     * escalate to SIGKILL after the SIGTERM window.
+                     */
+                    if (WIFSIGNALED(status) && agent->slots &&
+                        index < agent->slot_capacity) {
+                        agent->slots[index].has_required_child_failed = 1;
+                        agent->slots[index].has_activated = 0;
+                        fprintf(stderr,
+                                "[runtime-agent] F03: child pid=%d died by "
+                                "signal %d during STOP; compensating teardown "
+                                "allowed\n",
+                                (int)pid, WTERMSIG(status));
+                        return 0;
+                    }
                     if (error && error_len != 0) {
                         (void)snprintf(
                             error, error_len,
@@ -431,6 +461,17 @@ static int stop_one_runtime(
             if (r < 0 && errno == ECHILD) {
                 owned->runtime_pids[index] = 0;
                 clear_stale_admitted_endpoints(runtime_manifest);
+                /*
+                 * Already reaped (often by reap_runtime_children after an
+                 * intentional kill). If that path marked required-child-
+                 * failed, allow F03 compensating STOP; otherwise keep N1.
+                 */
+                if (slot->has_required_child_failed) {
+                    fprintf(stderr,
+                            "[runtime-agent] F03: child already reaped after "
+                            "required failure; compensating STOP teardown\n");
+                    return 0;
+                }
                 return mark_stop_incomplete(
                     owned, index, error, error_len,
                     "admitted runtime was reaped before STOP could prove "
@@ -453,6 +494,17 @@ static int stop_one_runtime(
             clear_stale_admitted_endpoints(runtime_manifest);
             if (!runtime_exit_was_clean(status)) {
                 owned->runtime_stop_incomplete[index] = 1;
+                if (WIFSIGNALED(status) && agent->slots &&
+                    index < agent->slot_capacity) {
+                    agent->slots[index].has_required_child_failed = 1;
+                    agent->slots[index].has_activated = 0;
+                    fprintf(stderr,
+                            "[runtime-agent] F03: child pid=%d died by "
+                            "signal %d after SIGTERM window wait; "
+                            "compensating teardown allowed\n",
+                            (int)pid, WTERMSIG(status));
+                    return 0;
+                }
                 if (error && error_len != 0) {
                     (void)snprintf(
                         error, error_len,
@@ -467,6 +519,12 @@ static int stop_one_runtime(
         if (r < 0 && errno == ECHILD) {
             owned->runtime_pids[index] = 0;
             clear_stale_admitted_endpoints(runtime_manifest);
+            if (slot->has_required_child_failed) {
+                fprintf(stderr,
+                        "[runtime-agent] F03: child already reaped after "
+                        "required failure; compensating STOP teardown\n");
+                return 0;
+            }
             return mark_stop_incomplete(
                 owned, index, error, error_len,
                 "admitted runtime was reaped before STOP could prove "
@@ -576,6 +634,55 @@ void wvm_admission_runtime_agent_reap(struct wvm_admission_runtime_agent *agent)
     pthread_mutex_lock(&agent->node_service.receiver.lock);
     reap_runtime_children(agent);
     pthread_mutex_unlock(&agent->node_service.receiver.lock);
+}
+
+
+/*
+ * F08: fail-close authorize without STOP teardown. Quiesce the slot gate
+ * (caller already did) and SIGUSR1 the admitted child so its gate quiesces.
+ * Do not wait, SIGKILL, or retire names — STOP still owns cleanup.
+ */
+static int quiesce_one_runtime(
+    void *context, struct wvm_admission_receiver_slot *slot,
+    const struct wvm_node_runtime_manifest *runtime_manifest, char *error,
+    size_t error_len)
+{
+    struct wvm_admission_runtime_agent *agent = context;
+    struct agent_owned_storage *owned;
+    size_t index;
+    pid_t pid;
+
+    (void)runtime_manifest;
+    if (!agent || !slot) {
+        set_error(error, error_len, "admitted runtime quiesce input is invalid");
+        return -EINVAL;
+    }
+    owned = agent->owned_storage;
+    for (index = 0; index < agent->slot_capacity; index++) {
+        if (&agent->slots[index] == slot) {
+            break;
+        }
+    }
+    if (index == agent->slot_capacity || !owned || !owned->runtime_pids) {
+        set_error(error, error_len, "admitted runtime slot is not owned by agent");
+        return -EINVAL;
+    }
+    /* Slot gate already quiesced by receiver; ensure idempotent. */
+    if (wvm_runtime_gate_quiesce(&slot->gate, error, error_len) != 0) {
+        return -1;
+    }
+    pid = owned->runtime_pids[index];
+    if (pid > 0) {
+        if (kill(pid, SIGUSR1) != 0 && errno != ESRCH) {
+            set_error(error, error_len,
+                      "cannot signal admitted runtime child to quiesce");
+            return -errno;
+        }
+    }
+    if (error && error_len) {
+        error[0] = '\0';
+    }
+    return 0;
 }
 
 static void force_stop_runtime_children(
@@ -931,6 +1038,7 @@ int wvm_admission_runtime_agent_init(
     receiver_config.delivery_inputs = delivery_inputs;
     receiver_config.start_runtime = start_runtime;
     receiver_config.stop_runtime = stop_one_runtime;
+    receiver_config.quiesce_runtime = quiesce_one_runtime;
     memset(&service_config, 0, sizeof(service_config));
     service_config.socket_path = config->socket_path;
     service_config.network_endpoint = config->network_endpoint;

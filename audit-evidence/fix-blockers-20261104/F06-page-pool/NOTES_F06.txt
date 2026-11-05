@@ -1,0 +1,15 @@
+F06 PAGE_POOL occupancy — directed exhaust stress (Asia/Shanghai 2026-11-04 21:41:28 CST)
+
+Proven this turn:
+  - page_pool_claim/release occupy all 4096 slots; 4097th returns -1
+  - 128 further claims stay bounded fail (no wrap overwrite)
+  - release+reclaim works; full return → in_use=0
+  - Unit: tests/unit/test_f06_page_pool.sh → PASS (unit_f06.log)
+  - resolve_fault_on_worker still logs "F06 write page pool exhausted..." on -ENOMEM
+
+Note: stress is the pool claim path used by non-coherent write faults (same
+CAS occupancy). Full guest SIGSEGV flood through QEMU not re-run; Mode A
+coherent path does not exercise this pool.
+
+Status: PASS (directed occupy/return/exhaust). No MINIMUM_COMPLETE.
+tip=620cd762b dirty; no commit/push.

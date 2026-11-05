@@ -673,7 +673,18 @@ int wvm_runtime_gate_quiesce(struct wvm_runtime_gate *gate, char *error,
 {
     size_t i;
 
-    if (!gate || gate->state != WVM_RUNTIME_GATE_ACTIVE) {
+    if (!gate) {
+        set_error(error, error_len, "runtime gate is not active");
+        return -1;
+    }
+    /* F08: already QUIESCING means execution is already fail-closed. */
+    if (gate->state == WVM_RUNTIME_GATE_QUIESCING) {
+        if (error && error_len) {
+            error[0] = '\0';
+        }
+        return 0;
+    }
+    if (gate->state != WVM_RUNTIME_GATE_ACTIVE) {
         set_error(error, error_len, "runtime gate is not active");
         return -1;
     }

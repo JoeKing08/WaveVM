@@ -50,25 +50,44 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
   - 也可以把每一页 dump 存进一个目录，用脚本的 --from-pages 自动拼成 oldest-first。
 
 
-二½、分页 dump 规则（--from-pages）
---------------------------------
-拉全量 transcript 时请连续翻页，避免 dump 自身留下空洞：
+二½、翻页操作（主 Agent 做；本脚本不调 ReadTranscript）
+----------------------------------------------------
+本脚本只消费已落盘的页 dump / JSONL，**不会**自己翻会话。
+翻页必须在 Grok Bot **主 Agent**（非 executor）里用 cursor/ReadTranscript 完成。
 
-  1. 用 ReadTranscript + before=<本页 firstIndex> 一直翻到出现
-     “This is the start of the transcript.”（覆盖到最旧）。
-  2. 翻页结束后，**再拉一次最新 tip**（不带 before，或等价拿到当前最新一页）。
-  3. 不要在「最后一页 mid-page 的 end」和「tip 页的 start」之间留洞；
-     若 tip 从 S 起而上一页只到 E 且 E+1 < S，assembler 会报 uncovered，
-     并提示：dump incomplete: re-fetch ReadTranscript with before=<tip_start>。
+标准流程（从尾翻到头，再补 tip）——备份前照此做：
 
-关于 header 与缺位语义：
+  0. 准备空目录，例如 /workspace/grok-transcript-pages-<date>/。
+  1. 第一页：ReadTranscript（不带 before）+ write_to_file:true。
+     把返回的整页文件拷进上述目录（记下页头 positions A–B of N，
+     以及本页 firstIndex = A）。默认最新在前。
+  2. 向旧翻：再调 ReadTranscript，arguments 带 before=<上一页 firstIndex>，
+     write_to_file:true；每页都落盘。重复直到正文出现
+     “This is the start of the transcript.”（已覆盖到最旧）。
+  3. tip 再取一次：翻页全部结束后，**再拉一次不带 before 的最新 tip**，
+     落盘。不要在翻页循环里反复 tip；整轮只 tip 这一次
+     （push 轮在最终 assemble/redact 前再 tip 一次也可以）。
+  4. 交给本脚本拼页+转换：
+       python3 bot_to_grok_build.py \
+         --from-pages <pages_dir> \
+         --transcript <out.jsonl> \
+         --out <parent> --cwd /home/joeking --title "..."
+  5. 对转换产物再跑 redact_session.py，再进 session-backup/Grok Bot/。
 
+缺口自检（assemble 会查）：
+
+  - 不要在「最后一页 mid-page 的 end」和「tip 页的 start」之间留洞；
+    若 tip 从 S 起而上一页只到 E 且 E+1 < S，assembler 会报 uncovered，
+    并提示：dump incomplete: re-fetch ReadTranscript with before=<tip_start>。
   - 页头 `positions A–B of N` 可能比正文 JSONL 行数多报（常见 ok = claimed−1..−17）。
     转换器把 A+ok..B 当作 **phantom tail**，不计入 missing/uncovered。
   - 重叠页（重复 dump）：优先采用 header `of N` 更大的页（更新快照），已填槽不覆盖。
   - dump 覆盖完整时，assemble 应报 uncovered 0
     （stderr：assembled N messages, positions contiguous 0..max）。
   - 若仍有 uncovered，那是 dump 真缺页（本脚本不会凭空发明消息），请补拉后再拼。
+
+可复用旧 page cache：若同会话曾完整翻过，可保留旧页目录，只补 tip 缺口
+（再带 before 拉 mid→tip 缺段），不必每轮从 0 重翻。
 
 
 
@@ -155,7 +174,8 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
 
 八、给写项目 AI 的最短操作清单
 ----------------------------
-  [ ] 拿到 oldest-first 的 grokbot-transcript.jsonl（或 pages 目录）
+  [ ] 主 Agent 按二½ 翻页：尾→头（before=firstIndex）→ tip 再取一次 → pages 目录
+  [ ] 拿到 oldest-first 的 grokbot-transcript.jsonl（或直接 --from-pages）
   [ ] python3 bot_to_grok_build.py --transcript ... --out ... --cwd /home/joeking --title "..."
   [ ] 记下 stdout 里的 session_id
   [ ] 只把 summary.json + updates.jsonl 拷进

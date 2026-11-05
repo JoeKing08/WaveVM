@@ -10,6 +10,11 @@ Usage:
       --title "My session title"
 
 Also accepts a directory of ReadTranscript page dumps via --from-pages.
+
+Paging (tail→head, then one tip refetch) is NOT done by this script: the main
+Grok Bot agent must call ReadTranscript with before=<firstIndex> until start,
+dump each page, tip once, then pass the directory here. See
+bot_to_grok_build_README.txt section 二½.
 """
 
 from __future__ import annotations

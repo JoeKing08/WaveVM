@@ -238,18 +238,26 @@ static void report_typed_ingress_result(int status, size_t frame_bytes,
                                         const char *error)
 {
     unsigned int occurrence;
+    static atomic_uint g_typed_ingress_all;
 
-    if (status == WVM_INGRESS_ACCEPTED ||
-        status == WVM_INGRESS_INCOMPLETE ||
-        status < 0 || status > WVM_INGRESS_UNSUPPORTED) {
+    /* F02 diag: ACCEPTED/INCOMPLETE were silent, hiding whether WVM1 arrived.
+     * Cap total lines; keep REJECTED/BACKPRESSURE/UNSUPPORTED visible. */
+    if (status < 0 || status > WVM_INGRESS_UNSUPPORTED) {
         return;
     }
     occurrence = atomic_fetch_add_explicit(
         &g_typed_ingress_diagnostics[status], 1, memory_order_relaxed);
-    if (occurrence < 8) {
-        u_log("[Typed Ingress] status=%d bytes=%zu reason=%s",
-              status, frame_bytes, (error && error[0]) ? error : "none");
+    if (status == WVM_INGRESS_ACCEPTED || status == WVM_INGRESS_INCOMPLETE) {
+        unsigned int all = atomic_fetch_add_explicit(
+            &g_typed_ingress_all, 1, memory_order_relaxed);
+        if (all >= 32) {
+            return;
+        }
+    } else if (occurrence >= 8) {
+        return;
     }
+    u_log("[Typed Ingress] status=%d bytes=%zu reason=%s",
+          status, frame_bytes, (error && error[0]) ? error : "none");
 }
 
 static uint32_t local_slave_req_idx(uint64_t req_id) {

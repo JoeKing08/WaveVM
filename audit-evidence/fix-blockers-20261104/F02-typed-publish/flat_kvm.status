@@ -1,0 +1,9 @@
+run_id=f02-typed-publish-203412
+cell=flat_kvm
+rc=0
+elapsed_s=19
+class=ok
+cleanup_ok=1
+log=/tmp/wavevm-f02-typed-publish-203412/flat_kvm.log
+note=ok
+invoked=1

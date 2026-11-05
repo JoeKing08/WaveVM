@@ -306,6 +306,16 @@ static const struct wvm_route_rule_record *find_rule(
     return NULL;
 }
 
+static wvm_route_runtime_retire_hook_fn g_route_retire_hook;
+static void *g_route_retire_hook_context;
+
+void wvm_route_runtime_set_retire_hook(wvm_route_runtime_retire_hook_fn fn,
+                                       void *context)
+{
+    g_route_retire_hook = fn;
+    g_route_retire_hook_context = context;
+}
+
 void wvm_route_runtime_init(struct wvm_route_runtime *runtime)
 {
     if (!runtime) {
@@ -548,6 +558,9 @@ int wvm_route_runtime_retire(struct wvm_route_runtime *runtime,
         runtime->scope_count--;
     }
     pthread_rwlock_unlock(&runtime->lock);
+    if (g_route_retire_hook) {
+        g_route_retire_hook(g_route_retire_hook_context, key);
+    }
     return 0;
 }
 

@@ -41,6 +41,8 @@ extern volatile sig_atomic_t g_shutdown_requested;
 extern void *g_shm_ptr;
 extern size_t g_shm_size;
 static uint64_t g_agent_parent_pid;
+/* F08: SIGUSR1 fail-closes authorize without full STOP teardown. */
+static struct wvm_runtime_gate *g_fail_closed_gate;
 
 int wavevm_admission_agent_main(int argc, char **argv);
 
@@ -133,6 +135,31 @@ static int export_runtime_identity(
     snprintf(value, sizeof(value), "%d", physical_node_id);
     setenv("WVM_RUNTIME_PHYSICAL_NODE_ID", value, 1);
     setenv("WVM_RUNTIME_NAMESPACE", manifest->local_names.namespace_name, 1);
+    /*
+     * F05: keep physical-host proof visible to TCG helpers. Prefer placement-
+     * provided FE host (directory / memory authority host) when present;
+     * otherwise same-host CREATE keeps FE==executor via WVM_PHYSICAL_HOST_ID.
+     */
+    {
+        const char *ph = getenv("WVM_PHYSICAL_HOST_ID");
+        const char *fe = getenv("WVM_FE_PHYSICAL_HOST_ID");
+        const char *dir_host = getenv("WVM_DIRECTORY_PHYSICAL_HOST_ID");
+        char local_host[32];
+
+        if ((!ph || !*ph) && physical_node_id > 0) {
+            snprintf(local_host, sizeof(local_host), "%d", physical_node_id);
+            (void)setenv("WVM_PHYSICAL_HOST_ID", local_host, 0);
+            ph = getenv("WVM_PHYSICAL_HOST_ID");
+        }
+        if (ph && *ph) {
+            (void)setenv("WVM_EXECUTOR_PHYSICAL_HOST_ID", ph, 0);
+        }
+        if ((!fe || !*fe) && dir_host && *dir_host) {
+            (void)setenv("WVM_FE_PHYSICAL_HOST_ID", dir_host, 0);
+        } else if ((!fe || !*fe) && ph && *ph) {
+            (void)setenv("WVM_FE_PHYSICAL_HOST_ID", ph, 0);
+        }
+    }
     export_hex_env("WVM_CANDIDATE_MANIFEST_DIGEST",
                    manifest->candidate_manifest_digest,
                    sizeof(manifest->candidate_manifest_digest));
@@ -428,6 +455,19 @@ static int execute_local_block(void *opaque, uint32_t device_index,
                      "block device %u has no admitted local assignment",
                      device_index);
         return -ENODEV;
+    }
+    /*
+     * Q01: chunk store is identity+LBA only. A multi-assignment manifest
+     * would alias backends; refuse rather than silently share files.
+     */
+    if (context->manifest->local_storage_assignments.count > 1) {
+        if (error && error_len != 0)
+            snprintf(error, error_len,
+                     "Minimum refuses multi-device block IO without "
+                     "device-to-backend mapping (count=%zu device=%u)",
+                     context->manifest->local_storage_assignments.count,
+                     device_index);
+        return -ENOTSUP;
     }
     if (operation == WVM_BLOCK_OPERATION_READ)
         return wvm_block_chunk_read(lba_512, sector_count, out, out_capacity,
@@ -951,6 +991,7 @@ static int run_runtime_main(int argc, char **argv)
         runtime_context.manifest = &storage.manifest;
         runtime_context.dispatch = &dispatch_storage.projection;
         runtime_context.runtime_gate = &gate;
+        g_fail_closed_gate = &gate;
         runtime_context.route_runtime = &route_runtime;
         runtime_context.node_instance_id = node_instance_id;
         runtime_context.physical_node_id = (uint32_t)physical_node_id;
@@ -1512,6 +1553,21 @@ static void child_graceful_stop(int signal_number)
 {
     (void)signal_number;
     g_shutdown_requested = 1;
+}
+
+/*
+ * F08: QUIESCE_RUNTIME → agent SIGUSR1. Only flip gate state so authorize
+ * fails; do not request full shutdown (STOP still cleans by identity).
+ * Async-signal-safe: single aligned store of gate state.
+ */
+static void child_execution_fail_closed(int signal_number)
+{
+    struct wvm_runtime_gate *gate = g_fail_closed_gate;
+
+    (void)signal_number;
+    if (gate && gate->state == WVM_RUNTIME_GATE_ACTIVE) {
+        gate->state = WVM_RUNTIME_GATE_QUIESCING;
+    }
 }
 
 int main(int argc, char **argv)

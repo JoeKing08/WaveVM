@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-257-1-1.manifest
+599f71d8b14251b6d01e2f0a4115e60196aa012508343900c9dcca3394267364  /tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-257-1-1.manifest
+42b4211136ca69092b8c1c75d43f9d218c4baa2d51e3adc1adb5f30615855286  /tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-257-1-1.manifest.dispatch
+3e758aa7fbb71a5ba90be09ac9a8d0885ff79ffdafdd63aa166b64d40a605602  /tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-257-1-1.manifest.route

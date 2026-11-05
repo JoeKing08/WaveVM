@@ -94,6 +94,18 @@ struct control_context {
     size_t request_list_capacity;
     pthread_mutex_t lock;
     int lock_initialized;
+    /*
+     * F09: track which thread holds the owner lock. Nested yield depth is
+     * thread-local (control_owner_tls_yield_depth) so a second owner thread
+     * cannot inherit another thread's yield depth and hold the mutex across
+     * a blocking RPC (dual CREATE hang).
+     */
+    pthread_t lock_owner;
+    int lock_held;
+    /* Per-VM incarnation fencing while CREATE/STOP is in flight (incl. yield). */
+    uint32_t fence_vm_ids[64];
+    uint64_t fence_vm_incs[64];
+    size_t fence_count;
 };
 
 struct runtime_health_probe_context {
@@ -275,6 +287,130 @@ static void initialize_control_result(
     }
 }
 
+
+static void control_owner_lock(struct control_context *context)
+{
+    if (!context || !context->lock_initialized) {
+        return;
+    }
+    pthread_mutex_lock(&context->lock);
+    context->lock_owner = pthread_self();
+    context->lock_held = 1;
+}
+
+static void control_owner_unlock(struct control_context *context)
+{
+    if (!context || !context->lock_initialized) {
+        return;
+    }
+    context->lock_held = 0;
+    pthread_mutex_unlock(&context->lock);
+}
+
+/* F09: drop owner lock around blocking admission RPC; nested-safe per thread. */
+static __thread unsigned control_owner_tls_yield_depth;
+
+static void control_owner_before_network(void *opaque)
+{
+    struct control_context *context = opaque;
+
+    if (!context || !context->lock_initialized || !context->lock_held) {
+        return;
+    }
+    if (!pthread_equal(context->lock_owner, pthread_self())) {
+        return;
+    }
+    control_owner_tls_yield_depth++;
+    if (control_owner_tls_yield_depth == 1U) {
+        context->lock_held = 0;
+        pthread_mutex_unlock(&context->lock);
+    }
+}
+
+static void control_owner_after_network(void *opaque)
+{
+    struct control_context *context = opaque;
+
+    if (!context || !context->lock_initialized) {
+        return;
+    }
+    if (control_owner_tls_yield_depth == 0U) {
+        return;
+    }
+    if (control_owner_tls_yield_depth == 1U) {
+        pthread_mutex_lock(&context->lock);
+        context->lock_owner = pthread_self();
+        context->lock_held = 1;
+    }
+    control_owner_tls_yield_depth--;
+}
+
+static int control_owner_fence_contains(const struct control_context *context,
+                                       uint32_t vm_id, uint64_t vm_incarnation)
+{
+    size_t i;
+
+    if (!context || vm_id == 0) {
+        return 0;
+    }
+    for (i = 0; i < context->fence_count; i++) {
+        if (context->fence_vm_ids[i] == vm_id &&
+            context->fence_vm_incs[i] == vm_incarnation) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int control_owner_fence_add(struct control_context *context,
+                                  uint32_t vm_id, uint64_t vm_incarnation,
+                                  char *error, size_t error_len)
+{
+    if (!context || vm_id == 0 || vm_incarnation == 0) {
+        return 0;
+    }
+    if (control_owner_fence_contains(context, vm_id, vm_incarnation)) {
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "F09: VM %u inc %llu already has an in-flight lifecycle op",
+                     (unsigned)vm_id, (unsigned long long)vm_incarnation);
+        }
+        return -EAGAIN;
+    }
+    if (context->fence_count >=
+        sizeof(context->fence_vm_ids) / sizeof(context->fence_vm_ids[0])) {
+        if (error && error_len) {
+            snprintf(error, error_len, "F09: lifecycle fence table full");
+        }
+        return -ENOMEM;
+    }
+    context->fence_vm_ids[context->fence_count] = vm_id;
+    context->fence_vm_incs[context->fence_count] = vm_incarnation;
+    context->fence_count++;
+    return 0;
+}
+
+static void control_owner_fence_remove(struct control_context *context,
+                                      uint32_t vm_id, uint64_t vm_incarnation)
+{
+    size_t i;
+
+    if (!context || vm_id == 0) {
+        return;
+    }
+    for (i = 0; i < context->fence_count; i++) {
+        if (context->fence_vm_ids[i] == vm_id &&
+            context->fence_vm_incs[i] == vm_incarnation) {
+            context->fence_vm_ids[i] =
+                context->fence_vm_ids[context->fence_count - 1];
+            context->fence_vm_incs[i] =
+                context->fence_vm_incs[context->fence_count - 1];
+            context->fence_count--;
+            return;
+        }
+    }
+}
+
 static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
                            const struct wvm_member_key *authenticated_actor,
                            struct wvm_control_result *result, char *error,
@@ -372,17 +508,17 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
     }
     admission_input.transaction_out = &transaction;
     admission_input.submit_result_out = &submit_result;
-    pthread_mutex_lock(&context->lock);
+    control_owner_lock(context);
     if (wvm_control_plane_classify_request(
             context->plane, &vm_request, &request_disposition, error,
             error_len) != 0) {
-        pthread_mutex_unlock(&context->lock);
+        control_owner_unlock(context);
         free(storage_assignments);
         free(constraints);
         return -EIO;
     }
     if (request_disposition == WVM_CONTROL_PLANE_REQUEST_CONFLICT) {
-        pthread_mutex_unlock(&context->lock);
+        control_owner_unlock(context);
         result->status_code = WVM_CONTROL_RESULT_OPERATION_ID_CONFLICT;
         free(storage_assignments);
         free(constraints);
@@ -392,6 +528,16 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         wvm_admission_orchestrator_run(&admission_input, error, error_len);
     entry =
         wvm_control_plane_find_request(context->plane, vm_request.request_id);
+    /*
+     * F09: once the admission tx has a VM identity, fence it for the rest of
+     * this owner callback (incl. readiness RPCs that yield the lock).
+     */
+    if (entry && entry->transaction.vm_id != 0 &&
+        entry->transaction.vm_incarnation != 0) {
+        (void)control_owner_fence_add(context, entry->transaction.vm_id,
+                                      entry->transaction.vm_incarnation, NULL,
+                                      0);
+    }
     if (admission_result == 0 &&
         request_disposition == WVM_CONTROL_PLANE_REQUEST_REPLAY &&
         entry && entry->transaction.state == WVM_LIFECYCLE_COMMITTED &&
@@ -403,14 +549,18 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
             admission_authority->context, error, error_len);
     }
     if (!entry && context->plane->entry_count == context->plane->entry_capacity) {
-        pthread_mutex_unlock(&context->lock);
+        control_owner_fence_remove(context, transaction.vm_id,
+                                      transaction.vm_incarnation);
+        control_owner_unlock(context);
         result->status_code = WVM_CONTROL_RESULT_BACKPRESSURE;
         free(storage_assignments);
         free(constraints);
         return 0;
     }
     if (!entry) {
-        pthread_mutex_unlock(&context->lock);
+        control_owner_fence_remove(context, transaction.vm_id,
+                                      transaction.vm_incarnation);
+        control_owner_unlock(context);
         snprintf(error, error_len, "durable VM transaction disappeared");
         free(storage_assignments);
         free(constraints);
@@ -421,7 +571,9 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         result->status_code = WVM_CONTROL_RESULT_IN_PROGRESS;
     } else if (admission_result != 0 ||
                entry->transaction.state != WVM_LIFECYCLE_RUNNING) {
-        pthread_mutex_unlock(&context->lock);
+        control_owner_fence_remove(context, transaction.vm_id,
+                                      transaction.vm_incarnation);
+        control_owner_unlock(context);
         result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
         fprintf(stderr,
                 "wvm_ctl: CREATE_VM precondition failed admission_result=%d "
@@ -461,7 +613,9 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
             }
             entry = wvm_control_plane_find_request(context->plane,
                                                    transaction.request_id);
-            pthread_mutex_unlock(&context->lock);
+            control_owner_fence_remove(context, transaction.vm_id,
+                                      transaction.vm_incarnation);
+        control_owner_unlock(context);
             result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
             result->recorded_state =
                 entry ? (uint16_t)entry->transaction.state
@@ -490,7 +644,9 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
     memcpy(result->manifest_id, transaction.manifest_id,
            sizeof(result->manifest_id));
     result->route_scope_id = transaction.route_scope_key.route_scope_id;
-    pthread_mutex_unlock(&context->lock);
+    control_owner_fence_remove(context, transaction.vm_id,
+                                    transaction.vm_incarnation);
+    control_owner_unlock(context);
     (void)submit_result;
     free(storage_assignments);
     free(constraints);
@@ -531,7 +687,13 @@ static int apply_stop_vm(void *opaque, const struct wvm_envelope *request,
      * RUNNING STOP rebuilds from durable manifests; launch-plan rebuild is
      * not required. Pass NULL capture (fail-closed if manifests missing).
      */
-    pthread_mutex_lock(&context->lock);
+    control_owner_lock(context);
+    if (control_owner_fence_add(context, request->vm_id, request->vm_incarnation,
+                                error, error_len) != 0) {
+        control_owner_unlock(context);
+        result->status_code = WVM_CONTROL_RESULT_IN_PROGRESS;
+        return 0;
+    }
     rc = wvm_ctl_stop_vm(
         context->plane, context->namespace_allocator,
         &context->plane->membership_controller, authority,
@@ -551,7 +713,8 @@ static int apply_stop_vm(void *opaque, const struct wvm_envelope *request,
             "wvm_ctl: STOP_VM rc=%d status=%u recorded_state=%u err=%s\n",
             rc, (unsigned)result->status_code, (unsigned)result->recorded_state,
             (error && error[0]) ? error : "(none)");
-    pthread_mutex_unlock(&context->lock);
+    control_owner_fence_remove(context, request->vm_id, request->vm_incarnation);
+    control_owner_unlock(context);
     return rc;
 }
 
@@ -565,7 +728,7 @@ static int apply_control_request(
 
     if (request->message_type == WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES ||
         request->message_type == WVM_ENVELOPE_MSG_PUBLISH_RUNTIME_PROFILE) {
-        pthread_mutex_lock(&context->lock);
+        control_owner_lock(context);
         if (request->message_type == WVM_ENVELOPE_MSG_PUBLISH_CAPABILITIES) {
             rc = wvm_ctl_publish_capabilities(
                 context->state_directory,
@@ -577,7 +740,7 @@ static int apply_control_request(
                 &context->plane->membership_controller, request, actor, result,
                 error, error_len);
         }
-        pthread_mutex_unlock(&context->lock);
+        control_owner_unlock(context);
         return rc;
     }
     if (request->message_type == WVM_ENVELOPE_MSG_STOP_VM) {
@@ -1271,21 +1434,47 @@ static int admission_workspace_reset(
     return 0;
 }
 
+static int member_still_owns_control_endpoint(
+    enum wvm_manifest_member_state desired_state)
+{
+    /*
+     * Exact-identity control RPCs (STOP/abort/retire/ready query) must reach
+     * the registered instance while it still owns cluster resources. ACTIVE
+     * is the common case; CORDONED/DRAINING members remain addressable so
+     * existing VMs can stop. REMOVED/FAILED membership rows are not reused
+     * as live control targets — that would be a new incarnation.
+     */
+    return desired_state == WVM_MANIFEST_MEMBER_ACTIVE ||
+           desired_state == WVM_MANIFEST_MEMBER_CORDONED ||
+           desired_state == WVM_MANIFEST_MEMBER_DRAINING;
+}
+
 static int admission_transport_resolve_member(
     void *context, const struct wvm_member_key *member_key,
     struct wvm_admission_transport_target *target, char *error,
     size_t error_len)
 {
     struct admission_workspace *workspace = context;
-    const struct wvm_membership_controller_capture *capture;
+    struct wvm_membership_controller_capture *capture;
     size_t i;
 
     if (!workspace || !member_key || !target ||
+        !workspace->membership_controller ||
         wvm_member_key_validate(member_key, error, error_len) != 0) {
         snprintf(error, error_len, "invalid transport resolve arguments");
         return -1;
     }
     capture = &workspace->membership_capture;
+    /*
+     * Always resolve against a fresh membership snapshot. STOP/abort must
+     * still project the exact role/instance/endpoint even when observed
+     * health is SUSPECT/UNREACHABLE — new placement excludes those members
+     * via eligibility fences, not by erasing STOP identity.
+     */
+    if (wvm_membership_controller_capture(workspace->membership_controller,
+                                          capture, error, error_len) != 0) {
+        return -1;
+    }
     memset(target, 0, sizeof(*target));
     if (member_key->role_type == WVM_MANIFEST_ROLE_NODE_RUNTIME) {
         for (i = 0; i < capture->node_count; i++) {
@@ -1295,10 +1484,13 @@ static int admission_transport_resolve_member(
                 node->node_instance_id != member_key->instance_id) {
                 continue;
             }
-            if (node->desired_membership_state != WVM_MANIFEST_MEMBER_ACTIVE ||
-                node->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
+            if (!member_still_owns_control_endpoint(
+                    node->desired_membership_state)) {
                 snprintf(error, error_len,
-                         "node runtime is not an active healthy member");
+                         "node runtime membership no longer owns control "
+                         "endpoint (desired_state=%u health=%u)",
+                         (unsigned)node->desired_membership_state,
+                         (unsigned)node->observed_health_state);
                 return -1;
             }
             target->member_key = *member_key;
@@ -1313,11 +1505,13 @@ static int admission_transport_resolve_member(
                 gateway->gateway_instance_id != member_key->instance_id) {
                 continue;
             }
-            if (gateway->desired_membership_state !=
-                    WVM_MANIFEST_MEMBER_ACTIVE ||
-                gateway->observed_health_state != WVM_MEMBERSHIP_HEALTHY) {
+            if (!member_still_owns_control_endpoint(
+                    gateway->desired_membership_state)) {
                 snprintf(error, error_len,
-                         "gateway is not an active healthy member");
+                         "gateway membership no longer owns control "
+                         "endpoint (desired_state=%u health=%u)",
+                         (unsigned)gateway->desired_membership_state,
+                         (unsigned)gateway->observed_health_state);
                 return -1;
             }
             target->member_key = *member_key;
@@ -1381,16 +1575,88 @@ static int admission_transport_submit(
     }
 }
 
+
+static int execution_fail_closed_hook(
+    void *opaque, const struct wvm_admission_transaction_record *transaction,
+    enum wvm_lifecycle_state new_state, char *error, size_t error_len)
+{
+    struct runtime_health_probe_context *probe = opaque;
+    size_t i;
+    size_t matched = 0;
+    size_t quiesced = 0;
+
+    (void)new_state;
+    if (!probe || !probe->plane || !probe->workspace || !transaction ||
+        !transaction->has_candidate_manifest_digest) {
+        if (error && error_len) {
+            snprintf(error, error_len, "F08 execution fail-closed is not ready");
+        }
+        return -EINVAL;
+    }
+    if (!probe->plane->runtime_manifest_entries ||
+        probe->plane->runtime_manifest_entry_count == 0) {
+        /* No durable runtimes recorded — journal transition still stands. */
+        if (error && error_len) {
+            error[0] = '\0';
+        }
+        return 0;
+    }
+    if (wvm_membership_controller_capture(
+            probe->workspace->membership_controller,
+            &probe->workspace->membership_capture, error, error_len) != 0) {
+        return -1;
+    }
+    for (i = 0; i < probe->plane->runtime_manifest_entry_count; i++) {
+        const struct wvm_control_plane_runtime_manifest_entry *entry =
+            &probe->plane->runtime_manifest_entries[i];
+        char local_error[256];
+
+        if (memcmp(entry->candidate_manifest_digest,
+                   transaction->candidate_manifest_digest,
+                   sizeof(transaction->candidate_manifest_digest)) != 0) {
+            continue;
+        }
+        matched++;
+        local_error[0] = '\0';
+        if (wvm_ctl_quiesce_runtime_execution(
+                probe->plane, transaction, entry, probe->member_capacity,
+                probe->max_vcpus, &probe->workspace->transport, local_error,
+                sizeof(local_error)) != 0) {
+            if (error && error_len) {
+                snprintf(error, error_len, "%s",
+                         local_error[0] ? local_error
+                                        : "F08 QUIESCE_RUNTIME failed");
+            }
+            return -1;
+        }
+        quiesced++;
+    }
+    if (matched == 0) {
+        fprintf(stderr,
+                "[wvm_ctl] F08: no durable runtime entries to QUIESCE for "
+                "vm=%u inc=%llu (journal state still advanced)\n",
+                (unsigned)transaction->vm_id,
+                (unsigned long long)transaction->vm_incarnation);
+    } else {
+        fprintf(stderr,
+                "[wvm_ctl] F08: QUIESCE_RUNTIME ok vm=%u inc=%llu "
+                "matched=%zu quiesced=%zu state=%u\n",
+                (unsigned)transaction->vm_id,
+                (unsigned long long)transaction->vm_incarnation, matched,
+                quiesced, (unsigned)new_state);
+    }
+    if (error && error_len) {
+        error[0] = '\0';
+    }
+    return 0;
+}
+
 static int probe_remote_runtime_health(
     void *opaque, const struct wvm_admission_transaction_record *transaction,
     const struct wvm_control_plane_runtime_manifest_entry *runtime_entry,
     char *error, size_t error_len)
 {
     struct runtime_health_probe_context *probe = opaque;
-    struct wvm_member_key member_key;
-    struct wvm_membership_controller_member_status status;
-    char monitor_error[256];
-    enum wvm_membership_health_state next_health;
     int result;
 
     if (!probe || !probe->plane || !probe->workspace ||
@@ -1407,36 +1673,14 @@ static int probe_remote_runtime_health(
     result = wvm_ctl_probe_runtime_ready(
         probe->plane, transaction, runtime_entry, probe->member_capacity,
         probe->max_vcpus, &probe->workspace->transport, error, error_len);
-    if (result == 0) {
-        return 0;
-    }
-
     /*
-     * A failed authenticated probe is monitor evidence, not a self-health
-     * report.  Keep recovery under the member's authenticated self-report;
-     * the monitor only escalates repeated failures from SUSPECT to
-     * UNREACHABLE.  The VM reconcile in the caller remains fail-closed even
-     * if this durable evidence update itself cannot be persisted.
+     * F03: QUERY_RUNTIME_READY is per-VM lifecycle readiness (admitted child /
+     * frontend ready), not a membership heartbeat. A single VM's dead child or
+     * Mode-A store miss must DEGRADE/FAIL that VM via the caller — it must not
+     * mark the whole node SUSPECT/UNREACHABLE, or sibling VMs lose STOP
+     * identity resolution and can no longer be retired by exact instance.
+     * Membership monitor health stays on real member contact/heartbeat paths.
      */
-    memset(&member_key, 0, sizeof(member_key));
-    member_key.role_type = WVM_MANIFEST_ROLE_NODE_RUNTIME;
-    member_key.role_id = runtime_entry->physical_node_id;
-    member_key.instance_id = runtime_entry->expected_node_instance_id;
-    monitor_error[0] = '\0';
-    if (wvm_member_key_validate(&member_key, monitor_error,
-                                sizeof(monitor_error)) == 0 &&
-        wvm_membership_controller_member_status(
-            probe->workspace->membership_controller, &member_key, &status,
-            monitor_error, sizeof(monitor_error)) == 0) {
-        next_health = status.observed_health_state == WVM_MEMBERSHIP_SUSPECT ||
-                              status.observed_health_state ==
-                                  WVM_MEMBERSHIP_UNREACHABLE
-                          ? WVM_MEMBERSHIP_UNREACHABLE
-                          : WVM_MEMBERSHIP_SUSPECT;
-        (void)wvm_membership_controller_mark_monitor_health(
-            probe->workspace->membership_controller, &member_key, next_health,
-            monitor_error, sizeof(monitor_error));
-    }
     return result;
 }
 
@@ -1750,6 +1994,8 @@ int main(int argc, char **argv)
         goto out;
     }
     control_context.lock_initialized = 1;
+    control_context.lock_held = 0;
+    control_context.fence_count = 0;
 
     /*
      * Bind the admission authority before membership opens: the control plane
@@ -1840,6 +2086,8 @@ int main(int argc, char **argv)
         options.capacity > 64U ? (uint32_t)options.capacity : 64U;
     wvm_control_plane_set_runtime_health_probe(
         &plane, probe_remote_runtime_health, &runtime_health_probe);
+    wvm_control_plane_set_execution_fail_closed(
+        &plane, execution_fail_closed_hook, &runtime_health_probe);
     memset(&membership_enrollment, 0, sizeof(membership_enrollment));
     if (wvm_ctl_membership_enrollment_init(
             &membership_enrollment, &plane, options.local_physical_node_id,
@@ -1869,6 +2117,10 @@ int main(int argc, char **argv)
     authority_config.plan_provider = &admission_workspace.plan_provider;
     authority_config.route_compiler = &admission_workspace.route_compiler;
     authority_config.transport = &admission_workspace.transport;
+    /* F09: drop owner lock while admission RPCs wait on the network. */
+    wvm_admission_transport_set_network_hooks(
+        &admission_workspace.transport, control_owner_before_network,
+        control_owner_after_network, &control_context);
     authority_config.prepared_route = &admission_workspace.prepared_route;
     authority_config.prepared_vm = &admission_workspace.prepared_vm;
     authority_config.activation = &admission_workspace.activation;
@@ -2021,14 +2273,14 @@ int main(int argc, char **argv)
          * A12: serialize with CREATE/STOP owner callbacks that hold
          * control_context.lock while mutating the same plane/journal.
          */
-        pthread_mutex_lock(&control_context.lock);
+        control_owner_lock(&control_context);
         if (wvm_ctl_reconcile_required_member_health(
                 &plane, &plane.membership_controller, &transitioned,
                 reconcile_error, sizeof(reconcile_error)) != 0) {
             fprintf(stderr, "wvm_ctl: required-member reconcile failed: %s\n",
                     reconcile_error[0] ? reconcile_error : "unknown");
         }
-        pthread_mutex_unlock(&control_context.lock);
+        control_owner_unlock(&control_context);
         if (nanosleep(&interval, NULL) < 0 && errno != EINTR) {
             fprintf(stderr, "wvm_ctl: serve interval failed: %s\n",
                     strerror(errno));

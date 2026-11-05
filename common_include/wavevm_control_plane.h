@@ -6,6 +6,7 @@
 
 #include "wavevm_control.h"
 #include "wavevm_coordinator.h"
+#include "wavevm_lifecycle.h"
 #include "wavevm_membership_control.h"
 
 struct wvm_admission_authority;
@@ -70,6 +71,18 @@ typedef int (*wvm_control_plane_runtime_health_probe_fn)(
     char *error, size_t error_len);
 
 /*
+ * F08: after durable RUNNING→DEGRADED or DEGRADED→FAILED from required-member /
+ * required-runtime health reconcile, invoke this hook so the real execution
+ * gate is fail-closed. LIST_VM/journal FAILED alone must not be treated as the
+ * execution boundary. Hook should quiesce/deny authorize for this exact
+ * vm_id/incarnation only (do not touch sibling VMs). Return 0 on success;
+ * non-zero is logged by reconcile but does not roll back the durable state.
+ */
+typedef int (*wvm_control_plane_execution_fail_closed_fn)(
+    void *context, const struct wvm_admission_transaction_record *transaction,
+    enum wvm_lifecycle_state new_state, char *error, size_t error_len);
+
+/*
  * Membership is configured as a component of the one control-plane owner.
  * The caller supplies bounded tables and the transport-owned result sink;
  * neither the controller nor the receiver creates a process-global registry.
@@ -125,6 +138,9 @@ struct wvm_control_plane {
     uint32_t local_physical_node_id;
     wvm_control_plane_runtime_health_probe_fn runtime_health_probe;
     void *runtime_health_probe_context;
+    /* F08: optional per-VM execution fail-closed (quiesce/deny authorize). */
+    wvm_control_plane_execution_fail_closed_fn execution_fail_closed;
+    void *execution_fail_closed_context;
     const struct wvm_admission_authority *admission_authority;
 };
 
@@ -159,6 +175,11 @@ void wvm_control_plane_set_local_physical_node_id(
 void wvm_control_plane_set_runtime_health_probe(
     struct wvm_control_plane *plane,
     wvm_control_plane_runtime_health_probe_fn probe, void *context);
+
+/* Install F08 execution fail-closed hook (quiesce/deny) before serving. */
+void wvm_control_plane_set_execution_fail_closed(
+    struct wvm_control_plane *plane,
+    wvm_control_plane_execution_fail_closed_fn fn, void *context);
 
 /*
  * Bind the complete admission authority before the control service opens.

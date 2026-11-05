@@ -41,6 +41,13 @@ equivalence/failure testing are extended hardening work. They must not become a
 reason to delay a correct Mode B launch, and they must not introduce a second
 page-consistency authority.
 
+Minimum TCG capability and fallback acceptance covers bounded real execution
+and the shared memory/vCPU contracts. Full TCG guest boot/login/SSH and sustained
+multi-vCPU guest usability are Extended (`vcpu-handoff.md` Section 8.1). Selecting
+TCG, including an `AUTO` fallback, must expose that delivery boundary rather
+than claim that a TCG guest OS has passed acceptance. This does not change the
+probe requirements or permit live backend switching.
+
 Non-goals for V1:
 
 - Claiming a capability from kernel version, container image name, or a bound

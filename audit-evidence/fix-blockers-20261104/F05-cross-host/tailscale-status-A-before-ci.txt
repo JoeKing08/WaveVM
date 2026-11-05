@@ -1,0 +1,4 @@
+[sudo] joeking 的密码： 100.116.196.65  wavevm-ci-a-1  262213181@  linux  -                            
+100.115.205.34  wavevm-ci-a    262213181@  linux  offline, last seen 193d ago  
+100.114.246.92  wavevm-ci-b-1  262213181@  linux  -                            
+100.114.255.35  wavevm-ci-b    262213181@  linux  offline, last seen 193d ago  

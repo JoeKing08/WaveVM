@@ -1,0 +1,4 @@
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=25362 directory=99 directory_instance=202 operation=00000000000000000000000000000001 gpa=4096 remote_reads=1 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=25362 directory=99 directory_instance=202 operation=f2000000000000000000000000000000 gpa=0 remote_reads=1 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=25362 directory=99 directory_instance=202 operation=f200000000000000e00d000000000000 gpa=14548992 remote_reads=3553 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=25362 directory=99 directory_instance=202 operation=f2000000000000009f1b000000000000 gpa=28962816 remote_reads=7072 remote_commits=0

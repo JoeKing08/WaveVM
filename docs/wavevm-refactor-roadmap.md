@@ -45,8 +45,8 @@ This eliminates the long-term maintenance cost of two semantic paths while prese
 ## 1.1 Delivery Profiles
 
 The roadmap has two delivery profiles. They share the same semantic contracts;
-the second profile adds operational hardening rather than changing what a VM
-means.
+Extended adds backend usability coverage and operational hardening without
+changing what a VM means.
 
 ### Minimum usable system
 
@@ -55,11 +55,10 @@ The first usable release must provide:
 - a manifest-bound distributed VM with isolated VM identity, routes, sockets,
   shared memory, ports, logs, and temporary files;
 - flat and fractal routing with the same VM namespace rules;
-- correct TCG and KVM execution against the same memory and vCPU contracts,
-  including the baseline Section 16 / `vcpu-handoff` §8.1 Minimum usable
-  distributed multi-vCPU concurrent TCG contract (concurrency as the main
-  path; Section 15 bounded `force_local` only as exceptional coverage; not
-  full upstream QEMU MTTCG performance);
+- KVM guest execution and bounded real TCG execution against the same memory
+  and vCPU contracts; TCG contract tests include independent vCPU progress,
+  remote memory, handoff/device/atomic ordering, bounded failure, and cleanup
+  as specified in baseline Section 16 and `vcpu-handoff` Section 8.1;
 - multiple Mode B VMs on one physical host;
 - explicit per-VM kernel accelerator contexts, including two-VM isolation tests
   before Mode A is advertised for multi-VM hosts;
@@ -70,14 +69,23 @@ The first usable release must provide:
   failure semantics;
 - create, activate, start, stop, and partial-start cleanup with bounded
   failure reporting;
-- guest readiness plus evidence of remote vCPU and remote memory activity in
-  the end-to-end smoke tests.
+- KVM guest login or SSH plus evidence of remote vCPU and remote memory activity
+  in the end-to-end smoke tests, and TCG instruction/result-based evidence in
+  bounded contract tests. TCG guest OS boot/login/SSH and sustained multi-vCPU
+  guest usability are Extended gates, not Minimum gates.
 
 The minimum usable system does not provide live migration, automatic resource
 replanning, coordinator high availability, transparent recovery of lost
 compute state, or automatic repair without a verified replacement path.
 
-### Extended hardening
+### Extended backend coverage and hardening
+
+Extended includes full TCG guest OS boot/login/SSH and sustained distributed
+multi-vCPU guest execution. Its normal path must provide concurrent remote
+progress rather than a token trickle under `force_local`; the detailed gate is
+`vcpu-handoff.md` Section 8.1. Minimum TCG contract support must not be advertised
+as accepted TCG guest OS usability. This delivery boundary does not remove TCG,
+permit wrong execution results, or relax memory, isolation, and lifecycle rules.
 
 After the minimum usable system is stable, the project may add coordinator
 recovery matrices, automatic migration or resharding, UFFD and other pluggable
@@ -732,15 +740,21 @@ Purpose: make tests exercise architecture rather than handcrafted scripts.
 Actions:
 
 - **Minimum usable smoke matrix:** generate bounded manifests for flat and
-  fractal TCG, flat and fractal KVM, one-node kernel acceleration, and two
-  Mode B VMs on one physical host; include two independent compute-node
+  fractal TCG contract tests, flat and fractal KVM guest tests, one-node kernel
+  acceleration, and two Mode B VMs on one physical host; include two independent compute-node
   instances on one physical host with distinct ports/sockets and aggregate
   resource accounting; after Phase 8, include two Mode A VMs on one physical
   host to prove context isolation.
 - **Minimum usable evidence:** record the capability report, manifest digest,
-  actual QEMU resource arguments, guest readiness, remote vCPU/memory evidence,
-  and cleanup result.
+  actual QEMU resource arguments, remote vCPU/memory evidence, and cleanup
+  result. KVM guest cells require login or SSH; TCG contract cells require real
+  instruction execution and checked CPU/memory results, not guest OS login.
+  Kernel/multi-instance isolation cells may use bounded contract workloads;
+  they do not replace the KVM guest cells.
 - **Extended matrix:**
+  - flat and fractal TCG guest boot/login/SSH, multi-vCPU workload, concurrent
+    remote progress as the normal path, bounded local fallback, and STOP,
+    following `vcpu-handoff.md` Section 8.1;
   - mixed accelerator/no-accelerator clusters;
   - deterministic network fault injection for loss, duplication, reordering,
     delay, and route-generation replacement;
@@ -759,11 +773,16 @@ Acceptance criteria:
   routing, memory, CPU state, or guest boot.
 - **Minimum usable:** Logs do not fill disk.
 - **Minimum usable:** Tests do not require hidden production workarounds.
-- **Minimum usable:** Success requires guest login or SSH plus evidence that remote vCPU and remote
-  memory paths were exercised. Process survival or a listening port alone is
-  not a success oracle.
+- **Minimum usable:** KVM guest success requires login or SSH and evidence that
+  remote vCPU and remote memory paths were exercised. TCG contract success
+  requires bounded real execution with checked CPU/memory results and completed
+  remote operations. Process survival, a listening port, or a stub is not a
+  success oracle for either backend. A TCG guest login failure does not block
+  this profile, and a TCG contract pass does not establish guest OS usability.
 - **Minimum usable:** Every smoke test has a fixed timeout and leaves no process, SHM object, route, or
   unbounded artifact behind.
+- **Extended:** TCG guest acceptance requires the separate Section 8.1 gate;
+  it must not be inferred from Minimum TCG contract results.
 - **Extended:** Network and lifecycle fault injection, exhaustive crash
   matrices, rollback/retirement races, and broad engine-equivalence coverage
   are required before claiming operational hardening.
@@ -835,9 +854,10 @@ Use one dependency order:
 6. Implement Mode B multi-instance isolation and explicit placement/lifecycle.
 7. Implement the minimum usable node/gateway membership operations.
 8. Refactor kernel accelerator contexts and prove two-VM Mode A isolation.
-9. Regress KVM and finish TCG against the same semantic contracts, then run the
-   minimum usable flat/fractal smoke matrix.
-10. Add fault-engine plugins and extended deterministic failure testing.
+9. Regress KVM guest execution and TCG bounded execution against the shared
+   semantic contracts, then run the Minimum flat/fractal smoke matrix.
+10. Complete Extended TCG guest acceptance, then add fault-engine plugins and
+    extended deterministic failure testing as their dependencies permit.
 ```
 
 During specification phases, narrowly scoped fixes may continue when they
@@ -910,6 +930,7 @@ This keeps the project useful in restricted environments while preserving a path
 
 The immediate implementation target is the minimum usable profile: complete
 the user-space authorities, Mode B isolation, basic membership lifecycle, and
-per-VM Mode A contexts before treating the project as usable. Extended
-fault-engine and failure-injection work follows that gate and must not be used
-to postpone the basic distributed VM path.
+per-VM Mode A contexts, KVM guest acceptance, and bounded TCG contract tests
+before treating the Minimum profile as usable. Extended TCG guest acceptance,
+fault-engine, and failure-injection work follow that gate and must not be used
+to postpone the Minimum distributed VM path.

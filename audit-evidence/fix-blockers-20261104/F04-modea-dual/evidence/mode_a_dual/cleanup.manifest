@@ -1,0 +1,14 @@
+# cleanup.manifest for vm_id=256 inc=1
+# cleanup.manifest for vm_id=257 inc=1
+path=/tmp/wvm_user_wvm-v256-i1-g1-n801-fe7e3d2dc4388a23.sock
+path=/tmp/wvm_user_wvm-v257-i1-g1-n801-b9ecffbb28aaabd7.sock
+path=/tmp/wvm-v256-i1-g1-n801-fe7e3d2dc4388a23-executor.sock
+path=/tmp/wvm-v256-i1-g1-n801-fe7e3d2dc4388a23-monitor.sock
+path=/tmp/wvm-v256-i1-g1-n801-fe7e3d2dc4388a23-ready
+path=/tmp/wvm-v256-i1-g1-n801-fe7e3d2dc4388a23-worker.sock
+path=/tmp/wvm-v257-i1-g1-n801-b9ecffbb28aaabd7-executor.sock
+path=/tmp/wvm-v257-i1-g1-n801-b9ecffbb28aaabd7-monitor.sock
+path=/tmp/wvm-v257-i1-g1-n801-b9ecffbb28aaabd7-ready
+path=/tmp/wvm-v257-i1-g1-n801-b9ecffbb28aaabd7-worker.sock
+shm=/wavevm_ram_wvm-v256-i1-g1-n801-fe7e3d2dc4388a23
+shm=/wavevm_ram_wvm-v257-i1-g1-n801-b9ecffbb28aaabd7

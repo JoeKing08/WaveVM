@@ -1,0 +1,10 @@
+F02 flat_kvm regression after fractal range-map fix
+recorded_at=2026年 11月 04日 星期三 21:11:48 CST
+tip=620cd762b dirty
+Result: MATRIX flat_kvm PASS elapsed=38s cleanup_ok=1
+  create status=0 recorded_state=11
+  guest_shm_store=PASS marker=0x5266 waited_ms=480 via_gateway=0
+  typed_short_exec=PASS backend=kvm
+  stop status=0 recorded_state=17
+Source: /tmp/wavevm-f02-flat-rm run_id=f02-flat-rm-210943
+MINIMUM_COMPLETE=NOT_CLAIMED

@@ -60,24 +60,27 @@ WaveVM should be treated as a distributed QEMU, not as a collection of test-spec
 
 The project has two acceptance horizons:
 
-**Minimum usable system:** a manifest-bound VM can run with isolated local
-resources and identity, use either TCG or KVM, use flat or fractal routing, and
-share a physical host with other Mode B VMs. For multi-vCPU TCG, the Minimum
-includes the usable distributed concurrent multi-vCPU contract in Section 16
-(concurrency as the main path; Section 15 bounded local fallback only as
-exceptional coverage — not full upstream QEMU MTTCG performance). Mode A is
-usable for multiple VMs only after explicit per-VM kernel contexts and teardown
-isolation pass. The minimum system also includes basic node/gateway join,
-compute cordon, safe drain, and gateway replacement through acknowledged route
-snapshots.
+**Minimum usable system:** a manifest-bound KVM VM can reach guest login or
+SSH, use flat or fractal routing, and share a physical host with other Mode B
+VMs with isolated resources and identity. TCG remains an execution backend in
+Minimum: bounded execution, remote memory, CPU-state handoff, device-authority
+exits, and cleanup must satisfy the same semantic contracts. Full TCG guest
+boot/login and sustained multi-vCPU guest usability belong to Extended, as
+defined in Section 16 and `vcpu-handoff.md` Section 8.1. A TCG contract-test
+pass does not establish that a TCG guest OS is usable. Mode A is usable for
+multiple VMs only after explicit per-VM kernel contexts and teardown isolation
+pass. The minimum system also includes basic node/gateway join, compute
+cordon, safe drain, and gateway replacement through acknowledged route snapshots.
 
-**Extended hardening:** coordinator high availability, automatic migration or
+**Extended:** full TCG guest boot/login/SSH and sustained distributed
+multi-vCPU guest usability, coordinator high availability, automatic migration or
 resharding, transparent recovery after loss of required compute state, full
 fault-engine plugin coverage, exhaustive network/lifecycle fault injection, and
 hosted host-OS portability (a hypervisor adapter running the same Linux host
 appliance on a non-Linux physical host; not a WaveVM guest and not a native
-non-Linux port). These are later operational improvements, not prerequisites
-for proving that the distributed VM path works. See roadmap §1.1 and §14.1.
+non-Linux port). These extend backend coverage or operational resilience; they
+are not prerequisites for the Minimum KVM guest and TCG contract-test gates.
+See roadmap Sections 1.1, 14, and 14.1.
 
 The two horizons do not define two products or two semantic paths. Extended
 features must preserve the same manifest, identity, routing, memory, and vCPU
@@ -977,8 +980,8 @@ second Mode A VM on that node. Raising the limit requires explicit context
 ownership across sleepable and asynchronous paths, safe TX/VMA/destroy
 references, full u32 VM identity, and isolation/teardown acceptance evidence.
 Module-global VM identity and directory/route fallbacks are prohibited in the
-target path. Stub READY results cannot satisfy the Minimum guest login/SSH and
-remote-resource acceptance criteria.
+target path. Stub READY results cannot satisfy Minimum KVM guest login/SSH,
+TCG execution-contract tests, or remote-resource acceptance criteria.
 
 ## 15. Invariants
 
@@ -1102,35 +1105,35 @@ ABIs without choosing contradictory alternatives.
   `legacy_cluster_epoch` reset; in V1 it is quarantined until all
   route/cache/operation retirement acknowledgements complete and the next
   incarnation is checked.
-- **Minimum multi-vCPU TCG 应然 (usable distributed concurrent TCG / MTTCG
-  contract):** V1 same-host coherent-SHM TCG MUST provide a usable distributed
-  multi-vCPU concurrent execution contract. Concurrent BSP-local + AP-remote
-  (and multi-remote) progress is the **main normal path**. Guest-visible
-  multi-vCPU progress for ≥2 vCPUs under that path is a Minimum requirement,
-  not an optional optimization. The Section 15 bounded local synchronous
-  fallback (named `force_local` in `docs/specs/vcpu-handoff.md` §8.1) is
-  **only** an exceptional, per-vCPU, wall-clock-bounded correctness path for
-  windows that need true multi-vCPU interleaving (stop_machine / text_poke /
-  softlock-class IPI) or NEED_LOCAL device-authority bounce. It MUST NOT be
-  the normal execution mode, MUST NOT permanently serialize all vCPUs, and
-  MUST NOT dominate remote concurrent slice accounting under ordinary guest
-  progress. Trigger, per-vCPU scope, wall-clock bounds, renew/cooldown,
-  device-bounce coupling, configuration knobs, and Minimum acceptance shape
-  live in `docs/specs/vcpu-handoff.md` §8.1. This Minimum contract is **not**
-  a requirement for full upstream QEMU in-process MTTCG performance,
-  scheduling optimization, or helper-thread MTTCG parity. Fault injection,
-  coordinator HA, live migration, automatic resharding, transparent recovery,
-  and a full pluggable fault engine remain Extended and are not Minimum gates
-  for this contract.
+- **TCG delivery boundary:** Minimum retains real, manifest-bound TCG execution
+  tests for CPU context, remote memory reads/commits and fences, independent
+  vCPU ownership/progress, device/atomic exits, bounded failures, and STOP.
+  Both flat and fractal paths must execute actual guest instructions; a stub,
+  listener, local-only substitute, or KVM execution cannot satisfy that gate.
+  Full TCG guest OS boot, login/SSH, sustained multi-vCPU guest workload, and
+  proof that concurrent remote execution is the normal guest progress path
+  belong to Extended. This does not permit accepting incorrect bytes/context,
+  suppressing errors, or weakening shared memory and lifecycle contracts.
+  Same-host shared RAM requires an actual shared-backing proof; local mapping
+  alone does not establish cross-host coherence. The Section 15 fallback
+  (`force_local`) remains per-vCPU and bounded whenever used; ownership,
+  memory, device, and atomic ordering are not deferred. Section 8.1 of
+  `vcpu-handoff.md` defines the separate Minimum contract tests and Extended
+  TCG guest acceptance. Until Extended acceptance passes, user-facing backend
+  descriptions must distinguish TCG contract support from usable TCG guest OS
+  support, including for a policy-selected TCG fallback.
 
 The following remain future design work rather than V1 alternatives:
 
+- Full TCG guest OS boot/login/SSH and sustained distributed multi-vCPU guest
+  execution, including concurrent BSP-local + AP-remote progress as the normal
+  path rather than a token trickle under local fallback. Acceptance belongs in
+  `vcpu-handoff.md` Section 8.1 and roadmap Phase 10.
 - Full upstream QEMU in-process / cross-process TCG MTTCG performance and
   helper-thread MTTCG (or equivalent barriers) that removes the need for a
   Section 15 bounded local synchronous fallback on the concurrent SHM path
-  for stop_machine / text_poke / softlock-class IPI windows. Usable
-  distributed multi-vCPU concurrent TCG under the Minimum contract above is
-  required now; that full MTTCG optimization is deferred.
+  for stop_machine / text_poke / softlock-class IPI windows. This performance
+  work is separate from the Extended usable TCG guest acceptance above.
 - Cross-backend KVM-to-TCG or TCG-to-KVM vCPU handoff.
 - Live migration of the QEMU frontend or dynamic replanning of a running VM.
 - Automatic resharding of an active VM when a compute node joins or leaves.

@@ -1,0 +1,9 @@
+run_id=f04-modea-211148
+cell=mode_a_one
+rc=78
+elapsed_s=0
+class=skip
+cleanup_ok=1
+note=no_usable_/dev/wavevm
+invoked=0
+skip=1

@@ -1,0 +1,9 @@
+run_id=f02-fractal-kvm-203449
+cell=fractal_kvm
+rc=1
+elapsed_s=31
+class=start
+cleanup_ok=1
+log=/tmp/wavevm-f02-fractal-kvm-203449/fractal_kvm.log
+note=ok
+invoked=1

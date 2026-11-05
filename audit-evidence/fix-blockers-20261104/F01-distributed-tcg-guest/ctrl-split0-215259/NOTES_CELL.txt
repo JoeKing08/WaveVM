@@ -1,0 +1,4 @@
+cell=ctrl-split0-215259 vcpus=2 split=0 (all remote)
+guest_login=MISSING serial_bytes=0
+signature: early real-mode / BIOS stick; remote_done advances; no Cirros serial
+top RIPs: 0x17f, 0xef570, 0x0, 0xff53

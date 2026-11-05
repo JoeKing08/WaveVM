@@ -83,8 +83,9 @@ the advertised context limit:
 
 Same-GPA, multi-FD, asynchronous teardown, and failure tests must exercise
 these invariants before multi-context capability is advertised. Stub
-CREATE-to-RUNNING/READY evidence cannot satisfy the Minimum guest login/SSH
-and remote-resource acceptance criteria.
+CREATE-to-RUNNING/READY evidence cannot satisfy Minimum KVM guest login/SSH,
+TCG execution-contract tests, or remote-resource acceptance criteria. Full TCG
+guest acceptance is Extended; its deferral does not weaken context isolation.
 
 Non-goals for V1:
 
@@ -361,8 +362,8 @@ is lost.
 
 Capability discovery and admission must enforce the isolation gate in Section
 1.2. Context lifecycle tests establish the accelerator boundary only; the
-Minimum guest login/SSH and remote-resource criteria require separate
-end-to-end evidence.
+Minimum KVM guest login/SSH, TCG execution-contract, and remote-resource criteria
+require separate end-to-end evidence.
 
 ## 8. Implementation Touchpoints and Requirements
 

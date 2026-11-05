@@ -1,0 +1,117 @@
+[guest-smoke 08:52:40] art=audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/f01-stw-concurrent0-split1-085240 qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=2 log_cap=16777216 file_limit=33554432
+[guest-smoke 08:52:40] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-tcg (production + live helpers)
+[guest-smoke 08:52:49] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.mMmKgI agent=19076 ctl=19069
+[guest-smoke 08:52:49] CREATE backend=require-tcg accel=disabled
+[guest-smoke 08:52:49] live wavevm-accel QEMU processes≈2
+[guest-smoke 08:52:49] manifest=/tmp/wavevm-create-vm-single.mMmKgI/runtime/vm-256-1-1.manifest node_instance=802 child=19101
+[guest-smoke 08:52:49] start Cirros frontend -m 256 -smp 2 split=1 machine=pc-i440fx-5.2
+[guest-smoke 08:52:49] log_cap_bytes=16777216 file_limit_bytes=33554432
+[guest-smoke 08:52:52] frontend_pid=19250 serial=audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/f01-stw-concurrent0-split1-085240/vm-serial.log
+[guest-smoke 08:52:52] waiting up to 300s for 'cirros login:'
+[guest-smoke 08:53:42] boot poll 62s serial_bytes=28952
+[guest-smoke 08:54:32] guest reached cirros login
+[guest-smoke 08:54:32] waiting up to 120s for SSH login
+[guest-smoke 08:54:32] guest SSH PASS: wavevm-guest-ssh-ok
+cpu-smoke-ok
+              total        used        free      shared  buff/cache   available
+Mem:         219488       27268      152660          52       39560      184280
+Swap:             0           0           0
+2
+[guest-smoke 08:55:28] G9 remote wait 45s exhausted delta=0
+[guest-smoke 08:55:28] ERROR: G9 remote attribution incomplete (vcpu=0 mem=0 delta=0)
+=== G9 attribution (not boot banner) ===
+remote_done 28 -> 28 delta=0
+local_done  3328 -> 3584 delta=256
+force_local 3299 -> 3299 delta=0
+=== recent WVM-TCG-STATS / WVM-REMOTE ===
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2 force_local_used=0
+[WVM-REMOTE] cpu=1 dispatch #0 rip=0xffffffffa4539281 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00bbe00 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=1 local_done=0 force_local_used=0
+[WVM-REMOTE] cpu=1 dispatch #1 rip=0xffffffffa45bb0d2 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00bbe60 oldex=-1
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=2 local_done=0 force_local_used=0
+[WVM-REMOTE] cpu=1 dispatch #2 rip=0xffffffffa4578688 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00d8f00 oldex=-1
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=3 local_done=0 force_local_used=1
+[WVM-TCG-STATS] cpu=1 remote_done=3 local_done=1 force_local_used=2
+[WVM-REMOTE] cpu=1 dispatch #3 rip=0xffffffffa4539281 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc02afe30 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=4 local_done=1 force_local_used=2
+[WVM-REMOTE] cpu=1 dispatch #4 rip=0xffffffffa45bb0d2 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00bbe60 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=5 local_done=1 force_local_used=3
+[WVM-REMOTE] cpu=1 dispatch #5 rip=0xffffffffa458f38c cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc013fce8 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=6 local_done=1 force_local_used=4
+[WVM-TCG-STATS] cpu=1 remote_done=6 local_done=2 force_local_used=5
+[WVM-REMOTE] cpu=1 dispatch #6 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc0513a78 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=7 local_done=2 force_local_used=5
+[WVM-REMOTE] cpu=1 dispatch #7 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc013fe28 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=8 local_done=2 force_local_used=6
+[WVM-REMOTE] cpu=1 dispatch #8 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc013fda0 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=9 local_done=2 force_local_used=7
+[WVM-REMOTE] cpu=1 dispatch #9 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc0513a70 oldex=-1
+[WVM-TCG-STATS] cpu=1 remote_done=10 local_done=2 force_local_used=8
+[WVM-TCG-STATS] cpu=1 remote_done=11 local_done=2 force_local_used=9
+[WVM-TCG-STATS] cpu=1 remote_done=12 local_done=2 force_local_used=10
+[WVM-TCG-STATS] cpu=1 remote_done=13 local_done=2 force_local_used=11
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=2 force_local_used=12
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=3 force_local_used=49
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=4 force_local_used=50
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=256 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=256 force_local_used=412
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=512 force_local_used=692
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=768 force_local_used=1103
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=512 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=1024 force_local_used=1612
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=768 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1024 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=14 local_done=1280 force_local_used=2526
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1280 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1536 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=15 local_done=1417 force_local_used=3082
+[WVM-TCG-STATS] cpu=1 remote_done=16 local_done=1417 force_local_used=3083
+[WVM-TCG-STATS] cpu=1 remote_done=17 local_done=1417 force_local_used=3084
+[WVM-TCG-STATS] cpu=1 remote_done=18 local_done=1418 force_local_used=3085
+[WVM-TCG-STATS] cpu=1 remote_done=19 local_done=1418 force_local_used=3085
+[WVM-TCG-STATS] cpu=1 remote_done=20 local_done=1418 force_local_used=3086
+[WVM-TCG-STATS] cpu=1 remote_done=21 local_done=1418 force_local_used=3087
+[WVM-TCG-STATS] cpu=1 remote_done=22 local_done=1418 force_local_used=3087
+[WVM-TCG-STATS] cpu=1 remote_done=23 local_done=1418 force_local_used=3088
+[WVM-TCG-STATS] cpu=1 remote_done=24 local_done=1418 force_local_used=3089
+[WVM-TCG-STATS] cpu=1 remote_done=25 local_done=1418 force_local_used=3090
+[WVM-TCG-STATS] cpu=1 remote_done=26 local_done=1418 force_local_used=3090
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1792 force_local_used=0
+[WVM-TCG-STATS] cpu=1 remote_done=27 local_done=1419 force_local_used=3091
+[WVM-TCG-STATS] cpu=1 remote_done=28 local_done=1419 force_local_used=3092
+[WVM-TCG-STATS] cpu=1 remote_done=28 local_done=1536 force_local_used=3299
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2048 force_local_used=0
+=== completed remote memory operations during workload ===
+remote_memory 0 -> 0 delta=0
+=== WVM-REMOTE (vcpu only; NOT mem evidence) ===
+[WVM-REMOTE] cpu=1 dispatch #0 rip=0xffffffffa4539281 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00bbe00 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #1 rip=0xffffffffa45bb0d2 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00bbe60 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #2 rip=0xffffffffa4578688 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00d8f00 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #3 rip=0xffffffffa4539281 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc02afe30 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #4 rip=0xffffffffa45bb0d2 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc00bbe60 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #5 rip=0xffffffffa458f38c cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc013fce8 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #6 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc0513a78 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #7 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc013fe28 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #8 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc013fda0 oldex=-1
+[WVM-REMOTE] cpu=1 dispatch #9 rip=0xffffffffa4aa62a7 cs=0x10 cr0=0x80050033 cr3=0xa210000 efer=0xd01 rsp=0xffffb0fbc0513a70 oldex=-1
+guest_login=PASS
+guest_ssh=PASS
+remote_done_before=28
+local_done_before=3328
+force_local_used_before=3299
+remote_memory_before=0
+remote_memory_after=0
+remote_memory_delta=0
+guest_cpu_smoke=PASS
+remote_done_after=28
+local_done_after=3584
+force_local_used_after=3299
+remote_done_delta=0
+local_done_delta=256
+force_local_used_delta=0
+remote_vcpu_evidence=0
+remote_mem_evidence=0
+OVERALL=FAIL_g9_remote_attribution

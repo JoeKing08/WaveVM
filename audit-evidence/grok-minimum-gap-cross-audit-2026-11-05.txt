@@ -1,0 +1,296 @@
+WaveVM Minimum 缺口交叉审计（Grok Bot — audit only）
+======================================================================
+日期：2026-11-05 Asia/Shanghai（写盘约 09:58–10:05 CST）
+审计员：Grok Bot（executor subagent；只读审计，未改生产代码、未 commit/push）
+仓库：/workspaces/WaveVM
+machineId：2e4d3ec5-e1b1-4a36-9903-de6309119499
+Tip HEAD：620cd762b34ec309d7dac1b6822ddeff34fe59be（short 620cd762b）
+Dirty：是 — tip + 当前未提交工作树（大量 common_include/ctl_tool/node_runtime/
+       wavevm-qemu/tests 等 tracked 改动 + 构建产物/证据 ??）。
+       `git diff --stat HEAD` 可见约 36 files / +1990/-131（审计当时快照）。
+MINIMUM_COMPLETE：No / NOT_CLAIMED
+硬约束遵守：本轮不修代码、不宣称 COMPLETE、不提交/推送。
+
+一、中文总结论（给 Joe）
+----------------------------------------------------------------------
+1) Tip+dirty 核实通过；与已知记分牌大体一致，但不可把「本周定向 PASS」
+   自动升格成「全矩阵已在本 tip 重跑闭合」。
+2) 诚实 Minimum COMPLETE 仍被挡住。主缺口不是「骨架没做」，而是：
+   (a) F01 分布式并发 TCG guest 合同未闭合（Joe 已 撤退/deferred）；
+   (b) dirty 树里 wavevm-cpu.c 把 SHM concurrent 默认改成 STW=0，与纲领
+       §8.1「concurrent 为主路径」张力未收（仍属 F01 未收口的一部分）；
+   (c) F05 跨物理主机 coherent/远端缺页 live 证明缺第二台主机；
+   (d) F10 guest 成功判据 + 适用格真实 guest 矩阵尚未作为最终闭合证据；
+   (e) Q02 gateway drain 在 F02/F03 收口后的补跑仍见 CREATE 失败残留。
+3) 本周已可继承为「定向 PASS」的：F02、F03、F04、F06、F07、F08、F09 live
+   dual（+ F10 编译入口修复）。F01/F05 保持 PARTIAL。不得 COMPLETE。
+
+二、方法
+----------------------------------------------------------------------
+纲领（应然，优先阅读）：
+  docs/wavevm-architecture-baseline.md（尤其 §1 Minimum、§15–§16）
+  docs/wavevm-refactor-roadmap.md（§1.1 Minimum usable；Document Maintenance）
+  docs/specs/vcpu-handoff.md §8.1（分布式多 vCPU concurrent TCG + force_local）
+  docs/specs/runtime-manifest-lifecycle.md（CREATE/STOP/并发/清理）
+  docs/specs/cluster-membership-topology-lifecycle.md（join/cordon/drain）
+  docs/specs/memory-consistency.md（coherent / subscriber / commit）
+  docs/specs/resource-placement-admission.md、identity-routing.md、
+  storage-device-authority.md、capability-fault-engines.md（浅扫）
+
+证据根：
+  audit-evidence/fix-blockers-20261104/          （本周定向收口主根）
+    MINIMUM_STATUS_20261105-095248.txt
+    F01-…/F09-… 各 NOTES/RESULT/SUMMARY
+  audit-evidence/fix-blockers-20261104-audit/    （11-04 四方审计实测）
+  minimum-final-cross-audit-2026-11-04.txt         （Codex 最终交叉审基线）
+  对照：audit-evidence/fix-blockers-20261103/ s32/s55/s56；
+        fix-blockers-20261030/s23-tcg-contract（旧 fl 主导对照）
+
+方法口径：全广度、每点浅；每条缺口写纲领章节 + 具体证据路径。
+区分「本轮核对」vs「继承上周/本周已有 NOTES」——未重跑长测。
+风格对齐：Codex final cross-audit + 既有 grok charter self-audit 广覆盖浅深。
+
+三、记分牌 F01–F10 / Q01–Q03
+----------------------------------------------------------------------
+图例：PASS / PARTIAL / FAIL / OPEN
+核验：R=本轮核对证据文件；I=继承既有 NOTES/RESULT（未本轮复跑）
+
+F01  分布式并发 TCG guest 正确性（§8.1 / baseline §16）
+     状态：PARTIAL（Joe 2026-11-05 09:00 撤退 deferred）
+     核验：R
+     证据：
+       all-local PASS：
+         …/F01-distributed-tcg-guest/f01-fix-alllocal-split2-083037/
+         …/f01-fix-alllocal-split2-reconfirm-085750/result.txt
+           guest_login=PASS guest_ssh=PASS guest_cpu_smoke=PASS
+           （all-local：remote_memory_delta=0 可预期，非分布式合同）
+       distributed split=1 FAIL：
+         …/f01-fix-split1-083257/ （stack-protector ~0.62s；guest_login=MISSING）
+         …/s56-repro-214218/ （NULL in process_one_work；login MISSING）
+         历史：fix-blockers-20261103/s55、s56
+       NOTES_F01.txt + CURRENT_REPRO.txt：明确 PARTIAL + Joe defer
+     额外张力（本轮核对 dirty）：
+       wavevm-qemu/accel/wavevm/wavevm-cpu.c 将 WVM_TCG_SHM_CONCURRENT
+       默认从 1→0（STW default）。纲领要求 concurrent 为主路径；
+       STW 实验格不能用来宣称 §8.1 闭合。Joe 已要求停止打磨 F01。
+     纲领：baseline §16；vcpu-handoff.md §8.1；roadmap §1.1 TCG 合同。
+
+F02  KVM CREATE/readiness + flat/fractal typed 数据面
+     状态：PASS（定向；继承）
+     核验：I（读 NOTES/SUMMARY；未重跑）
+     证据：
+       …/F02-flat-rangemap/SUMMARY.txt + NOTES_F02.txt → flat_kvm PASS
+         create status=0/11；guest_shm_store marker=0x5266；typed_short_exec kvm；STOP 17
+       …/F02-fractal-rangemap/NOTES_F02.txt + SUMMARY → fractal_kvm PASS
+         via_gateway=1；range-map 修复后 typed store PASS
+       早期 FAIL 对照：F02-reverify / F02-fractal-kvm（dataplane FAIL）已被 rangemap 收口取代
+     纲领：roadmap Phase 创建/7 readiness；baseline frontend 注册。
+
+F03  双 VM STOP / 失败身份清理
+     状态：PASS（定向；继承）
+     核验：I
+     证据：…/F03-failed-stop/NOTES_F03.txt + SUMMARY.txt
+       mode_b_dual PASS；VM1 故意杀后 compensating STOP status=0/17；
+       VM2 healthy STOP status=0/17；cleanup_ok=1；非 RECOVERY_REBIND 宣称
+     纲领：runtime-manifest-lifecycle.md STOP/退役；roadmap Minimum 清理。
+
+F04  Mode A 生产 typed short-exec + 双 VM 隔离
+     状态：PASS（定向；继承）
+     核验：I
+     证据：
+       …/F04-modea-one/ → mode_a_one PASS（marker 0x5266；typed_WVM1_ingress）
+       …/F04-modea-dual/ → mode_a_dual PASS（STOP 隔离）
+       …/F04-modea-isol/run.log → WORKER-FAILURE ISOLATION: ALL PASS
+       …/F04-modea-recheck-after-f0567/ → F05/06/07 后 recheck PASS
+     纲领：roadmap Phase 8 Mode A per-VM context；baseline §13–§14。
+
+F05  coherent SHM 范围 vs 跨主机缺页路径
+     状态：PARTIAL（unit+placement PASS；跨主机 live 缺第二物理机）
+     核验：R（读 NOTES 刷新段）
+     证据：…/F05-coherent-host-scope/NOTES_F05.txt + unit_f05.log
+       EVID F05 cross_host_coherent_refused fe=1 ex=2
+       placement 导出 WVM_PHYSICAL_HOST_ID / EXECUTOR host env
+       20261105-095248 刷新：仍无第二物理主机 → 保持 PARTIAL
+     纲领：memory-consistency.md；vcpu-handoff.md §8.1 same-host 前提。
+     明确：非 F01；阻塞物是第二台物理主机，不是 Joe 撤退。
+
+F06  非 coherent 写页池占用/耗尽
+     状态：PASS（定向 unit；继承）
+     核验：I
+     证据：…/F06-page-pool/NOTES_F06.txt + unit_f06.log
+       claim 4097th fail；128 次有界失败；release+reclaim；in_use=0
+     纲领：memory-consistency 背压；Codex final F06 完成判据。
+
+F07  subscriber lease / 成员失效接线
+     状态：PASS（同进程定向；继承）
+     核验：I
+     证据：…/F07-subscriber-lease/NOTES_F07.txt + test_memory_service_f07.stdout
+       ACTIVE→STALE；membership hook；lease reap；EVID F07_* =1
+     边界：ctl 未链 memory_service 时 weak NULL（设计如此）
+     纲领：memory-consistency.md §4.5。
+
+F08  执行 fail-closed（控制面 FAILED ≠ 仍授权执行）
+     状态：PASS（定向；本周 RESULT 核对）
+     核验：R
+     证据：…/F08-execution-fail-closed/RESULT-20261105-084532.txt
+       test_f08_execution_fail_closed PASS；health reconcile + runtime-gate PASS
+       QUIESCE_RUNTIME / gate revoke 接线（dirty 树；F09 期间曾重建 receiver）
+     纲领：roadmap §1.1 fail closed；Phase 7 node-loss；baseline §16。
+
+F09  生产 owner 锁不阻塞无关 VM（网络等待让出）
+     状态：PASS（directed yield + live delayed dual；本周核对）
+     核验：R
+     证据：
+       …/F09-owner-lock-concurrency/RESULT-20261105-095248.txt
+       …/live-delayed-dual-20261105-095219/RESULT.txt
+         vm1+vm2 RUNNING；rpc_delay overlap_heuristic=True；overall=PASS
+       baseline-dual-mode-b-20261105-095035 PASS
+       test_f09_owner_lock_yield PASS（prior）
+     纲领：runtime-manifest-lifecycle.md §7；resource-placement-admission.md §6.3。
+
+F10  测试入口编译 + guest 成功判据 / 矩阵诚实
+     状态：PARTIAL（编译入口已修；guest 成功判据与全矩阵仍 OPEN）
+     核验：R（源码核对）+ I（旧 audit out）
+     证据：
+       编译入口（本轮源码核对）：
+         test_goal4_executor_remote_memory.c:446 (void)source_shared_backing;
+           complete_remote_fault 签名已自洽（不再误用已删参数）
+         test_coordinator.sh 已链 admission_readiness.c / admission_transport.c
+       仍开：
+         test_guest_smoke.sh 仍以 remote_delta>0 为主远程证据门；
+           未见强制拒绝 fl>>remote / fl_dominates 的硬失败（§8.1「非涓流」）
+         REQUIRE_STOP 路径仍先 kill frontend 再 STOP（:553 一带），
+           健康 guest 直接 STOP 的独立证据仍薄
+         guest minimum matrix 全四格 × 真实 login/SSH/远端 未在本 tip
+           作为最终闭合包重跑；MINIMUM_COMPLETE 脚本亦自标 NOT_CLAIMED
+     纲领：roadmap §1.1 guest readiness + remote evidence；vcpu-handoff §8.1
+           Acceptance evidence shape；Codex final F10。
+
+Q01  块服务多 device_index 地址空间
+     状态：OPEN（条件性；未放大为确定生产 bug）
+     核验：I + 浅扫 main.c device_index 仍按准入索引校验
+     说明：普通 QEMU 本地盘为合法 Minimum；若开放多盘须 device→backend 映射，
+           否则准入拒绝第二盘。本轮未见新的「必须立刻修」证据。
+     纲领：storage-device-authority.md；Codex final Q01。
+
+Q02  gateway drain prepare/commit 验收链
+     状态：OPEN / 仍见失败（F02/F03 后应补跑，尚未算 PASS）
+     核验：R
+     证据：…/Q02-reverify/console.txt
+       CREATE_VM attempt=0 status=14/9；attempt=1 status=6；
+       「CREATE_VM did not reach SUCCESS(0)/RUNNING」
+       → 未跑到目标 drain 操作；不能宣判 gateway 算法已坏，也不能算验收通过
+     纲领：cluster-membership-topology-lifecycle.md §1.1 drain/gateway replacement。
+
+Q03  声明能力的有限补证（Mode A 跨节点 / KVM dirty / >4096 / 异构拒绝）
+     状态：PARTIAL / 条件性
+     核验：I
+     证据要点：
+       Mode A 四真模块隔离：F04-modea-isol PASS（本机）
+       >4096 合成拓扑：Codex final 记载 flat/fractal fixture PASS
+         （tests/control-plane/test_membership_large_topology.* 等）
+       KVM dirty/resync、异构 CPU 拒绝：仍属有限补证，非本周主阻塞
+     说明：Q03 多数不是 COMPLETE 的第一阻塞；但最终矩阵前仍需按宣称能力抽检。
+
+四、仍阻挡诚实 Minimum COMPLETE 的缺口（按严重度 / 建议收口序）
+----------------------------------------------------------------------
+B1 [P0] F01 — 分布式并发 TCG guest 合同未闭合（Joe deferred）
+    纲领：baseline §16；vcpu-handoff §8.1；roadmap §1.1
+    证据：F01-distributed-tcg-guest/{f01-fix-split1-083257,s56-repro-*,NOTES_F01.txt}
+    另：dirty wavevm-cpu.c 默认 STW 与「concurrent MAIN」应然冲突——
+        即使 all-local/STW 能 login，也不能用默认 STW 冒充 §8.1 完成。
+    建议：按 Joe 撤退暂停打磨；恢复 concurrent 主路径前必须有 split≥1
+          login/SSH/远端进展/STOP 证据。不得用 force_local 主导或永久全本地过关。
+
+B2 [P0] F10 guest 成功判据 + 适用格真实 guest 矩阵
+    纲领：§8.1 Acceptance evidence shape；roadmap guest readiness
+    证据：tests/e2e/test_guest_smoke.sh；test_guest_minimum_matrix.sh；
+          尚无 tip+dirty 下 flat/fractal × TCG/KVM 全适用格 login 包
+    建议：先硬化判据（拒绝 fl 主导；健康 STOP；SKIP≠PASS），再跑矩阵。
+          判据小测 PASS ≠ guest 已过。
+
+B3 [P1] F05 — 跨物理主机 coherent/远端缺页 live 证明
+    纲领：memory-consistency；§8.1 same-host 前提
+    证据：F05-coherent-host-scope/NOTES_F05.txt（明确缺第二主机）
+    建议：有第二物理机后再做 refuse + remote fault/version/sync；
+          单机 unit 不得升格为跨机完成。
+
+B4 [P1] Q02 — gateway drain 链在当前 tip 仍未验收通过
+    纲领：membership §1.1
+    证据：Q02-reverify/console.txt（CREATE 未到 RUNNING）
+    建议：F02/F03 已 PASS 的前提下，干净环境重跑 drain prepare/commit；
+          分层区分夹具污染 vs 生产缺陷。
+
+B5 [P2] 全量回归诚实性 — F08/F09 之后未做 S6/guest 全适用格重跑
+    说明：F02–F04/F06–F09 多为定向细胞 PASS；F09 后仅 dual Mode B baseline
+          + F08 定向回归。最终 COMPLETE 前需一次「适用格」汇总，
+          避免 dirty 回归静默咬回。
+    证据对照：MINIMUM_STATUS_20261105-095248.txt；F09 RESULT；旧
+              fix-blockers-20261104-audit/S6（11-04，tip 亦不同代）
+
+五、非阻塞项（已关闭或超出 Minimum）
+----------------------------------------------------------------------
+- F02 flat/fractal KVM typed CREATE/store/STOP：定向已 PASS（非 guest login 合同）
+- F03 failed-identity / dual STOP 清理：定向已 PASS
+- F04 Mode A typed store + dual + 真模块隔离：定向已 PASS
+- F06 page pool 占用/耗尽：unit PASS
+- F07 subscriber invalidate/lease reap：同进程 PASS
+- F08 execution fail-closed 定向：PASS
+- F09 owner-lock yield + live delayed dual：PASS
+- F10 两个坏掉的测试编译入口：源码侧已修（goal4 参数；coordinator 链接）
+- >4096 合成拓扑定向：Codex 记载 PASS（非 4100 台物理机）
+- Extended：HA、迁移、RECOVERY_REBIND、透明恢复、完整故障矩阵、
+  跨平台移植、完整上游 MTTCG 性能 —— 不挡 Minimum
+- 工作区 dirty 本身不是产品 bug；但验收必须记录 tip+dirty 身份
+
+六、Joe 明确约束（本审计强调）
+----------------------------------------------------------------------
+- F01：Joe 撤退 — 停止继续 triage/fix/code；状态保持 PARTIAL。
+- F05：需要第二台物理主机才能做跨主机 coherent live 证明；与 F01 无关。
+- 二者之外，本轮不以「再磨 F01」或「假装单机=跨机」推进 COMPLETE。
+
+七、交给 Codex agent 的 handoff 要点
+----------------------------------------------------------------------
+请重核（建议）：
+  1) F01 证据是否仍成立：all-local PASS vs split=1 FAIL；STW 默认 dirty
+     是否与 §8.1 冲突（读 wavevm-cpu.c wavevm_tcg_shm_allow_concurrent）
+  2) F05 NOTES 是否仍写明「无第二主机 → PARTIAL」
+  3) F09 live-delayed-dual-20261105-095219 与 F08 RESULT 是否可复读为 PASS
+  4) Q02-reverify/console.txt 是否仍 FAIL（CREATE status=6）——勿跳过
+  5) F10：guest_smoke 是否仍缺少 fl 主导硬拒绝；矩阵是否仍 NOT_CLAIMED
+  6) tip 仍为 620cd762b + dirty；MINIMUM_COMPLETE 必须仍为 No
+
+请勿再争讼 / 不必重开：
+  - F02/F03/F04 定向 PASS 的「当初根因故事」是否还要重写
+  - Mode A「有没有 u32 准入」旧争论（Codex final 已纠偏）
+  - 把 F06 unit PASS 重打成 guest panic 根因
+  - 要求 HA/迁移/RECOVERY_REBIND/完整故障矩阵才算 Minimum
+  - 用 STW 默认或全本地 login 宣称 §8.1 concurrent 完成
+  - 把选格子 MATRIX_RESULT=PASS 写成 MINIMUM_COMPLETE
+
+建议 Codex 产出：在本文件之上做交叉确认/异议清单；仍 audit-only，
+除非 Joe 另开修复回合。
+
+八、证据索引（本轮主要引用）
+----------------------------------------------------------------------
+状态快照：
+  audit-evidence/fix-blockers-20261104/MINIMUM_STATUS_20261105-095248.txt
+基线交叉审：
+  /workspaces/WaveVM/minimum-final-cross-audit-2026-11-04.txt
+F01：audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/
+F02：…/F02-flat-rangemap/  …/F02-fractal-rangemap/
+F03：…/F03-failed-stop/
+F04：…/F04-modea-one/ …/F04-modea-dual/ …/F04-modea-isol/
+F05：…/F05-coherent-host-scope/
+F06：…/F06-page-pool/
+F07：…/F07-subscriber-lease/
+F08：…/F08-execution-fail-closed/RESULT-20261105-084532.txt
+F09：…/F09-owner-lock-concurrency/RESULT-20261105-095248.txt
+      …/live-delayed-dual-20261105-095219/
+Q02：…/Q02-reverify/console.txt
+旧 S6/guest：audit-evidence/fix-blockers-20261104-audit/
+
+九、最终声明
+----------------------------------------------------------------------
+MINIMUM_COMPLETE = No
+本文件仅为缺口审计与 Codex handoff；不修复、不提交、不宣称完成。

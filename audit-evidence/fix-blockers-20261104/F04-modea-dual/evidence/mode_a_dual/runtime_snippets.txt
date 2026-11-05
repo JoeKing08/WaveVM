@@ -1,0 +1,35 @@
+=== backend/topology snippets ===
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v256-i1-g1-n801-fe7e3d2dc4388a23': No such file or directory
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v256-i1-g1-n801-fe7e3d2dc4388a23': No such file or directory
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 8, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:29618
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-fe7e3d2dc4388a23 (Size: 16 MB)
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v257-i1-g1-n801-b9ecffbb28aaabd7': No such file or directory
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM-SHM] slave coherent open failed '/wavevm_ram_wvm-v257-i1-g1-n801-b9ecffbb28aaabd7': No such file or directory
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 8, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 7, vcpu_dispatch: sync, role_slave=1).
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:29667
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[System] Initializing SHM: /wavevm_ram_wvm-v257-i1-g1-n801-b9ecffbb28aaabd7 (Size: 16 MB)
+[WVM-EXECUTOR-BRIDGE] dispatch enter msg=5 payload=4522 vm=256
+=== child runtime logs (names) ===
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-257-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-256-1-1.manifest
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-257-1-1.manifest.route
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-256-1-1.manifest.route
+/tmp/wavevm-create-vm-dual-mode-a.gmrWrk/runtime/vm-257-1-1.manifest

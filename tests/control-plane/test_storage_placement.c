@@ -100,8 +100,13 @@ int main(void)
            "reject unordered device contracts");
 
     ordered[0].device_index = 0;
-    expect(wvm_vm_request_validate(&request, error, sizeof(error)) == 0,
-           "accept ordered device contracts");
+    /* Q01: even ordered multi-device plans are refused (no backend map). */
+    expect(wvm_vm_request_validate(&request, error, sizeof(error)) != 0,
+           "Q01 reject second WaveVM block device");
+
+    /* Single-device request path still validates. */
+    request.storage_device_plan.assignments.count = 1;
+    request.storage_device_plan.assignments.capacity = 1;
     ordered[0].backend_kind = 0;
     expect(wvm_vm_request_validate(&request, error, sizeof(error)) != 0,
            "reject a zero backend kind");

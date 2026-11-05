@@ -1,0 +1,55 @@
+[guest-smoke 21:47:26] art=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/ctrl-vcpus1-214659 qemu=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_bytes=268435456 vcpus=1 log_cap=16777216 file_limit=33554432
+[guest-smoke 21:47:26] CREATE_VM via test_create_vm_single_node.sh topology=flat backend=require-tcg (production + live helpers)
+[guest-smoke 21:47:35] CREATE RUNNING keep tmp=/tmp/wavevm-create-vm-single.yZaANi agent=27514 ctl=27507
+[guest-smoke 21:47:35] CREATE backend=require-tcg accel=disabled
+[guest-smoke 21:47:35] live wavevm-accel QEMU processes≈2
+[guest-smoke 21:47:35] manifest=/tmp/wavevm-create-vm-single.yZaANi/runtime/vm-256-1-1.manifest node_instance=802 child=27541
+[guest-smoke 21:47:35] start Cirros frontend -m 256 -smp 1 split=0 machine=pc-i440fx-5.2
+[guest-smoke 21:47:35] log_cap_bytes=16777216 file_limit_bytes=33554432
+[guest-smoke 21:47:38] frontend_pid=27690 serial=/workspaces/WaveVM/audit-evidence/fix-blockers-20261104/F01-distributed-tcg-guest/ctrl-vcpus1-214659/vm-serial.log
+[guest-smoke 21:47:38] waiting up to 240s for 'cirros login:'
+[guest-smoke 21:48:28] boot poll 62s serial_bytes=0
+[guest-smoke 21:49:28] boot poll 122s serial_bytes=0
+[guest-smoke 21:50:28] boot poll 182s serial_bytes=0
+[guest-smoke 21:51:28] boot poll 242s serial_bytes=0
+[guest-smoke 21:51:38] ERROR: cirros login not reached within 240s
+[WVM-TCG-LOCAL] cpu=0 n=32 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x4ea49d8576 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=33 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x512835c07e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=34 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x53abd9edbf lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=35 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x562f8379a0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=36 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x58b339e23c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=37 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x5b36d68210 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=38 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x5dba771800 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=39 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x603e25e66c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=40 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x62c1c29bb4 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=41 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x654576939c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=42 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x67c90ee2f7 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WaveVM-User] handoff dirty flush pages=1 skipped_zero=0 fd=15
+[WVM-TCG-SPIN-LOCAL] concurrent cpu=0 rip=0xff53 spin=4 no_local_peer=1 short_budget=32 hold=0
+[WVM-TCG-LOCAL] cpu=0 n=43 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x6a5f993341 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=44 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x6ce34821b9 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=45 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x6f66fe3702 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=46 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x71ea8caa47 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=47 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x746e47b7a2 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=48 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x76f1deb642 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=49 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x7975968db3 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=50 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x7bf94efd98 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=51 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x7e7cdb9c97 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=52 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x81007ef782 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=53 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x838433f29e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=54 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x8607d8056e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=55 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x888b850fc5 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=56 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x8b0f1cb3a0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=57 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x8d92c7f70b lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=58 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x901673641a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=59 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x929a219108 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=60 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x951ddbbece lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=61 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x97a162ced0 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=62 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x9a250556df lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=63 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x9ca8b8477c lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=64 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0x9f2c73dc0d lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=65 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0xa1affaa10e lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=66 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0xa433a434ca lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=67 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0xa6b748f6d5 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=68 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0xa93afb3491 lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=69 ret=65536 rip=0xff53 cs=0xf000 cr0=0x10 rdi=0xd0096600 rax=0xc6670724 r9=0x0 guest_tsc=0xabbe9f49df lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0

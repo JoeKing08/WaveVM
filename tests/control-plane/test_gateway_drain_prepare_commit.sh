@@ -39,7 +39,11 @@ cleanup() {
         kill -TERM "$ctl_pid" 2>/dev/null || true
         wait "$ctl_pid" 2>/dev/null || true
     fi
-    rm -rf -- "$tmpdir"
+    if [[ "${WVM_Q02_KEEP:-0}" == "1" ]]; then
+        echo "KEEP tmpdir=$tmpdir" >&2
+    else
+        rm -rf -- "$tmpdir"
+    fi
 }
 trap cleanup EXIT
 
@@ -47,10 +51,30 @@ export PATH="${HOME}/.local/bin:/home/box/.local/bin:/usr/bin:/bin:${PATH}"
 make -C "$repo_root/ctl_tool" -B -j2 >/dev/null
 make -C "$repo_root/gateway_service" -B >/dev/null
 make -C "$repo_root/node_runtime" -j2 >/dev/null
-gcc -Wall -Wextra -Werror -std=c11 \
-    "$repo_root/tests/control-plane/tcg_helper_stub.c" \
-    -o "$tmpdir/tcg_helper_stub"
-export WVM_TCG_QEMU_BIN="$tmpdir/tcg_helper_stub"
+# shellcheck source=s6_cell_common.sh
+source "$repo_root/tests/control-plane/s6_cell_common.sh"
+# CREATE→RUNNING requires manifest-bound QEMU_FRONTEND registration to publish
+# readiness (master_core publish_runtime_ready). tcg_helper_stub only holds the
+# session FD and never registers, so Mode B TCG CREATE stays IN_PROGRESS/COMMITTED.
+# Same real-QEMU helper path as test_s6_minimum_matrix / dual_mode_b cells.
+export WVM_S6_REAL_QEMU="${WVM_S6_REAL_QEMU:-1}"
+if [[ -z "${WVM_S6_QEMU_BIN:-}" ]]; then
+    for cand in \
+        "$repo_root/wavevm-qemu/build/qemu-system-x86_64" \
+        "$repo_root/wavevm-qemu/build/x86_64-softmmu/qemu-system-x86_64"; do
+        if [[ -x "$cand" ]]; then
+            export WVM_S6_QEMU_BIN="$cand"
+            break
+        fi
+    done
+fi
+s6_real_qemu=${WVM_S6_REAL_QEMU:-0}
+s6_qemu_bin=${WVM_S6_QEMU_BIN:-}
+s6_select_tcg_helper
+if [[ ! -x "${WVM_TCG_QEMU_BIN:-}" ]]; then
+    echo "Q02 drain: no TCG helper binary (need real QEMU for FE registration)" >&2
+    exit 2
+fi
 
 common_objs=(
     "$repo_root/common_include/wavevm_sha256.c"
@@ -332,11 +356,13 @@ if ! wait_member_state 901 902 4 20; then
 fi
 
 # Live CREATE_VM → membership route ACTIVATED + dependency_acquire (no offline seed).
+# Stable request_id byte across IN_PROGRESS retries so ctl REPLAY resumes
+# readiness (same contract as test_create_vm_single_node / dual_mode_b).
+# Bumping id each attempt starts a new CREATE and falsely gets status=6.
 create_out=""
 for ((attempt = 0; attempt < 80; attempt++)); do
-    id_hex=$(printf '%x' $((0x40 + attempt)))
     create_out=$("$tmpdir/submit_create_vm" "$tmpdir/ctl.sock" \
-        gw-drain-create 1 compact "$id_hex" || true)
+        gw-drain-create 1 compact 40 || true)
     echo "CREATE_VM attempt=$attempt $create_out"
     if [[ "$create_out" == status=0* ]]; then
         break
@@ -348,8 +374,12 @@ for ((attempt = 0; attempt < 80; attempt++)); do
 done
 if [[ "$create_out" != status=0* ]]; then
     echo "CREATE_VM did not reach SUCCESS(0)/RUNNING (got: $create_out)" >&2
-    tail -n 120 "$tmpdir/ctl.log" >&2 || true
+    echo "--- ctl.log (tail) ---" >&2
+    tail -n 40 "$tmpdir/ctl.log" >&2 || true
+    echo "--- agent.log (tail) ---" >&2
     tail -n 80 "$tmpdir/agent.log" >&2 || true
+    echo "--- ready files ---" >&2
+    find /tmp "$tmpdir" -name 'wvm-*-ready' 2>/dev/null | head -20 >&2 || true
     exit 1
 fi
 vm_id=$(echo "$create_out" | sed -n 's/.* vm_id=\([0-9]*\).*/\1/p')

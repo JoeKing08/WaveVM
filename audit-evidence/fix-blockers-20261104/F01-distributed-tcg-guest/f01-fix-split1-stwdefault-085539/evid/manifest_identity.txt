@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.TZAm35/runtime/vm-256-1-1.manifest
+dd303865c4d6812a3bdd9795e393ec7d77bf5110863d35cb445baaf014c57e9a  /tmp/wavevm-create-vm-single.TZAm35/runtime/vm-256-1-1.manifest
+fe24c9779196a0dc10711a5ed582b63a61e6fadfe29b2e66077eec8f3c89b45e  /tmp/wavevm-create-vm-single.TZAm35/runtime/vm-256-1-1.manifest.dispatch
+6078e21762d13c2b9b33b4798cd952d5e650e2c3d12df1ad9513ef678965e6eb  /tmp/wavevm-create-vm-single.TZAm35/runtime/vm-256-1-1.manifest.route

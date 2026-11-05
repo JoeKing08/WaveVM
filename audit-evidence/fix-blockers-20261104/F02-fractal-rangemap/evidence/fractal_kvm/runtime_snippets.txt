@@ -1,0 +1,9 @@
+=== backend/topology snippets ===
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v257-i1-g1-n801-df8738ea2bdebffc
+[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:46092
+[System] Initializing SHM: /wavevm_ram_wvm-v257-i1-g1-n801-df8738ea2bdebffc (Size: 16 MB)
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[WaveVM] KVM bootstrap OK (backend=kvm mode=user), keep wavevm vCPU control (kvm_enabled=1)
+qemu-system-x86_64: -accel wavevm,backend=kvm,mode=user: WaveVM: defer user mem init until first RAM block is registered
+[System] spawned manifest-bound QEMU frontend pid=14297 accel=wavevm,backend=kvm,mode=user bin=/workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 mem_mb=16 smp=1
+=== child runtime logs (names) ===

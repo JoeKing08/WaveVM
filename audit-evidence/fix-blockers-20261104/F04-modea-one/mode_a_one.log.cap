@@ -1,0 +1,11 @@
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+seed evidence: live-probe tcg=3 kvm=3 kern=3 records=5
+s6 seed flags='--live-probe' digest_prefix=057e5a0d94097976...
+attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2322547691121775950
+attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2322547691121775950
+status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2322547691121775950
+node_runtime_data_port=45849
+local_executor_service_port=45852
+s6 dataplane probe PASS_PRODUCTION_TYPED cell=mode_a_one backend=require-tcg vm_id=256
+s6 STOP: status=0 recorded_state=17 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2322547691121775950
+single-node CREATE_VM prepare→activate→commit→RUNNING: PASS backend=require-tcg accel=require-kernel (status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2322547691121775950)

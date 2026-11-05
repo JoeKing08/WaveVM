@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-dual-mode-b.FyTg2c/runtime/vm-257-1-1.manifest
+5875ecb4fffffd4d9b0831c4f796e35894799de4343d75efba2efb3d1e663f9c  /tmp/wavevm-create-vm-dual-mode-b.FyTg2c/runtime/vm-257-1-1.manifest
+e0a5e5ad1a1604b8c63dffa833f7b18bdc1d41f7d2113dc8f66f0c7fa5dd1f18  /tmp/wavevm-create-vm-dual-mode-b.FyTg2c/runtime/vm-257-1-1.manifest.dispatch
+69d5d51a652251ea89d15ef3db9629b4ef854a42c68389577e37094e29a31a8b  /tmp/wavevm-create-vm-dual-mode-b.FyTg2c/runtime/vm-257-1-1.manifest.route
