@@ -1,0 +1,9 @@
+=== G9 attribution (not boot banner) ===
+remote_done 0 -> 0 delta=0
+local_done  0 -> 0 delta=0
+force_local 0 -> 0 delta=0
+=== recent WVM-TCG-STATS / WVM-REMOTE ===
+
+=== completed remote memory operations during workload ===
+remote_memory 0 -> 0 delta=0
+=== WVM-REMOTE (vcpu only; NOT mem evidence) ===

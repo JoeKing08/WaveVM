@@ -1,0 +1,162 @@
+WaveVM Minimum gap self-audit vs NEW dirty charter
+==================================================
+When: 2026-11-09 ~19:27 CST Asia/Shanghai
+Who: Grok Bot executor (post-F05 VCPU/ACK slice; Joe: audit then STOP)
+Repo: /workspaces/WaveVM tip base e47d6a518 (workspace dirty; no commit/push)
+Charter: docs/wavevm-refactor-roadmap.md + docs/wavevm-architecture-baseline.md
+         + docs/specs/* (dirty, uncommitted) — Phase 0–9 = Minimum; 10–13 = Extended
+Authority worklist: audit-evidence/MINIMUM_FIX_LIST_20261109.txt
+MINIMUM_COMPLETE: NOT_CLAIMED
+
+Method: line-oriented against roadmap §1.1 Minimum bullets + Phase 0–9
+deliverable intent + baseline “Minimum usable system” + §16 TCG boundary.
+Evidence cited is directed/unit unless marked live. Directed PASS ≠ live
+production acceptance for that Phase-9 cell.
+
+======================================================================
+A. Roadmap §1.1 Minimum requirements (verdict per bullet)
+======================================================================
+
+A1. Manifest-bound create/activate/start/pause/stop/partial cleanup/restart
+    reconciliation by one active coordinator
+    Verdict: PARTIAL
+    Evidence: typed admission/lifecycle paths + N01 workspace lease directed
+      (fix-blockers-20261109/N01-admission-workspace/). Live multi-CREATE race
+      and cold-start ACTIVATION_DECIDED replay not re-proven this session.
+    Gap: durable activation fence restart replay / compensating cleanup live
+      matrix still thin vs baseline §16 coordinator restart obligation.
+
+A2. Explicit VM identity/incarnation, host placement, remote CPU/memory
+    allocation, independent leases, capability selection
+    Verdict: PARTIAL
+    Evidence: manifest/admission specs wired; N04 unique FE gate directed PASS.
+    Gap: remote CPU/memory *live attribution* still open (F05 RET / F10 g9).
+
+A3. Flat and fractal routing with ACK immutable snapshots; stable identity keys
+    Verdict: PARTIAL
+    Evidence: Q02-style gateway drain directed history; N06 listener budget
+      directed PASS (fix-blockers-20261109/N06-listener-budget/).
+    Gap: full flat+fractal acknowledged snapshot live under dual-host F05 not
+      the primary evidence of this run (F05 uses legacy CLI dual-node harness).
+
+A4. KVM guest login or SSH with evidence of remote vCPU and remote memory
+    Verdict: PARTIAL (login/SSH PASS; remote evidence FAIL on single host)
+    Evidence: F10 live-matrix-20261109-183406 flat_kvm+fractal_kvm
+      guest_login=PASS guest_ssh=PASS; OVERALL=FAIL_g9_remote_attribution
+      (remote_vcpu=0 mem=0; all-local under N04 unique FE).
+    Gap: needs second-host remote helper path (coupled to F05 VCPU RET).
+
+A5. Bounded real TCG execution contract (CPU/memory results, ownership,
+    handoff/device/atomic, errors, cleanup) — NOT TCG guest OS usable
+    Verdict: PARTIAL
+    Evidence: F05 dual-node: push-fence PASS; WVM-REMOTE cpu=2 sent; after
+      truncated-TCG decode FIX, B guest_vcpu=2 + matching CR3/RIP import
+      (…/dual-node-tcg-20261109-192419/). Contract incomplete: no VCPU_EXIT/
+      RET; helper dies on CR3 request_page_sync; shm=0 kick budget.
+    Gap: cross-host TCG handoff ACK + page-fault path survival.
+
+A6. Multiple Mode B VMs + multiple compute instances on one host (aggregate
+    physical_host_id; exclusive names/ports/SHM)
+    Verdict: PARTIAL
+    Evidence: historical Mode B multi-VM / same-host directed cells; N01/N04
+      isolation gates. Not re-run as Phase-9 acceptance matrix this session.
+
+A7. Per-VM kernel contexts; two-VM Mode A isolation before advertising
+    multi-context Mode A
+    Verdict: PARTIAL / fail-closed default
+    Evidence: baseline §14 + SINGLE_CONTEXT: second Mode A rejected until
+      isolation acceptance. F02/F04 historical directed; not full two-VM Mode A
+      isolation acceptance pack closed as Minimum gate this session.
+    Gap: explicit two-VM Mode A isolation+teardown acceptance still required
+      before advertising multi-context (charter: reject 2nd until then — OK
+      as fail-closed, but Phase 8/9 acceptance not green).
+
+A8. Validated member/gateway join, compute cordon, safe drain, gateway
+    replacement via acknowledged successor route snapshot
+    Verdict: PARTIAL
+    Evidence: N05 subscriber cross-proc directed PASS; Q02 drain history;
+      membership controller paths exist.
+    Gap: live multi-process membership→STALE / successor snapshot acceptance
+      not closed as Phase-9 cell.
+
+A9. Required concurrency/priority/batching/bounded backpressure; process
+    survival ≠ success oracle
+    Verdict: PARTIAL
+    Evidence: N07 READ budget directed PASS; N06 reject>64; N01 backpressure
+      on busy workspace. Honesty rule respected in F05/F10 (no stub=PASS).
+    Gap: representative independent-work concurrency profile run (Phase 9)
+      not freshly recorded.
+
+======================================================================
+B. Baseline “Minimum usable system” (one-paragraph gate)
+======================================================================
+Text: manifest-bound KVM login/SSH; flat or fractal; share host with other
+Mode B VMs; TCG backend contracts (not guest OS); Mode A multi only after
+per-VM context isolation; basic join/cordon/drain/gateway replace.
+
+Verdict: FAIL to claim usable — closest state is PARTIAL.
+  - KVM login/SSH: PASS on flat+fractal (F10 narrowed) but WITHOUT remote
+    vCPU/memory evidence → does not satisfy §1.1 KVM bullet as written.
+  - TCG: contract PARTIAL (fence+decode; no RET).
+  - Mode A multi: fail-closed / not accepted.
+  - Membership basics: directed PARTIAL.
+
+======================================================================
+C. Phase 0–9 (roadmap) — rollup
+======================================================================
+Phase 0 Identity/IPC foundations .......... PARTIAL (in tree; dirty docs)
+Phase 1 Unified per-VM node runtime ....... PARTIAL (typed runtime; F05
+                                            still exercises legacy CLI slave)
+Phase 2 Membership/route services ......... PARTIAL (N05/N06 directed)
+Phase 3 Memory consistency/fault paths .... PARTIAL (N02 directed; F05 live
+                                            cross-host page sync FAIL after
+                                            import)
+Phase 4 QEMU/vCPU/device coordination ..... PARTIAL (N04 FE gate; F05 remote
+                                            VCPU RET open; F01 Extended)
+Phase 5 Placement/admission/lifecycle ..... PARTIAL (N01/N03 directed;
+                                            restart reconciliation live thin)
+Phase 6 Multi-VM / same-host isolation .... PARTIAL (directed; not Phase-9
+                                            acceptance pack)
+Phase 7 Dynamic member/gateway lifecycle .. PARTIAL (directed/history)
+Phase 8 Per-VM kernel acceleration ........ PARTIAL / fail-closed 2nd Mode A
+Phase 9 Minimum integration acceptance .... FAIL (matrix not green:
+                                            KVM remote attribution FAIL;
+                                            TCG cross-host RET FAIL;
+                                            no MINIMUM_COMPLETE)
+
+======================================================================
+D. Must-fix worklist (MINIMUM_FIX_LIST) vs charter
+======================================================================
+N01 PASS directed
+N04 PASS directed gate (+ F10 unique FE consequence)
+N03 PASS directed
+N02 PASS directed
+F05 PARTIAL — fence PASS; truncated-TCG decode FIX verified guest_vcpu=2;
+             VCPU_RUN RET still 0 (helper dies on CR3 pagesync)
+N05 PASS directed
+N06 PASS directed
+N07 PASS directed
+F10 PARTIAL — login/SSH PASS; remote attribution blocked (2nd host / F05 RET)
+F01 DEFERRED Extended (Phase 10) — not touched
+
+======================================================================
+E. Remaining gaps (ordered; do NOT claim COMPLETE)
+======================================================================
+1) F05: keep helper alive through cross-host page fault after TCG import;
+   return VCPU_EXIT so A logs IPC VCPU_RUN RET (ack_status=0 ack_mode=1).
+2) F10: re-run KVM flat/fractal with remote_vcpu/mem attribution once (1) works.
+3) Phase 9 acceptance pack: manifest-bound (not legacy-CLI-only) cells for
+   KVM remote + TCG bounded contract; cleanup/ownership recorded.
+4) Coordinator restart / ACTIVATION_DECIDED durable replay live proof.
+5) Two-VM Mode A isolation acceptance before advertising multi-context.
+6) Live membership cordon/drain/successor snapshot cell.
+7) Keep F01 / TCG guest login/SSH in Extended (Phase 10) — out of Minimum.
+
+======================================================================
+F. Explicit non-claims
+======================================================================
+- MINIMUM_COMPLETE = No
+- F05 COMPLETE = No
+- F10 full PASS = No
+- TCG guest OS usable = No (Extended)
+- No commit / no push this session

@@ -15,6 +15,20 @@ This specification is normative for new planning and admission work. It does
 not authorize implicit live migration, dynamic resource borrowing, host CPU
 overcommit, or a user-authored route table as a placement mechanism.
 
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Own deterministic resource planning and atomic reservation mutation. Membership supplies eligibility; lifecycle owns durable activation and the admitted outcome. |
+| State and mutation | Plans read coherent inventory/profile snapshots. Reservation owners serialize conflicts per node/physical-host/name budget and transaction; replicas cannot independently grant capacity. |
+| Allowed implementation dependencies | Canonical request/plan records, immutable member/capability/route projections, public reservation store and lifecycle transaction interfaces. No dependency on concrete controller layout, runtime queues, or private page state. |
+| Interactions and lifetime | Section 6 owns resource acquisition/release. [Lifecycle Section 5.2](runtime-manifest-lifecycle.md#52-create-and-activate-sequence) owns prepare-to-activation ordering; Section 6.3 there owns safe retirement before reuse. |
+| Concurrency and cost | Independent planning may proceed concurrently. Revalidation and atomic reservations resolve conflicting snapshots; no process-global scratch workspace may couple concurrent creates. State lock/transaction domains and bounded store/transport waits. |
+| Failure and verification | Sections 8 and 11 govern stale eligibility, compensation, four-create contention and physical-host accounting. Timeout never proves a reservation was not activated. |
+
 ## 1. Goal and Non-Goals
 
 The goal is to let an ordinary VM request ask for vCPUs, memory, and policy
@@ -44,7 +58,7 @@ Each node instance also receives an explicit port/socket/name namespace and
 exclusive leases; no planner or runtime may assume that a host has only one
 node agent or reuse a host-global default port/path.
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - CPU, memory, or storage overcommit. A configured future overcommit policy
   requires its own accounting, eviction, and guest-visible failure contract.
@@ -84,7 +98,7 @@ remain governed by lifecycle/drain rules rather than being silently replanned.
 
 ### 3.1 Capacity Units
 
-V1 uses conservative, integer, non-overcommitted accounting:
+Minimum uses conservative, integer, non-overcommitted accounting:
 
 | Resource | Unit | Meaning |
 | --- | --- | --- |
@@ -207,7 +221,7 @@ It does not silently truncate guest RAM.
 
 `host_constraints` restrict every physical resource participant selected for
 the new VM, including QEMU host, vCPU executor, memory directory/executor, and
-storage owner. V1 interprets `PHYSICAL_NODE`, `FAILURE_DOMAIN`, and
+storage owner. Minimum interprets `PHYSICAL_NODE`, `FAILURE_DOMAIN`, and
 `CAPABILITY` constraints as `subject=id` plus a decimal `value`; all
 constraints are conjunctive. `LABEL` is rejected until canonical
 `NodeMetadata` records are introduced. The implementation must not consult
@@ -450,7 +464,7 @@ No node independently upgrades a reservation to `COMMITTED` based solely on a
 local process start, an old route, or a surviving socket. No process may consume
 a `PREPARED` reservation for guest traffic before activation.
 
-### 6.3 Concurrent Admissions
+### 6.4 Concurrent Admissions
 
 Admission coordination serializes conflicting inventory updates per physical
 node but permits disjoint plans and VM lifecycle operations to progress. It
@@ -488,7 +502,7 @@ data plane into a globally serial executor to make accounting simpler.
 | VM start fails before activation decision | Release only prepared reservations after bounded cleanup. |
 | VM start fails after activation decision | Preserve reservations while lifecycle completes activation recovery or compensating teardown; do not silently reuse them. |
 | Compute node is cordoned or gateway starts draining | It is excluded from new/unfinished admission; existing committed allocations follow their separate drain policy. |
-| Compute node/gateway removal has active dependencies | Membership controller rejects removal in V1; planner cannot use it for a new plan. |
+| Compute node/gateway removal has active dependencies | Membership controller rejects removal in Minimum; planner cannot use it for a new plan. |
 | A running VM exceeds reserved capacity | Report an explicit runtime/admission defect; do not borrow arbitrary capacity or silently degrade another VM. |
 
 Adding a member makes new inventory available only to later admissions. It does
@@ -501,7 +515,7 @@ a member with active VM allocations is governed by the drain restrictions in
 
 | File, symbol, or boundary | Required responsibility |
 | --- | --- |
-| `common_include/wavevm_resources.[ch]` | Become a parser/compatibility adapter for versioned inventory, eligibility fences, complete plans, explicit reservations, and host overhead. |
+| `common_include/wavevm_resources.[ch]` | Parse and validate canonical inventory, eligibility fences, complete plans, explicit reservations, and host overhead without legacy configuration adapters. |
 | `common_include/wavevm_admission.[ch]` | Grow into the coordinator-owned admission model and canonical-record renderer before it drives live reservation RPCs. |
 | `common_include/wavevm_admission_orchestrator.[ch]` | Connect production control transports and recovery reconciliation; do not bypass the durable coordinator with launch-script policy. |
 | `common_include/wavevm_admission_recovery.c` | Replace fixture-owned reconstruction with the production journal/recovery loader and participant query protocol. |
@@ -510,19 +524,13 @@ a member with active VM allocations is governed by the drain restrictions in
 | `gateway_service/aggregator.c` | Consume route snapshots generated for admitted participants; never decide capacity or placement. |
 | `artifacts/*/run.sh` and CI fixtures | Remain test inputs rendered from request/manifest fixtures, not capacity truth. |
 
-## 10. Compatibility and Migration
+## 10. Compatibility Boundary
 
-1. Inventory current resource units, implicit host selection, local ports,
-   socket/SHM names, and any hardcoded per-test placement assumptions.
-2. Introduce a read-only inventory snapshot that reproduces existing two-node
-   deployments exactly before changing placement behavior.
-3. Implement plan validation and manifest rendering before enabling concurrent
-   VM admission.
-4. Add node-local prepared reservations, activation-fence records, and cleanup
-   records while legacy static configuration remains a compatibility input.
-5. Make host overhead and exclusive local names visible in admission errors.
-6. Enable compact/spread selection only after deterministic fixtures prove that
-   a plan covers every vCPU and memory chunk without overlap or hidden default.
+No hand-authored static inventory, implicit request-host placement, or legacy
+reservation input is a production authority. Admission uses validated
+membership snapshots, canonical requests, explicit host overhead, exclusive
+local-name leases, and durable reservation/lifecycle records. Unsupported
+requests fail with structured results rather than hidden defaults.
 
 ## 11. Acceptance Tests
 

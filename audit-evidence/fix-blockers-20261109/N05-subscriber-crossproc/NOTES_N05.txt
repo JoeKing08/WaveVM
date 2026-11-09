@@ -1,0 +1,35 @@
+N05 subscriber cross-process invalidate + publish reap — 2026-11-09 Asia/Shanghai
+tip base: e47d6a518; production dirty (N01–N04 + N05)
+NO commit/push
+
+Disposition: PASS (directed) — ctl fanout bridge + publish-path reap
+
+Production changes:
+  - ctl_tool/subscriber_invalidate_bridge.{c,h}: strong override of
+    wvm_memory_service_membership_failure_invalidate_hook so wvm_ctl
+    (which does NOT link memory_service) fans out
+    WVM_ENVELOPE_MSG_INVALIDATE_SUBSCRIBERS (0x0307) to ACTIVE compute
+    members via admission transport.
+  - ctl_tool/main.c: wvm_ctl_subscriber_invalidate_bridge_bind after
+    membership/transport/capture are ready.
+  - common_include/wavevm_envelope.h: MSG_INVALIDATE_SUBSCRIBERS = 0x0307
+  - common_include/wavevm_admission_receiver.c: handle 0x0307 →
+    wvm_memory_service_global_invalidate_subscriber_instance
+  - node_runtime/memory_service.c: publish path calls
+    subscriber_reap_bucket_locked before looking for EMPTY; F07-style
+    lease reap / invalidate APIs retained.
+
+Directed evidence:
+  tests/control-plane/test_memory_service.sh → PASS
+  (EVID F07_invalidate_instance / membership_hook / lease_reap = 1)
+  console: …/N05-subscriber-crossproc/memory_service.txt
+
+Honest limits:
+  - Weak same-process hook still exists inside memory_service for in-process
+    unit paths; production ctl uses the bridge strong symbol.
+  - Fanout is best-effort (unreachable directories counted, others continue).
+  - Full live multi-process membership-failure → remote directory STALE not
+    re-driven this turn; receiver + bridge + memory_service unit cover the
+    Codex N05 gap class.
+
+Next: N06 listener budget refuse.

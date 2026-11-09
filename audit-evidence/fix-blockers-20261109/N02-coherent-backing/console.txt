@@ -1,0 +1,16 @@
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+[WaveVM-User] F05/N02 coherent REFUSED: FE host=1 executor host=2 (cross-host; fault path kept)
+[WaveVM-User] N02 coherent REFUSED: missing/invalid FE/executor physical host proof (fault path kept)
+[WaveVM-User] N02 coherent REFUSED: missing/invalid FE/executor physical host proof (fault path kept)
+[WaveVM-User] N02 coherent REFUSED: FE shm='/wavevm_ram_fe' executor shm='/wavevm_ram_exec' (different backing; fault path kept)
+[WaveVM-User] N02 coherent REFUSED: WVM_FE_SHM_FILE missing (no FE backing identity; fault path kept)
+[WaveVM-User] TCG SHM coherent mode ON (skip fault-hook / local RAM copies; directory commit stays)
+EVID N02 same_host_same_backing_coherent_allowed fe=7 ex=7
+EVID N02 cross_host_coherent_refused fe=1 ex=2 fault_hook_kept=1
+EVID N02 missing_host_ids_refuse coherent=0
+EVID N02 zero_host_ids_refuse coherent=0
+EVID N02 same_host_different_backing_refuse coherent=0
+EVID N02 missing_fe_shm_refuse coherent=0
+EVID N02 explicit_disable coherent=0
+F05/N02 coherent-host-scope unit: PASS
+placement_export_strings: admission_main+main+slave_hybrid OK

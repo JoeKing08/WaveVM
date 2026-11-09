@@ -1,0 +1,4 @@
+manifest_path=/tmp/wavevm-create-vm-single.chyRey/runtime/vm-256-1-1.manifest
+d21de6cfb6ed393da393266a76bd4dacd1447928d4c4e2b20362bb7101bedb2e  /tmp/wavevm-create-vm-single.chyRey/runtime/vm-256-1-1.manifest
+faf6b8171889e9af0b4df3eacdab81b061331093d1b37e46a890f287063db843  /tmp/wavevm-create-vm-single.chyRey/runtime/vm-256-1-1.manifest.dispatch
+fd23fc74e113bc1daeb3ac5ca88208102ac6dd1c2dd9a02b11e460745e5f72fb  /tmp/wavevm-create-vm-single.chyRey/runtime/vm-256-1-1.manifest.route

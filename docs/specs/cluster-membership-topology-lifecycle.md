@@ -14,10 +14,24 @@ specifications respectively. VM manifests and resource reservations are owned
 by `runtime-manifest-lifecycle.md` and `resource-placement-admission.md`; this
 specification supplies their eligible-member and route-snapshot inputs.
 
-This specification is normative for all membership and topology work. Current
-`NODE`, `ROUTE`, heartbeat, and legacy gateway control paths are not production
+This specification is normative for all membership and topology work. `NODE`,
+`ROUTE`, heartbeat, and legacy gateway control paths are not production
 inputs; topology records and authenticated membership control messages are the
 only authoritative inputs.
+
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Own registered members, topology, eligibility and authoritative snapshot publication. Health reports are evidence; forwarding caches cannot admit members. |
+| State and mutation | Control-plane APIs mutate member/topology revisions and transactions. Immutable snapshots and node/gateway observations are projections with instance/generation lifetimes, not alternate registries. |
+| Allowed implementation dependencies | Canonical records, public identity/route compiler and snapshot APIs, capability evidence, authenticated control transport, and lifecycle/admission notifications. No direct page/vCPU mutation or private planner state. |
+| Interactions and lifetime | Sections 4.1, 5 and 7 bind eligibility, admission and publish/retire. [Route-operation lifetime](identity-routing.md#61-route-replacement-and-operation-lifetime) owns in-flight generation retention; [lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) owns VM cleanup. |
+| Concurrency and cost | Serialize conflicting member/snapshot transitions in their declared domains; readers use coherent immutable snapshots. Do not put the registry on each page/vCPU RPC path or wait on network ACKs under a global data-plane lock. |
+| Failure and verification | Sections 5, 7 and 10 govern drain refusal, sole-path failure, stale fences and ACK sets. Report correlated host effects without implicitly rebinding guest state. |
 
 ## 1. Goal and Non-Goals
 
@@ -36,7 +50,7 @@ operator desired topology + observed member health
   -> scheduling/routing eligibility
 ```
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - Automatic live migration, hot-add, or transparent rebalancing of a running
   VM when a member joins or leaves.
@@ -364,7 +378,7 @@ enumerate every dependent VM allocation, including vCPU execution, memory
 owner/directory duties, storage work, required local control duties, and every
 hosted gateway role if the physical host itself is being removed.
 
-V1 permits removal only when that dependency set is empty. If it is nonempty,
+Minimum permits removal only when that dependency set is empty. If it is nonempty,
 the operation is rejected with a structured reason. The controller must not
 silently rewrite CPU routes, memory placement, directory ownership, or guest
 NUMA layout to make a node appear removable.
@@ -453,17 +467,16 @@ An unplanned role failure is handled in this order:
    healthy operation and do not invent a guest-state recovery path.
 6. Reappearing members re-enter validation with a fresh instance ID check;
    they do not become `ACTIVE` from a heartbeat alone. A required existing VM
-   does not automatically rebind to the new member instance in V1.
+   does not automatically rebind to the new member instance in Minimum.
 
 ## 6. Flat and Fractal Route Scope
 
-`WVM_SLAVE_BITS=12` describes a current 4096-slot implementation limit, not a
-permanent flat-domain, leaf-Pod, or cluster capacity. Membership capture and
-admission must not size all member records or scratch storage from one domain's
-vnode limit. Cluster members, domain vnodes, gateway adjacency/routes, and
-per-VM workspaces have independent, explicit resource budgets and bounded
-storage sized for actual records. Record/byte limits, including serialized
-snapshot limits, remain enforced before publication or activation.
+Membership capture and admission must not size all member records or scratch
+storage from one domain's vnode limit. Cluster members, flat/leaf domain vnodes,
+gateway adjacency/routes, and per-VM workspaces have independent, explicit
+resource budgets and bounded storage sized for actual records. Record/byte
+limits, including serialized snapshot limits, remain enforced before
+publication or activation.
 
 The formal routed-frame prefix uses a `u32` vnode/endpoint and a separate `u64`
 destination scope. `0xffffffff` is reserved; the representable vnode range is
@@ -487,11 +500,11 @@ In a fractal deployment:
 
 The control plane selects `flat`, `fractal`, or a policy such as `auto` from
 connectivity, route-aggregation policy, and the independent capacity budgets.
-A directly connected flat domain may exceed 4096 when its consumers have
-sufficient capacity; neither a high vnode ID nor crossing the old constant
-alone forces hierarchy. Conversely, several Pods may each retain a 4096-vnode
-budget while the cluster total grows beyond it. Existing global-array checks
-must be removed and verified before claiming either behavior works.
+A flat domain may use its independently declared capacity when its consumers
+have sufficient resources; neither a high vnode ID nor a capacity threshold
+alone forces hierarchy. Fractal topology can aggregate independently budgeted
+leaf domains into a larger cluster. Global membership and admission capacity
+must not inherit a leaf-domain budget.
 
 Users request VM resources and policy, not hand-authored per-destination
 gateway routes. Budget changes do not make new members ACTIVE, alter existing
@@ -591,7 +604,7 @@ snapshot while a receive worker can still use it. The exact mechanism is an
 implementation decision, but its reader/writer ordering and teardown behavior
 must be tested.
 
-V1 has no automatic durable control-plane failover guarantee. A membership
+Minimum has no automatic durable control-plane failover guarantee. A membership
 operation has a bounded prepared lease and operation identity. After coordinator
 restart, it reconciles the persisted transaction/ACK set with participants and
 either completes one known activation/retirement or aborts it; it must not infer
@@ -616,26 +629,12 @@ A `DEL_ROUTE` opcode alone cannot implement member removal. Removal must obey
 the state, acknowledgement, drain, and VM-dependency rules in this
 specification regardless of the gateway's packet-control interface.
 
-## 9. Compatibility and Migration
+## 9. Compatibility Boundary
 
-1. Remove direct `NODE` and `ROUTE` parsing from production launch paths.
-2. Use the control-plane registry as the sole source of versioned desired
-   membership state.
-3. Generate immutable route snapshots from the registry for flat and fractal
-   topology fixtures.
-4. Add prepare/ack/commit/retire around gateway snapshot replacement before
-   exposing live route updates.
-5. Add persisted RequiredAckSet, independent control ACK path, and
-   predecessor operation-retention handling before permitting live replacement.
-6. Add compute/gateway cordon/drain checks and host-role/failure-domain
-   transactions before permitting role or host removal.
-7. Replace fixed global route assumptions using the identity/routing and
-   kernel-accelerator specifications; do not preserve a legacy flat cache as a
-   compatibility target.
-
-Compatibility must fail closed for a missing nonzero VM route. It must not strip
-the VM namespace, guess a member from a heartbeat, or treat a route-learning
-entry as a substitute for an admitted snapshot.
+No static `NODE`/`ROUTE` input, learned route, heartbeat, or legacy flat cache is
+a production membership or routing authority. Production membership and route
+changes use the authenticated registry and the prepared, acknowledged snapshot
+contracts. Missing scoped routes fail closed without stripping VM identity.
 
 ## 10. Acceptance Tests
 
@@ -657,7 +656,7 @@ correct member lifecycle.
   unchanged.
 - Cordon blocks new placement without interrupting an allowed existing
   allocation.
-- Removal of a compute node with active VM dependencies is rejected in V1.
+- Removal of a compute node with active VM dependencies is rejected in Minimum.
 - Gateway drain succeeds only with a verified alternate path and preserves
   bounded in-flight request behavior.
 - Attempting to remove a sole gateway path fails without producing a black hole.

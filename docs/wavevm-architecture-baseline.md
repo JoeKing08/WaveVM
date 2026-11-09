@@ -1,9 +1,9 @@
 # WaveVM Architecture Baseline
 
 Status: normative architecture baseline for long-term maintenance.
-Scope: this document defines architectural authority, boundaries, invariants, and
-first-version decisions. It does not claim that every item is already implemented,
-and it is not a substitute for subsystem implementation specifications.
+Scope: this document defines architectural authority, boundaries, invariants,
+and delivery-profile decisions. Subsystem specifications define their detailed
+contracts and acceptance conditions.
 
 The [Document Maintenance](wavevm-refactor-roadmap.md#document-maintenance)
 rules govern this baseline and all subsystem specifications. Implementation
@@ -13,7 +13,8 @@ The WaveVM design documentation has three levels:
 
 1. This baseline defines what the system is and which component owns each class
    of decision.
-2. `wavevm-refactor-roadmap.md` defines dependency order and migration gates.
+2. `wavevm-refactor-roadmap.md` defines implementation dependency order and
+   acceptance boundaries, including requirements for architectural changes.
 3. Subsystem specifications define exact structures, state machines, APIs,
    message semantics, lock ordering, failure behavior, and executable tests.
 
@@ -32,10 +33,183 @@ runtime is substantially rewritten:
 - `docs/specs/kernel-accelerator.md`
 - `docs/specs/storage-device-authority.md`
 
-Until a subsystem specification is accepted, current code remains the source of
-truth for current behavior, while this document constrains the allowed target
-direction. Missing detail in this document is not permission to invent a second
-semantic path.
+Existing code is evidence of observed behavior, not a normative definition of
+the target. Missing detail requires a decision in the owning specification
+before changing that boundary; it is not permission to copy an accidental
+implementation constraint or invent a second semantic path.
+
+## 0. Architecture Authority and Maintenance Contracts
+
+### 0.1 Target Authority and Design Changes
+
+Project requirements, correctness and isolation invariants, verified technical
+constraints, and reproducible evidence determine the architecture. Existing
+file layouts, call graphs, state structures, and historical decisions do not
+define or override it. External projects provide evidence and design lessons,
+not templates that supersede WaveVM's requirements.
+
+When code and a normative contract disagree:
+
+| Condition | Required response |
+| --- | --- |
+| Required behavior is missing or incorrect. | Bring the implementation into compliance. |
+| Historical compatibility introduced a compromise. | Remove the unnecessary compatibility path; retain one only for an explicitly required deployment obligation. |
+| A case has no specified behavior. | Resolve it in the owning specification before choosing implementation semantics. |
+| A requirement is contradicted by verified constraints or evidence. | Reconsider the architectural decision and update affected contracts together. |
+| The code implements a different design. | Assess that design against the requirements; its existence does not authorize it. |
+
+A core design change must state the triggering requirement or constraint,
+supporting evidence, alternatives and trade-offs, affected authorities and
+consumers, and how its correctness and performance consequences will be
+verified. Implementation convenience and sunk migration cost alone do not
+justify weakening correctness, isolation, or required capabilities. The project
+owner may explicitly revise optional feature scope and delivery priorities for
+budget or maintenance reasons; update the profile boundary and dependent
+contracts rather than claiming that an unimplemented requirement was met.
+
+The baseline, roadmap, and subsystem specifications state required behavior
+and acceptance conditions only. Observed dependency graphs, code inventories,
+implementation gaps, test results, and progress belong in separate records.
+An observed dependency matrix must not be copied into an allowed-dependency
+contract without architectural justification.
+
+### 0.2 Logical Module Boundaries
+
+Each subsystem must declare its responsibility, non-responsibility, public
+interfaces, allowed implementation dependencies, and private state. Consumers
+must use public contracts, not private structures, hidden globals, incidental
+include order, or accidental link dependencies. Implementation dependency
+cycles are prohibited; explicitly contracted request/reply or callback
+interaction can be bidirectional without creating such a cycle.
+
+Organize modules around domain responsibilities and state ownership. A file
+length, existing directory name, or preferred AI context size does not decide
+the boundary. Do not introduce another process, RPC, service, or generic
+adapter solely to create modularity. The node-runtime roles remain within
+one production node-runtime binary; local worker/helper isolation follows its
+execution and fault-containment contract, not historical master/slave launch
+paths. QEMU facilities outside distributed coordination should use shared
+machine, device, address-space, and backend facilities rather than duplicate
+them for each execution mode.
+
+### 0.3 State Authority, Writers, and Replicas
+
+For each important state or resource, identify its key and lifetime scope,
+semantic authority, authorized mutation entry points and execution contexts,
+readers, replicas, invalidation rules, and reclamation owner. Scope must be
+precise: a VM incarnation, page, vCPU, route snapshot, admission transaction,
+or kernel context, not merely a component name such as "node runtime."
+
+Semantic authority decides validity and transitions. An authorized writer may
+apply those transitions under the authority's contract; a replica or cache
+does not acquire authority by storing bytes. Multiple writers, shards, workers,
+and queues are permitted when their ordering and conflict rules are explicit.
+Single authority does not imply one global thread, lock, or serialization
+domain. Delegation must define its scope and how stale writers are fenced.
+
+Non-owners may not mutate authoritative state through exposed pointers or
+reconstruct another authority's policy. Snapshots and caches must define their
+publication, version validation, expiry/invalidation, and safe reconstruction.
+Local cache ownership never authorizes choosing a new page version, placement,
+VM identity, or lifecycle outcome.
+
+### 0.4 Cross-Subsystem Interaction Contracts
+
+Cross-boundary contracts must specify applicable identity and authorization,
+preconditions, successful completion and visibility, required ordering,
+ownership transfer or borrowing, resource lifetimes, execution context,
+blocking/reentrancy constraints, and failure/timeout/cancellation semantics.
+Asynchronous operations must define late completion, retry identity, reference
+retention, and partial or uncertain results. In-process calls, shared memory,
+local IPC, network transport, and device memory do not provide interchangeable
+visibility guarantees; identify which layer supplies each synchronization
+obligation. C atomics alone do not establish cross-node coherence.
+
+Each cross-domain rule has one owning specification and a stable section
+reference. Other specifications reference that definition and add their local
+obligations without copying or redefining it. The following ownership applies:
+
+| Interaction contract | Owning definition | Required consumers |
+| --- | --- | --- |
+| Candidate preparation and durable activation | [Runtime lifecycle Section 5.2](specs/runtime-manifest-lifecycle.md#52-create-and-activate-sequence) | Placement/reservations, membership, node runtime, QEMU, executors, gateways, kernel contexts. |
+| Quiescence, drain, and final reclamation | [Runtime lifecycle Section 6.3](specs/runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) | IPC, memory, vCPU, storage, routes, kernel contexts, reservation/name owners. |
+| Memory visibility at vCPU ownership transfer | [Memory Section 4.6](specs/memory-consistency.md#46-handoff-fence) | vCPU coordinator, frontend, executor, fault engines, kernel acceleration. |
+| Route replacement and semantic-operation lifetime | [Identity/routing Section 6.1](specs/identity-routing.md#61-route-replacement-and-operation-lifetime) | Wire/IPC, gateways, membership, lifecycle, memory/vCPU/block operations. |
+| Remote execution exits and device authority | [vCPU Section 7](specs/vcpu-handoff.md#7-exit-device-interrupt-and-time-semantics) | Frontend devices, executors, memory, storage, lifecycle. |
+
+Subsystem boundary summaries must index the owning sections for authority,
+allowed dependencies, state, cross-domain interactions, concurrency/cost,
+failure, and verification. They are navigation aids, not duplicate schemas or
+parallel sources of truth. Concrete encodings belong to the wire/schema or
+operation specification that owns them. Document history is tracked in Git;
+stable references do not require numbered API names, a new runtime registry,
+or support for obsolete contracts. A boundary change must identify and update
+affected producers, consumers, and verification mappings together.
+
+### 0.5 Lifecycle Coordination and Authorization
+
+The lifecycle coordinator owns overall phase transitions; each subsystem owns
+its internal quiescence, in-flight work, references, and resource reclamation.
+Quiesce, drain, and finalize are logical obligations, not a mandatory universal
+hook API or another VM state machine. Required ACKs, fences, cancellation,
+result queries, and cleanup traffic must remain possible during draining.
+Reclamation requires the subsystem's completion or fencing proof; a timeout
+or a local zero counter is not proof that remote work can no longer act.
+Independent cleanup may proceed concurrently within the declared ordering.
+
+Security boundaries must state the authorization source, permitted resource
+scope, and revocation or expiry rules. Use capabilities or handles where their
+resource delegation and lifetime semantics are needed; do not require a
+capability wrapper for every internal call. A transport endpoint, resource ID,
+or cached record alone is not proof of authorization.
+
+### 0.6 Performance and Scalability Requirements
+
+The system must implement and maintain the parallel execution, locality,
+batching, and bounded resource use required by its resource-pooling goals and
+selected delivery profile. Correctness work must supply the necessary
+concurrent design, not merely preserve whatever concurrency already exists.
+The Minimum/Extended TCG boundary in Section 16 remains applicable; this rule
+does not move sustained TCG guest usability into Minimum.
+
+Independent VMs, vCPUs, pages, and operation keys must be able to progress
+concurrently where their contracts and available resources permit. Scope
+ordering and synchronization to the related resource or transaction; a shared
+worker or registry is not permission for a global data-plane critical section.
+Any centralized coordination, additional IPC/network hop, bulk copy, blocking
+wait, or serialization on a normal hot path requires a reason and a bounded
+cost/concurrency model. Necessary topology, isolation, and durability costs
+must remain explicit; eliminating a hop never authorizes bypassing an authority.
+
+Performance-sensitive contracts must describe queue ownership and limits,
+in-flight concurrency, blocking and callback context, batching/coalescing,
+priority/fairness, data copying and locality, and overload behavior. Implement
+asynchronous and parallel paths where required; do not merely declare them
+possible. Backpressure must be bounded and must neither lose required work nor
+starve the control/completion traffic needed to recover.
+
+Concrete mechanisms such as MPSC queues, UDP, asynchronous diffs, or batched
+I/O may be corrected or replaced when evidence supports the alternative.
+Neither their historical presence nor implementation convenience decides the
+choice. Changes that remove an optimization, broaden synchronization, or
+alter hot-path queues must explain how the required capabilities are met and
+use proportionate before/after evidence under comparable conditions. A guest
+boot alone cannot establish parallelism or absence of a performance regression.
+
+Acceptance specifications define relevant throughput, tail-latency, CPU/memory
+cost, and scaling checks with workload, topology, capability profile, and
+hardware conditions. Measurements and accepted trade-offs belong in separate
+verification/design records, not as implementation status here. Do not impose
+hardware-independent latency promises, a full benchmark matrix on every edit,
+or a requirement to complete all performance tuning before Minimum acceptance.
+Essential parallelism and bounded operation remain required within each profile.
+
+Architecture checks should enforce a small set of explicit dependency and
+interface rules, supplemented by targeted contract tests and review. Automated
+include/symbol checks cannot prove all state ownership or temporal correctness
+in C/C++. Historical co-change frequency is diagnostic evidence, not a hard
+coupling metric. Local work may use the relevant boundary summaries; changes
+that affect shared semantics must also review the neighboring contracts.
 
 ## 1. Project Goal
 
@@ -80,7 +254,7 @@ hosted host-OS portability (a hypervisor adapter running the same Linux host
 appliance on a non-Linux physical host; not a WaveVM guest and not a native
 non-Linux port). These extend backend coverage or operational resilience; they
 are not prerequisites for the Minimum KVM guest and TCG contract-test gates.
-See roadmap Sections 1.1, 14, and 14.1.
+See roadmap Section 1.1 and Phases 10 through 13.
 
 The two horizons do not define two products or two semantic paths. Extended
 features must preserve the same manifest, identity, routing, memory, and vCPU
@@ -136,13 +310,13 @@ admitted manifest: VM-scoped routing, page consistency, request correlation,
 and CPU/memory dispatch. Both are user-space semantic authorities in
 non-overlapping domains.
 
-The current names `master` and `slave` describe logical roles inside a node
+The names `master` and `slave` describe logical roles inside a node
 runtime, not a permanent requirement for two separately deployed services. The
 master role is the semantic coordinator and local fabric endpoint. The slave
-role is the local executor manager. A deployment may implement those roles in
-one process, in multiple processes, or with worker threads, provided that the
-role ownership, local ABI, lifecycle, queue ownership, and fault containment
-remain explicit. A TCG helper QEMU may remain a separate process because its
+role is the local executor manager. One node-runtime binary provides both
+roles, with explicit worker queues, local ABI, lifecycle, and fault containment;
+independent master/slave production launch paths are not supported. A TCG
+helper QEMU may remain a separate process because its
 QEMU lifecycle and address space require that isolation.
 
 Every remote operation terminates at the remote node runtime before reaching a
@@ -155,9 +329,8 @@ The kernel module, if present, is an accelerator. It must not become a second se
 
 ### 4.1 User-Space Cluster Control Plane
 
-This is a logical role. It may initially be implemented by an evolved control
-tool and node launcher; the architecture does not require a new distributed
-service before Phase 4 specifications are complete.
+This is a logical role. Its production entry point may be a control tool and
+node launcher; its authority does not require an additional distributed service.
 
 Responsibilities:
 
@@ -188,7 +361,8 @@ Non-responsibilities:
 
 ### 4.2 QEMU Frontend
 
-The QEMU frontend is based on QEMU 5.2.0 in the current project.
+The frontend integration baseline is QEMU 5.2.0; upgrades must preserve the
+guest-visible and distributed-operation contracts.
 
 Responsibilities:
 
@@ -205,12 +379,12 @@ Non-responsibilities:
 - QEMU must not directly route around the local node runtime and sidecar/gateway
   fabric for production traffic.
 
-### 4.3 User-Space Node Runtime (Current Master Role)
+### 4.3 Node Runtime Coordination Role
 
 The user-space node runtime is the canonical authority for one logical VM
-instance on one participating physical node. `master_core` is the current
-implementation of its master-role portion; that source-tree name is a
-implementation detail, not a supported deployment boundary.
+instance on one participating physical node. Semantic coordination and local
+execution are logical roles within the unified node-runtime boundary, not
+independently deployed services.
 
 Responsibilities:
 
@@ -230,20 +404,19 @@ Responsibilities:
 - Provide QEMU IPC endpoint for the local frontend.
 - Provide a stable surface for optional accelerators.
 
-Long-term requirement:
+Multiplicity and concurrency requirements:
 
 - Every `{vm_incarnation, physical_node_id}` has its own node-runtime state,
   even when one process hosts multiple VM instances on the same physical node.
-- The normal data path keeps explicit queues, batching, and QoS. Moving an
+- The normal data path implements explicit queues, batching, and QoS. Moving an
   executor behind an in-process interface must not turn the node runtime into
   one globally serial executor.
 
-### 4.4 Local Execution Runtime (Current Slave Role)
+### 4.4 Node Runtime Local Executor Role
 
-The local execution runtime is the node runtime's local execution and storage
-role for one VM instance on one physical node. `slave_daemon` is the current
-implementation of this role. It is not an independent distributed semantic
-authority.
+The local executor role performs assigned execution and storage work for one VM
+instance on one physical node. It is not an independent distributed semantic
+authority or a separately deployed master/slave service.
 
 Responsibilities:
 
@@ -424,7 +597,7 @@ must define field ownership, export/import ordering, vCPU exclusion, interrupt
 merging, timeout behavior, and duplicate-request handling before the handoff
 path is substantially changed.
 
-V1 supports a homogeneous execution backend inside one VM:
+Minimum supports a homogeneous execution backend inside one VM:
 
 - KVM frontend to KVM execution runtime.
 - TCG frontend to TCG execution runtime.
@@ -440,26 +613,22 @@ service capability, capacity, and route are valid.
 
 Mode A and Mode B may still be mixed between nodes because kernel acceleration
 is independent of the execution backend. KVM-to-TCG or TCG-to-KVM vCPU handoff
-is not a V1 capability. It must fail capability negotiation rather than attempt
-an implicit conversion.
+is not a Minimum capability. It must fail capability negotiation rather than
+attempt an implicit conversion.
 
 ## 7. Multi-VM Model
 
 ### 7.1 VM Identity
 
-WaveVM uses composite IDs for network-visible node identity:
-
-```text
-31        24 23                  0
-+----------+----------------------+
-|  vm_id   |       node_id        |
-+----------+----------------------+
-```
+WaveVM uses complete scoped identities for network-visible operations, as
+defined by the identity/routing and wire specifications. A historical packed
+8-bit VM / 24-bit node identifier cannot represent that contract and must not
+be used as a production VM identity.
 
 The identity terms are distinct:
 
-- `vm_id` is a V1 `u32` logical namespace allocated to a VM. Legacy wire
-  compatibility carries only `1..255`; it is not a durable identity by itself.
+- `vm_id` is a `u32` logical namespace allocated to a VM. It is not a durable
+  identity by itself.
 - `vm_incarnation` is a generation created for each successful VM creation. It
   prevents delayed traffic from an old VM lifetime entering a new VM that
   reuses the same `vm_id`.
@@ -470,23 +639,22 @@ The identity terms are distinct:
   `physical_node_id` resource providers and gateway roles.
 - `vnode_id` identifies a DHT/routing slot inside one VM namespace. A physical
   node may own multiple vnodes.
-- `primary_vnode` is the designated vnode used to identify a physical node in
-  legacy code paths that accept only one raw node ID. It is not the physical
-  node ID.
+- `primary_vnode` is the designated local vnode in the admitted route scope.
+  It is not the physical node ID or a substitute for the complete route key.
 - `WVM_INSTANCE_ID` is a local runtime discriminator used to derive socket and
   file names. It may differ between physical nodes participating in the same VM
   and must not be used as a network identity.
 - A process instance ID is diagnostic identity for one process lifetime. It is
   not a VM, node, or routing identity.
-- A network-visible composite ID identifies a VM-scoped routing target. The
-  legacy `slave_id` / `target_id` encoding combines `{vm_id, vnode_id}`;
-  production traffic must also meet the incarnation and route-scope
+- A network-visible route key identifies a VM-incarnation-scoped destination;
+  production traffic must meet the complete identity and route-scope
   requirements of the wire and identity/routing specifications.
 
-V1 identity rules:
+Minimum identity rules:
 
 - Every network route and packet belongs to exactly one VM namespace.
-- Network paths must carry composite IDs, except legacy `vm_id=0` traffic.
+- VM operations carry complete identities. `vm_id=0` is reserved for the
+  authenticated cluster-control scope, not raw-ID guest traffic.
 - DHT-internal tables may use raw vnode IDs only where the enclosing per-VM
   runtime context makes the namespace unambiguous.
 - Physical node IDs and vnode IDs occupy different semantic domains even when
@@ -496,25 +664,21 @@ V1 identity rules:
   logs, and temporary paths must be explicitly parameterized by the
   registered node instance. A host-global default is invalid when two node
   instances share one host.
-- A legacy wire path that cannot validate `vm_incarnation` must not permit
-  reuse of a nonzero legacy `vm_id` while old routes, packets, or processes
-  from its previous lifetime can still exist. The complete path must negotiate
-  V1 identity before incarnation-scoped reuse is permitted.
-- The lifecycle and wire specifications must add incarnation validation before
-  immediate `vm_id` reuse is supported. The existing node `epoch` field must
-  not silently be repurposed as VM incarnation.
+- Reject a wire path that cannot validate the required incarnation and scope.
+  ID reuse requires confirmed retirement and a fresh incarnation; node/page
+  epochs must not be repurposed as VM incarnation.
 
 ### 7.2 Per-VM Runtime Isolation
 
 Each VM instance must have isolated:
 
 - `vm_id`
-- `vm_incarnation` once the protocol carries it
+- `vm_incarnation`
 - `WVM_INSTANCE_ID`
 - QEMU IPC socket path
 - `WVM_SHM_FILE`
-- node-runtime ingress endpoint (legacy master port during migration)
-- local executor endpoint (legacy slave port during migration)
+- node-runtime ingress endpoint
+- local executor binding
 - gateway/sidecar route namespace or route keys
 - QEMU monitor/serial/SSH forwarding ports
 - log directory
@@ -549,7 +713,7 @@ Host placement requirements:
 
 Creating a VM must be an atomic admission operation.
 
-The only V1 admission linearization point is a durable activation fence binding
+The Minimum admission linearization point is a durable activation fence binding
 one candidate manifest, eligibility fence, route-scope snapshot, and prepared
 reservation set. VM identity/incarnation is allocated before any reservation or
 candidate-manifest digest. A reservation or local manifest in `PREPARED` state
@@ -672,8 +836,8 @@ rule before it carries production traffic.
 
 Removing a member follows the reverse sequence. A compute node may not leave
 while an admitted VM still has vCPUs, memory ownership/directory duties, storage
-work, or required control-plane duties allocated there. V1 rejects that removal
-instead of silently rebinding a running VM. A gateway may not leave until a
+work, or required control-plane duties allocated there. Minimum rejects that
+removal instead of silently rebinding a running VM. A gateway may not leave until a
 prepared successor snapshot provides a validated alternate path for every
 affected destination, new traffic has moved to that snapshot, and old-snapshot
 in-flight traffic has drained or failed through its bounded recovery policy.
@@ -689,8 +853,6 @@ degraded, paused, or failed lifecycle outcome; it must not be reported as
 healthy. A physical-host failure marks every hosted compute/gateway role
 unreachable together; host removal drains all hosted roles before stop.
 
-A 12-bit vnode-slot budget (`WVM_SLAVE_BITS=12`) represents 4096 logical slots;
-it must not define a permanent flat-domain, leaf-Pod, or global cluster limit.
 Cluster membership capacity, per-domain vnode capacity, gateway adjacency and
 route capacity, and per-VM admission workspace must have independent resource
 budgets. Storage follows actual records within those budgets, not the largest
@@ -772,7 +934,7 @@ Examples:
 
 A knob such as dirty-batch-size must not accidentally change correctness. It should only change when synchronization occurs under a documented policy.
 
-For V1, `dirty-batch-size=1` means that each captured dirty update is submitted
+For Minimum, `dirty-batch-size=1` means that each captured dirty update is submitted
 to the consistency path without waiting to accumulate a second dirty update.
 It does not by itself mean that every guest store is synchronously visible on
 all nodes, and it does not replace acquire, invalidation, acknowledgement, or
@@ -840,12 +1002,12 @@ user-authored VM creation input. At cluster bootstrap an operator supplies
 member endpoints, role/capability declarations, Pod membership, and the desired
 topology graph. The control plane compiles those records into immutable,
 versioned next-hop snapshots and distributes them to node runtimes, sidecars,
-and gateways. Legacy `NODE` and `ROUTE` files are compatibility/bootstrap
-inputs only.
+and gateways. Production bootstrap consumes canonical topology/member records;
+legacy `NODE` and `ROUTE` files are not compatibility inputs.
 
 ### 10.3 VM Route Namespace
 
-V1 route lookup rules are strict:
+Minimum route lookup rules are strict:
 
 - Route configuration and runtime tables must preserve the complete composite
   `{vm_id, vnode_id}` key for every nonzero `vm_id`.
@@ -855,8 +1017,8 @@ V1 route lookup rules are strict:
   namespace or authorize raw-ID fallback.
 - If lookup of a nonzero composite target fails, routing must fail explicitly.
   It must not strip `vm_id` and retry with a raw vnode ID.
-- Raw-node fallback is allowed only for legacy `vm_id=0` configuration and
-  traffic.
+- Raw-node fallback is prohibited for production traffic. Authenticated
+  cluster-control scope is not an exception for guest routing.
 - Flat and fractal gateways must preserve the same VM namespace at every level;
   hierarchy is not a namespace boundary.
 - Route-table updates must be generation-based and atomically published. A
@@ -865,9 +1027,8 @@ V1 route lookup rules are strict:
 - `WVM_NODE_AUTO_ROUTE` is a sentinel, not an identity. Its resolution must
   produce a VM-scoped composite target before cross-node transmission.
 
-Any legacy fallback in `gateway_service/aggregator.c` is subject to the
-identity/routing migration constraints; its presence cannot authorize a raw-ID
-fallback for admitted production traffic.
+Any raw-ID fallback in an implementation must be removed from the production
+path; its presence cannot authorize weakening the identity/routing contract.
 
 ### 10.4 Static vs Learned Routes
 
@@ -875,9 +1036,8 @@ Static configured routes must not be overwritten by auto-learning.
 
 Auto-learning may be used for diagnostics or dynamic discovery only when it cannot invalidate explicit routes.
 
-Learned routes must be scoped by VM namespace and incarnation. Until
-incarnation exists in the wire and route ABI, automatic route learning must not
-make immediate `vm_id` reuse appear safe.
+Learned observations must be scoped by VM namespace and incarnation. They
+cannot authorize ID reuse or production route publication.
 
 Heartbeats and endpoint observations are health evidence. They may cause the
 control plane to revalidate a member, but they must not directly mutate a
@@ -895,7 +1055,9 @@ Rules:
 - Block write errors must reach the guest path.
 - Flush operations must be real flushes unless explicitly configured otherwise for unsafe testing.
 
-Long-term device distribution may remain incomplete, but the architecture must not hide that gap.
+Minimum requires the specified QEMU-host device authority and selected block
+primitives. Arbitrary distributed device ownership requires its own Extended
+contract and must not be implied by those primitives.
 
 ## 12. Environment Capability Model
 
@@ -947,7 +1109,7 @@ The user-space node runtime decides which capabilities to use.
 
 ## 14. Multi-VM and Kernel Accelerator
 
-V1 chooses an explicit per-VM kernel context, not an implicit per-open context.
+Minimum chooses an explicit per-VM kernel context, not an implicit per-open context.
 One VM may legitimately have several processes and file descriptors using
 `/dev/wavevm`, including QEMU, node-runtime roles, and control tooling. Creating an
 unrelated VM context for every `open()` would split state that must be shared.
@@ -1008,7 +1170,9 @@ The following invariants should guide future code changes:
   or mandatory process boundaries. The node runtime remains the only
   guest-semantic cross-node ingress/egress endpoint; executors remain local.
 - Test scripts may constrain topology, but production code must not hardcode those constraints.
-- Correctness repairs preserve the intended concurrent and batched normal path.
+- Implement and maintain the concurrent and batched normal path required by
+  Section 0.6; an absent optimization remains an implementation obligation
+  when needed to meet that contract. Correctness repairs must satisfy it.
   They must not silently replace it with global serialization, synchronous
   forwarding, or a permanently disabled queue.
 - A local synchronous fallback is allowed only as a bounded backpressure or
@@ -1019,11 +1183,10 @@ The following invariants should guide future code changes:
   architecture changes. They require a stated ownership and backpressure model,
   not only a test that one guest boots.
 
-## 16. V1 Decisions and Deferred Work
+## 16. Delivery Scope and Deferred Capabilities
 
-The following defaults are architectural decisions for the first maintainable
-implementation. Subsystem specifications must fill in their algorithms and
-ABIs without choosing contradictory alternatives.
+The following decisions define the required baseline profile. Subsystem
+specifications define their algorithms and ABIs without contradicting them.
 
 - A user-facing CLI or API submits a versioned VM request containing requested
   resources, policy, and constraints. After admission, the control plane
@@ -1039,10 +1202,10 @@ ABIs without choosing contradictory alternatives.
 - VM startup is coordinated as identity allocation, candidate plan/route scope,
   prepared reservations, prepared participants, one durable activation fence,
   committed local records, start-without-guest-traffic, then `RUNNING` or
-  compensating teardown. V1 is all-or-nothing: a partially started VM is not
+  compensating teardown. Creation is all-or-nothing: a partially started VM is not
   reported as running, and every resource created before failure has a named
   cleanup owner.
-- The node accepting a V1 create request acts as lifecycle coordinator for that
+- The node accepting a create request acts as lifecycle coordinator for that
   operation. It may select a different `host_node` for QEMU. The minimum
   deployment uses one active coordinator and has no coordinator high
   availability or transparent failover. It must persist enough of the
@@ -1051,24 +1214,25 @@ ABIs without choosing contradictory alternatives.
   state. Prepared reservations use bounded leases only before activation;
   activated reservations remain held until lifecycle teardown.
 - Nonzero VM route namespaces use strict composite keys at every flat or
-  fractal gateway level. Raw-ID fallback is legacy behavior for `vm_id=0` only.
-- Flat and leaf-Pod domains have independently budgeted vnode capacity, without
-  a permanent 4096-vnode ceiling. The control plane selects flat or fractal
+  fractal gateway level. Raw-ID guest fallback is prohibited, including through
+  the reserved cluster-control namespace.
+- Flat and leaf-Pod domains have independently budgeted vnode capacity without
+  a fixed domain ceiling. The control plane selects flat or fractal
   topology from connectivity, route-aggregation needs, and resource budgets;
-  exceeding the old constant alone does not force hierarchy. An operator does
-  not hand-author one route per VM destination. Global membership and admission
+  a capacity threshold alone does not force hierarchy. An operator does not
+  hand-author one route per VM destination. Global membership and admission
   storage must not inherit a leaf-domain budget. Declared capacities must fit
   every consumer and be verified in both topologies before being advertised;
   neither wide IDs nor hierarchy alone prove supported scale.
-- V1 supports controlled member registration, cordon, and drain only through
+- Minimum supports controlled member registration, cordon, and drain only through
   prepared/acknowledged route snapshots with a persisted required-survivor ACK
   set. Adding a member may make capacity available to future VM admissions; it
   does not dynamically add resources to a running VM. Cordon/drain/health or
   instance changes invalidate candidates not yet activated. Removing a member
-  with active VM dependencies is rejected in V1.
+  with active VM dependencies is rejected in Minimum.
 - A member or gateway failure marks affected capacity/routes unavailable and
   triggers documented degraded, paused, or failed VM behavior. A physical-host
-  failure marks all hosted roles together. V1 does not claim automatic live
+  failure marks all hosted roles together. Minimum does not claim automatic live
   resource migration, transparent guest-state recovery, or automatic repair of
   a sole failed gateway path.
 - The default guest topology is flat for compatibility. A placement-aware or
@@ -1087,24 +1251,22 @@ ABIs without choosing contradictory alternatives.
   14. Until its isolation acceptance criteria are met, admission must reject
   a second Mode A VM on the same physical node.
 - Each participating physical node has one logical node-runtime instance for
-  each `{vm_id, vm_incarnation, physical_node_id}`. It may host master-role
-  coordination and slave-role execution in one process or multiple local
-  processes, but the manifest, request namespace, queues, and lifecycle remain
-  per-instance. Current `master_core` and `slave_daemon` process names are
-  compatibility implementation details, not a permanent topology contract.
-- The authoritative QEMU frontend owns the V1 guest device model. Remote vCPU
+  each `{vm_id, vm_incarnation, physical_node_id}`. One node-runtime binary
+  provides master-role coordination and slave-role execution; helper processes
+  obey the local executor contract. The manifest, request namespace, queues,
+  and lifecycle remain per-instance. Source-directory names do not authorize
+  independent master/slave production launch paths or compatibility adapters.
+- The authoritative QEMU frontend owns the guest device model. Remote vCPU
   execution returns MMIO/PIO and unsupported device exits to that authority.
   A remote block data service may execute I/O, but ordering, flush completion,
   and guest-visible errors remain governed by the QEMU-host device authority.
-- The V1 `u32` VM namespace permits `UINT32_MAX` nonzero logical namespaces.
+- The `u32` VM namespace permits `UINT32_MAX` nonzero logical namespaces.
   Allocation above 255 requires every selected participant to negotiate
-  `WVM_CAP_VM_ID_U32`; a legacy compatibility deployment remains limited to
-  255 nonzero IDs. Mode B has no smaller architectural per-host count; admission
-  is constrained by reserved resources and exclusive local names. In legacy wire
-  mode a nonzero ID is reusable only after a controlled full
-  `legacy_cluster_epoch` reset; in V1 it is quarantined until all
-  route/cache/operation retirement acknowledgements complete and the next
-  incarnation is checked.
+  `WVM_CAP_VM_ID_U32`; incompatible participants cannot join that VM's path.
+  Mode B has no smaller architectural per-host count; admission is constrained
+  by reserved resources and exclusive local names. A nonzero ID is quarantined
+  until all route/cache/operation retirement acknowledgements complete and the
+  next incarnation is checked. No legacy mixed-deployment path is required.
 - **TCG delivery boundary:** Minimum retains real, manifest-bound TCG execution
   tests for CPU context, remote memory reads/commits and fences, independent
   vCPU ownership/progress, device/atomic exits, bounded failures, and STOP.
@@ -1123,12 +1285,13 @@ ABIs without choosing contradictory alternatives.
   descriptions must distinguish TCG contract support from usable TCG guest OS
   support, including for a policy-selected TCG fallback.
 
-The following remain future design work rather than V1 alternatives:
+The following capabilities are outside the Minimum profile and belong to
+Extended or separately accepted scope:
 
 - Full TCG guest OS boot/login/SSH and sustained distributed multi-vCPU guest
   execution, including concurrent BSP-local + AP-remote progress as the normal
   path rather than a token trickle under local fallback. Acceptance belongs in
-  `vcpu-handoff.md` Section 8.1 and roadmap Phase 10.
+  `vcpu-handoff.md` Section 8.1 and roadmap Phase 10 Extended acceptance.
 - Full upstream QEMU in-process / cross-process TCG MTTCG performance and
   helper-thread MTTCG (or equivalent barriers) that removes the need for a
   Section 15 bounded local synchronous fallback on the concurrent SHM path
@@ -1160,23 +1323,17 @@ However, GiantVM is not WaveVM's baseline architecture:
 
 WaveVM may borrow design discipline, not hard dependencies.
 
-## 18. Immediate Architectural Decision
+## 18. Implementation Dependency Order
 
-The project should stop expanding Mode A as a separate implementation.
+The [roadmap](wavevm-refactor-roadmap.md#implementation-order) owns the phase
+sequence. It orders executable identity/record/IPC foundations, the unified
+node runtime, validated member and route services, memory and vCPU/device
+execution, admission and lifecycle integration, multi-instance isolation,
+dynamic membership operations, and optional per-VM kernel acceleration before
+Minimum acceptance. Extended phases build on those contracts.
 
-Future work should proceed as:
-
-```text
-1. Specify shared consistency, handoff, identity, routing, and lifecycle semantics.
-2. Implement those semantics first through the canonical Mode B authority.
-3. Make KVM and TCG obey the same contracts through backend-specific mechanics.
-4. Add optional kernel acceleration only where it preserves those contracts.
-5. Merge the logical master/slave roles into one node-runtime binary and
-   normalize its boundary with the local executor; do not retain independent
-   master/slave production launch paths or compatibility adapters.
-6. Establish member registration, topology, and versioned route snapshots as
-   control-plane operations; production admission and forwarding must use
-   committed membership and route snapshots, without static `NODE`/`ROUTE`
-   compatibility inputs.
-7. Keep multi-VM, placement, admission, and lifecycle in user-space control plane.
-```
+Specifications constrain each implementation step; writing a specification,
+inventorying existing code, or establishing an empty skeleton is not a runtime
+feature phase or evidence of completion. Maintenance of an existing tree uses
+the same dependency order to identify affected prerequisites, without requiring
+a restart from the beginning of the sequence.

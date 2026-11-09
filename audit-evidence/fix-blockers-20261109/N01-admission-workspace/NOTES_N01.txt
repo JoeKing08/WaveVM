@@ -1,0 +1,33 @@
+N01 admission workspace isolation — 2026-11-09 Asia/Shanghai
+tip at start: e47d6a518 (code was tip; docs dirty)
+NO commit/push
+
+Disposition: PASS (directed) — production fail-closed lease + early fence
+
+Production changes (ctl_tool/main.c):
+  - admission_workspace gains tx_held/tx_holder/tx_vm_id/tx_vm_inc lease
+  - control_context.workspace bound to the single shared workspace
+  - apply_create_vm: admission_workspace_try_acquire before orchestrator;
+    busy second CREATE -> WVM_CONTROL_RESULT_BACKPRESSURE (fail-closed)
+  - n01_prepare_input_wrap: fence VM identity after BEGIN, before reset/network
+  - control_owner_before_network: re-assert fence before F09 yield
+  - admission_workspace_reset: refuse reset if another thread holds lease
+  - release lease on all CREATE exit paths
+  - Does NOT restore global owner lock across RPCs (F09 yield retained)
+
+Directed oracle:
+  tests/control-plane/test_n01_admission_workspace_isolation.c
+  tests/control-plane/test_n01_admission_workspace_isolation.sh
+  console: audit-evidence/fix-blockers-20261109/N01-admission-workspace/console.txt
+  Result: PASS (busy=1 refused_reset=1 resets=2 final_marker=0xB22)
+
+Limits (honest):
+  - Equivalent fail-closed serialization of overlapping CREATE on the single
+    workspace, not yet multi-slot independent workspaces. Concurrent CREATE
+    cannot clobber; second CREATE is refused until first releases.
+  - Full dual live CREATE overlap under production wvm_ctl not re-run here;
+    F09 yield unit + this oracle cover the race class named by Codex N01.
+  - authority_owner.h already allowed serialize OR independent instances;
+    this implements serialize/fail-closed per parent N01 success criteria.
+
+Next: N04 unique KVM FE ownership.

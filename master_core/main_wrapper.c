@@ -74,6 +74,8 @@ static int g_runtime_dispatch_active = 0;
 static pthread_mutex_t g_runtime_gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_runtime_operation_sequence = 1;
 volatile sig_atomic_t g_shutdown_requested = 0;
+/* F10/N04: in-process stub→Cirros replace — keep READY/gate ACTIVE. */
+static volatile sig_atomic_t g_fe_replace_pending = 0;
 /* Closed from the SIGTERM handler to unblock accept() (AS-safe wake). */
 static volatile sig_atomic_t g_master_listen_fd = -1;
 
@@ -105,6 +107,98 @@ static int publish_runtime_ready(char *error, size_t error_len)
  * manifest-bound FE after the runtime socket listens and before RUNNING.
  * Keep identity checks — registration still goes through the runtime gate.
  */
+static void stop_manifest_bound_qemu_frontend(void);
+static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len);
+/*
+ * F10/N04: after stub FE publishes READY, replace it with Cirros guest FE in
+ * this runtime process (waitpid-clean). Smoke-side SIGTERM of the stub left
+ * user-mem/BIOS publish at ECONNRESET (live#4/#5).
+ */
+static void *guest_fe_replace_thread(void *arg)
+{
+    const char *guest_image = getenv("WVM_GUEST_IMAGE");
+    char err[256];
+    int i;
+
+    (void)arg;
+    if (!guest_image || !guest_image[0]) {
+        return NULL;
+    }
+
+    /* Wait until stub FE has published READY (accept loop is running). */
+    for (i = 0; i < 300 && !g_runtime_ready_published; i++) {
+        usleep(100000);
+    }
+    if (!g_runtime_ready_published) {
+        fprintf(stderr,
+                "[System] F10: stub FE never published READY; skip guest replace\n");
+        return NULL;
+    }
+
+    /*
+     * Wait for harness trigger after CREATE RUNNING, or fall back to a
+     * bounded delay so ctl can observe stable stub READY first.
+     */
+    {
+        const char *trigger = getenv("WVM_GUEST_FE_REPLACE_TRIGGER");
+        int waited = 0;
+        if (trigger && trigger[0]) {
+            fprintf(stderr,
+                    "[System] F10: waiting for replace trigger %s\n", trigger);
+            for (i = 0; i < 600; i++) { /* up to 60s */
+                if (access(trigger, F_OK) == 0) {
+                    fprintf(stderr,
+                            "[System] F10: replace trigger observed after %dms\n",
+                            i * 100);
+                    break;
+                }
+                usleep(100000);
+                waited = i;
+            }
+            if (access(trigger, F_OK) != 0) {
+                fprintf(stderr,
+                        "[System] F10: replace trigger timeout; proceeding\n");
+            }
+        } else {
+            /* No trigger: give CREATE ~12s after READY before yanking stub. */
+            fprintf(stderr,
+                    "[System] F10: no replace trigger; settle 12s after READY\n");
+            usleep(12000000);
+        }
+        (void)waited;
+    }
+
+    fprintf(stderr,
+            "[System] F10/N04: replacing stub FE with guest image FE\n");
+    g_fe_replace_pending = 1;
+    setenv("WVM_FE_REPLACE_PENDING", "1", 1);
+    stop_manifest_bound_qemu_frontend();
+
+    for (i = 0; i < 100 && g_runtime_ready_published; i++) {
+        usleep(100000);
+    }
+    /* Bound settle so SHM/listener drain after stub disconnect. */
+    usleep(5000000);
+
+    err[0] = '\0';
+    if (spawn_manifest_bound_qemu_frontend(err, sizeof(err)) != 0) {
+        fprintf(stderr,
+                "[System] F10: guest FE respawn failed: %s\n",
+                err[0] ? err : "spawn failed");
+        g_shutdown_requested = 1;
+        return NULL;
+    }
+    fprintf(stderr,
+            "[System] F10/N04: guest FE spawned pid=%d; awaiting re-READY\n",
+            (int)g_frontend_pid);
+    /* Keep replace_pending until Cirros registers; disconnect of stub
+     * already skipped ready_remove. Clear after a short settle. */
+    usleep(3000000);
+    g_fe_replace_pending = 0;
+    unsetenv("WVM_FE_REPLACE_PENDING");
+    return NULL;
+}
+
 static void stop_manifest_bound_qemu_frontend(void)
 {
     int status = 0;
@@ -113,7 +207,11 @@ static void stop_manifest_bound_qemu_frontend(void)
     if (g_frontend_pid <= 0) {
         return;
     }
-    if (kill(g_frontend_pid, SIGTERM) != 0 && errno != ESRCH) {
+    /*
+     * F10: SIGTERM on paused KVM stub often ends as SIGBUS (status=135) and
+     * leaves SHM/KVM slots wedged for the Cirros successor. Hard-kill first.
+     */
+    if (kill(g_frontend_pid, SIGKILL) != 0 && errno != ESRCH) {
         fprintf(stderr,
                 "[System] cannot signal QEMU frontend pid=%d: %s\n",
                 (int)g_frontend_pid, strerror(errno));
@@ -134,6 +232,7 @@ static void stop_manifest_bound_qemu_frontend(void)
 
 static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
 {
+    static int spawn_generation;
     const char *qemu_bin = getenv("WVM_TCG_QEMU_BIN");
     const char *tcg_machine = getenv("WVM_TCG_QEMU_MACHINE");
     const char *tcg_ram_mb = getenv("WVM_TCG_QEMU_MEM_MB");
@@ -144,7 +243,7 @@ static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
     char ram_buf[32];
     char smp_buf[32];
     char accel_buf[64];
-    char *qemu_argv[24];
+    char *qemu_argv[40];
     int ai = 0;
     pid_t parent_pid;
     pid_t child;
@@ -217,25 +316,174 @@ static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
         unsetenv("WVM_EXECUTOR_ID");
         unsetenv("WVM_EXECUTOR_VCPU_INDEX");
 
-        qemu_argv[ai++] = (char *)qemu_bin;
-        if (tcg_datadir && *tcg_datadir) {
-            qemu_argv[ai++] = "-L";
-            qemu_argv[ai++] = (char *)tcg_datadir;
+        /*
+         * F10/N04 unique FE lifecycle: when WVM_GUEST_IMAGE is set, the
+         * placement-host FE is the Cirros guest itself (drive+netdev+serial).
+         * Guest smoke must not spawn a second FE PID against the same gate.
+         */
+        {
+            const char *guest_image = getenv("WVM_GUEST_IMAGE");
+            const char *guest_serial = getenv("WVM_GUEST_SERIAL_LOG");
+            const char *guest_ssh = getenv("WVM_GUEST_SSH_PORT");
+            const char *guest_nic = getenv("WVM_GUEST_NIC");
+            static char drive_buf[768];
+            static char netdev_buf[256];
+            static char nic_buf[128];
+            /*
+             * Generation 0 = paused stub for CREATE READY. Later spawns (after
+             * stop_manifest_bound in the replacer) boot Cirros when image set.
+             * BOOT_NOW still forces Cirros on first spawn (harness override).
+             */
+            int guest_boot = 0;
+            {
+                const char *boot_now = getenv("WVM_GUEST_FE_BOOT_NOW");
+                int allow_boot_now = boot_now && boot_now[0] &&
+                                    strcmp(boot_now, "0") != 0;
+                int allow_replace = (spawn_generation >= 1);
+                guest_boot = (allow_boot_now || allow_replace) &&
+                             guest_image && guest_image[0] != '\0';
+            }
+
+            qemu_argv[ai++] = (char *)qemu_bin;
+            if (tcg_datadir && *tcg_datadir) {
+                qemu_argv[ai++] = "-L";
+                qemu_argv[ai++] = (char *)tcg_datadir;
+            }
+            qemu_argv[ai++] = "-accel";
+            qemu_argv[ai++] = accel_buf;
+            if (tcg_machine && *tcg_machine) {
+                qemu_argv[ai++] = "-machine";
+                qemu_argv[ai++] = (char *)tcg_machine;
+            }
+            qemu_argv[ai++] = "-m";
+            qemu_argv[ai++] = (char *)tcg_ram_mb;
+            qemu_argv[ai++] = "-smp";
+            qemu_argv[ai++] = smp_buf;
+            if (guest_boot) {
+                const char *guest_split = getenv("WVM_GUEST_SPLIT");
+                const char *guest_fe_log = getenv("WVM_GUEST_FE_LOG");
+                static char split_accel[96];
+                int split_n = -1;
+
+                if (guest_split && *guest_split) {
+                    char *end = NULL;
+                    long parsed = strtol(guest_split, &end, 10);
+                    if (end && *end == '\0' && parsed >= 0 && parsed < 1024) {
+                        split_n = (int)parsed;
+                    }
+                }
+                /* Cirros guest FE: always Mode B user/SHM (Mode A bind races). */
+                if (split_n >= 0) {
+                    /*
+                     * Explicit split: override inherited all-local LOCAL_SPLIT
+                     * so AP vCPUs take remote RPC (G9). Single-node unique FE
+                     * + split currently hangs at region_add — second host.
+                     */
+                    char split_env[32];
+                    snprintf(split_env, sizeof(split_env), "%d", split_n);
+                    setenv("WVM_LOCAL_SPLIT", split_env, 1);
+                    if (snprintf(split_accel, sizeof(split_accel),
+                                 "wavevm,backend=kvm,mode=user,split=%d",
+                                 split_n) >= (int)sizeof(split_accel)) {
+                        fprintf(stderr, "[System] guest FE accel/split too long\n");
+                        _exit(127);
+                    }
+                } else if (snprintf(split_accel, sizeof(split_accel),
+                                    "wavevm,backend=kvm,mode=user") >=
+                           (int)sizeof(split_accel)) {
+                    fprintf(stderr, "[System] guest FE accel too long\n");
+                    _exit(127);
+                }
+                /* Replace prior -accel value. */
+                {
+                    int ai_accel = -1;
+                    int k;
+                    for (k = 0; k < ai - 1; k++) {
+                        if (qemu_argv[k] && strcmp(qemu_argv[k], "-accel") == 0) {
+                            ai_accel = k + 1;
+                            break;
+                        }
+                    }
+                    if (ai_accel > 0) {
+                        qemu_argv[ai_accel] = split_accel;
+                    }
+                }
+                if (guest_fe_log && *guest_fe_log) {
+                    int fd = open(guest_fe_log, O_WRONLY | O_CREAT | O_APPEND, 0644);
+                    if (fd >= 0) {
+                        dup2(fd, STDERR_FILENO);
+                        if (fd > STDERR_FILENO) {
+                            close(fd);
+                        }
+                    }
+                }
+                if (snprintf(drive_buf, sizeof(drive_buf),
+                             "file=%s,if=virtio,format=qcow2,snapshot=on",
+                             guest_image) >= (int)sizeof(drive_buf)) {
+                    fprintf(stderr,
+                            "[System] WVM_GUEST_IMAGE path too long for FE\n");
+                    _exit(127);
+                }
+                if (!guest_ssh || !*guest_ssh) {
+                    guest_ssh = "2226";
+                }
+                if (snprintf(netdev_buf, sizeof(netdev_buf),
+                             "user,id=ne,hostfwd=tcp::%s-:22",
+                             guest_ssh) >= (int)sizeof(netdev_buf)) {
+                    fprintf(stderr, "[System] WVM_GUEST_SSH_PORT invalid\n");
+                    _exit(127);
+                }
+                if (!guest_nic || !*guest_nic) {
+                    guest_nic = "e1000";
+                }
+                if (snprintf(nic_buf, sizeof(nic_buf),
+                             "%s,netdev=ne,mac=52:54:00:12:34:56",
+                             guest_nic) >= (int)sizeof(nic_buf)) {
+                    fprintf(stderr, "[System] WVM_GUEST_NIC invalid\n");
+                    _exit(127);
+                }
+                qemu_argv[ai++] = "-drive";
+                qemu_argv[ai++] = drive_buf;
+                qemu_argv[ai++] = "-netdev";
+                qemu_argv[ai++] = netdev_buf;
+                qemu_argv[ai++] = "-device";
+                qemu_argv[ai++] = nic_buf;
+                qemu_argv[ai++] = "-display";
+                qemu_argv[ai++] = "none";
+                qemu_argv[ai++] = "-vga";
+                qemu_argv[ai++] = "none";
+                if (guest_serial && *guest_serial) {
+                    qemu_argv[ai++] = "-serial";
+                    qemu_argv[ai++] = (char *)guest_serial;
+                    /* QEMU wants file:path for file-backed serial. */
+                    {
+                        static char serial_arg[832];
+                        if (strncmp(guest_serial, "file:", 5) == 0) {
+                            qemu_argv[ai - 1] = (char *)guest_serial;
+                        } else if (snprintf(serial_arg, sizeof(serial_arg),
+                                            "file:%s",
+                                            guest_serial) <
+                                   (int)sizeof(serial_arg)) {
+                            qemu_argv[ai - 1] = serial_arg;
+                        } else {
+                            fprintf(stderr,
+                                    "[System] WVM_GUEST_SERIAL_LOG too long\n");
+                            _exit(127);
+                        }
+                    }
+                } else {
+                    qemu_argv[ai++] = "-nographic";
+                }
+                qemu_argv[ai++] = "-monitor";
+                qemu_argv[ai++] = "none";
+                /* Boot immediately — this FE is the guest, not a paused stub. */
+            } else {
+                qemu_argv[ai++] = "-nographic";
+                qemu_argv[ai++] = "-S";
+                qemu_argv[ai++] = "-nodefaults";
+            }
+            qemu_argv[ai] = NULL;
         }
-        qemu_argv[ai++] = "-accel";
-        qemu_argv[ai++] = accel_buf;
-        if (tcg_machine && *tcg_machine) {
-            qemu_argv[ai++] = "-machine";
-            qemu_argv[ai++] = (char *)tcg_machine;
-        }
-        qemu_argv[ai++] = "-m";
-        qemu_argv[ai++] = (char *)tcg_ram_mb;
-        qemu_argv[ai++] = "-smp";
-        qemu_argv[ai++] = smp_buf;
-        qemu_argv[ai++] = "-nographic";
-        qemu_argv[ai++] = "-S";
-        qemu_argv[ai++] = "-nodefaults";
-        qemu_argv[ai] = NULL;
 
         execvp(qemu_bin, qemu_argv);
         fprintf(stderr, "[System] exec QEMU frontend '%s' failed: %s\n",
@@ -270,6 +518,7 @@ static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
     }
 
     g_frontend_pid = child;
+    spawn_generation++;
     fprintf(stderr,
             "[System] spawned manifest-bound QEMU frontend pid=%d accel=%s "
             "bin=%s mem_mb=%s smp=%s\n",
@@ -918,6 +1167,53 @@ static void handle_ipc_fault(int qemu_fd, const uint8_t *payload,
         result = wvm_memory_service_global_request_fault(
             request.gpa, request.operation_id, request.delivery_attempt_id,
             &ack, page, error, sizeof(error));
+        /*
+         * F05 legacy CLI dual-node: typed V1 memory service is not installed
+         * (admitted runtime owns that). Helper TCG page faults still arrive
+         * as TYPED_MEM_FAULT over the Unix IPC socket. Fall back to
+         * logic_core's directory pull (local hit or remote MSG_MEM_READ) so
+         * the helper can install CR3/code pages after VCPU_RUN import
+         * instead of _exit(1) on ENOTCONN.
+         */
+        if (result == -ENOTCONN) {
+            uint64_t version = 0;
+            static int legacy_fault_log;
+            int lr = wvm_handle_page_fault_logic(request.gpa, page, &version);
+            if (legacy_fault_log < 40) {
+                fprintf(stderr,
+                        "[IPC V1 Fault] legacy logic_core fallback "
+                        "gpa=%#llx ret=%d ver=%#llx\n",
+                        (unsigned long long)request.gpa, lr,
+                        (unsigned long long)version);
+                legacy_fault_log++;
+            }
+            if (lr == 0 && version != 0) {
+                memset(&ack, 0, sizeof(ack));
+                ack.gpa = request.gpa;
+                ack.version = version;
+                ack.status = WVM_MEM_ACK_SUCCESS;
+                /*
+                 * Encode rejects physical/instance id 0; legacy NODE 0 is
+                 * valid in fract configs — shift to 1-based labels for the
+                 * ACK header only (helper uses version + page bytes).
+                 */
+                ack.directory_physical_node_id =
+                    (uint32_t)g_my_node_id + 1U;
+                ack.directory_node_instance_id =
+                    (uint64_t)g_my_node_id + 1ULL;
+                ack.data = page;
+                ack.data_bytes = WVM_MEMORY_PAGE_BYTES;
+                result = 0;
+                error[0] = '\0';
+            } else {
+                result = lr == 0 ? -EIO : lr;
+                if (!error[0]) {
+                    snprintf(error, sizeof(error),
+                             "legacy directory fault failed ret=%d ver=%llu",
+                             lr, (unsigned long long)version);
+                }
+            }
+        }
         if (result == 0 &&
             wvm_mem_ack_encode(&ack, ack_payload, sizeof(ack_payload),
                                   &ack_payload_bytes, error,
@@ -1022,7 +1318,7 @@ static void handle_ipc_cpu_run(int qemu_fd,
 }
 
 #define WVM_COMMIT_SYNC_WINDOW     512  /* F05: larger in-flight over TS */
-#define WVM_COMMIT_SYNC_TIMEOUT_US 5000000ULL
+#define WVM_COMMIT_SYNC_TIMEOUT_US 60000000ULL  /* F05 cross-host */
 #define WVM_COMMIT_SYNC_RETRY_US   50000ULL
 
 struct pending_commit_sync {
@@ -2187,13 +2483,22 @@ client_done:
                        !wvm_runtime_gate_has_registered_role(
                            &g_runtime_gate,
                            WVM_MANIFEST_ROLE_QEMU_FRONTEND)) {
-                if (wvm_runtime_ready_remove(
+                if (g_fe_replace_pending) {
+                    fprintf(stderr,
+                            "[RuntimeGate] F10: stub FE gone during replace; "
+                            "keeping READY/gate open for Cirros fd=%d\n",
+                            qemu_fd);
+                } else if (wvm_runtime_ready_remove(
                         &g_runtime_storage.manifest, error, sizeof(error)) !=
                     0) {
                     fprintf(stderr,
                             "[RuntimeGate] cannot withdraw QEMU readiness fd=%d: %s\n",
                             qemu_fd, error[0] ? error : "unknown error");
-                    g_shutdown_requested = 1;
+                    /*
+                     * F10: do not tear down the whole runtime on withdraw
+                     * failure — ordered Cirros FE replace must stay alive.
+                     */
+                    g_runtime_ready_published = 0;
                 } else {
                     g_runtime_ready_published = 0;
                 }
@@ -2523,7 +2828,7 @@ int wavevm_master_runtime_main(
         fprintf(stderr,
                 "[System] runtime socket listening; waiting for manifest-bound "
                 "QEMU frontend registration\n");
-        if (spawn_manifest_bound_qemu_frontend(fe_error, sizeof(fe_error)) !=
+                if (spawn_manifest_bound_qemu_frontend(fe_error, sizeof(fe_error)) !=
             0) {
             fprintf(stderr,
                     "[System] cannot start manifest-bound QEMU frontend: %s\n",
@@ -2531,6 +2836,28 @@ int wavevm_master_runtime_main(
             (void)wvm_kernel_memory_stop(&kernel_memory);
             close(listen_fd);
             return 1;
+        }
+        /*
+         * F10/N04: stub→Cirros replace is opt-in (WVM_GUEST_FE_REPLACE=1).
+         * Default Cirros-at-CREATE uses WVM_GUEST_FE_BOOT_NOW (unique FE).
+         * Replace currently leaves Cirros dead at first region_add (same
+         * class as unique FE + split=1 hang); keep code for later.
+         */
+        if (getenv("WVM_GUEST_FE_REPLACE") &&
+            getenv("WVM_GUEST_FE_REPLACE")[0] &&
+            strcmp(getenv("WVM_GUEST_FE_REPLACE"), "0") != 0 &&
+            getenv("WVM_GUEST_IMAGE") && getenv("WVM_GUEST_IMAGE")[0] &&
+            !(getenv("WVM_GUEST_FE_BOOT_NOW") &&
+              getenv("WVM_GUEST_FE_BOOT_NOW")[0] &&
+              strcmp(getenv("WVM_GUEST_FE_BOOT_NOW"), "0") != 0)) {
+            pthread_t replace_tid;
+            if (pthread_create(&replace_tid, NULL, guest_fe_replace_thread,
+                               NULL) != 0) {
+                fprintf(stderr,
+                        "[System] F10: cannot start guest FE replace thread\n");
+            } else {
+                pthread_detach(replace_tid);
+            }
         }
     }
 

@@ -135,8 +135,18 @@ static int owner_route_plan(
         owner->config.plan_provider->node_listener_plans &&
         owner->config.plan_provider->node_listener_plan_count > 0) {
         size_t n = owner->config.plan_provider->node_listener_plan_count;
-        if (n > sizeof(override_node_ids) / sizeof(override_node_ids[0])) {
-            n = sizeof(override_node_ids) / sizeof(override_node_ids[0]);
+        size_t cap = sizeof(override_node_ids) / sizeof(override_node_ids[0]);
+        /*
+         * N06: never silently clamp past the override workspace. Refuse so
+         * admission cannot publish routes that fall back to sidecar data_port
+         * for unmapped listeners.
+         */
+        if (n > cap) {
+            set_error(error, error_len,
+                      "N06: listener_plan_count %zu exceeds ingress override "
+                      "budget %zu; enlarge workspace or reduce listeners",
+                      n, cap);
+            return -1;
         }
         for (i = 0; i < n; i++) {
             const struct wvm_admission_node_listener_plan *lp =

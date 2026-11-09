@@ -37,6 +37,7 @@
 #include "exec/ram_addr.h"
 
 #include "../../../common_include/wavevm_protocol.h"
+#include "../../../common_include/crc32.h"
 #include "../../../common_include/wavevm_local_memory.h"
 #include "../../../common_include/wavevm_memory.h"
 #include "wavevm-runtime-registration.h"
@@ -77,28 +78,56 @@ static atomic_bool g_tcg_dirty_baseline_ready = false;
 void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
 {
     /*
-     * F05: SHM join/attach only proves this process mapped a local backing.
-     * Coherent fast-path (skip fault-hook) requires FE and executor to share
-     * that backing on the same physical host. When both host ids are known
-     * and differ, refuse coherent and keep the real fault/sync path.
-     * Missing host ids keep the prior same-host join behavior (local tests)
-     * but do not claim cross-host shared RAM.
+     * N02/F05: coherent fast-path (skip fault-hook) needs affirmative proof
+     * that FE and executor share the same physical host AND the same SHM
+     * backing. Missing/invalid host ids, cross-host mismatch, or mismatched
+     * / missing backing identity must keep the real fault/sync path.
+     * SHM join/attach alone is not that proof.
      */
     if (enabled) {
         const char *fe_host = getenv("WVM_FE_PHYSICAL_HOST_ID");
         const char *ex_host = getenv("WVM_EXECUTOR_PHYSICAL_HOST_ID");
+        const char *shm_path = getenv("WVM_SHM_FILE");
+        const char *fe_shm = getenv("WVM_FE_SHM_FILE");
+        char *fe_end = NULL, *ex_end = NULL;
+        unsigned long long fe = 0, ex = 0;
+        int hosts_ok = 0;
+
         if (fe_host && *fe_host && ex_host && *ex_host) {
-            char *fe_end = NULL, *ex_end = NULL;
-            unsigned long long fe = strtoull(fe_host, &fe_end, 10);
-            unsigned long long ex = strtoull(ex_host, &ex_end, 10);
+            fe = strtoull(fe_host, &fe_end, 10);
+            ex = strtoull(ex_host, &ex_end, 10);
             if (fe_end && *fe_end == '\0' && ex_end && *ex_end == '\0' &&
-                fe != 0 && ex != 0 && fe != ex) {
-                fprintf(stderr,
-                        "[WaveVM-User] F05 coherent REFUSED: FE host=%llu "
-                        "executor host=%llu (cross-host; fault path kept)\n",
-                        fe, ex);
-                enabled = 0;
+                fe != 0 && ex != 0) {
+                hosts_ok = 1;
             }
+        }
+        if (!hosts_ok) {
+            fprintf(stderr,
+                    "[WaveVM-User] N02 coherent REFUSED: missing/invalid "
+                    "FE/executor physical host proof (fault path kept)\n");
+            enabled = 0;
+        } else if (fe != ex) {
+            fprintf(stderr,
+                    "[WaveVM-User] F05/N02 coherent REFUSED: FE host=%llu "
+                    "executor host=%llu (cross-host; fault path kept)\n",
+                    fe, ex);
+            enabled = 0;
+        } else if (!shm_path || !*shm_path) {
+            fprintf(stderr,
+                    "[WaveVM-User] N02 coherent REFUSED: WVM_SHM_FILE missing "
+                    "(no local backing identity; fault path kept)\n");
+            enabled = 0;
+        } else if (!fe_shm || !*fe_shm) {
+            fprintf(stderr,
+                    "[WaveVM-User] N02 coherent REFUSED: WVM_FE_SHM_FILE missing "
+                    "(no FE backing identity; fault path kept)\n");
+            enabled = 0;
+        } else if (strcmp(fe_shm, shm_path) != 0) {
+            fprintf(stderr,
+                    "[WaveVM-User] N02 coherent REFUSED: FE shm='%s' "
+                    "executor shm='%s' (different backing; fault path kept)\n",
+                    fe_shm, shm_path);
+            enabled = 0;
         }
     }
     g_tcg_shm_coherent = enabled ? 1 : 0;
@@ -1827,6 +1856,124 @@ static int install_page_bytes(uint64_t gpa, uintptr_t aligned_addr,
     return 0;
 }
 
+
+/*
+ * F05 legacy dual-node: typed V1 memory service is not installed on the
+ * CLI master, so helper TYPED_MEM_FAULT gets ENOTCONN and the SIGSEGV
+ * worker fails closed (_exit). Fall back to UDP MSG_MEM_READ via the
+ * REQ channel (Proxy → directory). Try both vnode targets for the
+ * 2-node fract harness; req_id=gpa matches master demux conventions.
+ */
+static int request_page_over_udp_slave(uint64_t gpa, uintptr_t aligned_addr,
+                                       bool is_write)
+{
+    uint8_t pkt[sizeof(struct wvm_header) + 8];
+    uint8_t rx[sizeof(struct wvm_header) + sizeof(struct wvm_mem_ack_payload)];
+    struct wvm_header *hdr = (struct wvm_header *)pkt;
+    uint64_t net_gpa = WVM_HTONLL(gpa);
+    uint32_t vm_id = WVM_GET_VMID(g_slave_id);
+    int node;
+
+    if (g_fd_req < 0) {
+        return -ENOTCONN;
+    }
+
+    for (node = 0; node < 2; node++) {
+        uint32_t target = (node == 0)
+            ? WVM_NODE_AUTO_ROUTE
+            : wvm_wire_target(vm_id, (uint32_t)node);
+        struct pollfd pfd;
+        uint64_t start_ms, now_ms;
+        int got = 0;
+
+        memset(hdr, 0, sizeof(*hdr));
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->msg_type = htons(MSG_MEM_READ);
+        hdr->payload_len = htons(8);
+        hdr->slave_id = htonl(g_slave_id);
+        /* V31 local slave->master marker; explicit node target on retry */
+        hdr->target_id = htonl(target);
+        hdr->req_id = WVM_HTONLL(gpa);
+        hdr->qos_level = 1;
+        memcpy(pkt + sizeof(*hdr), &net_gpa, 8);
+        hdr->crc32 = 0;
+        hdr->crc32 = htonl(calculate_crc32(pkt, sizeof(pkt)));
+
+        if (send(g_fd_req, pkt, sizeof(pkt), 0) != (ssize_t)sizeof(pkt)) {
+            continue;
+        }
+
+        start_ms = (uint64_t)time(NULL) * 1000ULL;
+        while (!got) {
+            int pret;
+            ssize_t n;
+            struct wvm_header *rh;
+            struct wvm_mem_ack_payload *ack;
+
+            now_ms = (uint64_t)time(NULL) * 1000ULL;
+            if (now_ms - start_ms > 5000ULL) {
+                break;
+            }
+            pfd.fd = g_fd_req;
+            pfd.events = POLLIN;
+            pret = poll(&pfd, 1, 200);
+            if (pret <= 0) {
+                /* retransmit */
+                (void)send(g_fd_req, pkt, sizeof(pkt), 0);
+                continue;
+            }
+            n = recv(g_fd_req, rx, sizeof(rx), 0);
+            if (n < (ssize_t)(sizeof(struct wvm_header) +
+                              sizeof(struct wvm_mem_ack_payload))) {
+                continue;
+            }
+            rh = (struct wvm_header *)rx;
+            if (ntohl(rh->magic) != WVM_MAGIC ||
+                ntohs(rh->msg_type) != MSG_MEM_ACK) {
+                continue;
+            }
+            ack = (struct wvm_mem_ack_payload *)(rx + sizeof(*rh));
+            if (WVM_NTOHLL(ack->gpa) != gpa) {
+                continue;
+            }
+            if (install_page_bytes(gpa, aligned_addr, ack->data,
+                                   is_write ? 1 : 0) != 0) {
+                return -1;
+            }
+            {
+                uint64_t ver = WVM_NTOHLL(ack->version);
+                if (ver == 0) {
+                    ver = 1;
+                }
+                set_local_page_version(gpa, ver);
+            }
+            {
+                static int udp_ok_log;
+                if (udp_ok_log < 40) {
+                    fprintf(stderr,
+                            "[WaveVM-User] UDP MEM_READ ok gpa=%#llx "
+                            "target_node=%d ver=%#llx\n",
+                            (unsigned long long)gpa, node,
+                            (unsigned long long)WVM_NTOHLL(ack->version));
+                    udp_ok_log++;
+                }
+            }
+            return 0;
+        }
+    }
+    {
+        static int udp_fail_log;
+        if (udp_fail_log < 20) {
+            fprintf(stderr,
+                    "[WaveVM-User] UDP MEM_READ failed gpa=%#llx "
+                    "(typed+udp exhausted)\n",
+                    (unsigned long long)gpa);
+            udp_fail_log++;
+        }
+    }
+    return -ETIMEDOUT;
+}
+
 static int request_page_sync(uintptr_t fault_addr, bool is_write) {
     uint64_t gpa = hva_to_gpa_safe(fault_addr);
     if (gpa == (uint64_t)-1) return -1;
@@ -1855,6 +2002,10 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
     if (t_com_sock == -1) {
         t_com_sock = internal_connect_master();
         if (t_com_sock < 0) {
+            if (g_is_slave && g_fd_req >= 0) {
+                safe_log("[WVM] typed IPC unavailable; slave UDP MEM_READ fallback\n");
+                return request_page_over_udp_slave(gpa, aligned_addr, is_write);
+            }
             safe_log("[WVM] FATAL: Cannot connect to node_runtime for typed memory protocol\n");
             return -1;
         }
@@ -1866,10 +2017,24 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         int result = request_page_over_ipc(gpa, &ack, page);
 
         if (result != 0) {
+            if (g_is_slave) {
+                static int typed_fail_log;
+                if (typed_fail_log < 20) {
+                    fprintf(stderr,
+                            "[WaveVM-User] typed MEM_FAULT failed gpa=%#llx "
+                            "ret=%d; trying UDP MEM_READ\n",
+                            (unsigned long long)gpa, result);
+                    typed_fail_log++;
+                }
+                return request_page_over_udp_slave(gpa, aligned_addr, is_write);
+            }
             return result;
         }
         result = ack_status_to_errno(ack.status);
         if (result != 0) {
+            if (g_is_slave) {
+                return request_page_over_udp_slave(gpa, aligned_addr, is_write);
+            }
             return result;
         }
         /*

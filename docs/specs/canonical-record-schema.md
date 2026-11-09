@@ -14,6 +14,20 @@ No implementation may invent a second JSON, environment-variable, or
 host-native structure as the semantic form of a record listed here. Human
 readable renderings are diagnostics only.
 
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | This document owns canonical field/tag/type/order and digest rules, not membership, placement, or lifecycle decisions. Semantic validators remain with the record's domain owner. |
+| State and mutation | Codec buffers and decode results are caller/operation-owned; codecs never modify an inventory, reservation, route table, or VM state. Validate a full record before exposing it for domain mutation. |
+| Allowed implementation dependencies | Shared scalar/TLV primitives, bounded allocation, and digest utilities. No runtime/controller private structures, policy callbacks during decoding, or second JSON/native-layout schema. |
+| Interactions and lifetime | [Wire containers](wire-ipc-abi.md#13-wvm-envelope-v1) supply framing; this document supplies record bodies. Public encode/decode APIs declare copy/borrow ownership and result lifetime; domain validation follows successful decoding. |
+| Concurrency and cost | Independent records must be encodable/decodable concurrently. Bound bytes, nesting/list counts, workspace, and bulk copies; no global codec workspace shared between operations. |
+| Failure and verification | Reject malformed records atomically under Sections 1 and 3. Use [schema conformance](#5-schema-conformance-requirements); do not equate canonical validity with authorization or admission. |
+
 ## 1. Common Encoding Rules
 
 Every record uses `CanonicalRecord` and `CanonicalField` from
@@ -37,7 +51,7 @@ The scalar aliases are:
 | `Set<T, key>` | `List<T, key>` whose members carry no positional meaning. |
 
 Every integer range in this document is inclusive. `vm_id=0` is reserved for
-cluster-scoped control and explicit legacy compatibility records; a VM record
+authenticated cluster-scoped control records; a VM record
 uses `1..UINT32_MAX`. Timestamps use `U64 unix_time_ms`. Durations and
 retention horizons use `U64 milliseconds`.
 
@@ -182,11 +196,10 @@ The V1 enum registry is:
   projection. Every memory mapping also retains its selected directory's
   physical-node and node-instance authority, which a returned memory ACK must
   match before it can install an authoritative page.
-- The current legacy logic-core adapter consumes only flat exact-vnode routes
-  with IPv4/UDP local-sidecar endpoints. It must reject a non-flat projection
-  at legacy startup rather than flattening a hierarchical route into guessed
-  endpoints; the typed node-runtime path consumes both flat and fractal
-  projections.
+- Production dispatch consumers must accept supported complete flat/fractal
+  keys or reject an unsupported projection before activation. A flat-only
+  adapter cannot flatten a hierarchical route, guess endpoints, or establish
+  a separate production launch path.
 - `CandidateVmManifest.execution_plan.backend` and every
   `PlacementPlan.vcpu_assignments[].backend` must agree. A VM may use KVM or
   TCG, but never a mixed vCPU backend in one admitted incarnation.

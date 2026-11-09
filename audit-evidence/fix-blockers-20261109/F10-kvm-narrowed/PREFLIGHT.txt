@@ -1,0 +1,7 @@
+preflight 2026-11-09 16:34:47 CST
+/dev/kvm=crw-rw----+ 1 root kvm 10, 232 11月  9 12:32 /dev/kvm
+/dev/wavevm=ls: 无法访问 '/dev/wavevm': 没有那个文件或目录
+lsmod_wavevm=none
+sudo_n=sudo: 需要密码
+rc=1
+mode=Mode_B_require-kvm_without_wavevm.ko (matches prior flat-kvm-manual)

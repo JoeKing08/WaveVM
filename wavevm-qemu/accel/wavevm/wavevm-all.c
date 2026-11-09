@@ -2027,11 +2027,33 @@ static void *wavevm_slave_net_thread(void *arg) {
                     struct wvm_ipc_cpu_run_req local_req;
                     struct wvm_ipc_cpu_run_req *req = NULL;
                     bool compact_ctx_payload = false;
+                    bool truncated_tcg_payload = false;
                     uint64_t run_req_id = WVM_NTOHLL(hdr->req_id);
+                    /*
+                     * Wire forms (F05 / dual-node TCG):
+                     *  1) full union-sized wvm_ipc_cpu_run_req (KVM-sized)
+                     *  2) truncated TCG request: prefix + tcg ctx only
+                     *     (offsetof(ctx)+sizeof(tcg) == 4400) — master RPC
+                     *  3) compact: pure tcg/kvm context (legacy)
+                     * Form 2 must NOT be treated as form 3: that misaligns
+                     * by 16 bytes (mode/slave/vcpu/pad), yields guest_vcpu=0
+                     * and shifts RIP into CR0, then helper SIGSEGV on gpa=0.
+                     */
+                    const size_t tcg_req_bytes =
+                        offsetof(struct wvm_ipc_cpu_run_req, ctx) +
+                        sizeof(wvm_tcg_context_t);
+                    const size_t tcg_ack_bytes =
+                        offsetof(struct wvm_ipc_cpu_run_ack, ctx) +
+                        sizeof(wvm_tcg_context_t);
 
-                    /* Backward compatibility: some senders put only context in payload. */
                     if (actual_payload >= (int)sizeof(struct wvm_ipc_cpu_run_req)) {
                         req = (struct wvm_ipc_cpu_run_req *)payload;
+                    } else if (hdr->mode_tcg &&
+                               actual_payload >= (int)tcg_req_bytes) {
+                        memset(&local_req, 0, sizeof(local_req));
+                        memcpy(&local_req, payload, tcg_req_bytes);
+                        req = &local_req;
+                        truncated_tcg_payload = true;
                     } else {
                         memset(&local_req, 0, sizeof(local_req));
                         local_req.mode_tcg = hdr->mode_tcg ? 1 : 0;
@@ -2092,6 +2114,17 @@ static void *wavevm_slave_net_thread(void *arg) {
                                 hdr->payload_len = htons(sizeof(full_ack.ctx.kvm));
                                 msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.kvm);
                             }
+                        } else if (truncated_tcg_payload) {
+                            /* Keep ACK inside MAX_PKT_SIZE; match request shape. */
+                            if (sizeof(struct wvm_header) + tcg_ack_bytes > MAX_PKT_SIZE) {
+                                fprintf(stderr,
+                                        "[WaveVM-Slave] truncated TCG ACK %zu exceeds MAX_PKT\n",
+                                        tcg_ack_bytes);
+                                continue;
+                            }
+                            memcpy(payload, &full_ack, tcg_ack_bytes);
+                            hdr->payload_len = htons((uint16_t)tcg_ack_bytes);
+                            msgs[i].msg_len = sizeof(struct wvm_header) + tcg_ack_bytes;
                         } else {
                             memcpy(payload, &full_ack, sizeof(full_ack));
                             hdr->payload_len = htons(sizeof(full_ack));

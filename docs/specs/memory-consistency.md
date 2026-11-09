@@ -13,7 +13,7 @@ handoff, resource placement admission, or host fault-engine selection. Those
 boundaries belong to `storage-device-authority.md`, `vcpu-handoff.md`,
 `resource-placement-admission.md`, and `capability-fault-engines.md`.
 
-Terminology: `master` and `slave` below name current implementation roles. The
+Terminology: `master` and `slave` below name logical source-level roles. The
 architecture baseline calls them the node runtime's semantic-coordinator role
 and local-execution role respectively; they are not required to remain separate
 processes. This specification's authority and ordering rules apply regardless
@@ -22,6 +22,20 @@ of that deployment choice.
 This specification defines required behavior. Source mappings identify where
 to apply the contract; observed implementation deviations belong in separate
 audits and do not relax it.
+
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Own page-version/directory/subscriber semantics and memory fences. For each VM-incarnation/page key, the manifest-selected directory runtime is authoritative for bytes/version; capture engines are not. |
+| State and mutation | Section 2 distinguishes authority and copies. Authorized per-page commits mutate bytes/version atomically; QEMU/executor/kernel caches retain explicit validity and subscriber lifetime. |
+| Allowed implementation dependencies | Public identity/route/IPC, immutable placement projections, fault-engine and local-memory APIs. No private lifecycle, device, or vCPU state; the vCPU coordinator consumes the public fence result. |
+| Interactions and lifetime | Section 4.6 owns handoff visibility. [IPC Section 5.1](wire-ipc-abi.md#51-buffer-ownership-visibility-and-completion-context) owns buffer publication; [lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) orders page, subscriber and mapping release. |
+| Concurrency and cost | Section 6 requires independent-page progress, asynchronous diffs/capture, batching, bounded QoS queues and explicit copy/round-trip costs; one authority is not one global executor. |
+| Failure and verification | Sections 7 and 10 require version-gap resync, retained uncertain operations and checked bytes/ACKs. Local mapping alone is not cross-host shared-memory proof. |
 
 ## 1. Goal and Non-Goals
 
@@ -35,15 +49,15 @@ This is a directory plus version plus subscriber/copyset protocol. It is not a
 claim to implement full hardware MESI, cache-line coherence, transparent live
 migration, or durable storage ordering.
 
-V1 unit of coherence is one 4 KiB guest physical page:
+The unit of coherence is one 4 KiB guest physical page:
 
 ```text
 page_key = (vm_id, incarnation, gpa aligned to 4096)
 ```
 
-`vm_id` alone is insufficient after VM deletion and reuse. Until the wire ABI
-carries an incarnation, V1 must reject reuse of a `vm_id` while any old runtime
-can still send packets. The future `wire-ipc-abi.md` defines the encoding.
+`vm_id` alone is insufficient after VM deletion and reuse. Production traffic
+must carry and validate the incarnation using `wire-ipc-abi.md`; reject packets
+that cannot establish the complete page identity.
 
 ## 2. Authority and Ownership
 
@@ -261,7 +275,7 @@ An authoritative `MSG_PAGE_PUSH_FULL` or `MSG_FORCE_SYNC` is directory to
 client recovery traffic. It may overwrite an older local cache because it
 carries directory-owned bytes and a directory version.
 
-A client-originated full-page commit is not a general recovery shortcut in V1.
+A client-originated full-page commit is not a general recovery shortcut in Minimum.
 It must still carry a base version and satisfy the normal commit precondition.
 In particular, a client must not overwrite a newer directory page merely
 because it has a full 4 KiB snapshot.
@@ -396,13 +410,20 @@ directory-authorized acceleration path.
 
 The normal path remains asynchronous and parallel:
 
-- Per-page striped directory locks permit unrelated pages to progress.
+- Per-page or striped directory locks must permit unrelated pages to progress;
+  brief shard contention must not become a global wait spanning network I/O.
 - Dirty capture is decoupled from network transmission by bounded producer /
   consumer queues or per-connection journals.
 - Gateway and node-runtime QoS queues preserve priority for control, ACK, and handoff
   traffic without globally serializing page data.
 - Batched receive and grouped diff transmission remain allowed when they retain
   each page's base-version ordering.
+
+These are required capabilities even when an implementation must add them.
+Implement asynchronous dirty capture, batching, and diff delivery under the
+version/fence contract; their absence is not a reason to weaken it. Document
+normal page/diff copies, queue bounds, and network round trips. A replacement
+mechanism must meet the same concurrency and visibility obligations.
 
 Correctness changes must not replace this normal path with a global mutex,
 single global worker, disabled queue, or unconditional synchronous send.
@@ -471,26 +492,12 @@ Required invariants across all affected paths:
 Apply these requirements with targeted changes that preserve the normal
 concurrent data path described in Section 6.
 
-## 9. Compatibility and Migration
+## 9. Compatibility Boundary
 
-1. Keep existing fields and message types readable during migration.
-2. Add canonical commit ACK payload support before relying on multi-page TCG
-   fences for correctness.
-3. Make duplicate commit recognition VM-scoped before increasing retry rates.
-4. Remove the full-page catchup exception only after recovery via full read or
-   `FORCE_SYNC` is covered by regression tests.
-5. Convert KVM dirty-page normal and emergency paths from `MSG_MEM_WRITE` to
-   versioned commit semantics, or define a narrow directory-authorized fast
-   path in `kernel-accelerator.md`.
-6. Replace `SYNC_MAGIC` with a typed fence sequence in `wire-ipc-abi.md`.
-7. Move kernel copies of page/route/identity state into explicit per-VM
-   accelerator contexts as defined by `kernel-accelerator.md`.
-8. Add SubscriberRecord identity/lease/removal and per-send route-scope
-   resolution before treating subscriber delivery as a handoff-fence dependency
-   or enabling VM-ID reuse.
-
-No migration may use hardcoded nodes, test-only production switches, or a
-permanent global serialization workaround.
+No legacy untyped memory write, generic ACK, guessed route, or global
+serialization workaround is a production alternative. Memory operations use
+the canonical VM-scoped identity, versioned commit result, subscriber lifetime,
+and fence contracts defined here and in the wire and accelerator specifications.
 
 ## 10. Acceptance Tests
 

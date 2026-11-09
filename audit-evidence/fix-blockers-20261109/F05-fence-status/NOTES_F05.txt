@@ -1,0 +1,61 @@
+Asia/Shanghai 2026-11-09 19:05:47 CST
+Result: PARTIAL (fence PASS; remote VCPU RET incomplete)
+
+ART_A=/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-190114
+ART_B=/home/joeking/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-190100
+(copied under /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-190114/from-B/)
+
+Tailscale (system daemon, not ephemeral):
+  A=100.116.196.65 (wavevm-f05-a) machine-id b9d31200e9414d3e9e6379c8a2df4312
+  B=100.114.246.92 (wavevm-f05-b) machine-id 429a0a31f87843f99d2be52688db2c22
+  Mutual ping ~1–4ms via LAN 192.168.10.129↔131
+
+=== Required markers (this run) ===
+WVM-REMOTE cpu=2: 1
+IPC VCPU_RUN (vcpu=2): 1
+IPC VCPU_RUN RET success: 0
+0
+push-fence failed: 0
+0
+push-fence ret=0: 1
+IPC FENCE begin: 1
+IPC FENCE done dr=0: 1
+COMMIT_SYNC ack: 40
+COMMIT_SYNC timeout: 0
+0
+cirros login (NOT required this turn): 0
+0
+
+=== Progress vs 2026-11-05 ===
+1. Tailscale auth key still valid; both hosts logged in.
+2. NUMA GPA layout OK FE+helpers A/B via qemu-tcg-numa-wrapper (ram1@0x100000000).
+3. High-GPA COMMIT_SYNC RX on B; A saw acks with commit_to=0 this run.
+4. Bulk handoff flush ~31473 pages; fence drained pending=512 overflow=1569 → 0/0.
+5. push-fence ret=0 (historical was -110).
+6. WVM-REMOTE cpu=2 + IPC VCPU_RUN sent; B master1 RX VCPU_RUN + slave1 SLAVE-RX type=5.
+7. NO guest_vcpu=2 / TCG ack on B; NO VCPU_RUN RET on A (slave_id logged as 4294967295).
+
+=== Residual blocker ===
+Remote VCPU execute/ACK path: VCPU_RUN reaches B master/slave repeatedly but does not
+produce guest_vcpu=2 / TCG ack / VCPU_RUN RET. IPC log shows slave_id=4294967295 (-1).
+B also logs: slave coherent open failed '/wvm_fract_node1' (POSIX SHM name vs mem-path
+file timing/identity); region_add high GPA still succeeded via wrapper mem-path.
+
+Fence / directory COMMIT drain for F05 handoff: PASS this cell.
+Full F05 remote VCPU evidence: still OPEN.
+F10 remote_attribution: PARTIAL — remote mem commits (dir=1 acks) + WVM-REMOTE seen;
+  not enough for VCPU RET matrix green.
+
+=== Patches / tooling this turn (NOT committed) ===
+- master_core/wavevm_node_master: binary-patched COMMIT_SYNC timeout 5s→60s (backup
+  master_core/wavevm_node_master.f05fix-5s); source define also bumped.
+- scripts/ci_dual_node.sh: system Tailscale socket; default hosts wavevm-f05-*;
+  WVM_F05_FENCE_ONLY mode (no guest login grind); TS_AUTHKEY optional when TS up.
+- /tmp/wavevm-f05-run/wvm_ctl_plan stub planner; qemu-tcg-numa-wrapper.
+- N02 coherent host/backing refuse already in dirty wavevm-user-mem.c (from earlier).
+
+=== Honesty ===
+NO MINIMUM_COMPLETE. NO F05 COMPLETE. NO commit/push. NO F01. NO guest grind.
+
+--- update 2026-11-09 19:27 CST ---
+PARTIAL: fence PASS; truncated-TCG decode FIX (guest_vcpu=2); RET still 0 (helper dies on CR3 pagesync). Evidence dual-node-tcg-20261109-192419/

@@ -1,0 +1,2 @@
+test_f08_execution_fail_closed: PASS
+runtime-gate tests: PASS

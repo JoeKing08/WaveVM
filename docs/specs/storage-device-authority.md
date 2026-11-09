@@ -7,10 +7,24 @@ rules apply to this specification.
 
 Scope: guest-visible device authority, remote block I/O dispatch, read/write
 ordering, flush/FUA semantics, idempotency, error mapping, and interaction with
-remote vCPU exits. This V1 document specifies remote block primitives; it does
+remote vCPU exits. This Minimum document specifies remote block primitives; it does
 not claim full distributed ownership of arbitrary PCI, VFIO, or GPU devices.
 The admitted manifest/resource plan selects storage participants, while
 `wire-ipc-abi.md` defines their transport envelope.
+
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | QEMU host owns guest device semantics; manifest-selected block service performs authorized I/O. Neither owns VM lifecycle, CPU placement or page consistency. |
+| State and mutation | Device/queue/operation identity scopes ordering and deduplication. A backend mutates only its authorized resource; cached results retain payload and lifetime through the required query horizon. |
+| Allowed implementation dependencies | Public QEMU device bridge, block-operation records, wire/identity/route and admitted resource/capability interfaces. No private vCPU coordinator, memory directory or lifecycle data structures. |
+| Interactions and lifetime | Sections 4 through 6 own block success and flush/device ordering; [vCPU exits](vcpu-handoff.md#7-exit-device-interrupt-and-time-semantics) return to device authority. [Lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) retains I/O buffers/handles through completion or fencing. |
+| Concurrency and cost | Preserve per-queue ordering with independent queue/VM progress. Declare copy/I/O costs, in-flight and retained-result budgets; reserve required completion capacity before executing side effects, not after. |
+| Failure and verification | Sections 5 and 9 require typed I/O/flush/uncertain errors and deduplicated retries. Resource IDs are not authorization; define resource scope and revocation without mandating capability wrappers for all calls. |
 
 ## 1. Goal and Non-Goals
 
@@ -19,7 +33,7 @@ nodes may execute block data work, but they do not become independent guest
 device authorities. A completed write, flush, or error must have the same
 guest-visible meaning regardless of the selected physical storage executor.
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - Transparent migration of a live block backend or arbitrary device model.
 - Treating `MSG_BLOCK_ACK` without status, ordering, or durable completion as a
@@ -51,17 +65,16 @@ QEMU device authority -> local node runtime -> sidecar/gateway fabric
 No remote storage executor sends a guest completion directly to QEMU or a
 remote executor.
 
-### 2.1 Minimum WaveVM block-service device cardinality (Q01)
+### 2.1 Minimum WaveVM Block-Service Device Cardinality
 
-The WaveVM block chunk store keys durable files by process identity prefix and
-LBA chunk id only. It does not map `device_index` onto distinct backends.
-Therefore Minimum admits **at most one** WaveVM block-service device assignment
+Minimum admits **at most one** WaveVM block-service device assignment
 per VM (`storage_device_plan` / placement storage templates / local runtime
 assignments). A second `device_index` is rejected at plan validation, admission
 placement, and local block execution rather than silently aliasing the same
 chunk files. Ordinary QEMU-local disks that never enter this block-service path
 remain valid Minimum; remote multi-disk backend mapping is out of Minimum scope
-until a device→backend map exists.
+unless an Extended device-to-backend mapping contract provides independent
+authorization, ordering, durable names, and failure semantics per device.
 
 ## 3. Block Request Model
 
@@ -110,7 +123,7 @@ origin runtime. The semantic operation key is `{vm_id, vm_incarnation,
 origin_physical_node_id, origin_runtime_instance_id, operation_id}`.
 `queue_sequence` preserves required guest ordering for a virtqueue or
 equivalent ordering domain. A future device specification may define multiple
-independent order domains; V1 must not silently reorder writes that the QEMU
+independent order domains; Minimum must not silently reorder writes that the QEMU
 frontend has serialized.
 
 `BlockForwardingMetadata` is outside the semantic payload digest. A route
@@ -124,10 +137,10 @@ maximum route predecessor completion-query/retry horizon. After that horizon it
 returns `RESULT_EXPIRED`/typed I/O failure and never converts a lost result into
 a fresh write or flush.
 
-The current `wvm_block_payload { lba, count, data[] }` and local
-`wvm_ipc_block_req { lba, len, is_write, data[] }` are compatibility payloads.
-They lack explicit incarnation, queue sequence, FUA/barrier flags, typed status,
-and reliable durable-completion semantics.
+Untyped payloads such as `{ lba, count, data[] }` or `{ lba, len, is_write,
+data[] }` cannot satisfy this contract without incarnation, queue sequence,
+FUA/barrier flags, typed status, and explicit durable-completion semantics.
+They are not supported production alternatives.
 
 ## 4. Normal Operations
 
@@ -212,22 +225,16 @@ delivery and duplicate suppression.
 | --- | --- |
 | `wavevm-qemu/.../wavevm-all.c:wvm_send_ipc_block_io` | Add request identity, queue ordering, flags, typed completion, and manifest validation. |
 | `slave_daemon/slave_hybrid.c:handle_block_io_phys` | Implement operation cache, real backend durability, status/error mapping, and bounds checks under the canonical schema. |
-| `common_include/wavevm_protocol.h` | Treat as legacy decoder until versioned block payload is negotiated. |
+| `common_include/wavevm_protocol.h` | Define the canonical block envelope and reject unsupported untyped payloads. |
 | Gateway/node runtime paths | Preserve node-runtime authority, queue QoS, and strict VM route identity. |
-| VFIO paths | Keep as future device-event source; do not claim V1 distributed device authority. |
+| VFIO paths | Keep as future device-event source; do not claim Minimum distributed device authority. |
 
-## 8. Compatibility and Migration
+## 8. Compatibility Boundary
 
-1. Inventory every QEMU block-hook call and current storage executor path.
-2. Add a typed local IPC block envelope and result while decoding the legacy
-   payload for existing fixtures.
-3. Add per-executor operation cache and queue/order metadata before enabling
-   write retry or reconnection behavior.
-4. Implement real flush/FUA checks for the selected backend and fail closed
-   when unavailable.
-5. Route all remote block completions through node runtimes and QEMU authority.
-6. Retire implicit `MSG_BLOCK_ACK` success only after contract tests prove
-   correct ordering, duplicate handling, and guest error propagation.
+No legacy block request, implicit ACK, or direct executor-to-frontend route is
+a production alternative. Block operations use typed identities, ordered
+completion, backend durability results, and the QEMU device-authority contract.
+Unsupported operations return explicit errors.
 
 ## 9. Acceptance Tests
 

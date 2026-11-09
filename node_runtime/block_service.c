@@ -50,6 +50,14 @@ static void release_entry_locked(struct wvm_block_service *service,
     else
         service->retained_bytes = 0;
     entry->result_bytes = 0;
+    /* N07: drop any unconverted pre-execute hold. */
+    if (entry->reserved_hold_bytes != 0) {
+        if (service->reserved_result_bytes >= entry->reserved_hold_bytes)
+            service->reserved_result_bytes -= entry->reserved_hold_bytes;
+        else
+            service->reserved_result_bytes = 0;
+        entry->reserved_hold_bytes = 0;
+    }
     memset(entry->operation_id, 0, sizeof(entry->operation_id));
     entry->origin_physical_node_id = 0;
     entry->origin_runtime_instance_id = 0;
@@ -80,6 +88,13 @@ static void expire_entry_locked(struct wvm_block_service *service,
     else
         service->retained_bytes = 0;
     entry->result_bytes = 0;
+    if (entry->reserved_hold_bytes != 0) {
+        if (service->reserved_result_bytes >= entry->reserved_hold_bytes)
+            service->reserved_result_bytes -= entry->reserved_hold_bytes;
+        else
+            service->reserved_result_bytes = 0;
+        entry->reserved_hold_bytes = 0;
+    }
     entry->state = WVM_BLOCK_ENTRY_EXPIRED;
     entry->expired_at_ms = now;
 }
@@ -151,7 +166,8 @@ static struct wvm_block_entry *reserve_entry_locked(
         return NULL;
     }
     if (need_bytes != 0 &&
-        service->retained_bytes + need_bytes > service->config.retention_bytes) {
+        service->retained_bytes + service->reserved_result_bytes + need_bytes >
+            service->config.retention_bytes) {
         set_error(error, error_len,
                   "block result budget is full; retry after retention");
         return NULL;
@@ -170,6 +186,11 @@ static struct wvm_block_entry *reserve_entry_locked(
     entry->status = 0;
     entry->completed_at_ms = 0;
     entry->expired_at_ms = 0;
+    entry->result = NULL;
+    entry->result_bytes = 0;
+    entry->reserved_hold_bytes = need_bytes;
+    /* N07: atomically hold READ result budget before execute. */
+    service->reserved_result_bytes += need_bytes;
     return entry;
 }
 
@@ -600,10 +621,35 @@ int wvm_block_service_dispatch(void *opaque,
         if (entry->result) {
             memcpy(entry->result, out, out_bytes);
             entry->result_bytes = out_bytes;
+            /*
+             * N07: convert the pre-execute hold into retained result bytes.
+             * Hold was need_bytes; actual out_bytes may match out_capacity.
+             */
+            if (entry->reserved_hold_bytes != 0) {
+                if (service->reserved_result_bytes >= entry->reserved_hold_bytes)
+                    service->reserved_result_bytes -= entry->reserved_hold_bytes;
+                else
+                    service->reserved_result_bytes = 0;
+                entry->reserved_hold_bytes = 0;
+            }
             service->retained_bytes += out_bytes;
         } else {
             entry->status = WVM_BLOCK_WIRE_IO_ERROR;
+            if (entry->reserved_hold_bytes != 0) {
+                if (service->reserved_result_bytes >= entry->reserved_hold_bytes)
+                    service->reserved_result_bytes -= entry->reserved_hold_bytes;
+                else
+                    service->reserved_result_bytes = 0;
+                entry->reserved_hold_bytes = 0;
+            }
         }
+    } else if (entry->reserved_hold_bytes != 0) {
+        /* Failed / non-READ: release hold without retaining a result. */
+        if (service->reserved_result_bytes >= entry->reserved_hold_bytes)
+            service->reserved_result_bytes -= entry->reserved_hold_bytes;
+        else
+            service->reserved_result_bytes = 0;
+        entry->reserved_hold_bytes = 0;
     }
     status = entry->status;
     entry->state = WVM_BLOCK_ENTRY_COMPLETED;

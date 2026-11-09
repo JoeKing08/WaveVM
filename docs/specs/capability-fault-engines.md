@@ -15,6 +15,20 @@ This specification is normative for selecting a runtime mechanism. A missing
 fast feature may select a slower correct mechanism, but never a semantic
 workaround that merely makes a test progress.
 
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Own real local probes and admitted execution/fault mechanisms; memory versions, VM placement, and lifecycle remain with their subsystem authorities. |
+| State and mutation | Probe evidence is scoped to member instance/profile generation. Engine-local mappings and capture state are authorized implementations of the admitted profile, not independent directory state. |
+| Allowed implementation dependencies | Public OS/backend probe adapters, canonical profiles, memory-operation contracts, and kernel capability APIs. No planner/controller internals or mutation of admitted policy. |
+| Interactions and lifetime | Profile selection is in Section 3; capture/publication ordering in Sections 4 and 5. Engine detach follows [lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) after callbacks and RAM/memslot references are safe. |
+| Concurrency and cost | Declare signal/worker context, blocking, dirty queues, copy/protection costs, and publication barriers. Implement independent-page progress; restricted-host fallback cannot silently become a global synchronous path. |
+| Failure and verification | Sections 5 and 9 govern unsupported capability, uncertain capture, and engine checks. Minimum requires correct fallback/KVM paths; broader engine equivalence remains Extended. |
+
 ## 1. Goal and Non-Goals
 
 The goal is to make capability-dependent behavior explicit before a VM starts:
@@ -48,7 +62,7 @@ TCG, including an `AUTO` fallback, must expose that delivery boundary rather
 than claim that a TCG guest OS has passed acceptance. This does not change the
 probe requirements or permit live backend switching.
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - Claiming a capability from kernel version, container image name, or a bound
   device path without a real probe.
@@ -119,7 +133,7 @@ unchanged.
 
 ### 2.3 Capability Classes
 
-At minimum V1 profiles capability records for:
+At minimum Minimum profiles capability records for:
 
 | Class | Examples |
 | --- | --- |
@@ -139,7 +153,7 @@ The control plane resolves an immutable profile into the VM manifest:
 
 ```text
 ExecutionFaultProfile {
-    backend;                      // KVM or TCG for this V1 VM
+    backend;                      // KVM or TCG for this Minimum VM
     context_schema_version;
     dirty_capture_engine;
     read_fault_or_resync_engine;
@@ -204,7 +218,7 @@ conversion.
 `REQUIRE_KVM` never performs this downgrade: if a complete KVM plan cannot be
 admitted, the request fails before any process starts. `REQUIRE_TCG` selects
 TCG directly. A KVM-to-TCG or TCG-to-KVM transition after `RUNNING` remains
-outside V1.
+outside Minimum.
 
 TCG capacity on a KVM-capable node is a separately advertised and accounted
 capacity class. It must not be inferred by copying KVM vCPU capacity, and
@@ -325,9 +339,9 @@ resume guest execution indefinitely.
 | Dirty capture uncertainty | Prevent dependent handoff/flush success; preserve/retry journal only through its operation identity. |
 | Kernel accelerator disappears | Stop using its fast path, then pause/fail unless a quiesced, manifest-valid transition to Mode B is explicitly implemented. |
 | Local child/profile restart with unchanged registered node instance | Invalidate profile/engine context and reprepare against the same manifest before accepting traffic. |
-| Registered node-agent or host replacement | New node instance invalidates the admitted member identity; V1 pauses/fails the VM rather than implicitly preparing a replacement or rebinding it. |
+| Registered node-agent or host replacement | New node instance invalidates the admitted member identity; Minimum pauses/fails the VM rather than implicitly preparing a replacement or rebinding it. |
 
-V1 does not live-switch engine implementation after `RUNNING`. A future
+Minimum does not live-switch engine implementation after `RUNNING`. A future
 transition must quiesce all affected vCPUs, complete/fail outstanding fences,
 validate the replacement engine against the same manifest, atomically publish
 the new profile generation, and resume only after all participants agree.
@@ -355,20 +369,12 @@ outside this specification.
 | `master_core/kernel_backend.c` and `common_include/wavevm_ioctl.h` | Publish capability evidence and bind all acceleration to per-VM contexts. |
 | CI/run scripts | Record probe results/profile selection and fail early when no correct engine exists. |
 
-## 8. Compatibility and Migration
+## 8. Compatibility Boundary
 
-1. Inventory every current fault handler, mprotect transition, dirty-bit clear,
-   KVM dirty-log call, and kernel-assisted memory operation.
-2. Add real host probes with a capability report before changing automatic
-   selection. Preserve current manual test selection only as an explicit
-   compatibility input.
-3. Introduce a per-VM engine context and route existing TCG/KVM paths through
-   `fault_engine_ops` adapters without changing directory semantics.
-4. Make signal handling asynchronous-safe and move page RPC/locking to a
-   dedicated fault worker before claiming the SIGSEGV path is production-safe.
-5. Add profile digest validation to QEMU/node-runtime/executor startup.
-6. Retire guessed KVM, UFFD, or module availability only after a fixture proves
-   that unavailable and degraded hosts fail clearly instead of hanging.
+No legacy host-capability input or engine-selection path is required. Admission
+uses actual host probes and the canonical capability profile. Unsupported or
+degraded profiles fail closed or use only an explicitly permitted pre-admission
+fallback; test fixtures cannot override probe evidence.
 
 ## 9. Acceptance Tests
 

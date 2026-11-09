@@ -13,10 +13,23 @@ interrupt and timer merge, exit semantics, and failure behavior. It relies on
 framing. The admitted manifest supplies executor placement and backend profile;
 `capability-fault-engines.md` supplies the validated local mechanics.
 
-This specification is normative for new vCPU changes. Current structures
-`wvm_kvm_context_t`, `wvm_tcg_context_t`, `wvm_ipc_cpu_run_req`, and
-`wvm_ipc_cpu_run_ack` are a code inventory and compatibility container, not a
-claim that their field set or host-native layout is already a stable ABI.
+This specification is normative for vCPU changes. A source structure name or
+host-native layout does not establish a stable ABI; public context and handoff
+records must satisfy the field, ownership, and encoding rules below.
+
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Origin per-VM/per-vCPU coordinator owns handoff sequence/execution ownership. Executor runs admitted slices; authoritative QEMU owns device effects and interrupt merge. |
+| State and mutation | One vCPU interval has one execution owner. Export/import and result caches are keyed by incarnation/vCPU/sequence/operation; transport or executor state cannot grant another interval. |
+| Allowed implementation dependencies | Public memory fences, wire/identity/routes, selected capability profile, local executor and QEMU device interfaces. No direct access to private directory/controller state or direct remote-executor routing. |
+| Interactions and lifetime | [Memory Section 4.6](memory-consistency.md#46-handoff-fence) owns memory visibility; Section 7 here owns device exits. [Lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) retains CPU objects and completion references until safe. |
+| Concurrency and cost | Section 8 requires scoped exclusion, independent progress, bounded workers/cache and QoS. Declare context copies, callback context and handoff waits. Section 8.1 separates Minimum bounded TCG work from Extended sustained guest progress. |
+| Failure and verification | Sections 6 and 11 require at-most-once execution, result query, interrupt preservation and typed uncertainty. A timeout cannot authorize a second execution interval. |
 
 ## 1. Goal and Non-Goals
 
@@ -32,7 +45,7 @@ For one {vm_id, vm_incarnation, vcpu_index, handoff_sequence},
 the guest instruction interval executes at most once.
 ```
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - KVM-to-TCG or TCG-to-KVM vCPU handoff inside one running VM.
 - Live migration of the authoritative QEMU frontend.
@@ -139,9 +152,9 @@ same deduplication key, context, and semantic payload digest, but may use a new
 route snapshot/delivery attempt after G -> G+1 replacement. That reroute must
 not create a second executable request.
 
-The current `wvm_ipc_cpu_run_req` has `mode_tcg`, `slave_id`, `vcpu_index`, and
-a KVM/TCG context union. The successor must carry the semantic identity above;
-existing fields remain compatibility fields until wire/local ABI transition.
+Local CPU requests must carry the semantic identity above and a validated
+backend/context description. A mode flag, raw slave ID, vCPU index, and native
+context union alone do not establish an admitted request.
 
 ### 3.1 Typed Request Encoding
 
@@ -247,7 +260,7 @@ QEMU-internal assumption cannot establish compatibility across builds.
 
 ### 4.3 Backend Compatibility
 
-V1 supports homogeneous backend pairs only:
+Minimum supports homogeneous backend pairs only:
 
 ```text
 KVM frontend -> KVM local executor
@@ -328,9 +341,8 @@ non-exit statuses. They use exit class `NONE` and carry no CPU context,
 memory-fence result, or event watermark. `EXECUTOR_FAILURE` uses
 `EXECUTOR_ERROR`; `MEMORY_FAILURE` uses `MEMORY_ERROR`.
 
-The current long `VCPU_RUN` timeout and retry window in `logic_core.c` are
-implementation guardrails. They do not make a repeated UDP send semantically
-safe unless the destination cache enforces this contract.
+Timeout/retry windows are liveness bounds. They do not make a repeated UDP
+send semantically safe unless the destination cache enforces this contract.
 
 ## 7. Exit, Device, Interrupt, and Time Semantics
 
@@ -367,8 +379,10 @@ bits that would restart an already initialized AP.
 ## 8. Concurrency and Backpressure
 
 - Ownership exclusion is per VM/incarnation/vCPU, not a global execution lock.
-- Independent vCPUs may hand off concurrently when their memory fences and
-  executor queues permit it.
+- Implement concurrent handoff/progress for independent vCPUs when their
+  memory fences, admitted resources, and executor queues permit it. The
+  Minimum bounded-execution and Extended sustained-guest gates in Section 8.1
+  determine the required workload; they do not permit a global ownership lock.
 - The local executor manager owns bounded worker queues and reports explicit
   overload. It must not drop a vCPU request or hide it behind unbounded waits.
 - Fast QoS is preserved for `VCPU_RUN`, `VCPU_EXIT`, required memory fence
@@ -377,6 +391,9 @@ bits that would restart an already initialized AP.
   or bounded backpressure, but cannot serialize all guest vCPUs permanently.
 - Completion-cache eviction must retain an entry at least through the origin's
   documented retry/query horizon or return a clear `RESULT_EXPIRED` error.
+- State the per-handoff copying, queue, IPC/network-hop, and blocking costs.
+  Context export/import and per-vCPU ownership changes must not unnecessarily
+  hold a lock that prevents unrelated vCPUs or VMs from progressing.
 
 ### 8.1 Same-host coherent-SHM concurrent TCG and bounded `force_local`
 
@@ -428,7 +445,7 @@ remains deferred architecture work (baseline Section 16 deferred list).
 
 #### Role
 
-`force_local` is the named V1 realization of the Section 15 bounded local
+`force_local` is the named Minimum realization of the Section 15 bounded local
 synchronous fallback on the concurrent SHM TCG path. Its contract role is to
 preserve guest correctness for stop_machine / text_poke / softlock-class IPI
 windows when remote AP slices cannot interleave with the local BSP the way
@@ -568,18 +585,12 @@ in the persistent plan or verification records, not in this specification.
 | `wavevm-qemu/.../wavevm-all.c` | Preserve required device/IRQ semantics without making serial execution the universal normal path. |
 | `common_include/wavevm_protocol.h` | Add versioned field maps and capability negotiation. |
 
-## 10. Compatibility and Migration
+## 10. Compatibility Boundary
 
-1. Write context-schema and exit-class tests around current KVM and TCG
-   exporters/importers before moving fields.
-2. Add per-vCPU handoff sequence and completion cache to the node-runtime
-   interface while retaining current request IDs as a compatibility key.
-3. Route current master-to-slave calls through the local executor ABI without
-   changing packet topology.
-4. Add typed duplicate/in-progress/result replay before reducing retries or
-   changing timeout behavior.
-5. Replace host-native context transfer only after all participating endpoints
-   negotiate a common schema version.
+No truncated request ID, untyped context transfer, or independently deployed
+master/slave path is a production alternative. Handoff and completion use the
+full VM-scoped semantic key and the typed local executor ABI. Participants
+reject unsupported context schemas rather than guessing or converting them.
 
 ## 11. Acceptance Tests
 

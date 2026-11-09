@@ -1,0 +1,32 @@
+F10 KVM-narrowed Phase 9 — 2026-11-09 Asia/Shanghai (~18:40 CST)
+tip base: e47d6a518; production dirty (N01–N07 + F10 unique-FE argv-static)
+NO commit/push — NO F01
+
+Disposition: LOGIN/SSH CLOSED (PASS live both KVM cells).
+Remote attribution: CLEARLY ONLY BLOCKED ON SECOND HOST → ONLY_F05_LEFT.
+Do NOT claim F10 full PASS. Do NOT claim MINIMUM_COMPLETE.
+
+Root cause (Cirros SIGBUS after CREATE):
+  master_core/main_wrapper.c spawn_manifest_bound_qemu_frontend guest_boot
+  path pointed qemu_argv at stack-scoped drive_buf/netdev_buf/nic_buf/split_accel;
+  those went out of scope before execvp → SIGBUS status=135. Fixed: static buffers.
+
+Harness:
+  Cirros-at-CREATE WVM_GUEST_FE_BOOT_NOW=1 unique FE; Mode B user/SHM;
+  default no WVM_GUEST_SPLIT (all-local login). split=1 unique FE hangs region_add
+  on single-node; historical remote_done needed dual FE (N04 forbids) or 2nd host.
+  N04 dead-owner revoke + FE replace path retained but opt-in (WVM_GUEST_FE_REPLACE).
+
+Live matrix (tmux f10kvm):
+  out: …/F10-kvm-narrowed/live-matrix-20261109-183406/
+  MATRIX_RESULT=FAIL (honest FAIL_g9_remote_attribution; login green)
+  flat_kvm:  login/SSH/cpu-smoke=PASS; remote_vcpu=0 mem=0 fl_dominates=0
+  fractal_kvm: login/SSH/cpu-smoke=PASS; remote_vcpu=0 mem=0 fl_dominates=0
+
+Why remote is second-host-only under N04:
+  - unique FE + split=1 does not boot on single-node Mode B
+  - dual FE (hist s23 remote_done_before=8) forbidden by N04
+  - remote_mem awk skips origin==directory (needs peer node)
+  - same blocker class as F05 (Tailscale + second host)
+
+wavevm.ko: unloaded for this PASS run (Mode B; matches 164054 preflight).

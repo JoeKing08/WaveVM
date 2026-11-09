@@ -38,6 +38,7 @@
 #include "runtime_profile_publication.h"
 #include "membership_enrollment.h"
 #include "gateway_drain.h"
+#include "subscriber_invalidate_bridge.h"
 
 struct local_authentication;
 
@@ -85,6 +86,17 @@ struct admission_workspace {
     size_t route_ack_set_bytes_capacity;
     size_t route_ack_capacity;
     int initialized;
+    /*
+     * N01: exclusive in-flight CREATE lease on this shared workspace.
+     * F09 yields the owner lock across network waits; without this lease a
+     * second CREATE can reset prepared_vm/route/activation while the first
+     * still uses them. Busy second CREATE must fail-closed (BACKPRESSURE),
+     * not clobber. Holder may still yield the owner lock.
+     */
+    int tx_held;
+    pthread_t tx_holder;
+    uint32_t tx_vm_id;
+    uint64_t tx_vm_inc;
 };
 
 struct control_context {
@@ -106,6 +118,8 @@ struct control_context {
     uint32_t fence_vm_ids[64];
     uint64_t fence_vm_incs[64];
     size_t fence_count;
+    /* N01: shared admission workspace (single prepared_* set). */
+    struct admission_workspace *workspace;
 };
 
 struct runtime_health_probe_context {
@@ -307,18 +321,35 @@ static void control_owner_unlock(struct control_context *context)
     pthread_mutex_unlock(&context->lock);
 }
 
+static int control_owner_fence_add(struct control_context *context,
+                                  uint32_t vm_id, uint64_t vm_incarnation,
+                                  char *error, size_t error_len);
+
 /* F09: drop owner lock around blocking admission RPC; nested-safe per thread. */
 static __thread unsigned control_owner_tls_yield_depth;
 
 static void control_owner_before_network(void *opaque)
 {
     struct control_context *context = opaque;
+    struct admission_workspace *workspace;
 
     if (!context || !context->lock_initialized || !context->lock_held) {
         return;
     }
     if (!pthread_equal(context->lock_owner, pthread_self())) {
         return;
+    }
+    /*
+     * N01: before F09 yield, ensure the in-flight CREATE's VM is fenced.
+     * Identity may already be bound in prepare wrap; re-assert here so a
+     * path that reached network without prepare wrap still cannot interleave.
+     */
+    workspace = context->workspace;
+    if (workspace && workspace->tx_held &&
+        pthread_equal(workspace->tx_holder, pthread_self()) &&
+        workspace->tx_vm_id != 0 && workspace->tx_vm_inc != 0) {
+        (void)control_owner_fence_add(context, workspace->tx_vm_id,
+                                      workspace->tx_vm_inc, NULL, 0);
     }
     control_owner_tls_yield_depth++;
     if (control_owner_tls_yield_depth == 1U) {
@@ -409,6 +440,114 @@ static void control_owner_fence_remove(struct control_context *context,
             return;
         }
     }
+}
+
+
+/* N01: acquire exclusive use of the single admission workspace. */
+static int admission_workspace_try_acquire(struct control_context *context,
+                                          char *error, size_t error_len)
+{
+    struct admission_workspace *workspace;
+
+    if (!context || !context->workspace) {
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "N01: admission workspace is not bound to control owner");
+        }
+        return -EINVAL;
+    }
+    workspace = context->workspace;
+    if (workspace->tx_held) {
+        if (pthread_equal(workspace->tx_holder, pthread_self())) {
+            return 0;
+        }
+        if (error && error_len) {
+            snprintf(error, error_len,
+                     "N01: admission workspace busy (concurrent CREATE)");
+        }
+        return -EBUSY;
+    }
+    workspace->tx_held = 1;
+    workspace->tx_holder = pthread_self();
+    workspace->tx_vm_id = 0;
+    workspace->tx_vm_inc = 0;
+    return 0;
+}
+
+static void admission_workspace_bind_vm(struct control_context *context,
+                                       uint32_t vm_id, uint64_t vm_incarnation)
+{
+    struct admission_workspace *workspace;
+
+    if (!context || !context->workspace || vm_id == 0 || vm_incarnation == 0) {
+        return;
+    }
+    workspace = context->workspace;
+    if (!workspace->tx_held ||
+        !pthread_equal(workspace->tx_holder, pthread_self())) {
+        return;
+    }
+    workspace->tx_vm_id = vm_id;
+    workspace->tx_vm_inc = vm_incarnation;
+    (void)control_owner_fence_add(context, vm_id, vm_incarnation, NULL, 0);
+}
+
+static void admission_workspace_release(struct control_context *context)
+{
+    struct admission_workspace *workspace;
+
+    if (!context || !context->workspace) {
+        return;
+    }
+    workspace = context->workspace;
+    if (!workspace->tx_held) {
+        return;
+    }
+    if (!pthread_equal(workspace->tx_holder, pthread_self())) {
+        return;
+    }
+    workspace->tx_held = 0;
+    workspace->tx_vm_id = 0;
+    workspace->tx_vm_inc = 0;
+}
+
+/*
+ * N01: wrap authority prepare_input so the VM fence is installed immediately
+ * after durable BEGIN identity exists and BEFORE any participant RPC can
+ * yield the owner lock (F09). TLS keeps the wrap bound to this CREATE only.
+ */
+struct n01_prepare_wrap {
+    struct control_context *control;
+    wvm_admission_input_prepare_fn inner;
+    void *inner_ctx;
+};
+
+static int n01_prepare_input_wrap(
+    void *context, const struct wvm_vm_request *request,
+    const struct wvm_coordinator_transaction *transaction,
+    struct wvm_admission_orchestrator_input *input, char *error,
+    size_t error_len)
+{
+    struct n01_prepare_wrap *wrap = context;
+    int rc;
+    if (!wrap || !wrap->inner) {
+        if (error && error_len) {
+            snprintf(error, error_len, "N01: prepare wrap is not configured");
+        }
+        return -1;
+    }
+    /*
+     * BEGIN already filled transaction identity. Fence before reset/network
+     * so a concurrent lifecycle op on this VM cannot interleave mid-CREATE.
+     */
+    if (transaction && transaction->vm_id != 0 &&
+        transaction->vm_incarnation != 0) {
+        admission_workspace_bind_vm(wrap->control, transaction->vm_id,
+                                    transaction->vm_incarnation);
+    }
+    rc = wrap->inner(wrap->inner_ctx, request, transaction, input, error,
+                     error_len);
+    return rc;
 }
 
 static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
@@ -524,19 +663,43 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         free(constraints);
         return 0;
     }
-    admission_result =
-        wvm_admission_orchestrator_run(&admission_input, error, error_len);
+    /*
+     * N01: take exclusive admission-workspace lease before prepare/reset.
+     * Second overlapping CREATE fail-closes with BACKPRESSURE rather than
+     * sharing the resettable prepared_* / route / activation buffers.
+     * Owner lock may still yield (F09); lease survives the yield.
+     */
+    if (admission_workspace_try_acquire(context, error, error_len) != 0) {
+        control_owner_unlock(context);
+        result->status_code = WVM_CONTROL_RESULT_BACKPRESSURE;
+        free(storage_assignments);
+        free(constraints);
+        return 0;
+    }
+    {
+        struct n01_prepare_wrap prepare_wrap;
+
+        memset(&prepare_wrap, 0, sizeof(prepare_wrap));
+        prepare_wrap.control = context;
+        if (admission_input.prepare_input) {
+            prepare_wrap.inner = admission_input.prepare_input;
+            prepare_wrap.inner_ctx = admission_input.prepare_input_context;
+            admission_input.prepare_input = n01_prepare_input_wrap;
+            admission_input.prepare_input_context = &prepare_wrap;
+        }
+        admission_result =
+            wvm_admission_orchestrator_run(&admission_input, error, error_len);
+    }
     entry =
         wvm_control_plane_find_request(context->plane, vm_request.request_id);
     /*
-     * F09: once the admission tx has a VM identity, fence it for the rest of
-     * this owner callback (incl. readiness RPCs that yield the lock).
+     * Fence should already be installed in N01 prepare wrap / before_network.
+     * Re-assert if identity exists (covers replay / readiness resume paths).
      */
     if (entry && entry->transaction.vm_id != 0 &&
         entry->transaction.vm_incarnation != 0) {
-        (void)control_owner_fence_add(context, entry->transaction.vm_id,
-                                      entry->transaction.vm_incarnation, NULL,
-                                      0);
+        admission_workspace_bind_vm(context, entry->transaction.vm_id,
+                                    entry->transaction.vm_incarnation);
     }
     if (admission_result == 0 &&
         request_disposition == WVM_CONTROL_PLANE_REQUEST_REPLAY &&
@@ -549,6 +712,7 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
             admission_authority->context, error, error_len);
     }
     if (!entry && context->plane->entry_count == context->plane->entry_capacity) {
+        admission_workspace_release(context);
         control_owner_fence_remove(context, transaction.vm_id,
                                       transaction.vm_incarnation);
         control_owner_unlock(context);
@@ -558,6 +722,7 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         return 0;
     }
     if (!entry) {
+        admission_workspace_release(context);
         control_owner_fence_remove(context, transaction.vm_id,
                                       transaction.vm_incarnation);
         control_owner_unlock(context);
@@ -571,6 +736,7 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
         result->status_code = WVM_CONTROL_RESULT_IN_PROGRESS;
     } else if (admission_result != 0 ||
                entry->transaction.state != WVM_LIFECYCLE_RUNNING) {
+        admission_workspace_release(context);
         control_owner_fence_remove(context, transaction.vm_id,
                                       transaction.vm_incarnation);
         control_owner_unlock(context);
@@ -613,7 +779,8 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
             }
             entry = wvm_control_plane_find_request(context->plane,
                                                    transaction.request_id);
-            control_owner_fence_remove(context, transaction.vm_id,
+            admission_workspace_release(context);
+        control_owner_fence_remove(context, transaction.vm_id,
                                       transaction.vm_incarnation);
         control_owner_unlock(context);
             result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
@@ -644,6 +811,7 @@ static int apply_create_vm(void *opaque, const struct wvm_envelope *request,
     memcpy(result->manifest_id, transaction.manifest_id,
            sizeof(result->manifest_id));
     result->route_scope_id = transaction.route_scope_key.route_scope_id;
+    admission_workspace_release(context);
     control_owner_fence_remove(context, transaction.vm_id,
                                     transaction.vm_incarnation);
     control_owner_unlock(context);
@@ -1390,6 +1558,16 @@ static int admission_workspace_reset(
         snprintf(error, error_len, "admission workspace is not configured");
         return -1;
     }
+    /*
+     * N01: refuse reset while another CREATE holds the workspace lease.
+     * Same-thread holder (normal prepare path) may reset.
+     */
+    if (workspace->tx_held &&
+        !pthread_equal(workspace->tx_holder, pthread_self())) {
+        snprintf(error, error_len,
+                 "N01: refusing reset of admission workspace owned by another CREATE");
+        return -1;
+    }
     capture = &workspace->membership_capture;
     if (wvm_membership_controller_capture(workspace->membership_controller,
                                           capture, error, error_len) != 0 ||
@@ -1606,44 +1784,72 @@ static int execution_fail_closed_hook(
             &probe->workspace->membership_capture, error, error_len) != 0) {
         return -1;
     }
-    for (i = 0; i < probe->plane->runtime_manifest_entry_count; i++) {
-        const struct wvm_control_plane_runtime_manifest_entry *entry =
-            &probe->plane->runtime_manifest_entries[i];
-        char local_error[256];
+    {
+        size_t failed = 0;
+        char first_error[256];
 
-        if (memcmp(entry->candidate_manifest_digest,
-                   transaction->candidate_manifest_digest,
-                   sizeof(transaction->candidate_manifest_digest)) != 0) {
-            continue;
+        first_error[0] = '\0';
+        for (i = 0; i < probe->plane->runtime_manifest_entry_count; i++) {
+            const struct wvm_control_plane_runtime_manifest_entry *entry =
+                &probe->plane->runtime_manifest_entries[i];
+            char local_error[256];
+
+            if (memcmp(entry->candidate_manifest_digest,
+                       transaction->candidate_manifest_digest,
+                       sizeof(transaction->candidate_manifest_digest)) != 0) {
+                continue;
+            }
+            matched++;
+            local_error[0] = '\0';
+            /*
+             * N03: do not abandon remaining reachable participants after the
+             * first QUIESCE failure. Unreachable members are recorded; others
+             * must still be fail-closed.
+             */
+            if (wvm_ctl_quiesce_runtime_execution(
+                    probe->plane, transaction, entry, probe->member_capacity,
+                    probe->max_vcpus, &probe->workspace->transport, local_error,
+                    sizeof(local_error)) != 0) {
+                failed++;
+                if (first_error[0] == '\0') {
+                    snprintf(first_error, sizeof(first_error), "%s",
+                             local_error[0] ? local_error
+                                            : "F08/N03 QUIESCE_RUNTIME failed");
+                }
+                fprintf(stderr,
+                        "[wvm_ctl] N03: QUIESCE_RUNTIME failed for one "
+                        "participant (continuing) vm=%u node=%u inst=%llu "
+                        "err=%s\n",
+                        (unsigned)transaction->vm_id,
+                        (unsigned)entry->physical_node_id,
+                        (unsigned long long)entry->expected_node_instance_id,
+                        local_error[0] ? local_error : "(none)");
+                continue;
+            }
+            quiesced++;
         }
-        matched++;
-        local_error[0] = '\0';
-        if (wvm_ctl_quiesce_runtime_execution(
-                probe->plane, transaction, entry, probe->member_capacity,
-                probe->max_vcpus, &probe->workspace->transport, local_error,
-                sizeof(local_error)) != 0) {
+        if (matched == 0) {
+            fprintf(stderr,
+                    "[wvm_ctl] F08: no durable runtime entries to QUIESCE for "
+                    "vm=%u inc=%llu (journal state still advanced)\n",
+                    (unsigned)transaction->vm_id,
+                    (unsigned long long)transaction->vm_incarnation);
+        } else {
+            fprintf(stderr,
+                    "[wvm_ctl] F08/N03: QUIESCE_RUNTIME vm=%u inc=%llu "
+                    "matched=%zu quiesced=%zu failed=%zu state=%u\n",
+                    (unsigned)transaction->vm_id,
+                    (unsigned long long)transaction->vm_incarnation, matched,
+                    quiesced, failed, (unsigned)new_state);
+        }
+        if (failed > 0) {
             if (error && error_len) {
                 snprintf(error, error_len, "%s",
-                         local_error[0] ? local_error
-                                        : "F08 QUIESCE_RUNTIME failed");
+                         first_error[0] ? first_error
+                                        : "F08/N03 QUIESCE_RUNTIME incomplete");
             }
             return -1;
         }
-        quiesced++;
-    }
-    if (matched == 0) {
-        fprintf(stderr,
-                "[wvm_ctl] F08: no durable runtime entries to QUIESCE for "
-                "vm=%u inc=%llu (journal state still advanced)\n",
-                (unsigned)transaction->vm_id,
-                (unsigned long long)transaction->vm_incarnation);
-    } else {
-        fprintf(stderr,
-                "[wvm_ctl] F08: QUIESCE_RUNTIME ok vm=%u inc=%llu "
-                "matched=%zu quiesced=%zu state=%u\n",
-                (unsigned)transaction->vm_id,
-                (unsigned long long)transaction->vm_incarnation, matched,
-                quiesced, (unsigned)new_state);
     }
     if (error && error_len) {
         error[0] = '\0';
@@ -1986,6 +2192,7 @@ int main(int argc, char **argv)
     wvm_vm_namespace_allocator_init(&namespace_allocator, namespace_records,
                                     options.capacity, 1);
     control_context.plane = &plane;
+    control_context.workspace = &admission_workspace;
     control_context.state_directory = options.state_directory;
     control_context.namespace_allocator = &namespace_allocator;
     control_context.request_list_capacity = options.capacity;
@@ -2144,6 +2351,11 @@ int main(int argc, char **argv)
         goto close_plane;
     }
     admission_workspace.initialized = 1;
+    /* N05: ctl fans out membership failure → directory subscriber invalidate. */
+    wvm_ctl_subscriber_invalidate_bridge_bind(
+        &plane.membership_controller, &admission_workspace.transport,
+        &admission_workspace.membership_capture);
+
 
     memset(&membership_config, 0, sizeof(membership_config));
     membership_config.members = members;

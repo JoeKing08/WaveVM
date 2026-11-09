@@ -1,0 +1,24 @@
+N06 route compile refuse >64 listeners — 2026-11-09 Asia/Shanghai
+tip base: e47d6a518; production dirty
+NO commit/push
+
+Disposition: PASS (directed) — explicit refuse, no silent clamp
+
+Production change:
+  common_include/wavevm_admission_authority_owner.c::owner_compile_route_plan
+  - If node_listener_plan_count > override workspace CAP (64), return error
+    "N06: listener_plan_count … exceeds ingress override budget …"
+    instead of clamping and falling back to membership sidecar ports.
+
+Directed evidence:
+  tests/control-plane/test_n06_listener_budget.c → PASS
+    (64 accepted; 65 refuses with N06:)
+  tests/control-plane/test_admission_authority_owner.sh → PASS
+  console: …/N06-listener-budget/console.txt
+  authority_owner: …/N06-listener-budget/authority_owner.txt
+
+Honest limits:
+  - Workspace still fixed at 64; enlarge is a separate capacity change.
+  - Large-topology vnode PASS remains orthogonal (does not cover this clamp).
+
+Next: N07 block READ result budget.

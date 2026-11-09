@@ -1,0 +1,13 @@
+tests/e2e/test_guest_smoke.sh:238:# N04/F10: KVM runtime may have auto-spawned a paused -S FE for readiness.
+tests/e2e/test_guest_smoke.sh:242:    log "N04/F10: reclaim unique KVM FE — stop auto-spawned paused frontends before Cirros"
+tests/e2e/test_guest_smoke.sh:534:fl_dominates=0
+tests/e2e/test_guest_smoke.sh:536:    fl_dominates=1
+tests/e2e/test_guest_smoke.sh:539:    fl_dominates=1
+tests/e2e/test_guest_smoke.sh:543:    fl_dominates=1
+tests/e2e/test_guest_smoke.sh:545:echo "fl_dominates=$fl_dominates" >>"$art_dir/result.txt"
+tests/e2e/test_guest_smoke.sh:546:if [[ "$fl_dominates" == "1" ]]; then
+tests/e2e/test_guest_smoke.sh:547:    log "ERROR: F10 fl_dominates (force_delta=$force_delta local_delta=$local_delta remote_delta=$remote_delta)"
+tests/e2e/test_guest_smoke.sh:549:    echo 'OVERALL=FAIL_f10_fl_dominates' >>"$art_dir/result.txt"
+tests/e2e/test_guest_minimum_matrix.sh:39:  echo "cells_default=flat_kvm,fractal_kvm (Minimum Phase 9)"
+tests/e2e/test_guest_minimum_matrix.sh:59:selected=(${WVM_GUEST_CELLS:-flat_kvm fractal_kvm})
+tests/e2e/test_guest_minimum_matrix.sh:90:        echo "honesty=EXTENDED_Phase10_TCG_guest_login_not_Minimum_gate" >"$cell_dir/HONESTY.txt"

@@ -1,0 +1,22 @@
+[19:52:30] [tcg/B] cleanup
+[19:52:30] [tcg/B] ART_DIR=/home/joeking/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195230
+[19:52:30] [tcg/B] TCG Mode B/B: do not load wavevm.ko; temporarily hide /dev/kvm for pure TCG
+[19:52:30] [tcg/B] tailscale reuse socket=/run/tailscale/tailscaled.sock host=wavevm-f05-b ip=100.114.246.92 peer=wavevm-f05-a
+[19:52:30] [tcg/B] peer ip 100.116.196.65
+[19:52:30] [tcg/B] F05 env role=b host=429a0a31f87843f9 NUMA=2048:1024 MEM=3072
+[19:52:30] [tcg/B] start gateway gw_l1b listen=19420 upstream=100.116.196.65:19520 ctrl=19421
+[19:52:30] [tcg/B] start gateway gw_sidecar_b listen=19220 upstream=127.0.0.1:19420 ctrl=19221
+[19:52:30] [tcg/B] start slave1/master1
+[19:52:30] [tcg/B] node B ready; holding for node A test
+[19:53:30] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:53:30] [tcg/B] node B hold 1m
+[19:54:30] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:54:30] [tcg/B] node B hold 2m
+[19:55:30] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:55:31] [tcg/B] node B hold 3m

@@ -1,0 +1,146 @@
+WaveVM Minimum gap — combined audit (Grok self-audit + 小浪 cross-audit)
+======================================================================
+When: 2026-11-09 ~20:30+ CST Asia/Shanghai
+Who: Grok Bot (summary / prior self-auditor) + 小浪 (independent cross-auditor id 2faa8a3e-…)
+Repo: machineId 2e4d3ec5-e1b1-4a36-9903-de6309119499 `/workspaces/WaveVM`
+Tip base: e47d6a5189b0134ca48d9e9af3e41a3e2e8401f1 (short e47d6a518) ✓
+Workspace: dirty (docs + production fixes + evidence uncommitted); audited WORKING TREE as-is
+2604 second host: offline this round (Joe closed) — F05 cross-host not re-run
+
+Contrast sources (authority for each side):
+  - Grok self-audit:
+    audit-evidence/fix-blockers-20261109/MINIMUM_GAP_SELF_AUDIT_DIRTY_CHARTER_20261109-1957.txt
+  - 小浪 cross-audit (raw):
+    audit-evidence/fix-blockers-20261109/xiaolang-cross-audit-20261109-2030.md
+    (also box /workspace/wavevm-min-xaudit-20261109.md)
+
+MINIMUM_COMPLETE: NOT_CLAIMED / NOT_CLAIMABLE
+No COMPLETE claim. F01 remains Extended. No further code fix this round.
+No commit/push in this executor turn (parent batches after Grok session backup).
+
+======================================================================
+1) Executive bottom line
+======================================================================
+Both sides agree:
+  - MINIMUM_COMPLETE cannot be signed / claimed.
+  - Closest honest state remains PARTIAL across §1.1 / Phases 0–8; Phase 9 FAIL to close.
+  - F01 / TCG guest login correctly stays Extended — no scope error.
+  - F05 has real VCPU_RUN RET evidence (195252/195230) but fence-only harness still ERROR → NOT COMPLETE.
+  - F10 KVM login/SSH green on flat+fractal; remote_vcpu/mem attribution still FAIL → not Phase-9 closed.
+
+Adopted stricter closeout honesty from 小浪 (this summary):
+  - N05 downgraded PASS directed → PARTIAL (wrong oracle: F07 same-proc; no bridge/0x0307 live).
+  - Reject F05 “RET path CLOSED” and F10 “CLOSED for login/SSH” as closeout wording.
+  - Under-weighted gaps (legacy master path, typed MEM_FAULT ENOTCONN→UDP, stale NOTES_F05,
+    ACTIVATION_DECIDED not in MUST-FIX chain, rebuild reproducibility) are now first-class.
+
+======================================================================
+2) §1.1 agreement table (Grok vs 小浪)
+======================================================================
+| Item | Grok (1957) | 小浪 | Combined closeout |
+|---|---|---|---|
+| A1 lifecycle + ACTIVATION_DECIDED | PARTIAL | Agree PARTIAL (weaker: no live ACTIVATION) | PARTIAL — cold-start replay still zero live |
+| A2 identity/remote alloc | PARTIAL | Agree PARTIAL | PARTIAL — KVM remote=0; F05 RET is TCG slice only |
+| A3 flat/fractal ACK snapshots | PARTIAL | Agree PARTIAL | PARTIAL — N06 directed; not typed ACK acceptance cell |
+| A4 KVM login + remote | PARTIAL (login PASS / remote FAIL) | Agree PARTIAL; **reject “CLOSED for login”** | PARTIAL — login green ≠ §1.1 closed (binds remote) |
+| A5 TCG contract | PARTIAL→RET evidenced; harness not green | Agree PARTIAL | PARTIAL — RET real; harness ERROR ≠ Phase9 PASS |
+| A6 multi Mode B | PARTIAL | Agree PARTIAL | PARTIAL — matrix not re-run |
+| A7 Mode A isolation | PARTIAL / fail-closed | Basically agree PARTIAL | PARTIAL — no new acceptance pack this round |
+| A8 join/drain/successor | PARTIAL | Agree PARTIAL | PARTIAL — bridge code; live STALE unproven |
+| A9 backpressure/honesty | PARTIAL | Agree PARTIAL | PARTIAL — directed OK; Phase9 concurrency profile missing |
+| Minimum usable | FAIL to claim / PARTIAL | Agree: not claimable | NOT claimable |
+
+======================================================================
+3) Phase 0–9 agreement
+======================================================================
+| Phase | Grok | 小浪 | Combined |
+|---|---|---|---|
+| P0–P8 | PARTIAL each | Agree; **strengthen P1/P3** | PARTIAL; P1 F05 still wavevm_node_master+stub planner; P3 typed MEM_FAULT ENOTCONN→UDP |
+| P9 | FAIL to claim closed | Agree FAIL / not closed | FAIL — F10 MATRIX FAIL_g9; F05 harness ERROR; STATUS NOT_CLAIMED |
+
+======================================================================
+4) MUST-FIX N01–N07 / F05 / F10 / F01
+======================================================================
+| Item | Grok 1957 | 小浪 | Adopted for closeout |
+|---|---|---|---|
+| N01 | PASS directed | Agree PASS directed | PASS directed (serialize/fail-closed) |
+| N04 | PASS directed | Agree PASS directed | PASS directed (异PID second FE reject) |
+| N03 | PASS directed | Agree PASS directed (thin) | PASS directed (thin; no live soak) |
+| N02 | PASS directed | Agree PASS directed (weak: path≠inode) | PASS directed (weak proof vs baseline §16) |
+| N05 | PASS directed | **DISAGREE → PARTIAL** | **PARTIAL** — code/bridge present; cited oracle is F07 same-proc only; no 0x0307 / cross-proc STALE |
+| N06 | PASS directed | Agree | PASS directed (>64 explicit refuse) |
+| N07 | PASS directed | Agree | PASS directed (reserved_result_bytes pre-claim) |
+| F05 | PARTIAL RET; harness ERROR; NOT COMPLETE | Agree PARTIAL/NOT COMPLETE; **reject “RET CLOSED” as F05 closed** | PARTIAL / NOT COMPLETE |
+| F10 | login CLOSED wording; remote FAIL | Agree remote FAIL; **reject login CLOSED wording** | PARTIAL — remote FAIL; login sub-item ≠ closeout |
+| F01 | Extended; do not touch | Agree | Extended OK |
+| MINIMUM_COMPLETE | NOT_CLAIMED | Agree; cannot upgrade | NOT_CLAIMED / NOT_CLAIMABLE |
+
+N05 disagreement detail (adopt 小浪):
+  Grok fix-list/self-audit called N05 PASS directed citing
+  fix-blockers-20261109/N05-subscriber-crossproc/ and bridge strong-symbol story.
+  小浪 opened memory_service.txt and found only F07 same-process EVID lines —
+  zero 0x0307 / bridge fanout / cross-process STALE; no test_n05*.
+  Closeout honesty: keep historical directed notes, mark cross-audit STATUS = PARTIAL
+  pending true bridge→0x0307→STALE oracle.
+
+======================================================================
+5) Gaps 小浪 says Grok missed / under-weighted (all 11)
+======================================================================
+1. N05 evidence mismatch — PASS directed overstated; oracle wrong → PARTIAL.
+2. F05 violates typed-only — ci_dual_node.sh still starts wavevm_node_master +
+   stub planner /tmp/…/wvm_ctl_plan; goal wants typed runtime as sole production path.
+3. RET via UDP fallback; typed MEM_FAULT still ENOTCONN — Phase 3/9 checked-memory
+   hole on production typed service.
+4. NOTES_F05.txt stale — still says RET incomplete (~19:27) while ART NOTES claim RET.
+5. “RET path CLOSED” too strong — same ART: q_alive=NO, remote=0, handoff=0,
+   vm.log truncated, tcp::2226 forward fail, overlap 195244.
+6. slave_id=4294967295 (-1) still on VCPU_RUN send line despite RET received.
+7. Master rebuild segfault / .f05fix-5s binary reproducibility unproven from clean dirty-tree rebuild.
+8. F10 “CLOSED for login/SSH” conflicts with Phase-9 gate that binds remote evidence.
+9. ACTIVATION_DECIDED cold-start not in MUST-FIX chain though goal marks it Minimum-hard.
+10. N02 path-string equality ≠ inode st_dev/st_ino same-backing proof (baseline §16).
+11. F04 historical multi-context=64 vs verbal “fail-closed until isolation acceptance” tension.
+
+======================================================================
+6) Punch-list adopted for next fix round (from 小浪 §4)
+======================================================================
+1. F05 single-run hygiene: clear overlap/FE/port 2226 → fence-only harness PASS while
+   keeping RET+guest_vcpu+mem evidence; sync NOTES_F05.txt.
+2. F05 migrate to typed node_runtime + V1 memory (kill ENOTCONN / UDP-only);
+   drop closeout dependency on wavevm_node_master / stub planner.
+3. F10 second-host (or lawful remote helper) re-run flat/fractal; remote_vcpu/mem>0;
+   refuse force_local masquerade; MATRIX true PASS.
+4. N05 true oracle: ctl bridge → 0x0307 → runtime global invalidate / STALE;
+   replace F07-only console.
+5. ACTIVATION_DECIDED cold-start live: persist → kill/restart coordinator →
+   replay/reconcile/compensate; put into MUST-FIX or Phase-9 cell.
+6. Phase-9 pack: Mode B multi-VM/same-host isolation re-run; join/cordon/drain/successor
+   snapshot live; representative concurrency profile; Mode A two-VM isolation or prove
+   SINGLE_CONTEXT reject.
+7. Clean source rebuild of master/qemu/slave before new evidence (no unreproducible binary patch).
+8. Drop misleading “CLOSED” wording on F10 login and F05 RET path; unify PARTIAL until
+   Phase-9 cell green.
+9. Still banned unless Joe opens: MINIMUM_COMPLETE, F01/Extended start, commit/push.
+
+======================================================================
+7) Explicit non-claims
+======================================================================
+- MINIMUM_COMPLETE: No / NOT_CLAIMED / NOT_CLAIMABLE
+- F05 COMPLETE: No (RET evidence yes; clean fence-only harness PASS no)
+- F10 COMPLETE / remote attribution: No
+- F10 “CLOSED for login/SSH” as §1.1/Phase-9 closeout: No (wording rejected)
+- F05 “RET path CLOSED” as F05/Phase-9 closeout: No (wording rejected)
+- N05 PASS directed for closeout: No — adopted PARTIAL pending true oracle
+- Cirros / TCG guest login as Minimum gate: No (Extended / F01)
+- No commit/push in this executor turn
+
+======================================================================
+8) STOP / next
+======================================================================
+Per Joe t531u:
+  - This combined audit written.
+  - Session backups: refresh DSH / Claude Code / Codex only on this VM;
+    Grok Bot session backup deferred to parent.
+  - No further code fix this round; 2604 closed.
+  - Parent will batch commit+push after Grok backup — executor does not commit/push.
+

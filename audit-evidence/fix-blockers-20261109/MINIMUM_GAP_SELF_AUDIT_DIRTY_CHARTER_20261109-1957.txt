@@ -1,0 +1,151 @@
+WaveVM Minimum gap self-audit vs NEW dirty charter
+==================================================
+When: 2026-11-09 ~19:57 CST Asia/Shanghai
+Who: Grok Bot executor (post-F05 pagesync→RET slice; Joe t529u / pt529u: fix then audit STOP)
+Repo: /workspaces/WaveVM tip base e47d6a518 (workspace dirty; no commit/push)
+Charter: docs/wavevm-refactor-roadmap.md + docs/wavevm-architecture-baseline.md
+         + docs/specs/* (dirty, uncommitted) — Phase 0–9 = Minimum; 10–13 = Extended
+Authority worklist: audit-evidence/MINIMUM_FIX_LIST_20261109.txt (updated ~19:56)
+MINIMUM_COMPLETE: NOT_CLAIMED
+
+Method: line-oriented against roadmap §1.1 Minimum bullets + Phase 0–9
+deliverable intent + baseline “Minimum usable system” + §16 TCG boundary.
+Evidence cited is directed/unit unless marked live. Directed PASS ≠ live
+production acceptance for that Phase-9 cell.
+Delta vs prior audit 20261109-1927: F05 VCPU_RUN RET evidence landed; harness
+still ERROR; no COMPLETE claim.
+
+======================================================================
+A. Roadmap §1.1 Minimum requirements (verdict per bullet)
+======================================================================
+
+A1. Manifest-bound create/activate/start/pause/stop/partial cleanup/restart
+    reconciliation by one active coordinator
+    Verdict: PARTIAL
+    Evidence: typed admission/lifecycle paths + N01 workspace lease directed
+      (fix-blockers-20261109/N01-admission-workspace/). Live multi-CREATE race
+      and cold-start ACTIVATION_DECIDED replay not re-proven this session.
+    Gap: durable activation fence restart replay / compensating cleanup live
+      matrix still thin vs baseline §16 coordinator restart obligation.
+
+A2. Explicit VM identity/incarnation, host placement, remote CPU/memory
+    allocation, independent leases, capability selection
+    Verdict: PARTIAL
+    Evidence: manifest/admission specs wired; N04 unique FE gate directed PASS.
+    Gap: remote CPU/memory *live attribution* still open for KVM F10 g9;
+      F05 TCG remote RET now has directed dual-node evidence (below) but not
+      a Phase-9 acceptance matrix cell.
+
+A3. Flat and fractal routing with ACK immutable snapshots; stable identity keys
+    Verdict: PARTIAL
+    Evidence: Q02-style gateway drain directed history; N06 listener budget
+      directed PASS (fix-blockers-20261109/N06-listener-budget/).
+    Gap: full flat+fractal acknowledged snapshot live under dual-host F05 not
+      the primary evidence of this run (F05 uses legacy CLI dual-node harness).
+
+A4. KVM guest login or SSH with evidence of remote vCPU and remote memory
+    Verdict: PARTIAL (login/SSH PASS; remote evidence FAIL on single host)
+    Evidence: F10 live-matrix-20261109-183406 flat_kvm+fractal_kvm
+      guest_login=PASS guest_ssh=PASS; OVERALL=FAIL_g9_remote_attribution
+      (remote_vcpu=0 mem=0; all-local under N04 unique FE).
+    Gap: needs second-host remote helper path for KVM (coupled to F05/F10).
+
+A5. Bounded real TCG execution contract (CPU/memory results, ownership,
+    handoff/device/atomic, errors, cleanup) — NOT TCG guest OS usable
+    Verdict: PARTIAL→stronger (RET path evidenced; harness not green)
+    Evidence: F05 dual-node ART A dual-node-tcg-20261109-195252 + B 195230:
+      fence push-barrier done; VCPU_RUN vcpu=2; **VCPU_RUN RET**
+      target=1 rpc_ret=0 ack_status=0 ack_mode=1; B guest_vcpu=2;
+      UDP MEM_READ ok ×9 (CR3+pages); TCG ack; VCPU_EXIT demux.
+      Decode FIX retained (truncated TCG wire). Proxy gateway seeded from
+      VCPU_RUN so UP-MEM_READ no longer dropped.
+    Gap: ci_dual_node fence-only harness ERROR (FE QEMU dead by poll;
+      this ART vm.log truncated → remote/handoff grep=0). Not a clean
+      Phase-9 acceptance PASS. No cirros/login claimed (correctly Extended).
+
+A6. Multiple Mode B VMs + multiple compute instances on one host (aggregate
+    physical_host_id; exclusive names/ports/SHM)
+    Verdict: PARTIAL
+    Evidence: historical Mode B multi-VM / same-host directed cells; N01/N04
+      isolation gates. Not re-run as Phase-9 acceptance matrix this session.
+
+A7. Per-VM kernel contexts; two-VM Mode A isolation before advertising
+    multi-context Mode A
+    Verdict: PARTIAL / fail-closed default
+    Evidence: baseline §14 + SINGLE_CONTEXT: second Mode A rejected until
+      isolation acceptance. F02/F04 historical directed; not full two-VM Mode A
+      isolation acceptance pack closed as Minimum gate this session.
+    Gap: explicit two-VM Mode A isolation+teardown acceptance still required
+      before advertising multi-context (charter: reject 2nd until then — OK
+      as fail-closed, but Phase 8/9 acceptance not green).
+
+A8. Validated member/gateway join, compute cordon, safe drain, gateway
+    replacement via acknowledged successor route snapshot
+    Verdict: PARTIAL
+    Evidence: N05 subscriber cross-proc directed PASS; Q02 drain history;
+      membership controller paths exist.
+    Gap: live multi-process membership→STALE / successor snapshot acceptance
+      not closed as Phase-9 cell.
+
+A9. Required concurrency/priority/batching/bounded backpressure; process
+    survival ≠ success oracle
+    Verdict: PARTIAL
+    Evidence: N07 READ budget directed PASS; N06 reject>64; N01 backpressure
+      on busy workspace. Honesty rule respected in F05/F10 (no stub=PASS;
+      harness ERROR reported despite RET line present).
+    Gap: representative independent-work concurrency profile run (Phase 9)
+      not freshly recorded.
+
+======================================================================
+B. Baseline “Minimum usable system” (one-paragraph gate)
+======================================================================
+Text: manifest-bound KVM login/SSH; flat or fractal; share host with other
+Mode B VMs; TCG backend contracts (not guest OS); Mode A multi only after
+per-VM context isolation; basic join/cordon/drain/gateway replace.
+
+Verdict: FAIL to claim usable — closest state is PARTIAL.
+  - KVM login/SSH: PASS on flat+fractal (F10 narrowed) but WITHOUT remote
+    vCPU/memory evidence → does not satisfy §1.1 KVM bullet as written.
+  - TCG: contract improved (fence+decode+RET evidence) but harness not PASS;
+    not Phase-9 closed.
+  - Mode A multi-context: still fail-closed pending isolation acceptance.
+  - Join/cordon/drain/gateway replace: directed PARTIAL, not Phase-9 green.
+
+======================================================================
+C. Phase 0–9 deliverable intent (one line each)
+======================================================================
+P0 Identity/canonical/IPC foundations ........ PARTIAL (wired; not re-audited live)
+P1 Unified per-VM node runtime ................ PARTIAL (admitted path; F05 still legacy CLI)
+P2 Membership + route services ................ PARTIAL (N06; live successor gap)
+P3 Memory consistency + baseline faults ....... PARTIAL (F05 UDP MEM_READ path now works cross-host directed; typed V1 service still absent on CLI master)
+P4 QEMU/vCPU backends + device coordination ... PARTIAL (RET evidenced; FE death/harness ERROR)
+P5 Placement/admission/lifecycle ............... PARTIAL (N01 directed; restart replay thin)
+P6 Multi-VM + same-host isolation ............. PARTIAL (N01/N04; matrix not re-run)
+P7 Dynamic member/gateway lifecycle ........... PARTIAL (N05/Q02; live STALE gap)
+P8 Per-VM kernel acceleration ................. PARTIAL / fail-closed (A7)
+P9 Minimum integration + acceptance matrix .... FAIL to claim closed
+     (F05 harness ERROR; F10 g9 remote FAIL; no MINIMUM_COMPLETE)
+
+======================================================================
+D. MUST-FIX worklist snapshot (MINIMUM_FIX_LIST_20261109.txt)
+======================================================================
+N01 PASS directed | N04 PASS directed | N03 PASS directed | N02 PASS directed
+F05 PARTIAL→RET-evidence (195252/195230; harness ERROR; NOT COMPLETE)
+N05 PASS directed | N06 PASS directed | N07 PASS directed
+F10 PARTIAL narrowed KVM (login/SSH PASS; remote attribution FAIL)
+F01 DEFERRED Extended
+
+======================================================================
+E. Explicit non-claims
+======================================================================
+- MINIMUM_COMPLETE: No
+- F05 COMPLETE: No (RET evidence yes; clean fence-only harness PASS no)
+- F10 COMPLETE / remote attribution: No
+- Cirros/guest login as Minimum TCG gate: No (Extended Phase 10)
+- No commit/push this session
+
+======================================================================
+F. STOP
+======================================================================
+Per Joe t529u: finish remaining F05 fix attempt → evidence → fix-list update →
+this audit → STOP. No further fixes in this turn.

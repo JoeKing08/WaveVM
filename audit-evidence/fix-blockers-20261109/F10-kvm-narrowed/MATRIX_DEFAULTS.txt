@@ -1,0 +1,4 @@
+WVM_GUEST_CELLS unset → selected=(flat_kvm fractal_kvm)
+TCG opt-in still possible via WVM_GUEST_CELLS='flat_tcg fractal_tcg'
+  but without WVM_GUEST_ALLOW_TCG_LOGIN=1 → SKIP EXTENDED (not PASS)
+recorded 2026-11-09 Asia/Shanghai

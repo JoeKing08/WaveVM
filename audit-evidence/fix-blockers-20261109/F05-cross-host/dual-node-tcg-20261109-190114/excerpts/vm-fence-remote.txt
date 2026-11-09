@@ -1,0 +1,5 @@
+[WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffff9b5397b1 cs=0x10 cr0=0x80050033 cr3=0x1da10000 efer=0xd01 rsp=0xffffb5a8c07b3e48 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31473
+[WVM-PUSH-APPLY] pid=38068 n=1 type=26 gpa=0x13ef2d000 version=0x2 local=0x2 t=4214661293
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=0 flush=31473

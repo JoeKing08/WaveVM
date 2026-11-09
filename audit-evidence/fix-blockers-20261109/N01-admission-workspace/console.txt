@@ -1,0 +1,2 @@
+test_n01_admission_workspace_isolation: PASS
+busy=1 refused_reset=1 resets=2 final_marker=0xB22

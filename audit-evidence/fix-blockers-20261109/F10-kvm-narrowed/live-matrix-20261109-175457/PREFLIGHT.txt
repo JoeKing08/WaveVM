@@ -1,0 +1,5 @@
+preflight 2026-11-09 17:54:57 CST
+crw-rw----+ 1 root kvm 10, 232 11月  9 17:51 /dev/kvm
+crw-rw-rw-  1 root kvm 10, 264 11月  9 17:54 /dev/wavevm
+wavevm                 45056  0
+mode_hint=wavevm.ko_loaded ordered_FE_replace split=1

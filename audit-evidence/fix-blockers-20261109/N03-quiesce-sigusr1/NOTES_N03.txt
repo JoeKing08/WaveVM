@@ -1,0 +1,29 @@
+N03 QUIESCE / SIGUSR1 fail-closed — 2026-11-09 Asia/Shanghai
+NO commit/push
+
+Disposition: PASS (directed)
+
+Changes:
+1) node_runtime/main.c
+   - Register SIGUSR1 → child_execution_fail_closed in child argv path
+   - Re-arm SIGUSR1 when g_fail_closed_gate is bound in run_runtime_main
+   - Handler flips ACTIVE→QUIESCING (authorize refuse); not TERM/INT kill
+
+2) ctl_tool/main.c::execution_fail_closed_hook
+   - On first QUIESCE_RUNTIME failure, continue other matched participants
+   - Aggregate failed count; return error only after all attempted
+
+3) wavevm_admission_runtime_agent.c::quiesce_one_runtime
+   - Require slot gate state == QUIESCING before success (ACK surface)
+   - SIGUSR1 delivery; ESRCH = child already gone (fail-stop OK)
+
+Evidence:
+  tests/control-plane/test_n03_quiesce_sigusr1.{c,sh} → PASS
+  console.txt
+  F08 regression PASS; runtime-gate PASS
+  Builds: wvm_ctl + wavevm_node_runtime
+
+Limits:
+  - No live dual-node QUIESCE RPC soak in this directed cell
+  - Child gate ACK is SIGUSR1 delivery + slot-gate QUIESCING, not a
+    cross-process readback of the child's gate word

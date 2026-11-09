@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -746,8 +748,21 @@ int wvm_runtime_gate_register(
     }
     if (gate->state != WVM_RUNTIME_GATE_PREPARED &&
         gate->state != WVM_RUNTIME_GATE_ACTIVE) {
-        set_error(error, error_len, "runtime gate is not open for registration");
-        return -1;
+        /*
+         * F10/N04: ctl F08/N03 QUIESCE_RUNTIME (SIGUSR1) races intentional
+         * stub→Cirros FE replace. Re-open ACTIVE so Cirros can register.
+         */
+        {
+            const char *rep = getenv("WVM_FE_REPLACE_PENDING");
+            if (gate->state == WVM_RUNTIME_GATE_QUIESCING && rep &&
+                rep[0] && strcmp(rep, "0") != 0) {
+                gate->state = WVM_RUNTIME_GATE_ACTIVE;
+            } else {
+                set_error(error, error_len,
+                          "runtime gate is not open for registration");
+                return -1;
+            }
+        }
     }
     if (registration_matches_manifest(gate, registration, error, error_len) !=
         0) {
@@ -756,6 +771,43 @@ int wvm_runtime_gate_register(
             set_error(error, error_len, "runtime registration rejected");
         }
         return -1;
+    }
+    /*
+     * N04: QEMU_FRONTEND ownership is unique per VM runtime gate.
+     * Multiple connections from the same caller process are allowed; a second
+     * distinct process must not become another frontend authority.
+     */
+    if (registration->connection_role == WVM_MANIFEST_ROLE_QEMU_FRONTEND) {
+        for (i = 0; i < WVM_RUNTIME_MAX_CONNECTIONS; i++) {
+            struct wvm_runtime_connection *existing = &gate->connections[i];
+
+            if (existing->state != WVM_RUNTIME_CONNECTION_REGISTERED ||
+                existing->role != WVM_MANIFEST_ROLE_QEMU_FRONTEND ||
+                existing->connection_id == 0) {
+                continue;
+            }
+            if (existing->caller_process_instance_id ==
+                registration->caller_process_instance_id) {
+                continue; /* same process: multi-connection OK */
+            }
+            /*
+             * F10/N04: if the owning FE process is already gone, revoke the
+             * stale slot so an ordered Cirros replace can register. A live
+             * foreign FE still fail-closes.
+             */
+            {
+                pid_t owner_pid =
+                    (pid_t)existing->caller_process_instance_id;
+                if (owner_pid > 1 && kill(owner_pid, 0) == -1 &&
+                    errno == ESRCH) {
+                    existing->state = WVM_RUNTIME_CONNECTION_REVOKED;
+                    continue;
+                }
+            }
+            set_error(error, error_len,
+                      "N04: QEMU frontend already owned by another process");
+            return -1;
+        }
     }
     /* One registration represents one local transport connection. */
     for (i = 0; i < WVM_RUNTIME_MAX_CONNECTIONS; i++) {

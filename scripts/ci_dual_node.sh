@@ -24,12 +24,18 @@ case "$PROJECT_USER" in
 esac
 
 if [ -z "${TS_AUTHKEY:-}" ]; then
-  echo "ERROR: TS_AUTHKEY is not set in CircleCI environment" >&2
-  exit 2
+  if tailscale ip -4 >/dev/null 2>&1 || sudo -n tailscale ip -4 >/dev/null 2>&1; then
+    TS_AUTHKEY="unused-system-tailscale-already-up"
+    export TS_AUTHKEY
+    echo "[ci_dual_node] TS_AUTHKEY unset; reusing system Tailscale" >&2
+  else
+    echo "ERROR: TS_AUTHKEY is not set and system Tailscale is not up" >&2
+    exit 2
+  fi
 fi
 
-NODE_A_HOST="${NODE_A_HOST:-wavevm-ci-a}"
-NODE_B_HOST="${NODE_B_HOST:-wavevm-ci-b}"
+NODE_A_HOST="${NODE_A_HOST:-wavevm-f05-a}"
+NODE_B_HOST="${NODE_B_HOST:-wavevm-f05-b}"
 THIS_HOST="$NODE_A_HOST"
 PEER_HOST="$NODE_B_HOST"
 if [ "$ROLE" = "B" ]; then
@@ -90,11 +96,31 @@ install_tailscale() {
 
 start_tailscale() {
   install_tailscale
-  # F05 local: reuse live ephemeral daemon so peer IP stays stable across restarts.
-  if sudo tailscale --socket=/tmp/tailscaled.sock ip -4 >/dev/null 2>&1; then
-    TAIL_IP=$(sudo tailscale --socket=/tmp/tailscaled.sock ip -4 | head -n1)
+  # F05 2026-11-09: prefer already-up system Tailscale (Joe dual-VM LAN/TS).
+  if [ -z "${WVM_TS_SOCKET:-}" ]; then
+    if [ -S /run/tailscale/tailscaled.sock ]; then
+      WVM_TS_SOCKET=/run/tailscale/tailscaled.sock
+    elif [ -S /var/run/tailscale/tailscaled.sock ]; then
+      WVM_TS_SOCKET=/var/run/tailscale/tailscaled.sock
+    else
+      WVM_TS_SOCKET=/tmp/tailscaled.sock
+    fi
+  fi
+  export WVM_TS_SOCKET
+  if sudo tailscale --socket="$WVM_TS_SOCKET" ip -4 >/dev/null 2>&1; then
+    TAIL_IP=$(sudo tailscale --socket="$WVM_TS_SOCKET" ip -4 | head -n1)
     echo "$TAIL_IP" >"$ART_DIR/tailscale_ip.txt"
-    sudo tailscale --socket=/tmp/tailscaled.sock status --json >"$ART_DIR/tailscale_status.json" 2>/dev/null || true
+    sudo tailscale --socket="$WVM_TS_SOCKET" status --json >"$ART_DIR/tailscale_status.json" 2>/dev/null || true
+    log "tailscale reuse socket=$WVM_TS_SOCKET host=$THIS_HOST ip=$TAIL_IP peer=$PEER_HOST"
+    return
+  fi
+  # F05 local: reuse live ephemeral daemon so peer IP stays stable across restarts.
+  if sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" ip -4 >/dev/null 2>&1; then
+    WVM_TS_SOCKET=/tmp/tailscaled.sock
+    export WVM_TS_SOCKET
+    TAIL_IP=$(sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" ip -4 | head -n1)
+    echo "$TAIL_IP" >"$ART_DIR/tailscale_ip.txt"
+    sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" status --json >"$ART_DIR/tailscale_status.json" 2>/dev/null || true
     log "tailscale reuse host=$THIS_HOST ip=$TAIL_IP peer=$PEER_HOST"
     return
   fi
@@ -102,17 +128,17 @@ start_tailscale() {
   sudo rm -f /tmp/tailscaled.sock /tmp/tailscaled.state 2>/dev/null || true
   sudo tailscaled --state=/tmp/tailscaled.state --socket=/tmp/tailscaled.sock >"$ART_DIR/tailscaled.log" 2>&1 &
   for _ in $(seq 1 30); do
-    if sudo tailscale --socket=/tmp/tailscaled.sock status >/dev/null 2>&1; then
+    if sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" status >/dev/null 2>&1; then
       break
     fi
     sleep 1
   done
-  sudo tailscale --socket=/tmp/tailscaled.sock up \
+  sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" up \
     --authkey "$TS_AUTHKEY" \
     --hostname "$THIS_HOST" \
     --accept-routes=false \
     --ssh=false
-  TAIL_IP=$(sudo tailscale --socket=/tmp/tailscaled.sock ip -4 | head -n1)
+  TAIL_IP=$(sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" ip -4 | head -n1)
   if [ -z "$TAIL_IP" ]; then
     echo "ERROR: failed to get tailscale IPv4" >&2
     exit 1
@@ -124,7 +150,7 @@ start_tailscale() {
 peer_candidates() {
   local host="$1"
   local status_file="$ART_DIR/tailscale_status.json"
-  sudo tailscale --socket=/tmp/tailscaled.sock status --json >"$status_file" 2>/dev/null || true
+  sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" status --json >"$status_file" 2>/dev/null || true
   python3 - "$status_file" "$host" <<'PY' || true
 import json
 import sys
@@ -153,7 +179,7 @@ for _, ip in sorted(matches):
         print(ip)
         seen.add(ip)
 PY
-  sudo tailscale --socket=/tmp/tailscaled.sock ip -4 "$host" 2>/dev/null | head -n5 || true
+  sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" ip -4 "$host" 2>/dev/null | head -n5 || true
 }
 
 wait_peer_ip() {
@@ -178,7 +204,7 @@ wait_peer_services() {
   for i in $(seq 1 "$max"); do
     candidates=$(peer_candidates "$host" | awk 'NF && !seen[$0]++')
     for ip in $candidates; do
-      if sudo tailscale --socket=/tmp/tailscaled.sock ping -c 1 "$ip" >/dev/null 2>&1; then
+      if sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" ping -c 1 "$ip" >/dev/null 2>&1; then
         log "peer $host selected at $ip" >&2
         echo "$ip"
         return 0
@@ -186,12 +212,12 @@ wait_peer_services() {
     done
     if [ $((i % 15)) -eq 0 ]; then
       log "waiting for $host services; candidates=$(printf '%s' "$candidates" | tr '\n' ',' | sed 's/,$//') (${i}s)" >&2
-      sudo tailscale --socket=/tmp/tailscaled.sock status | sed -n '1,12p' >&2 || true
+      sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" status | sed -n '1,12p' >&2 || true
     fi
     sleep 1
   done
   echo "ERROR: peer $host services did not become reachable" >&2
-  sudo tailscale --socket=/tmp/tailscaled.sock status >&2 || true
+  sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" status >&2 || true
   return 1
 }
 
@@ -392,6 +418,74 @@ EOF_A_L2
     -serial file:"$ART_DIR/vm-serial.log" -monitor none \
     >"$ART_DIR/vm.log" 2>&1 &
   QPID=$!
+
+  if [ "${WVM_F05_FENCE_ONLY:-0}" = "1" ]; then
+    log "F05 fence-only mode: poll fence/remote markers (no guest login grind)"
+    local fence_ok=0 remote_ok=0 push_fail=0 handoff=0
+    # Give bulk COMMIT flush time before first poll (cross-host ~minutes-scale).
+    sleep 90
+    for i in $(seq 1 24); do
+      if kill -0 "$QPID" 2>/dev/null; then q_alive=yes; else q_alive=NO; fi
+      fence_ok=$(grep -c '\[IPC FENCE\] push-barrier done' "$ART_DIR/master0.log" 2>/dev/null || true)
+      push_fail=$(grep -c 'push-fence failed' "$ART_DIR/vm.log" 2>/dev/null || true)
+      rem=$(grep -c 'WVM-REMOTE.*cpu=2' "$ART_DIR/vm.log" 2>/dev/null || true)
+      sent=$(grep -c 'IPC VCPU_RUN] vcpu=2 ' "$ART_DIR/master0.log" 2>/dev/null || true)
+      ack=$(grep -c 'IPC VCPU_RUN RET] vcpu=2.*target=1 rpc_ret=0 ack_status=0 ack_mode=1' "$ART_DIR/master0.log" 2>/dev/null || true)
+      handoff=$(grep -c 'WVM-TCG-HANDOFF] cpu=2' "$ART_DIR/vm.log" 2>/dev/null || true)
+      commit_to=$(grep -c 'COMMIT_SYNC] timeout' "$ART_DIR/master0.log" 2>/dev/null || true)
+      commit_ack=$(grep -c 'COMMIT_SYNC] ack' "$ART_DIR/master0.log" 2>/dev/null || true)
+      fence_ok=${fence_ok:-0}; push_fail=${push_fail:-0}; rem=${rem:-0}; sent=${sent:-0}; ack=${ack:-0}
+      handoff=${handoff:-0}; commit_to=${commit_to:-0}; commit_ack=${commit_ack:-0}
+      log "fence-only poll ${i}: Q=$q_alive fence_done=$fence_ok push_fail=$push_fail remote=$rem sent=$sent ack=$ack handoff=$handoff commit_ack=$commit_ack commit_to=$commit_to"
+      {
+        echo "F05_FENCE_ONLY=1"
+        echo "poll=$i"
+        echo "q_alive=$q_alive"
+        echo "fence_done=$fence_ok"
+        echo "push_fail=$push_fail"
+        echo "remote=$rem"
+        echo "sent=$sent"
+        echo "ack=$ack"
+        echo "handoff=$handoff"
+        echo "commit_ack=$commit_ack"
+        echo "commit_to=$commit_to"
+      } >"$ART_DIR/f05_fence_only_result.txt"
+      if [ "$push_fail" -gt 0 ]; then
+        echo "ERROR: push-fence failed observed" >&2
+        summarize || true
+        return 1
+      fi
+      if [ "$fence_ok" -gt 0 ] && [ "$rem" -gt 0 ] && [ "$sent" -gt 0 ] && [ "$ack" -gt 0 ]; then
+        remote_ok=1
+        break
+      fi
+      if [ "$q_alive" = "NO" ]; then
+        echo "ERROR: QEMU died in fence-only mode" >&2
+        summarize || true
+        return 1
+      fi
+      sleep 30
+    done
+    summarize || true
+    {
+      echo "F05_FENCE_ONLY=1"
+      echo "fence_done=$fence_ok"
+      echo "push_fail=$push_fail"
+      echo "remote=$rem"
+      echo "sent=$sent"
+      echo "ack=$ack"
+    } >"$ART_DIR/f05_fence_only_result.txt"
+    if [ "$fence_ok" -gt 0 ] && [ "$push_fail" -eq 0 ] && [ "$rem" -gt 0 ] && [ "$sent" -gt 0 ] && [ "$ack" -gt 0 ]; then
+      log "F05 fence-only PASS (fence+remote VCPU evidence)"
+      return 0
+    fi
+    if [ "$fence_ok" -gt 0 ] && [ "$push_fail" -eq 0 ]; then
+      echo "PARTIAL: fence drained but remote VCPU evidence incomplete" >&2
+      return 2
+    fi
+    echo "ERROR: F05 fence-only markers not observed" >&2
+    return 1
+  fi
 
   for i in $(seq 1 30); do
     sleep 60

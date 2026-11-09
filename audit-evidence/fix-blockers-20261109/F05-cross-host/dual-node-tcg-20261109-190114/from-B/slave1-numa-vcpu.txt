@@ -1,0 +1,27 @@
+[qemu-tcg-numa-wrapper] NUMA ram0=2048M ram1=1024M shm0=/dev/shm/wvm_fract_node0 shm1=/dev/shm/wvm_fract_node1
+[WaveVM-SHM] slave coherent open failed '/wvm_fract_node1': No such file or directory
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5
+[SLAVE-RX] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=4200 magic=0x57564d58 type=5

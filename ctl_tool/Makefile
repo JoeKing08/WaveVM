@@ -8,6 +8,7 @@ SRCS = main.c admission_workspace.c admission_readiness.c admission_recovery.c \
 	capability_publication.c \
 	runtime_profile_publication.c membership_enrollment.c gateway_drain.c \
 	gateway_drain_successor.c \
+	subscriber_invalidate_bridge.c \
 	$(COMMON_DIR)/wavevm_sha256.c \
 	$(COMMON_DIR)/wavevm_canonical.c \
 	$(COMMON_DIR)/wavevm_identity.c \

@@ -1,0 +1,41 @@
+F05 cross-host dual-node TCG — PARTIAL (2026-11-09 Asia/Shanghai)
+================================================================
+A ART: dual-node-tcg-20261109-192419 (this dir)
+B ART: dual-node-tcg-20261109-192409 on 30b14f91-…169f1 /home/joeking/WaveVM/...
+Hosts: A 100.116.196.65 wavevm-f05-a ; B 100.114.246.92 wavevm-f05-b
+Authorized: t525u (dual VM) + parent continue F05 VCPU/ACK
+
+Verdict: PARTIAL — fence still PASS; truncated-TCG decode FIX landed and
+verified (B guest_vcpu=2 + matching CR3/RIP); A VCPU_RUN RET still 0.
+
+What was fixed this turn
+-----------------------
+Root cause of guest_vcpu=0 / scrambled TCG ctx:
+  Wire MSG_VCPU_RUN payload_len=4400 = offsetof(ctx)+sizeof(tcg_context)
+  (truncated cpu_run_req). QEMU slave treated anything < sizeof(full union
+  14112) as "compact pure context", misaligning by 16 bytes → guest_vcpu=0,
+  real RIP appeared in CR0, helper SIGSEGV on gpa=0.
+
+Patch (no commit/push):
+  wavevm-qemu/accel/wavevm/wavevm-all.c — recognize truncated TCG req;
+    ACK with truncated ack (fits MAX_PKT_SIZE 8192).
+  slave_daemon/slave_hybrid.c — same decode for Mode A path.
+  Rebuilt A build-native qemu; copied binary+legacy slave to B (B apt lock /
+  missing libssl blocked local ninja/link).
+
+B evidence after fix (b-side-excerpt/NOTES-decode-fix-then-pagesync-death.txt):
+  vCPU got req mode_tcg=1 cpu=0 guest_vcpu=2
+  TCG req eip=0xffffffff91539281 cs=0x10 cr0=0x80050033 cr3=0x1ba10000 efer=0xd01
+  (matches A WVM-REMOTE rip/cr3)
+
+Still blocked for VCPU_RUN RET
+-----------------------------
+After correct import: sigsegv → request_page_sync gpa=0x1ba10000 (CR3 page);
+helper then gone (NO_QEMU); Proxy keeps DN VCPU_RUN pending retries;
+A master0: IPC VCPU_RUN RET count=0; fence-only result ack=0.
+
+Fence cell (unchanged PASS this run):
+  fence_done=1 push_fail=0 remote=1 sent=1 handoff>=3 commit_to=0
+
+Not claimed: F05 COMPLETE / MINIMUM_COMPLETE / cirros login.
+No commit/push.

@@ -159,6 +159,19 @@ static int export_runtime_identity(
         } else if ((!fe || !*fe) && ph && *ph) {
             (void)setenv("WVM_FE_PHYSICAL_HOST_ID", ph, 0);
         }
+        /*
+         * N02: FE backing identity for coherent proof. Same-host CREATE uses
+         * the admitted SHM name; cross-host must not claim FE shares this file
+         * without an explicit matching WVM_FE_SHM_FILE.
+         */
+        {
+            const char *shm = getenv("WVM_SHM_FILE");
+            const char *fe_shm = getenv("WVM_FE_SHM_FILE");
+
+            if ((!fe_shm || !*fe_shm) && shm && *shm) {
+                (void)setenv("WVM_FE_SHM_FILE", shm, 0);
+            }
+        }
     }
     export_hex_env("WVM_CANDIDATE_MANIFEST_DIGEST",
                    manifest->candidate_manifest_digest,
@@ -892,6 +905,8 @@ static void *agent_parent_watchdog(void *arg)
     return NULL;
 }
 
+static void child_execution_fail_closed(int signal_number);
+
 static int run_runtime_main(int argc, char **argv)
 {
     const char *manifest_path = NULL;
@@ -992,6 +1007,15 @@ static int run_runtime_main(int argc, char **argv)
         runtime_context.dispatch = &dispatch_storage.projection;
         runtime_context.runtime_gate = &gate;
         g_fail_closed_gate = &gate;
+        {
+            /* N03: ensure SIGUSR1 fail-closed is armed once the gate exists. */
+            struct sigaction fail_closed_action;
+
+            memset(&fail_closed_action, 0, sizeof(fail_closed_action));
+            fail_closed_action.sa_handler = child_execution_fail_closed;
+            sigemptyset(&fail_closed_action.sa_mask);
+            (void)sigaction(SIGUSR1, &fail_closed_action, NULL);
+        }
         runtime_context.route_runtime = &route_runtime;
         runtime_context.node_instance_id = node_instance_id;
         runtime_context.physical_node_id = (uint32_t)physical_node_id;
@@ -1563,8 +1587,15 @@ static void child_graceful_stop(int signal_number)
 static void child_execution_fail_closed(int signal_number)
 {
     struct wvm_runtime_gate *gate = g_fail_closed_gate;
+    const char *rep;
 
     (void)signal_number;
+    /* Async-signal-safe enough: getenv is not strictly AS-safe but matches
+     * existing handler style; F10 replace must not QUIESCE mid-swap. */
+    rep = getenv("WVM_FE_REPLACE_PENDING");
+    if (rep && rep[0] && strcmp(rep, "0") != 0) {
+        return;
+    }
     if (gate && gate->state == WVM_RUNTIME_GATE_ACTIVE) {
         gate->state = WVM_RUNTIME_GATE_QUIESCING;
     }
@@ -1595,13 +1626,25 @@ int main(int argc, char **argv)
         }
         g_agent_parent_pid = parent_pid;
         {
-            struct sigaction action;
+            struct sigaction stop_action;
+            struct sigaction fail_closed_action;
 
-            memset(&action, 0, sizeof(action));
-            action.sa_handler = child_graceful_stop;
-            sigemptyset(&action.sa_mask);
-            (void)sigaction(SIGTERM, &action, NULL);
-            (void)sigaction(SIGINT, &action, NULL);
+            memset(&stop_action, 0, sizeof(stop_action));
+            stop_action.sa_handler = child_graceful_stop;
+            sigemptyset(&stop_action.sa_mask);
+            (void)sigaction(SIGTERM, &stop_action, NULL);
+            (void)sigaction(SIGINT, &stop_action, NULL);
+
+            /*
+             * N03: QUIESCE_RUNTIME → agent SIGUSR1 must hit this handler.
+             * child_execution_fail_closed only flips gate→QUIESCING (authorize
+             * fail-closed); it must be installed — TERM/INT alone kill/stop
+             * and are not the quiesce contract.
+             */
+            memset(&fail_closed_action, 0, sizeof(fail_closed_action));
+            fail_closed_action.sa_handler = child_execution_fail_closed;
+            sigemptyset(&fail_closed_action.sa_mask);
+            (void)sigaction(SIGUSR1, &fail_closed_action, NULL);
         }
         runtime_argv[0] = argv[0];
         runtime_argv[1] = argv[4];

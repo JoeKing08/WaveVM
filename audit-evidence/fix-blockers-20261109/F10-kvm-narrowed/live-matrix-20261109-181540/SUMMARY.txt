@@ -1,0 +1,7 @@
+guest_matrix run_id=f10-kvm-trig-20261109-181540 out_dir=audit-evidence/fix-blockers-20261109/F10-kvm-narrowed/live-matrix-20261109-181540 tip=e47d6a518 have_kvm=1
+cells_default=flat_kvm,fractal_kvm (Minimum Phase 9)
+cells_extended_opt_in=flat_tcg,fractal_tcg
+2026年 11月 09日 星期一 18:15:40 CST
+=== CELL flat_kvm topology=flat backend=require-kvm ===
+RESULT=flat_kvm FAIL rc=1
+=== CELL fractal_kvm topology=fractal backend=require-kvm ===

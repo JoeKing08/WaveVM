@@ -1,0 +1,63 @@
+[IPC COMMIT_SYNC] ack gpa=0x100005000 dir=1 rid=1
+[IPC COMMIT_SYNC] ack gpa=0x100007000 dir=1 rid=2
+[IPC COMMIT_SYNC] ack gpa=0x100008000 dir=1 rid=3
+[IPC COMMIT_SYNC] ack gpa=0x100012000 dir=1 rid=4
+[IPC COMMIT_SYNC] ack gpa=0x100048000 dir=1 rid=5
+[IPC COMMIT_SYNC] ack gpa=0x10004e000 dir=1 rid=6
+[IPC COMMIT_SYNC] ack gpa=0x100050000 dir=1 rid=7
+[IPC COMMIT_SYNC] ack gpa=0x100051000 dir=1 rid=8
+[IPC COMMIT_SYNC] ack gpa=0x100054000 dir=1 rid=9
+[IPC COMMIT_SYNC] ack gpa=0x100055000 dir=1 rid=10
+[IPC COMMIT_SYNC] ack gpa=0x100057000 dir=1 rid=11
+[IPC COMMIT_SYNC] ack gpa=0x100058000 dir=1 rid=12
+[IPC COMMIT_SYNC] ack gpa=0x100059000 dir=1 rid=13
+[IPC COMMIT_SYNC] ack gpa=0x10005d000 dir=1 rid=14
+[IPC COMMIT_SYNC] ack gpa=0x10005e000 dir=1 rid=15
+[IPC COMMIT_SYNC] ack gpa=0x10005f000 dir=1 rid=16
+[IPC COMMIT_SYNC] ack gpa=0x100067000 dir=1 rid=17
+[IPC COMMIT_SYNC] ack gpa=0x10006a000 dir=1 rid=18
+[IPC COMMIT_SYNC] ack gpa=0x10006b000 dir=1 rid=19
+[IPC COMMIT_SYNC] ack gpa=0x10006c000 dir=1 rid=20
+[IPC COMMIT_SYNC] window full, overflow count=0 win=512
+[IPC COMMIT_SYNC] window full, overflow count=1 win=512
+[IPC COMMIT_SYNC] window full, overflow count=2 win=512
+[IPC COMMIT_SYNC] window full, overflow count=3 win=512
+[IPC COMMIT_SYNC] window full, overflow count=4 win=512
+[IPC COMMIT_SYNC] window full, overflow count=5 win=512
+[IPC COMMIT_SYNC] window full, overflow count=6 win=512
+[IPC COMMIT_SYNC] window full, overflow count=7 win=512
+[IPC COMMIT_SYNC] window full, overflow count=8 win=512
+[IPC COMMIT_SYNC] window full, overflow count=9 win=512
+[IPC COMMIT_SYNC] window full, overflow count=10 win=512
+[IPC COMMIT_SYNC] window full, overflow count=11 win=512
+[IPC COMMIT_SYNC] window full, overflow count=12 win=512
+[IPC COMMIT_SYNC] window full, overflow count=13 win=512
+[IPC COMMIT_SYNC] window full, overflow count=14 win=512
+[IPC COMMIT_SYNC] window full, overflow count=15 win=512
+[IPC COMMIT_SYNC] window full, overflow count=16 win=512
+[IPC COMMIT_SYNC] window full, overflow count=17 win=512
+[IPC COMMIT_SYNC] window full, overflow count=18 win=512
+[IPC COMMIT_SYNC] window full, overflow count=19 win=512
+[IPC FENCE] begin fd=8 pending=512 overflow=1569 helpers=1
+[IPC COMMIT_SYNC] ack gpa=0x13ee4b000 dir=1 rid=153
+[IPC COMMIT_SYNC] ack gpa=0x13ee4c000 dir=1 rid=154
+[IPC COMMIT_SYNC] ack gpa=0x13ee4e000 dir=1 rid=155
+[IPC COMMIT_SYNC] ack gpa=0x13ee50000 dir=1 rid=156
+[IPC COMMIT_SYNC] ack gpa=0x13ee53000 dir=1 rid=157
+[IPC COMMIT_SYNC] ack gpa=0x13ee54000 dir=1 rid=158
+[IPC COMMIT_SYNC] ack gpa=0x13ee57000 dir=1 rid=159
+[IPC COMMIT_SYNC] ack gpa=0x13ee58000 dir=1 rid=160
+[IPC COMMIT_SYNC] ack gpa=0x13ee59000 dir=1 rid=161
+[IPC COMMIT_SYNC] ack gpa=0x13ee5c000 dir=1 rid=162
+[IPC COMMIT_SYNC] ack gpa=0x13ee5e000 dir=1 rid=163
+[IPC COMMIT_SYNC] ack gpa=0x13ee60000 dir=1 rid=164
+[IPC COMMIT_SYNC] ack gpa=0x13ee62000 dir=1 rid=165
+[IPC COMMIT_SYNC] ack gpa=0x13ee66000 dir=1 rid=166
+[IPC COMMIT_SYNC] ack gpa=0x13ee67000 dir=1 rid=167
+[IPC COMMIT_SYNC] ack gpa=0x13ee68000 dir=1 rid=168
+[IPC COMMIT_SYNC] ack gpa=0x13ee6b000 dir=1 rid=169
+[IPC COMMIT_SYNC] ack gpa=0x13ee6c000 dir=1 rid=170
+[IPC COMMIT_SYNC] ack gpa=0x13ee6d000 dir=1 rid=171
+[IPC COMMIT_SYNC] ack gpa=0x13ee6e000 dir=1 rid=172
+[IPC FENCE] push-barrier done br=0 helpers=1 hr=0 dr=0 fail_gpa=0 pending=0 overflow=0 fd=8
+[IPC VCPU_RUN] vcpu=2 mode=1 slave_id=4294967295

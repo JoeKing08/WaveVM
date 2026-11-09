@@ -19,6 +19,20 @@ untyped completion markers do not establish the required identity or
 idempotency contract. Production traffic must satisfy the framing and semantic
 validation below; any legacy decoder is subject to the migration constraints.
 
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Own framing, validation, transport/control authentication and local IPC mechanics. Operation owners determine semantic completion, ordering and error meaning. |
+| State and mutation | Channels, reassembly buffers and delivery attempts are transport-local. Semantic operation IDs/results remain domain-owned; received traffic cannot acquire authority from its address or framing. |
+| Allowed implementation dependencies | Shared identity/scalar encoding and bounded checksum/transport primitives, with public payload codecs/validators at ingress composition. Framing must not import concrete lifecycle, planner, directory or executor internals. |
+| Interactions and lifetime | Section 5.1 owns buffers and completion context; [route-operation lifetime](identity-routing.md#61-route-replacement-and-operation-lifetime) owns rerouting identity; [lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) governs drain versus channel shutdown. |
+| Concurrency and cost | Sections 5 and 6 require bounded parallel dispatch, copying/hop accounting, priority and backpressure. Transport choice preserves semantic guarantees and is justified by applicable measurements. |
+| Failure and verification | Sections 2, 3 and 9 reject invalid/stale/unauthorized traffic before mutation. Local enqueue/send is not a durable or guest-visible success result. |
+
 ## 1. Framing and Versioning
 
 Every network packet and local IPC record has an explicit versioned envelope.
@@ -72,8 +86,8 @@ are raw bytes in network order.
 | 8 | `u16` | `message_type` | Registry-defined data/control/local operation. |
 | 10 | `u16` | `flags` | Typed non-overlapping flags; unknown set bits reject. |
 | 12 | `u32` | `payload_bytes` | Bytes following this header in this frame/fragment, including the required routed-frame prefix when one applies. |
-| 16 | `u32` | `vm_id` | Logical namespace; zero only for explicitly legacy/control traffic. |
-| 20 | `u64` | `vm_incarnation` | Required for all nonlegacy VM operations. |
+| 16 | `u32` | `vm_id` | Logical namespace; zero only for authenticated cluster-control traffic. |
+| 20 | `u64` | `vm_incarnation` | Required for all VM operations. |
 | 28 | `u64` | `manifest_generation` | Candidate/admitted manifest generation; zero only for cluster registration. |
 | 36 | `u32` | `origin_physical_node_id` | Registered source host identity. |
 | 40 | `u64` | `origin_runtime_instance_id` | Fresh source runtime/process identity. |
@@ -544,7 +558,7 @@ The canonical local message families are:
 | `WVM_IPC_TYPE_REGISTER` | Bind QEMU connection role and identity. | Registration ACK with accepted versions/roles. |
 | `WVM_IPC_TYPE_TYPED_MEM_FAULT` | Request an authoritative page through the admitted local node runtime. | Typed page/status response. |
 | `WVM_IPC_TYPE_TYPED_MEM_COMMIT` | Submit an operation-identified dirty-page commit through the admitted local node runtime. | Typed commit result with authoritative page version/status. |
-| `WVM_IPC_TYPE_MEM_FAULT` / `MEM_WRITE` / `COMMIT_DIFF` | Legacy local-memory paths. They must not substitute for the typed admitted path. | Legacy/compatibility handling only. |
+| `WVM_IPC_TYPE_MEM_FAULT` / `MEM_WRITE` / `COMMIT_DIFF` | Unsupported untyped local-memory paths. | Reject; never substitute for the typed admitted path. |
 | `WVM_IPC_TYPE_COMMIT_DIFF_SYNC` | Complete a handoff-scoped memory fence. | Fence result tied to operation sequence. |
 | `WVM_IPC_TYPE_CPU_RUN` | Request local/remote vCPU handoff. | `wvm_ipc_cpu_run_ack` successor with exact status and context. |
 | `WVM_IPC_TYPE_IRQ` / `INVALIDATE` | Deliver a typed guest event or correction. | Explicit delivery/backpressure result where guest progress depends on it. |
@@ -578,6 +592,32 @@ For an IOCTL, a 24-byte kernel-context prefix
 `{context_handle:u64, attach_capability:u8[16]}` precedes the V1 envelope.
 The kernel validates the context/manifest role before parsing the envelope;
 the prefix does not replace VM/incarnation/operation identity fields.
+
+### 5.1 Buffer Ownership, Visibility, and Completion Context
+
+Every public send/dispatch interface declares whether it borrows, copies, or
+transfers a buffer; who may mutate/free it; and which event ends the reference.
+An enqueue result is not semantic completion. Asynchronous completion retains
+the operation identity and generation and cannot address a freed/reused object.
+Cancellation and teardown follow [lifecycle Section 6.3](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement).
+
+The contract specifies the callback thread/event loop, reentrancy, permitted
+blocking, and lock constraints. Consumers must not depend on private transport
+locks or callback timing. A queued callback must not unexpectedly become an
+inline callback unless the public contract permits both execution contexts.
+
+In-process publication, process-shared memory, network delivery, and device
+visibility require their own synchronization. Declare the producer/transport/
+consumer responsibility for publication and lifetime. Release/acquire on a
+local queue does not prove remote memory visibility, device completion, or
+durability; those success conditions belong to the operation owner.
+
+For hot paths, state the normal copy and process/network-hop costs, in-flight
+limits, and batching policy. Implement bounded parallel queues and required
+priority/fairness rather than funneling all operations through a synchronous
+global dispatcher. A transport replacement requires comparable measurements
+and unchanged operation semantics; neither UDP nor a stream protocol is
+universally preferable by name alone.
 
 ## 6. QoS, Size, and Backpressure
 
@@ -616,23 +656,19 @@ distributed protocol. Current IOCTLs are classified as follows:
 | `IOCTL_SET_MEM_LAYOUT` | Per-VM QEMU RAM registration cache. |
 | `IOCTL_WAIT_IRQ` | Per-VM local interrupt wait/notification. |
 | `IOCTL_SET_GATEWAY`, route, placement, VM ID, epoch updates | Derived manifest/route cache refresh only; never truth injection. |
-| `IOCTL_RPC_SYNC_ACK` | Remove or give a typed owner before stable ABI claim; no current handler exists. |
+| `IOCTL_RPC_SYNC_ACK` | Reject/remove an unowned ACK path; semantic fence completion must use the typed operation owner's contract. |
 
 Every ioctl and mmap must resolve an attached `wvm_kernel_ctx` with VM identity,
 incarnation, manifest generation, and lifetime validation. The ioctl number and
 payload layout are not stable until `kernel-accelerator.md` accepts them.
 
-## 8. Compatibility and Migration
+## 8. Compatibility Boundary
 
-1. Inventory all current message producers and consumers before changing an
-   existing numeric message type.
-2. Add protocol-version negotiation and typed error decoding before emitting a
-   next-format packet on a mixed deployment.
-3. Introduce new envelopes in parallel with legacy readers; never reinterpret
-   a legacy payload based solely on a flag or a guessed size.
-4. Move memory, vCPU, block, and membership operations to typed completions.
-5. Retire `SYNC_MAGIC`, raw-ID fallback, untyped one-byte ACKs, and blind
-   passthrough only after all corresponding contract tests pass.
+The defined envelope and canonical schemas are the production wire contract.
+No legacy header, guessed payload format, raw-ID fallback, `SYNC_MAGIC`,
+untyped ACK, or blind passthrough is a compatibility requirement. Endpoints
+reject unsupported protocol/schema capabilities before activation; local test
+fixtures use the same canonical records as production.
 
 ## 9. Acceptance Tests
 

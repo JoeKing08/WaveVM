@@ -94,6 +94,7 @@ struct wvm_block_entry {
     uint16_t status;
     uint8_t *result;
     size_t result_bytes;
+    size_t reserved_hold_bytes; /* N07: budget held while IN_FLIGHT */
     uint64_t completed_at_ms;
     uint64_t expired_at_ms;
     pthread_cond_t completed;
@@ -114,6 +115,8 @@ struct wvm_block_service {
     struct wvm_block_entry entries[WVM_BLOCK_SERVICE_MAX_ENTRIES];
     struct wvm_block_queue_state queues[WVM_BLOCK_SERVICE_QUEUE_SLOTS];
     size_t retained_bytes;
+    /* N07: READ result bytes held before execute completes. */
+    size_t reserved_result_bytes;
     int initialized;
 };
 

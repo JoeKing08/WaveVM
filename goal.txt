@@ -1,21 +1,18 @@
-按 docs 纲领（baseline + roadmap + docs/specs）依赖顺序，从当前中间态把 WaveVM 落到完整架构并完成对应验证。goal.txt 只是执行口令，不能替代纲领。执行约束：manifest/typed runtime 是唯一生产路径；没有存量业务，不保留旧 master/slave 独立入口、旧 48-byte legacy wire header、NODE/ROUTE 注入、旧 field-by-field IOCTL 或兼容部署；不添加硬编码或测试专用 workaround；不启动未经验证的最终 guest E2E（完整 guest 登录/SSH 放到第 7 步）。单活协调器冷启动恢复、持久化 ACTIVATION_DECIDED 对账/重放/补偿属 Minimum，不得因「不含 Extended」而砍掉。不发明 HA/透明恢复/RECOVERY_REBIND/MIGRATE_VM（Extended later）。Mode A「双」是验收门槛不是上限：隔离证据通过前必须拒绝第二个 Mode A VM。
+按 docs 纲领（dirty baseline + roadmap + docs/specs）依赖顺序，从当前中间态把 WaveVM 维护到 Minimum 可用并完成对应验证。goal.txt 只是执行口令，不能替代纲领。执行约束：manifest/typed runtime 是唯一生产路径；没有存量业务，不保留旧 master/slave 独立入口、旧 48-byte legacy wire header、NODE/ROUTE 注入、旧 field-by-field IOCTL 或兼容部署；不添加硬编码或测试专用 workaround；诚实 FAIL 优于 stub/SKIP=PASS。单活协调器冷启动恢复、持久化 ACTIVATION_DECIDED 对账/重放/补偿属 Minimum，不得因「不含 Extended」而砍掉。不发明 HA/透明恢复/RECOVERY_REBIND/MIGRATE_VM（Extended Phase 12）。Mode A「双」是验收门槛不是上限：隔离证据通过前必须拒绝第二个 Mode A VM（baseline §14 / Phase 8 / kernel-accelerator SINGLE_CONTEXT；不是旧「roadmap §12 短期自限」话术）。
 
-依次完成（CC 顺序 + Codex 补充）：
+交付档（现行 dirty 纲领）：
+- Phase 0–9 = Minimum。收口后：KVM flat/fractal guest login 或 SSH，且有远端 vCPU 与远端内存活动证据；TCG 仅要求有界真执行合同（可核对 CPU/内存结果、独立 vCPU 进展、handoff/设备/原子退出、清理）——合同通过 ≠ TCG guest OS 可用。
+- Phase 10–13 = Extended：TCG guest boot/login/SSH（Phase 10）；更广故障引擎（11）；HA/恢复/迁移（12）；hosted 移植（13）。完整 TCG guest 登录/SSH 不进 Minimum 收口门。
 
-0. 恢复 Mode A 准入拒绝门：隔离测试通过前拒绝第二个 Mode A VM（仅控制面 per-VM lease 不算通过），与 roadmap §12 短期自限一致。
+工作序（对齐 audit-evidence/MINIMUM_FIX_LIST_20261109.txt）：
+1) N01 并发 CREATE 隔离 admission workspace（让锁 ≠ 共享可重置工作区）。
+2) N04 同 VM 唯一 KVM FE 所有权。
+3) N03 QUIESCE/成员失效证明执行已收住（SIGUSR1 真接线或明确 fail-stop+补偿）。
+4) N02 coherent SHM 须真实同-backing 证明，缺证明走 fault 路径。
+5) F05 fence/远端缺页路径（可要第二主机）；不磨 cirros/guest login。
+6) N05 subscriber 失效跨进程到目录 runtime + publish 前过期回收。
+7) N06 route 编译第 65+ listener：容纳或明确拒绝，禁止静默截断。
+8) N07 block READ 结果预算执行前预占。
+9) F10（收窄）适用格重跑：KVM flat/fractal login/SSH + 远端归因；TCG guest login 格属 Extended。拒 force_local/本地主导冒充远端；MATRIX_PASS ≠ MINIMUM_COMPLETE。
 
-1. drain/换血 fail-closed：compute 有依赖不可 drain；gateway V1 单 scope；双 VM 共享 gateway 时安全拒绝不支持的换血（勿提前做 Extended 多 scope 联合事务）；附带 Phase 7 验收点：并发 CREATE 不双分配、RUNNING 期间不误报节点丢失、活流量 snapshot 路由不得半张表。事务失败恢复（覆盖本步与第 2 步）：peer COMMIT/ABORT、基础重启对账、部分启动补偿、依赖资源释放。
-
-2. STOP 与清理：VM STOP 后控制面/runtime/executor 资源与依赖干净释放，无残留 lease/socket/SHM/依赖记账。
-
-3. Mode A 内核真隔离：真实 per-VM kernel context（非仅控制面 lease）；隔离证据通过后才可放开多 Mode A VM。
-
-4. 多节点 SPREAD + 同机多计算节点：physical_host_id 聚合记账、同机多 node_instance（实例身份、port/socket 隔离）、并发 CREATE 不双分配；Mode A 前端准入保持真隔离。真砍证据边界：用真 executor + 远程内存路径，禁止用 RUNNING stub 冒充；完整 guest 登录/SSH 仍放到第 7 步。同机多计算节点可与第 2 步前后交叉落地，但本步须收口证据。
-
-5. 受限 TCG fallback + KVM dirty/resync（及能力探测）：属 Minimum；完整故障引擎可延期。
-
-6. flat/fractal × TCG/KVM 分层验证矩阵。
-
-7. 最终 guest 冒烟（含登录/SSH 等完整验收）。
-
-优先顺序提醒：guest 放最后；先把 Mode B 真隔离、同机多计算节点等隔离做好，再专心修 TCG/KVM 本身和真 guest。
+优先提醒：先隔离与生产生命周期（N01/N04/N03），再内存/成员接线（N02/N05），再预算（N06/N07），最后 KVM guest 矩阵诚实门。不修 F01。不宣称 MINIMUM_COMPLETE。

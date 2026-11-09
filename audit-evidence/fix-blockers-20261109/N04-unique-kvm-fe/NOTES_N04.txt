@@ -1,0 +1,28 @@
+N04 unique KVM FE ownership — 2026-11-09 Asia/Shanghai
+tip base: e47d6a518; production dirty (N01+N04)
+NO commit/push
+
+Disposition: PASS (directed gate) — PARTIAL vs full production lifecycle
+
+Production change:
+  common_include/wavevm_runtime_gate.c::wvm_runtime_gate_register
+  - If QEMU_FRONTEND already REGISTERED from caller_process_instance_id A,
+    reject registration from distinct process B with
+    "N04: QEMU frontend already owned by another process".
+  - Same process may still open multiple local connections (prior contract).
+
+Evidence:
+  tests/control-plane/test_runtime_gate.c (extended N04 case)
+  tests/control-plane/test_runtime_gate.sh → PASS
+  console: audit-evidence/fix-blockers-20261109/N04-unique-kvm-fe/console-runtime-gate.txt
+
+Honest residual (does not reopen the gate hole):
+  - KVM auto-spawn paused FE (master_core spawn_manifest_bound_qemu_frontend)
+    + guest_smoke second Cirros FE was the dual-FE anti-pattern.
+  - Gate now fail-closes that race. Guest harness / single-FE ownership path
+    (runtime owns real FE, OR external-only FE with readiness wait) remains
+    for F10 KVM matrix work; disconnect already revokes so replace-after-stop
+    is possible.
+  - FE stop bounded upgrade (SIGTERM wait timeout) not separately hardened here.
+
+Next: N03 QUIESCE / SIGUSR1 wiring.

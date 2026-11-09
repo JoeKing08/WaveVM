@@ -1,0 +1,210 @@
+[19:52:52] [tcg/A] cleanup
+[19:52:52] [tcg/A] ART_DIR=/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195252
+[19:52:52] [tcg/A] TCG Mode B/B: do not load wavevm.ko; temporarily hide /dev/kvm for pure TCG
+[19:52:52] [tcg/A] tailscale reuse socket=/run/tailscale/tailscaled.sock host=wavevm-f05-a ip=100.116.196.65 peer=wavevm-f05-b
+[19:52:52] [tcg/A] peer wavevm-f05-b selected at 100.114.246.92
+[19:52:52] [tcg/A] peer ip 100.114.246.92
+[19:52:52] [tcg/A] F05 env role=a host=b9d31200e9414d3e NUMA=2048:1024 MEM=3072
+[19:52:52] [tcg/A] start gateway gw_l2 listen=19520 upstream=127.0.0.1:19599 ctrl=19521
+[19:52:52] [tcg/A] start gateway gw_l1a listen=19320 upstream=127.0.0.1:19520 ctrl=19321
+[19:52:52] [tcg/A] start gateway gw_sidecar_a listen=19120 upstream=127.0.0.1:19320 ctrl=19121
+[19:52:52] [tcg/A] start slave0/master0
+[19:52:52] [tcg/A] node-b tailscale peer selected at 100.114.246.92; WaveVM ports are UDP, so QEMU/RPC logs are the readiness check
+[19:53:00] [tcg/A] start QEMU accel=tcg local_split=2
+[19:53:00] [tcg/A] F05 fence-only mode: poll fence/remote markers (no guest login grind)
+[19:53:52] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[19:54:30] [tcg/A] fence-only poll 1: Q=NO fence_done=1 push_fail=0 remote=0 sent=1 ack=1 handoff=0 commit_ack=40 commit_to=0
+[19:54:44] [tcg/A] ci heartbeat
+processes: gw=0 master=0 slave=0 qemu=0
+[19:54:52] [tcg/A] fence-only poll 2: Q=NO fence_done=0 push_fail=0 remote=1 sent=0 ack=0 handoff=3 commit_ack=0 commit_to=0
+ERROR: QEMU died in fence-only mode
+[19:54:52] [tcg/A] summary ART_DIR=/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244
+processes: gw=0 master=0 slave=0 qemu=0
+WVM-REMOTE(cpu2)=1
+VCPU_RUN(cpu2)=0
+VCPU_RETURN(cpu2,node1)=0
+--- gw_l2.log tail ---
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19521
+[Gateway] Loaded 2 route groups.
+[Gateway] System has 6 cores (allowed=6). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] sockfd=4 reuseport=0
+[Gateway] Control Plane Active on Port 19521 (Static)
+[Gateway] bind ok port=19520 fd=4 local=0.0.0.0:19520
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+--- gw_l1a.log tail ---
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19321
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 6 cores (allowed=6). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19321 (Static)
+[Gateway] sockfd=5 reuseport=0
+[Gateway] bind ok port=19320 fd=5 local=0.0.0.0:19320
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+--- gw_sidecar_a.log tail ---
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19121
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 6 cores (allowed=6). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19121 (Static)
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19120 fd=4 local=0.0.0.0:19120
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+--- slave0.log tail ---
+[WaveVM-User] N02 coherent REFUSED: missing/invalid FE/executor physical host proof (fault path kept)
+[WaveVM-User] ram_block hva=0x7a634fe00000..0x7a63cfe00000 gpa=0 size=0x80000000 blocks=1
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 1)
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x7a630fc00000..0x7a634fc00000 gpa=0x100000000 size=0x40000000 blocks=2
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x7a634fea0000..0x7a634fec0000 gpa=0xfeda0000 size=0x20000 blocks=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x7a634fe00000..0x7a634fec0000 gpa=0 size=0xc0000 blocks=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x7a634ff00000..0x7a63cfe00000 gpa=0x100000 size=0x7ff00000 blocks=5
+[WaveVM-Slave] helper clock enabled virtual=13358 deadline=27449381
+[WaveVM-Slave] vCPU service loop online cpu=0
+[Hybrid] TCG install notify fd=5 -> push port 30306
+[SLAVE-BIND] port=19105 ok
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+qemu-system-x86_64: terminating on signal 15 from pid 49990 ()
+qemu-system-x86_64: terminating on signal 15 from pid 49990 ()
+--- master0.log tail ---
+[Config] DHT Ring Size: 2 Virtual Nodes (from 2 Physical).
+[GW-SET] id=0 ip=127.0.0.1 port=19120
+[GW-SET] id=1 ip=127.0.0.1 port=19220
+[Config] VM 0 placement: 3 vCPUs, 3 x 1GiB memory chunks (compact).
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 2048 MB >= Reservation 2147483648 bytes.
+[Init] Identity Mapped: PhysID 0 -> VirtualID 0 (Primary)
+[System] Initializing SHM: /wvm_fract_node0 (Size: 2048 MB)
+[+] Memory Ready at 0x7b6abc5fe000
+[System] Control Socket: /tmp/wvm_user_0.sock
+[System] cannot publish runtime readiness: local namespace has invalid metadata
+[System] continuing without readiness publish (ungated legacy)
+[+] WaveVM V29 Node Ready. Waiting for QEMU...
+[Swarm] New neighbor discovered: 1
+[Autonomous] Node started in SHADOW mode. Auto-scaling into cluster...
+[Lifecycle] Transition to WARMING
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+--- vm.log tail ---
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff9f7b603b rsp=0xffffbe68406d3e78 ret=0 q0=0xffffffff9f7b5f3e q1=0xffffbe68406d3e90 q2=0xffffffff9ea4ba45 q3=0xffffbe68406d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff9f7b603b cs=0x10 eflags=0x216 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffff9eb397b1 cs=0x10 cr0=0x80050033 cr3=0x1c210000 efer=0xd01 rsp=0xffffbe68407c3e48 oldex=-1
+[WVM-DBG] cpu=2 kvm_enabled=0 vcpu_sock=19 split=2
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WaveVM-User] handoff dirty flush pages=31508 skipped_zero=754924 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31508
+[WVM-PUSH-BARRIER] rx cookie=1
+[WVM-PUSH-BARRIER] ack cookie=1
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=0 flush=31508
+[WVM-TCG-TSC] phase=export cpu=2 local=0x8b3ef6832 offset=0 guest=0x8b3ef4420
+[WVM-TCG-APIC-OWNER] action=pause cpu=2 expiry=12167689814
+[WVM-TCG-CR3] cpu=2 cr3=0x1c210000 pml4e508=0x13ffcd067 ok=1
+[WVM-TCG-STACK] phase=master-pre-send cpu=2 rip=0xffffffff9eb397b1 rsp=0xffffbe68407c3e48 ret=0 q0=0xffffbe68407c3e78 q1=0xffff9eeb81a32f80 q2=0xffffbe68407c3e68 q3=0xffffffff9f7b6cf8
+[WVM-TCG-IPC] cpu=2 write CPU_RUN begin fd=19
+[WVM-TCG-IPC] cpu=2 write CPU_RUN done, wait ack fd=19
+qemu-system-x86_64: terminating on signal 15 from pid 50413 ()
+[WVM-TCG-IPC] cpu=2 read ack failed fd=19 errno=0
+[WaveVM-User] handoff dirty rollback pages=31508
+[WVM-TCG-APIC-OWNER] action=resume cpu=2 expiry=12167689814
+--- serial tail ---
+[    0.453657] pid_max: default: 32768 minimum: 301
+[    0.454619] LSM: Security Framework initializing
+[    0.455501] landlock: Up and running.
+[    0.455574] Yama: becoming mindful.
+[    0.457297] AppArmor: AppArmor initialized
+[    0.464147] Dentry cache hash table entries: 524288 (order: 10, 4194304 bytes, vmalloc)
+[    0.466613] Inode-cache hash table entries: 262144 (order: 9, 2097152 bytes, vmalloc)
+[    0.467266] Mount-cache hash table entries: 8192 (order: 4, 65536 bytes, vmalloc)
+[    0.467698] Mountpoint-cache hash table entries: 8192 (order: 4, 65536 bytes, vmalloc)
+[    0.489414] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    0.489683] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    0.490031] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    0.490291] Spectre V2 : Mitigation: Retpolines
+[    0.490364] Spectre V2 : Spectre v2 / SpectreRSB mitigation: Filling RSB on context switch
+[    0.490474] Spectre V2 : Spectre v2 / SpectreRSB : Filling RSB on VMEXIT
+[    0.490647] Speculative Store Bypass: Vulnerable
+[    0.644432] Freeing SMP alternatives memory: 44K
+[    0.766727] smpboot: CPU0: AMD QEMU Virtual CPU version 2.5+ (family: 0x6, model: 0x6, stepping: 0x3)
+[    0.773872] Performance Events: PMU not available due to virtualization, using software events only.
+[    0.776063] rcu: Hierarchical SRCU implementation.
+[    0.782880] NMI watchdog: Perf NMI watchdog permanently disabled
+[    0.787119] smp: Bringing up secondary CPUs ...
+[    0.791211] x86: Booting SMP configuration:
+[    0.791441] .... node  #0, CPUs:      #1
+[    0.892540] .... node  #1, CPUs:   #2
+[    0.987214] smp: Brought up 2 nodes, 3 CPUs
+[    0.987544] smpboot: Max logical packages: 3
+[    0.987672] smpboot: Total of 3 processors activated (18520.08 BogoMIPS)
+[    1.007841] devtmpfs: initialized
+[    1.011931] x86/mm: Memory block size: 128MB
+[    1.022272] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    1.023124] futex hash table entries: 1024 (order: 4, 65536 bytes, vmalloc)
+[    1.026961] pinctrl core: initialized pinctrl subsystem
+[    1.034359] PM: RTC time: 11:52:58, date: 2026-11-09
+[    1.047207] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    1.050992] DMA: preallocated 512 KiB GFP_KERNEL pool for atomic allocations
+[    1.051718] DMA: preallocated 512 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
+[    1.052390] DMA: preallocated 512 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+[    1.053246] audit: initializing netlink subsys (disabled)
+[    1.057748] audit: type=2000 audit(1794225178.624:1): state=initialized audit_enabled=0 res=1
+[    1.061535] thermal_sys: Registered thermal governor 'fair_share'
+[    1.061598] thermal_sys: Registered thermal governor 'bang_bang'
+[    1.061850] thermal_sys: Registered thermal governor 'step_wise'
+[    1.061932] thermal_sys: Registered thermal governor 'user_space'
+[    1.062001] thermal_sys: Registered thermal governor 'power_allocator'
+[    1.062549] EISA bus registered
+[    1.065739] cpuidle: using governor ladder
+[    1.065739] cpuidle: using governor menu
+[    1.067066] ACPI: bus type PCI registered
+[    1.067296] acpiphp: ACPI Hot Plug PCI Controller Driver version: 0.5
+[    1.070372] PCI: MMCONFIG for domain 0000 [bus 00-ff] at [mem 0xb0000000-0xbfffffff] (base 0xb0000000)
+[    1.070924] PCI: MMCONFIG at [mem 0xb0000000-0xbfffffff] reserved in E820
+[    1.071916] PCI: Using configuration type 1 for base access
+[    1.074742] mtrr: your CPUs had inconsistent fixed MTRR settings
+[    1.074890] mtrr: your CPUs had inconsistent variable MTRR settings
+[    1.074972] mtrr: your CPUs had inconsistent MTRRdefType settings
+[    1.075042] mtrr: probably your BIOS does not setup all CPUs.
+[    1.075107] mtrr: corrected configuration.
+[    1.089595] Kprobes globally optimized
+[    1.097195] HugeTLB registered 2.00 MiB page size, pre-allocated 0 pages
+--- timeout counts ---
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/gw_l1a.log:0
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/gw_l2.log:0
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/gw_sidecar_a.log:0
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/master0.log:0
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/slave0.log:0
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/vm.log:0
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/vm-serial.log:0
+--- log sizes ---
+   12 /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/gw_l1a.log
+   11 /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/gw_l2.log
+   16 /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/gw_sidecar_a.log
+   26 /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/master0.log
+   57 /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/slave0.log
+  321 /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/vm.log
+  186 /workspaces/WaveVM/audit-evidence/fix-blockers-20261109/F05-cross-host/dual-node-tcg-20261109-195244/vm-serial.log
+  629 总计
+[19:54:52] [tcg/A] cleanup

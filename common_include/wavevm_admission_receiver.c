@@ -1,5 +1,10 @@
 #include "wavevm_admission_receiver.h"
 
+int wvm_memory_service_global_invalidate_subscriber_instance(
+    uint32_t physical_node, uint64_t node_instance, uint64_t runtime_instance,
+    const void *scope_key, char *error, size_t error_len)
+    __attribute__((weak));
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -179,6 +184,7 @@ static int stage_message_type(uint16_t message_type)
     case WVM_ENVELOPE_MSG_ACTIVATE_MANIFEST:
     case WVM_ENVELOPE_MSG_QUERY_RUNTIME_READY:
     case WVM_ENVELOPE_MSG_QUIESCE_RUNTIME:
+    case WVM_ENVELOPE_MSG_INVALIDATE_SUBSCRIBERS:
     case WVM_ENVELOPE_MSG_ABORT_MANIFEST:
     case WVM_ENVELOPE_MSG_ROUTE_PREPARE:
     case WVM_ENVELOPE_MSG_ROUTE_COMMIT:
@@ -1825,6 +1831,44 @@ int wvm_admission_receiver_apply(
         apply_result = apply_participant_stage(receiver, request, result, error,
                                                error_len);
         break;
+    case WVM_ENVELOPE_MSG_INVALIDATE_SUBSCRIBERS: {
+        uint32_t failed_node = 0;
+        uint64_t failed_instance = 0;
+        char local_error[128];
+
+        if (!request->payload || request->payload_bytes < 12) {
+            result->status_code = WVM_CONTROL_RESULT_INVALID_ENVELOPE;
+            apply_result = 0;
+            break;
+        }
+        failed_node = (uint32_t)request->payload[0] |
+                      ((uint32_t)request->payload[1] << 8) |
+                      ((uint32_t)request->payload[2] << 16) |
+                      ((uint32_t)request->payload[3] << 24);
+        failed_instance = (uint64_t)request->payload[4] |
+                          ((uint64_t)request->payload[5] << 8) |
+                          ((uint64_t)request->payload[6] << 16) |
+                          ((uint64_t)request->payload[7] << 24) |
+                          ((uint64_t)request->payload[8] << 32) |
+                          ((uint64_t)request->payload[9] << 40) |
+                          ((uint64_t)request->payload[10] << 48) |
+                          ((uint64_t)request->payload[11] << 56);
+        local_error[0] = '\0';
+        if (wvm_memory_service_global_invalidate_subscriber_instance) {
+            int inv = wvm_memory_service_global_invalidate_subscriber_instance(
+                failed_node, failed_instance, 0, NULL, local_error,
+                sizeof(local_error));
+            if (inv != 0 && inv != -ENOTCONN) {
+                result->status_code = WVM_CONTROL_RESULT_PRECONDITION_FAILED;
+                apply_result = -1;
+                break;
+            }
+        }
+        result->status_code = WVM_CONTROL_RESULT_SUCCESS;
+        result->recorded_state = WVM_LIFECYCLE_COMMITTED;
+        apply_result = 0;
+        break;
+    }
     default:
         apply_result = apply_route_stage(receiver, request, result, error,
                                          error_len);

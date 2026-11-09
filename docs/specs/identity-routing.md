@@ -6,17 +6,31 @@ The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
 rules apply to this specification.
 
 Scope: identity allocation, identity lifetime, flat and fractal route scope,
-route lookup, route-snapshot ownership, compatibility with the current 32-bit
-`slave_id`/`target_id`, and failure behavior for missing or stale routes. This
+route lookup, route-snapshot ownership, complete destination validation, and
+failure behavior for missing or stale routes. This
 specification does not define packet framing, payload layout, membership state
 transitions, page consistency, or vCPU handoff; those belong to the wire IPC,
 membership, memory, and vCPU specifications. VM identity allocation and
 retirement are consumed from `runtime-manifest-lifecycle.md`; resource placement
 is consumed from `resource-placement-admission.md`.
 
-This document is normative for new routing work. Current raw-ID fallback,
-`NODE`/`ROUTE` files, gateway route learning, and fixed route arrays describe
-compatibility behavior rather than the target contract.
+This document is normative for routing work. Raw-ID fallback, `NODE`/`ROUTE`
+production inputs, and gateway-invented membership are prohibited; bounded
+storage must follow the declared independent capacity budgets.
+
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Own identity/key interpretation, scoped lookup and operation lifetime across route replacement. Lifecycle allocates VM lifetimes; membership publishes routing truth. |
+| State and mutation | Runtime route maps are immutable snapshot projections keyed by full scope/generation. Only authorized publication replaces them; lookup never invents an ID, member, or placement. |
+| Allowed implementation dependencies | Shared identity types, canonical snapshot records, public snapshot/compiler utilities and transport-facing lookup interfaces. Consume membership projections, not controller private state. |
+| Interactions and lifetime | Section 6.1 owns rerouting without duplicate effects. Retirement consumes [lifecycle Section 6.3](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement); preserve old snapshot references through required result/query horizons. |
+| Concurrency and cost | Concurrent lookups use complete snapshots. Declare lookup/compilation storage budgets and flat/fractal hop costs; sparse IDs do not justify dense allocation or global lookup serialization. |
+| Failure and verification | Sections 6 and 10 require typed missing/stale/capacity errors and identity isolation. A wider field or extra gateway level does not prove supported scale. |
 
 ## 1. Goal and Non-Goals
 
@@ -29,33 +43,32 @@ The goal is a hierarchy-aware route model where flat and fractal deployments
 share the same VM namespace and endpoint semantics while each gateway holds
 only the route scope it needs.
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - Reusing a `vm_id` immediately while old processes, routes, or packets can
   still exist.
 - Inferring a route from a UDP source address or heartbeat.
 - Exposing physical topology selection or per-destination routes as ordinary
   VM-user input.
-- Treating a 24-bit field in the current header as proof that all user/kernel
-  route tables can already scale to 2^24 endpoints.
+- Treating an identifier's representable range as proof that route tables can
+  support the same number of endpoints.
 - Supporting a distributed-hash or auto-learning route algorithm as a semantic
   authority without a separately accepted discovery and membership contract.
 
 ## 2. Identity Model
 
-The following identifiers are distinct even when they are numerically equal in
-current tests.
+The following identifiers are distinct even when numerically equal.
 
 | Identifier | Owner | Lifetime and meaning |
 | --- | --- | --- |
-| `vm_id` | Cluster control plane | V1 logical VM namespace is `u32` values `1..UINT32_MAX`; legacy compatibility wire carries only values `1..255`. It is not durable on its own. |
+| `vm_id` | Cluster control plane | Logical VM namespace is `u32` values `1..UINT32_MAX`. It is not durable on its own. |
 | `vm_incarnation` | Cluster control plane | Fresh value per identity allocation, consumed even by an aborted candidate; protects against delayed traffic after `vm_id` reuse. |
 | `physical_node_id` | Cluster control plane | Registered resource-provider host. It is not a DHT or route-table index. |
 | `node_instance_id` | Registered node agent | Fresh boot/process instance for a physical node registration. |
 | `gateway_id` / `gateway_instance_id` | Cluster control plane and gateway agent | Logical gateway role and one gateway process lifetime. |
 | `pod_id` | Cluster control plane | Fractal routing domain or prefix scope. It is not guest NUMA identity. |
 | `vnode_id` | Cluster control plane | Logical routing slot inside a VM/POD route domain. One physical node can own multiple vnodes. |
-| `primary_vnode` | Cluster control plane | A designated vnode for legacy APIs that accept one local route identity. |
+| `primary_vnode` | Cluster control plane | Designated local vnode in the admitted route scope; not a substitute for a complete key. |
 | `WVM_INSTANCE_ID` | Local runtime manifest | Local namespace discriminator for sockets, SHM, logs, and processes. Never a wire route ID. |
 | `process_instance_id` | Component runtime | Diagnostic lifetime for one process. Never a VM identity or route key. |
 | `membership_revision` | Cluster membership authority | Desired member-record revision. |
@@ -64,19 +77,10 @@ current tests.
 | `route_generation` | Route snapshot authority | Immutable next-hop generation within one route scope. |
 | `route_snapshot_digest` | Route compiler | Digest of one full immutable snapshot. |
 
-The current packet header encodes a compatibility composite ID:
-
-```text
-31        24 23                  0
-+----------+----------------------+
-|  vm_id   | current node_id field |
-+----------+----------------------+
-```
-
-`WVM_ENCODE_ID(vm_id, node_id)` and `WVM_GET_NODEID()` remain valid only as
-compatibility helpers during the wire transition. They do not carry
-`vm_incarnation`, member instance identity, topology revision, or route
-generation.
+An 8-bit VM / 24-bit node packed identifier cannot carry VM incarnation,
+member-instance identity, topology revision, or route generation. Such helpers
+must not replace the complete production key. The zero VM namespace is for
+authenticated cluster control, not an exception permitting raw-ID guest routes.
 
 ### 2.1 VM Namespace Allocation and Retirement
 
@@ -88,7 +92,6 @@ VmNamespaceRecord {
     next_vm_incarnation;
     state;                        // FREE, ALLOCATED, ACTIVE, RETIRING,
                                   // QUARANTINED
-    legacy_cluster_epoch;
     retirement_record_digest;
 }
 ```
@@ -105,7 +108,7 @@ scope is emitted. It allocates a strictly new `vm_incarnation`; retrying an
 aborted attempt never revives the old value. `ACTIVE` follows the lifecycle
 activation fence, not a route listener or process start.
 
-For the V1 wire ABI, `RETIRING -> QUARANTINED` requires all of the following:
+For the defined wire ABI, `RETIRING -> QUARANTINED` requires all of the following:
 
 - The VM route scopes/current and predecessor snapshots have received required
   retirement acknowledgements and have no active operation references.
@@ -118,21 +121,14 @@ Only then may the allocator return the ID to `FREE`; the next allocation uses a
 new incarnation and rejects every old-format/new-format packet that does not
 match it.
 
-The legacy wire format has no incarnation field. In legacy mode a nonzero
-`vm_id` is used at most once per `legacy_cluster_epoch`. It becomes reusable
-only after a controlled cluster-wide epoch reset has stopped or fenced every
-node runtime, sidecar, gateway, executor, and kernel context and cleared their
-route/request/cache state. This is deliberately conservative and gives the
-current 8-bit namespace a finite lifetime per epoch rather than pretending
-unsafe immediate reuse is valid.
+Old formats without the required incarnation are rejected. Their rejection
+must not depend on a global epoch reset or a supported legacy VM deployment.
 
-### 2.2 V1 Width and Mixed-Deployment Rule
+### 2.2 Identity Width and Participant Capability
 
-The V1 envelope's `vm_id` is a full `u32` namespace. The legacy
-`WVM_MAX_VMS` (256) constant is only the dense resource-plan table capacity for
-compatibility plans indexed by legacy slot IDs; it must not cap or alias the V1
-`u32` namespace, and a V1 identity that cannot index that table must use the
-typed identity/admission path rather than the legacy resource-plan array.
+The envelope's `vm_id` is a full `u32` namespace. A fixed dense resource-plan
+array must not cap or alias that namespace. Identity/admission storage follows
+actual records and declared capacity, independently of identifier magnitude.
 The allocator may assign
 any value in `1..UINT32_MAX` only after every required participant for that VM
 (QEMU frontend, node runtimes, executors, sidecars, gateways, and selected
@@ -140,12 +136,10 @@ accelerator contexts) has negotiated `WVM_CAP_VM_ID_U32`. A participant
 outside the VM's manifest need not negotiate this feature merely because it is
 registered in the cluster.
 
-A VM that uses V1 identity semantics never traverses a legacy header hop. A
-mixed deployment may continue to host legacy VMs with IDs `1..255`, subject to
-the legacy cluster-epoch reuse rule, alongside V1 VMs whose complete selected
-path supports V1. The control plane records the selected namespace ABI in the
-candidate manifest and rejects a plan whose route or local participant lacks
-the required capability.
+A production VM never traverses a legacy header hop. The control plane records
+the required namespace ABI in the candidate manifest and rejects a plan whose
+route or local participant lacks it. Mixed old/new VM deployments and dual
+identity decoders are not required.
 
 ## 3. Canonical Route Key
 
@@ -172,7 +166,7 @@ RouteSnapshotKey = {
 ```
 
 `destination_scope` is empty for a flat route domain and is a Pod/prefix for a
-fractal route domain. The exact V1 wire carriage is the 24-byte routed-frame
+fractal route domain. The wire carriage is the 24-byte routed-frame
 prefix in `wire-ipc-abi.md`: its `destination_kind`,
 `destination_scope`, and `destination_vnode_or_endpoint` fields complete this
 key. The prefix is forwarding metadata protected by the frame CRC but excluded
@@ -185,20 +179,20 @@ flat:    { vm_id, vm_incarnation, local_vnode }
 fractal: { vm_id, vm_incarnation, pod_or_prefix, local_vnode }
 ```
 
-The current `WVM_SLAVE_BITS=12` reserves 4096 slots in fixed implementation
-tables. It does not define a permanent local or global capacity contract.
-Existing consumers that impose this bound must be migrated before advertising
-larger domains; changing the macro alone is insufficient.
+Vnode address space and deployed capacity are separate contracts. A domain's
+capacity follows explicit bounded storage and transport budgets, not an
+identifier bitfield or a fixed array. Fractal topology may aggregate multiple
+independently budgeted leaf domains; it is not required merely because an
+identifier is numerically large.
 
 ### 3.1 Address Space and Capacity Budgets
 
-The formal routed-frame prefix in `wire-ipc-abi.md` already carries a `u32`
+The formal routed-frame prefix in `wire-ipc-abi.md` carries a `u32`
 `destination_vnode_or_endpoint`. Values `0..0xfffffffe` are representable vnode
 IDs; `0xffffffff` is reserved and must reject. This gives 4,294,967,295 possible
 vnode values per VM-scoped flat or leaf-Pod domain. It is an address-space bound,
-not a physical-host count or an achievable deployment size. The old 24-bit
-composite node field is not the target contract and must not truncate formal
-IDs. Range/count arithmetic must reject overflow and inclusion of the sentinel.
+not a physical-host count or an achievable deployment size. Range/count
+arithmetic must reject overflow and inclusion of the sentinel.
 
 The control plane owns independent capacity budgets for cluster members,
 domain vnode counts, gateway adjacency and route records, and per-VM admission
@@ -358,33 +352,20 @@ cannot independently create, remove, or reactivate a member.
 
 | File, symbol, or boundary | Required responsibility |
 | --- | --- |
-| `common_include/wavevm_protocol.h` | Define a versioned route key carrying incarnation and fractal scope in the next ABI. |
+| `common_include/wavevm_protocol.h` | Define the canonical route key carrying incarnation and fractal scope. |
 | `common_include/wavevm_config.h` | Replace shared fixed limits with independent resource budgets and storage sized for actual records; 4096 is not a permanent flat/leaf ceiling. |
 | `common_include/wavevm_cluster.c`, `wavevm_admission.[ch]`, and `wavevm_runtime_dispatch.c` | Separate member/plan capacities from domain occupancy and ID validity; validate complete scoped destinations without dense-ID assumptions. |
 | `master_core/user_backend.c` | Cache only local sidecar/derived next-hop state; do not require every destination to fit one local array. |
-| `gateway_service/aggregator.c` | Use strict complete keys and immutable snapshot lookup; retain legacy fallback only for `vm_id=0` during migration. |
+| `gateway_service/aggregator.c` | Use strict complete keys and immutable snapshot lookup; reject raw-ID production fallback. |
 | `common_include/wavevm_resources.c` | Import as bootstrap data into a versioned member/topology registry. |
 | `master_core/kernel_backend.c` | Convert to a context-scoped derived accelerator cache after kernel specification acceptance. |
 
-## 9. Compatibility and Migration
+## 9. Compatibility Boundary
 
-1. Keep current `vm_id=0` raw-ID behavior only behind an explicit legacy
-   compatibility reader.
-2. Add manifest fields for VM incarnation, topology revision, route generation,
-   route scope, snapshot digest, Pod/prefix, and local vnode without changing
-   all data-plane fields at once.
-3. Make gateways accept a prepared complete-key snapshot before emitting a new
-   route format.
-4. Add wire version negotiation and dual decoders before sending incarnation or
-   hierarchy fields to legacy nodes.
-5. Reject mixed routes that use a nonzero `vm_id` with raw fallback once all
-   participating nodes advertise the new capability.
-6. Remove `WVM_MAX_GATEWAYS` global-destination assumptions and fixed whole-cluster
-   admission arrays, with flat/fractal tests proving independent capacity checks,
-   sparse complete-key lookup, and kernel-cache isolation. Keep resource limits
-   explicit; no mixed fallback to an old dense table may truncate larger IDs.
-7. Implement the legacy namespace epoch reset before attempting nonzero VM-ID
-   reuse on a legacy-wire deployment.
+No legacy raw-ID route, static route file, dense-index assumption, or dual
+decoder is required. Production traffic uses complete VM-incarnation-scoped
+keys and admitted snapshots; unsupported identities and missing routes reject
+before forwarding. VM-ID reuse follows the retirement contract in Section 2.
 
 ## 10. Acceptance Tests
 
@@ -417,8 +398,8 @@ cannot independently create, remove, or reactivate a member.
   produces one cached result or one bounded terminal failure.
 - Start/stop VM A while VM B shares gateways and raw vnode values. VM A route
   retirement never mutates VM B's current or predecessor snapshot.
-- Delayed legacy/new-wire packets after VM-ID reuse cannot reach the new
-  incarnation; legacy reuse is rejected until a full cluster epoch reset.
+- Delayed old-format and wrong-incarnation packets after VM-ID reuse cannot
+  reach the new incarnation; no legacy decoder bypasses that check.
 - Source-address changes and heartbeat observations cannot overwrite a pinned
   production route or create a member.
 - Kernel and user-space derived caches reject a stale VM identity or route

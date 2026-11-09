@@ -1,0 +1,5 @@
+preflight 2026-11-09 17:57:34 CST
+crw-rw----+ 1 root kvm 10, 232 11月  9 17:55 /dev/kvm
+crw-rw-rw-  1 root kvm 10, 264 11月  9 17:54 /dev/wavevm
+wavevm                 45056  0
+fix=ordered_FE_replace + Cirros mode=user split=1

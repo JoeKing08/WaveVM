@@ -1,0 +1,23 @@
+N02 coherent SHM same-backing proof — 2026-11-09 Asia/Shanghai
+NO commit/push
+
+Disposition: PASS (directed)
+
+Changes:
+1) wavevm-qemu/accel/wavevm/wavevm-user-mem.c::wavevm_user_mem_set_tcg_shm_coherent
+   - Require both FE/executor physical host ids: present, parseable, non-zero
+   - Refuse cross-host mismatch
+   - Require WVM_SHM_FILE and WVM_FE_SHM_FILE non-empty and equal
+   - Missing/invalid → coherent OFF, fault path kept
+
+2) node_runtime/main.c — export WVM_FE_SHM_FILE from WVM_SHM_FILE when unset
+3) slave_daemon/slave_hybrid.c — inherit WVM_FE_SHM_FILE into helper env
+
+Evidence:
+  tests/unit/test_f05_coherent_host_scope.sh → PASS (updated assertions)
+  audit-evidence/fix-blockers-20261109/N02-coherent-backing/console.txt
+
+Limits:
+  - Backing identity is path-string equality (WVM_FE_SHM_FILE vs WVM_SHM_FILE),
+    not inode st_dev/st_ino of an opened fd
+  - QEMU binary rebuild not run here; unit extracts setter from source

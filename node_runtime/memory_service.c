@@ -1321,6 +1321,12 @@ static int publish_typed_commit(
     }
     pthread_mutex_lock(&service->subscriber_lock);
     size_t bucket = subscriber_bucket(gpa, service->subscriber_bucket_count);
+    /*
+     * N05: expire ACTIVE/READING leases before publish selects recipients.
+     * Upsert/explicit invalidate already reaped; publish-only traffic must
+     * not keep delivering to leases past completion_timeout_ms.
+     */
+    subscriber_reap_bucket_locked(service, bucket, monotonic_milliseconds());
     for (struct wvm_memory_subscriber *s = service->subscriber_buckets[bucket];
          s; s = s->next) {
         if ((s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||

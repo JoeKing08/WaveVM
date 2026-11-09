@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# §7 guest E2E matrix: flat|fractal × require-tcg|require-kvm.
-# Durable evidence under WVM_GUEST_OUT_DIR; honesty labels per cell.
-# Does NOT claim Minimum COMPLETE by itself.
+# Phase 9 Minimum guest matrix (F10 narrowed): flat|fractal × require-kvm.
+# TCG guest OS login/SSH cells are Extended Phase 10 — default selection is
+# KVM-only. Opt into TCG guest cells explicitly via WVM_GUEST_CELLS (they are
+# labeled EXTENDED, not Minimum gates). Durable evidence under WVM_GUEST_OUT_DIR.
+# Does NOT claim Minimum COMPLETE by itself. SKIP≠PASS.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -34,7 +36,8 @@ export WVM_S6_REAL_QEMU=${WVM_S6_REAL_QEMU:-1}
 tip=$(cd "$repo_root" && git rev-parse --short HEAD 2>/dev/null || echo unknown)
 {
   echo "guest_matrix run_id=$run_id out_dir=$out_dir tip=$tip have_kvm=$have_kvm"
-  echo "cells=flat_tcg,fractal_tcg,flat_kvm,fractal_kvm"
+  echo "cells_default=flat_kvm,fractal_kvm (Minimum Phase 9)"
+  echo "cells_extended_opt_in=flat_tcg,fractal_tcg"
   TZ=Asia/Shanghai date
 } | tee -a "$summary"
 
@@ -52,7 +55,8 @@ declare -A CELL_ACCEL=(
   [flat_kvm]=disabled [fractal_kvm]=disabled
 )
 
-selected=(${WVM_GUEST_CELLS:-flat_tcg fractal_tcg flat_kvm fractal_kvm})
+# F10: Minimum default is KVM guest cells only.
+selected=(${WVM_GUEST_CELLS:-flat_kvm fractal_kvm})
 pass=0 fail=0 skip=0 blocked=0
 ran=()
 
@@ -75,7 +79,15 @@ run_cell() {
 
     if [[ "$backend" == "require-kvm" && "$have_kvm" != "1" ]]; then
         echo "RESULT=$cell SKIP reason=no_kvm" | tee "$status_f" | tee -a "$summary"
-        echo "honesty=SKIP_no_/dev/kvm" >"$cell_dir/HONESTY.txt"
+        echo "honesty=SKIP_no_/dev/kvm_not_PASS" >"$cell_dir/HONESTY.txt"
+        skip=$((skip + 1))
+        return 0
+    fi
+
+    # F10: TCG Cirros login/SSH is Extended Phase 10, not Minimum Phase 9.
+    if [[ "$backend" == "require-tcg" && "${WVM_GUEST_ALLOW_TCG_LOGIN:-0}" != "1" ]]; then
+        echo "RESULT=$cell SKIP reason=extended_tcg_guest_login" | tee "$status_f" | tee -a "$summary"
+        echo "honesty=EXTENDED_Phase10_TCG_guest_login_not_Minimum_gate" >"$cell_dir/HONESTY.txt"
         skip=$((skip + 1))
         return 0
     fi
@@ -165,7 +177,8 @@ done
     echo "MATRIX_RESULT=FAIL"
   fi
   echo "MINIMUM_COMPLETE=NOT_CLAIMED_BY_GUEST_MATRIX"
-  echo "NOTE: guest matrix proves §7 Cirros path per cell; not MTTCG / not charter COMPLETE."
+  echo "NOTE: Minimum Phase 9 = KVM flat/fractal login/SSH + remote attribution;"
+  echo "NOTE: TCG guest login is Extended; SKIP≠PASS; MATRIX_PASS≠MINIMUM_COMPLETE."
   TZ=Asia/Shanghai date
 } | tee -a "$summary"
 

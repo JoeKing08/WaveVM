@@ -1,0 +1,2 @@
+test_n03_quiesce_sigusr1: PASS
+sigusr1_quiesce=1 multi_participant_continue=1

@@ -1,0 +1,16 @@
+WaveVM Minimum status — 2026-11-09 ~20:30+ CST Asia/Shanghai
+MINIMUM_COMPLETE: NOT_CLAIMED / NOT_CLAIMABLE
+Tip: e47d6a518 (docs+code dirty; no commit/push this turn)
+
+Post cross-audit (Grok 1957 self-audit + 小浪 2030 independent):
+  PASS directed: N01 N02 N03 N04 N06 N07
+  N05: PARTIAL (cross-audit downgrade — bridge code present; oracle was F07 same-proc only;
+       pending true bridge→0x0307→STALE)
+  F10: PARTIAL — KVM login/SSH green on flat/fractal; remote_attribution FAIL
+       (reject “CLOSED for login/SSH” closeout wording)
+  F05: PARTIAL — RET evidenced (195252/195230); harness ERROR; NOT COMPLETE
+       (reject “RET path CLOSED” as F05 closed)
+  F01: DEFERRED (Extended)
+  Phase 9: FAIL to close
+Combined audit: audit-evidence/MINIMUM_GAP_CROSS_AUDIT_GROK_XIAOLANG_20261109-2030.txt
+小浪 raw: audit-evidence/fix-blockers-20261109/xiaolang-cross-audit-20261109-2030.md

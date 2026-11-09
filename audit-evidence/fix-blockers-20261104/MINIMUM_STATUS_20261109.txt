@@ -1,0 +1,17 @@
+WaveVM Minimum status 20261109 Asia/Shanghai (continue after N01/N04)
+tip: e47d6a518 — docs dirty + production dirty (N01–N04,N03,N02)
+NO commit/push — NO MINIMUM_COMPLETE
+
+权威清单：audit-evidence/MINIMUM_FIX_LIST_20261109.txt
+
+Closed this arc:
+  N01 PASS directed — admission workspace lease/fail-closed
+  N04 PASS directed gate — unique KVM FE process ownership
+  N03 PASS directed — SIGUSR1 wired + multi-participant QUIESCE continue
+  N02 PASS directed — coherent requires host+backing affirmative proof
+
+Still open:
+  F05 OPEN/BLOCKED — no TS/second host; push-fence drain residual
+  N05, N06, N07, F10(KVM narrowed)
+
+Next: N05 (when resuming) — or F05 when fabric available.

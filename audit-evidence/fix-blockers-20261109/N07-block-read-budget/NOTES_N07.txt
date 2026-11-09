@@ -1,0 +1,25 @@
+N07 block READ result budget pre-execute reserve — 2026-11-09 Asia/Shanghai
+tip base: e47d6a518; production dirty
+NO commit/push
+
+Disposition: PASS (directed) — atomic pre-execute hold
+
+Production change:
+  node_runtime/block_service.c
+  - reserve_entry_locked accounts retained_bytes + reserved_result_bytes
+    + need against limit before admitting the entry.
+  - READ path sets reserved_hold_bytes and increments reserved_result_bytes
+    before execute (atomic under service lock).
+  - On complete: convert hold → retained_bytes; on fail/release: drop hold.
+  - release/complete paths clear unconverted holds so budget cannot leak.
+
+Directed evidence:
+  tests/control-plane/test_n07_block_read_budget.c → PASS
+    winners=1 reserved=4096 (two concurrent 4096 against limit 4096)
+  console: …/N07-block-read-budget/console.txt
+
+Honest limits:
+  - Oracle models the lock+hold race; production block_service change matches.
+  - Full multi-queue live block READ soak not re-run this turn.
+
+Next: F10 KVM-narrowed guest matrix criteria.

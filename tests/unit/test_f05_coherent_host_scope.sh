@@ -36,7 +36,8 @@ test -s "$tmpdir/f05_coherent.inc"
 grep -q 'WVM_PHYSICAL_HOST_ID' "$repo_root/node_runtime/admission_main.c"
 grep -q 'WVM_FE_PHYSICAL_HOST_ID' "$repo_root/node_runtime/main.c"
 grep -q 'WVM_EXECUTOR_PHYSICAL_HOST_ID' "$repo_root/slave_daemon/slave_hybrid.c"
-grep -q 'F05 coherent REFUSED' "$repo_root/wavevm-qemu/accel/wavevm/wavevm-user-mem.c"
+grep -qE 'N02 coherent REFUSED|F05/N02 coherent REFUSED|F05 coherent REFUSED' "$repo_root/wavevm-qemu/accel/wavevm/wavevm-user-mem.c"
+grep -q 'WVM_FE_SHM_FILE' "$repo_root/node_runtime/main.c"
 
 gcc -std=gnu11 -Wall -Wextra -Werror -I"$tmpdir" \
     "$repo_root/tests/unit/test_f05_coherent_host_scope.c" -o "$tmpdir/test_f05"

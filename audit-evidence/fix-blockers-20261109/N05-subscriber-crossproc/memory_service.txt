@@ -1,0 +1,16 @@
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=33405 directory=99 directory_instance=202 operation=00000000000000000000000000000001 gpa=4096 remote_reads=1 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=33405 directory=99 directory_instance=202 operation=f2000000000000000000000000000000 gpa=0 remote_reads=1 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=33405 directory=99 directory_instance=202 operation=f2000000000000005e0e000000000000 gpa=15065088 remote_reads=3679 remote_commits=0
+[WVM-MEM-STATS] vm=256 incarnation=7 manifest=3 origin=17 instance=101 runtime=1001 pid=33405 directory=99 directory_instance=202 operation=f2000000000000008f1c000000000000 gpa=29945856 remote_reads=7312 remote_commits=0
+EVID memory_service_subscriber: leaf_instance=303 next_hop_instance=202
+EVID F07_invalidate_instance: ACTIVE_to_STALE=1
+EVID F07_membership_hook: global_invalidate_all_runtimes=1
+EVID F07_lease_reap: ACTIVE_past_horizon_STALE_or_freed=1
+EVID F07_subscriber_lease: invalidate=1 membership_hook=1 lease_reap=1
+EVID memory_subscriber_capacity: pages=4097 repeated_read_deduplicated=1 last_page_push=1 admitted_bound=1
+EVID memory_subscriber_read: commit_during_snapshot_delivered=1 untracked_success_rejected=1
+EVID memory_service_capacity: commits=1025 local_receipts_retained=1 remote_receipt_retained=1
+EVID memory_service_retire: callback_pinned=1 new_work_rejected=1 subscribers_removed=1
+EVID memory_read_receipts: pages=8192 bytes=33554432 elapsed_ms=566 retention_ms=60000 same_id_newer_snapshot=1 stale_reply_ignored=1 identity_and_digest_conflicts_rejected=1
+EVID memory_service: dirty_commit base_version=7->result_version=8 STALE_BASE_VERSION=1 ack_version_path=9
+memory-service tests: PASS

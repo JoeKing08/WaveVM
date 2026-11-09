@@ -1,936 +1,562 @@
 # WaveVM Refactor Roadmap
 
-Status: normative dependency-ordered roadmap for converging Mode A and Mode B
-without losing functionality.
-Scope: this document defines deliverables and implementation gates. It is not
-an implementation log and does not replace the subsystem specifications named
-by `wavevm-architecture-baseline.md`.
+Status: normative implementation and maintenance roadmap.
+Scope: dependency-ordered runtime capabilities, architectural constraints, and
+objective acceptance boundaries. This document records requirements, not code
+inventories, implementation progress, audit verdicts, or test results.
+
+Phases 0 through 9 form Minimum. Phases 10 through 13 form Extended. Every
+phase delivers executable behavior; writing specifications or producing an
+empty skeleton is not a feature phase. Targeted verification accompanies the
+capability it checks; the final matrix closes a delivery profile.
 
 ## Document Maintenance
 
-These rules apply to the architecture baseline, this roadmap, and every
-subsystem specification under `docs/specs/`:
+These rules govern the architecture baseline, this roadmap, and all subsystem
+specifications under docs/specs/:
 
-- Record architecture, ownership, semantic contracts, interfaces, constraints,
-  dependency order, migration requirements, and objective acceptance criteria.
-  Keep implementation progress, completion checkboxes, dated approval notes,
-  test results, coverage totals, and audit verdicts in the persistent plan,
-  implementation audit reports, or verification records. A specification or
-  source-location table is not evidence that its requirements are implemented.
-- Source mappings may identify affected files and required responsibilities;
-  they must not maintain claims about what the current tree has finished or
-  still lacks. Record code inventories and observed deviations separately.
-- State machines, capability states and limits, and conditional admission or
-  release gates are normative content. Express a gate through the evidence it
-  requires, rather than a dated pass/fail declaration or an audit finding ID.
-- Evolve the design when requirements change, including adding contracts and
-  promoting Extended work into Minimum. Update the owning specifications,
-  affected boundaries, dependencies, and acceptance criteria together. An
-  implementation shortcut or missing feature does not by itself authorize
-  weakening a requirement, declaring acceptance, or moving it into Extended.
+- State required architecture, authority, interfaces, state transitions,
+  concurrency, resource costs, failure behavior, dependencies, and acceptance
+  conditions. Keep completion checkboxes, dated approvals, observed code gaps,
+  measurements, and audit findings in separate plan or verification records.
+- A source mapping identifies a required responsibility, not proof that a file
+  implements it. Observed dependency/state matrices remain outside the charter;
+  allowed dependencies and required ownership must be justified by the target.
+- Existing implementation does not define architectural validity. Follow
+  baseline Section 0.1 when resolving conflicts or revising a core decision.
+  Missing functionality or a historical compromise alone cannot weaken a rule.
+- Revise an owning definition and affected producers, consumers, and acceptance
+  conditions together. Reference cross-domain rules rather than copying them.
+  Boundary summaries index the full contracts; they do not redefine them.
+- State/capability names and conditional admission gates describe required
+  behavior, not present completion. Express each gate through the evidence it
+  requires, without an audit ID or dated pass/fail declaration.
+- Minimum/Extended are temporary scope and dependency boundaries for this
+  delivery roadmap, not permanent feature tiers or progress labels. The project
+  owner may revise feature scope explicitly; preserve the affected correctness
+  and isolation contracts. A completed capability does not change its normative
+  meaning. After the owner closes this roadmap and its phases are accepted,
+  remove the Minimum/Extended labels and boundary while retaining their
+  requirements as system contracts. Track completion separately; future
+  capabilities belong in a new roadmap, not in the retired delivery split.
+- Normative contract history is tracked in Git. Do not add version suffixes to
+  subsystem filenames, symbols, or APIs solely to preserve contract history;
+  wire-format version fields follow the wire ABI contract. No parallel protocol
+  implementation or compatibility path is required. There is no standing
+  requirement to support old configurations, independently launched
+  master/slave services, or mixed legacy deployments.
 
-## 1. Refactor Goal
+## 1. Architecture and Delivery Goal
 
-The goal is not to delete Mode A. The goal is to merge Mode A into the canonical Mode B architecture as an optional kernel accelerator.
+Implement one distributed QEMU platform with canonical user-space semantics:
 
-Target state:
+- The cluster control plane owns membership, identities, capacity, placement,
+  admission, and overall VM lifecycle.
+- One node-runtime binary provides per-VM semantic coordination and local
+  executor management. Backend workers and helper QEMU processes obey its
+  explicit local executor contract; they are not cross-node endpoints.
+- Mode B implements the semantic baseline. Mode A adds optional per-VM kernel
+  acceleration without taking over control-plane or runtime authority.
+- KVM/TCG and flat/fractal paths satisfy the same operation-level meaning.
+- Resource pooling includes explicit accounting, multi-VM isolation, necessary
+  parallel execution, and bounded runtime resources.
 
-```text
-Mode B baseline = correct user-space distributed VM runtime.
-Mode A = Mode B baseline + optional kernel data-plane acceleration.
-```
+### 1.1 Delivery Profiles
 
-This eliminates the long-term maintenance cost of two semantic paths while preserving the performance upside of kernel help.
+**Minimum** requires:
 
-## 1.1 Delivery Profiles
+- Manifest-bound creation, activation, startup, pause/stop, partial-start
+  cleanup, and restart reconciliation by one active coordinator.
+- Explicit VM identity/incarnation, QEMU host placement, remote CPU/memory
+  allocation, independent resource/name leases, and capability selection.
+- Flat and fractal routing with acknowledged immutable snapshots, consistent
+  identity rules, and unchanged semantic-operation keys across rerouting.
+- KVM guest login or SSH with evidence of remote vCPU and remote memory use.
+- Bounded real TCG execution with checked CPU/memory results, independent
+  vCPU ownership/progress, handoff/device/atomic ordering, errors, and cleanup.
+  See baseline Section 16 and vcpu-handoff Section 8.1. A contract pass is not
+  evidence of usable TCG guest OS execution.
+- Multiple Mode B VMs and multiple compute-node instances on one physical
+  host, including aggregate physical_host_id accounting and explicit endpoint,
+  port, socket, shared-memory, log, and temporary-file ownership.
+- Per-VM kernel contexts, with two-VM isolation and teardown evidence before
+  advertising multi-context Mode A.
+- Validated member/gateway join, compute cordon, safe drain, and gateway
+  replacement through an acknowledged successor route snapshot.
+- Required concurrency, priority, batching, and bounded backpressure for these
+  workloads; process survival and listening sockets are not success oracles.
 
-The roadmap has two delivery profiles. They share the same semantic contracts;
-Extended adds backend usability coverage and operational hardening without
-changing what a VM means.
+Minimum assumes one active coordinator and bounded single-scope operations.
+It requires durable activation decisions, restart replay or compensating
+cleanup, and fail-closed required-member loss. It does not require coordinator
+HA, transparent recovery of lost compute state, live migration/resharding, or
+aggregate multi-scope host transactions. Those exclusions cannot excuse stale
+activation, identity bypass, leaks, unsafe removal, or false RUNNING.
 
-### Minimum usable system
+**Extended** adds TCG guest boot/login/SSH and sustained distributed multi-vCPU
+usability; broader fault engines and failure matrices; recovery, HA, migration,
+and live reconfiguration; and hosted host-OS portability. These extend the same
+contracts. Full TCG guest usability must be distinguished from Minimum TCG
+contract support, including when AUTO chooses TCG before admission.
 
-The first usable release must provide:
+Host portability first targets the same Linux host appliance under a declared
+hypervisor adapter on a non-Linux host or where native deployment is
+impractical. It is a host adapter, not a WaveVM guest. Native non-Linux
+user-space and kernel ports require separate contracts. Actual appliance
+probes determine KVM and Mode A availability independently; neither capability
+is inherited from the outer host. Phase 13 owns acceptance.
 
-- a manifest-bound distributed VM with isolated VM identity, routes, sockets,
-  shared memory, ports, logs, and temporary files;
-- flat and fractal routing with the same VM namespace rules;
-- KVM guest execution and bounded real TCG execution against the same memory
-  and vCPU contracts; TCG contract tests include independent vCPU progress,
-  remote memory, handoff/device/atomic ordering, bounded failure, and cleanup
-  as specified in baseline Section 16 and `vcpu-handoff` Section 8.1;
-- multiple Mode B VMs on one physical host;
-- explicit per-VM kernel accelerator contexts, including two-VM isolation tests
-  before Mode A is advertised for multi-VM hosts;
-- basic membership operations: node/gateway join, compute cordon, safe drain,
-  and gateway replacement through an acknowledged route snapshot;
-- multiple compute-node instances on one physical host, with explicit host
-  aggregation, per-instance port/socket/name leases, and correlated host
-  failure semantics;
-- create, activate, start, stop, and partial-start cleanup with bounded
-  failure reporting;
-- KVM guest login or SSH plus evidence of remote vCPU and remote memory activity
-  in the end-to-end smoke tests, and TCG instruction/result-based evidence in
-  bounded contract tests. TCG guest OS boot/login/SSH and sustained multi-vCPU
-  guest usability are Extended gates, not Minimum gates.
+## 2. Architectural Constraints
 
-The minimum usable system does not provide live migration, automatic resource
-replanning, coordinator high availability, transparent recovery of lost
-compute state, or automatic repair without a verified replacement path.
+- No second semantic authority in an executor, gateway, kernel cache, launch
+  script, environment variable, or user-authored route file.
+- No VM-specific global singleton or implicit one-node-instance-per-host rule.
+- No process layout, file boundary, or inherited data structure is itself a
+  target requirement. Independent master/slave production entry points and
+  legacy configuration readers must be removed rather than preserved solely
+  for compatibility.
+- No direct executor-to-executor or frontend-to-remote-executor production
+  path. Cross-node work uses both node runtimes and the sidecar/gateway fabric.
+- No membership admission from a heartbeat, learned route, or source endpoint.
+- No resource removal before allocation drain and acknowledged route retirement
+  or replacement. A sole required path cannot be removed successfully.
+- No global serialization, disabled queue, extra RPC, bulk copy, or blocking
+  forwarding solely to simplify implementation or create module boundaries.
+  Necessary synchronization has an explicit scope and cost.
+- No silent omission of asynchronous diffs, batching, multiqueue processing,
+  or required parallel execution. Meet baseline Section 0.6 through a correct
+  implementation or a justified replacement; naming an optimization is not
+  evidence that it exists or performs well.
+- No test-only production switch, fixed delay as a synchronization proof, or
+  success inferred from an alive process.
 
-### Extended backend coverage and hardening
+## 3. Contract and Change Gate
 
-Extended includes full TCG guest OS boot/login/SSH and sustained distributed
-multi-vCPU guest execution. Its normal path must provide concurrent remote
-progress rather than a token trickle under `force_local`; the detailed gate is
-`vcpu-handoff.md` Section 8.1. Minimum TCG contract support must not be advertised
-as accepted TCG guest OS usability. This delivery boundary does not remove TCG,
-permit wrong execution results, or relax memory, isolation, and lifecycle rules.
+Before changing a public boundary, its owning specification must define the
+applicable responsibility, authority and scope, authorized writers/replicas,
+allowed implementation dependencies, public inputs/results, ordering and
+visibility, resource lifetime, concurrency, and failure semantics. It must
+identify producers/consumers and objective verification. Review adjacent
+contracts for cross-domain changes; local summaries alone are insufficient.
 
-After the minimum usable system is stable, the project may add coordinator
-recovery matrices, automatic migration or resharding, UFFD and other pluggable
-fault engines, deterministic network/lifecycle fault injection, and broad
-failure/recovery CI. These improve operational resilience but are not required
-to establish that the distributed VM itself works.
+Use the subsystem boundary summaries as an index, not another duplicated
+specification. Keep record encoding in canonical-record-schema, operation
+semantics in the owning subsystem, and cross-domain rules at the baseline's
+referenced owner. No universal adapter layer, capability wrapper, lifecycle
+hook API, or runtime contract-version registry is required.
 
-Host OS portability is also Extended, not Minimum. The Minimum profile stays on
-Linux with the existing QEMU/KVM/TCG and `wavevm.ko` paths. The first Extended
-goal here is **hosted portability**: run the same Linux host appliance (WaveVM
-control plane, node runtime, gateway/sidecar, and executor) inside a hypervisor
-adapter on a non-Linux host—or on a host where native deployment is impractical—
-rather than rewriting Kernel or Mode A paths for every OS. That appliance is a
-host adapter, not a WaveVM guest. Native non-Linux user-space ports and native
-Mode A/kernel ports are separate Extended work and are not implied by the
-appliance. Capabilities are whatever the appliance actually probes, with no
-inheritance assumed from the outer host. Missing nested KVM permits only a TCG
-execution plan. Missing or unusable `wavevm.ko` disables Mode A and selects
-Mode B, but does not prohibit a KVM Mode B plan when nested KVM passes its
-probe. Each unavailable capability fails or records the policy-allowed
-pre-admission fallback independently. The adapter is not tied to any particular
-commercial hypervisor; concrete backends are defined by an adapter contract plus
-capability reports and acceptance tests. This work must not change or block Minimum. Acceptance criteria
-live in section 14.1.
+Verification is proportionate to the change. Use executable contract checks,
+public-header/include/symbol rules where enforceable, and targeted concurrency
+or failure checks where needed. Static tooling cannot prove all pointer
+ownership or temporal behavior. Historical co-change frequency is diagnostic,
+not a mandatory score. A full benchmark/fault matrix is not required for every
+patch. Hot-path changes require comparable workload/profile conditions and
+relevant throughput, latency, resource-cost, or scaling evidence; record results
+outside the charter. Keep diagnostics, runtime, and artifacts bounded.
 
-The minimum profile deliberately assumes one active coordinator and bounded
-single-scope control operations. It must fail closed when that coordinator or a
-required member disappears; it does not need transparent recovery, aggregate
-multi-VM host transactions, or live reconfiguration of a running VM. Those
-limits are operational boundaries, not permission to skip identity validation,
-resource cleanup, route acknowledgements, or VM isolation.
+## 4. Phase 0: Implement Identity, Canonical Records, and IPC Foundations
 
-## 2. Architectural Risks to Eliminate
+Implement:
 
-### 2.1 Duplicated Semantic State
+- VM/incarnation, node/member-instance, physical-host, local-runtime, vnode,
+  Pod/scope, route-generation, and semantic-operation identities with explicit
+  allocation, validation, retirement, and non-overlapping version domains.
+- Canonical record codecs, digest/self-digest handling, wire framing, typed
+  status/completion records, size limits, and bounded reassembly.
+- Authenticated control/local registration and operation-origin binding.
+  Reject unknown/incompatible formats, raw-ID substitution, invalid lengths,
+  and unauthorized roles before state mutation.
+- Local executor request/completion primitives with explicit buffer ownership,
+  callback context, cancellation, queue limits, and identity retention.
 
-The architecture must prevent independent semantic copies across these paths:
+Acceptance: executable round trips and negative cases verify canonical bytes,
+identity isolation, bounded decoding, and late/duplicate completion behavior.
+No old producer or reader is retained solely for coexistence. A fixture may
+supply canonical records but cannot bypass validation.
 
-- user-space `logic_core.c` state through `user_backend.c` and `main_wrapper.c`.
-- kernel-side `logic_core.c` state through `kernel_backend.c`.
-- route tables injected into both paths.
-- memory placement injected into both paths.
-- vm_id injected into both paths.
-- unrelated request namespaces in user and kernel paths.
+Owning contracts: identity-routing, wire-ipc-abi, canonical-record-schema.
 
-This creates risk that Mode A and Mode B behave differently under the same VM configuration.
+## 5. Phase 1: Implement the Unified Per-VM Node Runtime
 
-### 2.2 Kernel Module Global Singleton
+Implement:
 
-VM-specific state must not be owned by module-global singletons such as:
+- One node-runtime binary with per-VM coordination and local executor roles,
+  explicit instance identity, request correlation, worker queues, and lifecycle
+  ownership. Delete independent master/slave production launch paths.
+- Candidate/activation validation and local prepare/abort/query records.
+  Unadmitted or merely PREPARED instances cannot serve guest traffic.
+- The typed local executor ABI for workers and helper QEMU processes, including
+  manifest/route references, operation identity, status, and lifetime checks.
+- Bounded ingress/dispatch/completion queues, priority, backpressure, and
+  independent progress. A locally targeted response must reach the requesting
+  local channel rather than be mistaken for another runtime's RPC reply.
 
-- `g_my_vm_id`
-- `g_socket`
-- `gateway_table`
-- `g_mapping`
-- page metadata radix tree
-- CPU and memory route tables through shared `logic_core`
-- request context arrays
+Acceptance: real registered local requests complete through the runtime and
+executor contract; stale identity, role, manifest, and activation failures are
+typed rejections. Worker progress and stop do not depend on a global data-plane
+lock. Helper processes cannot acquire an independent network authority.
 
-Shared workers and transports must carry explicit context references; singleton
-VM state cannot satisfy multi-VM Mode A isolation.
+Owning contracts: runtime-manifest-lifecycle, wire-ipc-abi, and operation specs.
 
-### 2.3 Host Placement Is Implicit
+## 6. Phase 2: Implement Validated Membership and Route Services
 
-Resource planning must select the QEMU host explicitly. Placement order must
-not implicitly determine the host or its overhead reservations.
+Implement:
 
-### 2.4 TCG and KVM Fixes Can Drift
+- Trusted compute/gateway registration, instance identity, physical_host_id,
+  role/capacity declarations, actual capability probes, and health evidence.
+  Probe KVM, TCG, memory/fault mechanics, and optional kernel capabilities
+  independently; resolve required versus preferred policy explicitly.
+- Validation and PENDING/VALIDATING/PREPARED/ACTIVE transitions with bounded
+  authenticated control transport. Reachability alone cannot activate a member.
+- Flat/fractal topology compilation, immutable route-snapshot
+  prepare/ack/publish/retire, exact snapshot digests and persisted survivor
+  RequiredAckSet, and VM route-scope create/retire services.
+- Independently budgeted member, vnode-domain, gateway-adjacency/route, and
+  per-VM admission storage. Size bounded storage for actual records, not the
+  maximum ID or a shared fixed global array. A 4096-slot domain budget is not
+  a global cluster limit and crossing 4096 alone does not require fractal.
+- Sidecar/gateway lookup against complete snapshots, preserving VM identity
+  through every hop; the fabric routes to the remote node runtime.
 
-Many bugs are caused by KVM and TCG requiring different mechanics but the same semantics. Without a shared semantic contract, fixes risk becoming backend-specific patches.
+Acceptance: invalid registrations never become schedulable/routable. Missing
+routes fail explicitly. Sparse high IDs, actual route lookup above 4096 under
+adequate budgets, and multi-Pod totals above a leaf budget are verified
+separately from identifier validity. Unsupported capacity is rejected, never
+truncated or advertised solely from a wider integer field. Rerouting preserves
+semantic-operation identity and never exposes a partial route table.
 
-### 2.5 Test Scripts Encode Too Much Runtime Policy
+Owning contracts: cluster-membership-topology-lifecycle, identity-routing,
+wire-ipc-abi, canonical-record-schema, capability-fault-engines.
 
-CI fixtures may describe topology, ports, capabilities, and expected placement,
-but production policy must come from the control plane and admitted manifests.
-Scripts must not become a second planner or hide capability failures.
+## 7. Phase 3: Implement Memory Consistency and Baseline Fault Paths
 
-### 2.6 Master/Slave Is an Accidental Strong Deployment Boundary
+Implement:
 
-The `master_core` and `slave_daemon` names identify different logical roles;
-their historical process split is not an architectural requirement.
-The master role owns local semantic coordination and the slave role owns local
-execution mechanics. Treating the process boundary as permanent can duplicate
-request correlation and add a local forwarding hop; simply deleting it,
-however, would risk losing executor isolation and making the normal path
-serial. The target is one logical node runtime per VM per participating
-physical node, with an explicit local executor interface.
+- Manifest-selected directory authority and per-page bytes, version,
+  subscriber/copyset state, valid/stale predicates, and authorized writes.
+- Read/fault resolution, versioned dirty/diff commits, push/invalidation,
+  duplicate/reordered update handling, full resync, and exact ACK semantics.
+- The handoff fence, including all required dirty/subscriber visibility.
+  dirty-batch-size=1 is immediate submission, not automatic global coherence.
+- A correct restricted-host TCG fault/capture path and KVM dirty/resync path
+  when KVM is available. Signal handlers remain async-signal-safe. Neither
+  UFFD nor a kernel module is mandatory.
+- Per-page/shard concurrency, asynchronous capture/delivery, batching, QoS,
+  bounded pressure recovery, and safe buffer/mapping/subscriber lifetimes.
 
-### 2.7 Script-Owned Membership and Gateway Topology
+Acceptance: real bytes/versions and successful fence results match the
+contract under representative independent-page concurrency, loss/retry, and
+version-gap cases. Queued submission is not a commit ACK. No dependent vCPU
+executes against unconfirmed memory, and same-host SHM requires actual shared
+backing rather than a local-map or hostname inference.
 
-Static `NODE`/`ROUTE` fixtures and route-add packets cannot replace an
-authoritative member registry, member states, route generations, distributed
-prepare/commit, acknowledgement, drain, or failure policy. A multi-hop fixture
-does not establish safe scale-out or capacity. Route updates must be derived
-from the membership lifecycle and its acknowledged snapshots.
+Owning contracts: memory-consistency, capability-fault-engines, wire-ipc-abi.
 
-## 3. Refactor Principles
+## 8. Phase 4: Implement QEMU, vCPU Backends, and Device Coordination
 
-- Preserve semantic behavior while replacing old paths; no old deployment or
-  wire path is retained solely for compatibility because there is no in-flight
-  business deployment to protect.
-- Keep Mode B as the correctness baseline.
-- Never make a performance optimization define correctness.
-- Treat current master and slave names as logical roles, not a mandatory
-  process topology. Preserve an explicit node-runtime/executor ABI, queue
-  ownership, and failure boundary before changing their deployment.
-- Never use broad serialization, synchronous forwarding, or disabled queues as
-  an undocumented permanent substitute for a correct concurrent design.
-- Preserve the normal asynchronous, batched, and priority-aware data path when
-  repairing correctness. A blocking fallback is valid only when it is bounded,
-  explicitly specified as backpressure or failure handling, and cannot change
-  the success semantics of the normal path.
-- Introduce capability probing before behavior switching.
-- Replace legacy launch, route-injection, and local IPC paths with the typed
-  manifest/runtime path; a temporary source adapter is acceptable only inside
-  the same binary while its deletion is part of the current phase.
-- Avoid broad rewrites of KVM and TCG at the same time.
-- Keep every phase testable with small smoke tests.
-- Do not hide failures behind test-only production parameters.
-- Treat membership, topology, and route publication as control-plane state.
-  Heartbeats and route learning may supply health evidence, but never become
-  independent membership or route authorities.
+Implement:
 
-### 3.1 Specification Gate
+- Shared QEMU machine/device/address-space integration with backend-specific
+  execution mechanics behind the typed local executor interface.
+- KVM context/interrupt/timer export/import, dirty/resync integration, and
+  guest-visible exits. Avoid host protection behavior that invalidates KVM RAM.
+- Real bounded TCG instructions, checked CPU-state transfer and memory access,
+  independent vCPU ownership/progress, and device/atomic exit handling.
+- Per-vCPU at-most-once handoff with memory fences, interrupt merging, typed
+  error/completion, result queries, and bounded uncertain-result handling.
+- QEMU-host device authority for MMIO/PIO/interrupts and block completion.
+  Remote block primitives, when selected, retain write ordering, flush/FUA,
+  idempotency, data-budget limits, and guest-visible errors. This does not
+  require distributed ownership of arbitrary devices or remote disks for
+  every VM.
 
-A subsystem specification is accepted only when it defines, as applicable:
+Acceptance: actual instructions and remote memory operations produce checked
+results; duplicate handoff cannot execute the interval twice. Device exits
+return to the authority, and writes/errors/flushes are not fabricated. KVM/TCG
+share semantic results while retaining backend-specific mechanics. Independent
+work must meet the selected profile's concurrency contract without global
+execution exclusion. Sustained TCG guest usability remains Phase 10.
 
-1. Goal, non-goals, affected code locations, and migration inputs.
-2. Semantic authority and ownership.
-3. Exact structures, fields, units, ranges, and versioning.
-4. Public API, ioctl, local IPC, and wire messages.
-5. Normal sequence and state-transition tables.
-6. Concurrency, lock ordering, and memory-ordering rules.
-7. Timeout, retry, idempotency, and error semantics.
-8. Process and node failure recovery.
-9. Compatibility and migration from current code.
-10. Existing files and symbols expected to change.
-11. Executable tests with objective success oracles and bounded diagnostics.
-12. Expected normal-path concurrency, queue ownership, batching, priority, and
-    overload/backpressure behavior.
+Owning contracts: vcpu-handoff, memory-consistency, storage-device-authority,
+wire-ipc-abi, capability-fault-engines.
 
-Words such as `add`, `support`, `ensure`, `define`, and `handle` are not an
-implementation design unless the document also says what is added, where it
-lives, who calls it, and what happens on success, failure, and concurrency.
+## 9. Phase 5: Implement Placement, Admission, and VM Lifecycle
 
-Phase 0 and Phase 1 may begin immediately. Runtime restructuring in later
-phases must not begin until its prerequisite specifications pass this gate.
+Implement:
 
-## 4. Phase 0: Freeze Architecture Direction
+- A production CLI/API request entry that uses actual eligible membership,
+  inventory, capabilities, routes, and constraints. Implement deterministic
+  compact/spread scoring and stable tie-breakers.
+- Explicit QEMU host selection and overhead, resource quantities independent
+  of node/NUMA selection, physical-host aggregate accounting, exclusive
+  port/socket/name leases, and structured rejection without overcommit.
+- Backend-aware planning: AUTO tries a complete KVM placement, then a new
+  complete TCG placement with explicit fallback; REQUIRE_KVM never degrades.
+  A VM's vCPUs use one backend. Memory participants need their memory-service
+  capability and route, not necessarily KVM.
+- VM identity allocation before candidate digests/reservations, prepared route
+  scope, atomic prepared reservations, participant prepare, eligibility-fence
+  revalidation, one durable activation decision, commit, start, and readiness.
+- Idempotent production prepare/activate/abort/query wiring and persisted
+  participant ACKs. Prevent stale activation after cordon, health/capability,
+  gateway drain, or selected member-instance changes.
+- Pause/stop, partial-start compensation, route/subscriber/completion/context
+  retirement, named cleanup owners, safe reuse, and coordinator restart
+  reconciliation against the durable decision. Activated allocations cannot
+  expire as if they were uncommitted prepare leases.
 
-Purpose: prevent new code from deepening the split.
+Acceptance: a multi-node SPREAD request traverses the production entry through
+actual participant ACKs to RUNNING with remote CPU/memory evidence. Submission
+node and QEMU host may differ. Four concurrent creates cannot double-allocate
+CPU, memory, names/ports, or overhead. Normal startup failures release exactly
+their own resources. Restart replays/cleans up one recorded decision; no
+listener, process, or test-owned planner substitutes for readiness.
 
-Actions:
+Quiesce/drain/finalize follows lifecycle Section 6.3. Timeouts do not establish
+cancellation or authorize reuse of a still-referenced resource. Comprehensive
+crash matrices and coordinator HA belong to Phase 12, not basic reconciliation.
 
-- Adopt `docs/wavevm-architecture-baseline.md` as the guiding design document.
-- Mark Mode B as canonical in contributor notes.
-- Mark Mode A as optional accelerator, not separate semantic mode.
-- Make the node runtime the per-VM local semantic and cross-node endpoint;
-  remove the current master/slave process split rather than preserving it as a
-  deployment compatibility layer.
-- Remove `NODE`/`ROUTE` files, gateway route-add packets, legacy launch flags,
-  and field-by-field IOCTL injection from production inputs. Test fixtures may
-  render topology records, but they must not become a second runtime authority.
-- Stop adding new topology, VM lifecycle, or resource planning truth to `kernel_backend.c`.
-- Stop adding hardcoded test workarounds to production code.
+Owning contracts: resource-placement-admission, runtime-manifest-lifecycle,
+cluster-membership-topology-lifecycle, and canonical record/wire contracts.
+
+## 10. Phase 6: Complete Multi-VM and Same-Host Instance Isolation
+
+Implement:
+
+- First-class per-VM runtime state, manifest-derived endpoints, SHM and
+  mappings, route/request namespaces, logs, temporary paths, process ownership,
+  and reservation/lifecycle records across every participating component.
+- Multiple registered compute instances on one physical host with explicit
+  instance namespaces and aggregate CPU/memory/context/overhead limits.
+- VM-scoped drain and cleanup, process-failure attribution, worker/completion
+  references, and independent queue progress under shared infrastructure.
+
+Acceptance: two Mode B VMs and two same-host compute instances coexist with
+identical raw vnodes/guest ports where permitted. Stopping or failing one does
+not clear, truncate, unlink, quiesce, or consume another's state. Concurrent
+admission honors physical-host budgets and exclusive leases. No host-global
+port, process-kill pattern, or singleton identity stands in for ownership.
+
+Owning contracts: runtime-manifest-lifecycle, resource-placement-admission,
+identity-routing, memory-consistency, vcpu-handoff, wire-ipc-abi.
+
+## 11. Phase 7: Complete Dynamic Member and Gateway Lifecycle
+
+Implement:
+
+- Production join/rejoin, cordon, compute drain/removal, gateway replacement,
+  and planned versus unplanned failure outcomes through the control plane.
+- Eligibility-fence invalidation for unfinished admissions. Joining adds
+  capacity for future placement, never silently rewrites an admitted VM.
+- Refusal to remove active vCPU, memory/directory, storage, or required control
+  dependencies without an accepted transfer protocol.
+- Successor routes prepared and acknowledged by the persisted exact survivor
+  RequiredAckSet before gateway switch. The departing/failed gateway is
+  optional drain evidence, not a required ACK. Retain predecessor generations
+  for active operations and bounded result/query horizons.
+- Correlated physical-host health exclusion across hosted roles, and role-local
+  handling for independent process faults. Aggregate multi-scope host-removal
+  transactions remain Extended.
+
+Acceptance: busy compute drain and sole-gateway removal fail safely; a verified
+alternate gateway succeeds without black holes, partial snapshots, duplicate
+side effects, or changed VM identity. Required-member loss yields documented
+paused/degraded/failed behavior, never false health or implicit rebind. Removing
+one VM's dependency cannot erase another VM's live route scope or allocation.
+
+Owning contracts: cluster-membership-topology-lifecycle, identity-routing,
+runtime-manifest-lifecycle, resource-placement-admission, wire-ipc-abi.
+
+## 12. Phase 8: Implement Per-VM Kernel Acceleration
+
+Implement:
+
+- Explicit context create/attach, permission validation, per-VM identity,
+  mappings, route/config caches, page/dirty metadata, operation namespaces,
+  queues, and lifetime-safe TX/VMA/work references.
+- Only context-tagged shared infrastructure as module-wide state; user-space
+  authorities retain placement, routing, lifecycle, and consistency decisions.
+- Typed manifest-derived atomic configuration and completions. Remove legacy
+  field-by-field truth injection and module-global VM fallbacks.
+- Context-specific quiesce/drain/teardown and bounded shared-worker fairness.
+  Another context's execution must not wait on unrelated network/VM teardown.
+
+Acceptance: real /dev/wavevm contexts for two VMs preserve independent bytes,
+requests, routes, mappings, and completion/failure lifetimes. Stopping a VM or
+closing one FD does not clear another context. Query capabilities honestly;
+reject a second context until this evidence exists. Mode A has the same
+operation-level results as Mode B and a declared acceleration cost model.
+Unavailable module capability leaves valid Mode B plans usable.
+
+Owning contracts: kernel-accelerator and its referenced memory/vCPU/IPC,
+capability, manifest, and lifecycle definitions.
+
+## 13. Phase 9: Close Minimum Integration and Acceptance
+
+Complete production wiring across the preceding capabilities and generate
+bounded, manifest-driven acceptance runs for:
+
+- Flat/fractal KVM guest login or SSH with remote vCPU and memory evidence.
+- Flat/fractal bounded real TCG execution with checked CPU/memory results,
+  independent vCPU ownership/progress, device/atomic ordering, and cleanup.
+- Mode B multi-VM and same-host compute-instance isolation, admission races,
+  membership operations, lifecycle/restart reconciliation, and two-VM Mode A
+  contexts. Bounded contract workloads may establish isolation but cannot
+  replace the KVM guest cells.
+- Representative independent-work concurrency and bounded queue/resource use
+  for the selected profile. Record declared workloads and hardware conditions;
+  comprehensive tuning and scale characterization do not block Minimum.
+
+Every cell records manifest identity/digest, route snapshot, capability profile,
+actual resource arguments, remote CPU/memory activity, failure classification,
+bounded diagnostics, and cleanup. Success requires the contract's result,
+not a stub, open socket, live process, local-only execution, or hidden workaround.
+Every run has a fixed timeout and bounded artifacts; cleanup cannot delete an
+unrelated VM's processes, files, SHM, routes, or reservations.
+
+Failures are classified as capability, launch, routing, memory, CPU state,
+device, lifecycle, or guest acceptance and fixed in the owning production
+path. They are not converted into false RUNNING or relaxed success criteria.
+
+**Minimum boundary: after Phase 9.** TCG guest OS login/SSH, sustained TCG
+guest usability, complete fault-engine coverage, and operational hardening
+continue below. The boundary does not remove shared correctness obligations.
+
+---
+
+## 14. Phase 10: Extended TCG Guest Usability
+
+Implement flat/fractal TCG guest boot/login/SSH and sustained distributed
+multi-vCPU execution under the shared memory, device, identity, and lifecycle
+contracts. Concurrent remote progress must be the normal path rather than a
+token trickle under force_local. Verify per-vCPU fallback bounds, ordering,
+cooldown, device bounce, and STOP according to vcpu-handoff Section 8.1.
+
+Acceptance: guest-visible results, remote CPU/memory evidence, concurrency,
+bounded fallback, and cleanup satisfy the separate Extended guest gate. A
+Minimum instruction contract pass is insufficient. Full native/helper MTTCG
+performance work may improve this path, but cannot weaken its semantic or
+sustained-progress requirements.
+
+## 15. Phase 11: Extended Fault Engines and Performance Coverage
+
+Implement broader fault_engine_ops coverage for SIGSEGV/mprotect, UFFD, KVM
+logging, and kernel dirty capture on supported hosts. Preserve page versions,
+engine state, async-signal-safety, and explicit selection. Live engine switching
+requires a state-transfer contract, not a timeout-triggered fallback.
+
+Extend verification to mixed accelerator/no-accelerator clusters, cross-engine
+equivalence, deterministic loss/duplication/reordering/delay, route replacement,
+and QEMU/runtime/executor/gateway faults. Include duplicate handoff, dirty gaps,
+block errors, VM-ID reuse, and broader same-host isolation. Baseline ordering
+and error correctness remain Minimum; this phase expands the coverage matrix.
+
+Characterize throughput, tail latency, copies/round trips, CPU/memory cost,
+fairness, and scaling under declared topology and hardware conditions. Optimize
+queues, diffs, batching, placement locality, and backend execution based on
+those results, including broader MTTCG work where appropriate. Acceptance must
+not depend on a topology-independent performance promise or a mandatory
+transport chosen solely by name. Evidence remains in separate records.
+
+## 16. Phase 12: Extended Recovery and Live Reconfiguration
+
+Implement coordinator HA/failover, complete crash-boundary matrices,
+transparent recovery, verified replacement and RECOVERY_REBIND, live migration,
+automatic replanning/resharding, and active-VM topology/resource changes only
+under explicit identity, old-instance fencing, state-transfer, and rollback
+contracts. Cross-backend execution handoff and live fault-engine changes also
+require their own transfer contracts; implicit conversions are prohibited.
+
+Add aggregate multi-scope host-role transactions and broader failure-domain
+handling. Persisted decisions, resource release, route replacement/retirement,
+page versions, vCPU sequences, and device ordering remain consistent across
+recovery. Acceptance converges to one committed VM or confirmed cleanup with no
+orphaned resources or false RUNNING. Basic restart reconciliation and rejection
+of stale admission candidates remain Minimum obligations.
+
+## 17. Phase 13: Extended Hosted Host-OS Portability
+
+Implement a declared hypervisor adapter that runs the same Linux host appliance
+on a non-Linux host or where native deployment is impractical. Before changing
+this boundary, its adapter contract must define trusted physical_host_id and
+correlated-failure mapping, networking, capabilities, overhead, and lifecycle.
+An endpoint, hostname, or appliance-local observation cannot establish that
+mapping. Without trusted mapping, do not claim cross-appliance aggregate
+capacity or correlated-host coverage.
 
 Acceptance criteria:
 
-- New changes can be reviewed against a single architecture document.
-- Any kernel change identifies which user-space semantic operation it accelerates.
-
-Risk:
-
-- No direct runtime improvement.
-
-## 5. Phase 1: Inventory Mode A/B Ownership Boundaries
-
-Purpose: make Mode A/B ownership and coupling explicit before changing them.
-
-Keep any code inventory and observed deviations in separate audit-evidence
-records outside this charter. The normative specifications define required
-ownership and behavior. Do not copy audit diary or 「现状」 inventories into
-the baseline, this roadmap, or `docs/specs/`.
-
-Actions:
-
-- Create a table mapping every `IOCTL_*` to the user-space semantic operation it supports.
-- Create a table mapping every kernel global to its intended owner.
-- Classify each kernel global as one of:
-  - accelerator cache
-  - per-VM state
-  - per-open state
-  - obsolete duplicated semantic state
-- Document QEMU's mode selection logic around `/dev/wavevm`.
-- Document slave KVM/TCG selection logic around `/dev/kvm` and helper QEMU.
-
-Acceptance criteria:
-
-- It is clear which state can be removed, moved, or wrapped.
-- It is clear which kernel paths are necessary for performance only.
-
-Risk:
-
-- May reveal more coupling than expected.
-
-## 6. Phase 2: Define Memory and vCPU Semantic Contracts
-
-Purpose: define correctness before moving semantic authority or continuing broad
-KVM/TCG changes.
-
-Deliverables:
-
-- `docs/specs/memory-consistency.md`
-- `docs/specs/vcpu-handoff.md`
-- `docs/specs/storage-device-authority.md`
-
-The memory specification must map current `page_meta_t`, version, subscribers,
-and every relevant `MSG_*` operation to explicit state predicates and
-transitions. It must define authority, lock ordering, concurrent writers,
-version and epoch rules, dirty barriers, duplicate/reordered traffic, retries,
-timeouts, and recovery.
-
-The vCPU specification must define the required and optional fields of
-`wvm_kvm_context_t` and `wvm_tcg_context_t`, export/import order, one-owner vCPU
-execution, request idempotency, IRQ merge rules, HLT/preempt/MMIO/PIO/exception
-behavior, and supported backend combinations.
-
-The memory, vCPU, and local IPC specifications must jointly define the
-node-runtime to local-executor ABI: identity/incarnation, manifest and route
-generation, request and completion identity, handoff ordering, cancellation,
-backpressure, error mapping, and process-failure behavior. The current
-  master-to-slave messages are implementation debt to be replaced by the typed
-  node-runtime/executor ABI; they are not a supported deployment interface.
-
-The storage/device specification must define QEMU-host device authority,
-MMIO/PIO return paths, block request ordering, flush/FUA semantics, write
-idempotency, and guest-visible error mapping.
-
-Acceptance criteria:
-
-- Every current consistency and vCPU message has a documented precondition,
-  completion condition, and failure result.
-- `dirty-batch-size=1` and each handoff boundary have one testable meaning.
-- Duplicate `VCPU_RUN` cannot be interpreted as permission to execute the same
-  guest interval twice.
-- Unsupported combinations, including cross-backend V1 handoff, are explicit.
-- No implementation choice depends on guessing semantics from a log message.
-
-Risk:
-
-- The specification may expose current behavior that cannot satisfy the target
-  contract. Such gaps become named migration work; they are not silently
-  redefined as accepted behavior.
-
-## 7. Phase 3: Define Identity, Routing, and Protocol ABI
-
-Purpose: make multi-VM isolation and communication unambiguous before adding
-more runtime instances.
-
-Deliverables:
-
-- `docs/specs/identity-routing.md`
-- `docs/specs/wire-ipc-abi.md`
-- `docs/specs/canonical-record-schema.md`
-
-Actions:
-
-- Define `vm_id`, VM incarnation, physical node ID, vnode ID, primary vnode,
-  local runtime instance ID, process instance ID, and composite wire identity.
-- Define allocation, reuse, validation, and compatibility rules.
-- Define a strict composite route namespace for nonzero `vm_id` in both flat
-  and fractal gateways.
-- Restrict raw-node fallback to legacy `vm_id=0`; a missing nonzero composite
-  route must fail.
-- Define generation-based atomic route replacement and in-flight packet rules.
-- Define independently budgeted flat and leaf-Pod route domains and an explicit
-  fractal address/prefix model. `WVM_SLAVE_BITS=12` describes the current fixed
-  storage limit, not a permanent topology boundary. Separate cluster members,
-  per-domain vnodes, gateway adjacency/routes, and per-VM admission capacity.
-  Replace ID-indexed global arrays and fixed admission scratch arrays with
-  bounded storage sized for actual records; kernel subscriber/cache storage
-  must not grow with the full ID space. Preserve batching and queue concurrency.
-- Permit flat domains above 4096 when connectivity and resource budgets allow;
-  do not require a topology change merely to cross the old constant. Validate
-  sparse high vnode IDs and capacity exhaustion separately from ID validity.
-  Prove actual route compilation/lookup above 4096, plus membership/admission
-  across multiple Pods whose total exceeds an individual Pod budget. The
-  `u32` destination space is an encoding bound, not a supported-scale claim.
-- Define the relationship between cluster membership revision, topology
-  revision, per-VM route generation, VM incarnation, and existing node/page
-  epochs. These identifiers must not be overloaded.
-- Specify every network `MSG_*` and local `WVM_IPC_TYPE_*`: direction, payload,
-  byte order, length, flags, status, ACK, retry, idempotency, ordering,
-  fragmentation, timeout, and protocol-version behavior.
-- Freeze the fixed V1 envelope, canonical manifest/route/control records and
-  their tag/type/list-order registry,
-  origin runtime identity, semantic-operation digest, mutable forwarding
-  metadata, control result schema, and route-snapshot key. Define
-  REGISTER/PREPARE/ACTIVATE/ABORT/QUERY/ROUTE/CORDON/DRAIN/REJOIN messages with
-  validation, retention, and duplicate behavior.
-- Define how VM incarnation enters the next wire ABI without overloading node
-  epoch or request ID.
-
-Acceptance criteria:
-
-- Two VMs may use the same raw vnode IDs without any route collision.
-- Delayed packets from a deleted VM cannot be accepted by a later incarnation.
-- Flat and fractal paths preserve the same namespace.
-- Protocol decoders reject incompatible versions and invalid lengths before
-  accessing payload fields.
-- Route replacement can reroute a lost result/query without changing the
-  semantic vCPU, memory, or block operation key.
-- Control decoders reject an origin-identity conflict, unknown mandatory field,
-  stale eligibility fence, or mismatched route snapshot before state mutation.
-- A compatibility matrix states exactly which legacy nodes may coexist.
-
-Risk:
-
-- Adding incarnation or protocol versioning may require a wire-version
-  transition rather than preserving the current header byte-for-byte.
-
-## 8. Phase 4: Define Capabilities, Manifest, Placement, and Lifecycle
-
-Purpose: define one versioned control-plane input and deterministic decisions
-before making user space the only authority.
-
-Deliverables:
-
-- `docs/specs/capability-fault-engines.md`
-- `docs/specs/runtime-manifest-lifecycle.md`
-- `docs/specs/resource-placement-admission.md`
-- `docs/specs/cluster-membership-topology-lifecycle.md`
-
-The capability specification must define a versioned structure or bitset,
-probe API, `required`/`preferred`/`available` semantics, probe owner and timing,
-planner input, forced enable/disable behavior, dynamic-change policy, and
-structured errors. KVM, TCG, kernel acceleration, UFFD, SIGSEGV faults, dirty
-capture, invalidation, wakeup, and packet acceleration are independent
-capabilities.
-
-The manifest specification must distinguish a user-facing VM request, an
-immutable candidate manifest used for prepare, and an admitted manifest bound
-by one durable activation fence. It must provide complete versioned canonical
-binary-record schemas plus human-readable examples for each. The request
-defines resources, policy, constraints, and optional guest topology; the
-candidate/admitted manifest resolves identities, host node, CPU and memory
-placement, capabilities, VM route scope/snapshot, ports, socket and SHM paths,
-logs, temporary storage, and per-node processes and arguments. Each schema
-must define types, units, required fields, defaults, ranges, cross-field
-validation, generator ownership, component consumers, compatibility, and its
-digest.
-
-The placement and lifecycle specifications must define deterministic compact
-and spread scoring with stable tie-breakers, candidate filtering, explicit
-`host_node`, host overhead, CPU/memory overcommit policy, capability and device
-constraints, multi-VM fairness, structured rejection, and whether running VMs
-are ever replanned. They must also define backend-aware planning for a
-heterogeneous cluster: `AUTO` tries a complete KVM placement before a new
-complete TCG placement, `REQUIRE_KVM` never silently degrades, vCPU backend is
-homogeneous per VM, and memory placement remains independent when the selected
-memory participants satisfy their own capability and route requirements.
-Lifecycle must define coordinator ownership, identity
-allocation before reservation, candidate route scope, an eligibility fence,
-prepared reservation/participant records, one durable activation fence,
-commit/start/abort messages, operation idempotency, cleanup ownership,
-stop/crash behavior, and V1 recovery limits.
-
-For V1, the node that accepts the create request coordinates that operation;
-the selected QEMU `host_node` may be different. Coordinator failover is not
-highly available in V1, but restart must recover one persisted activation
-decision. Only unactivated prepared reservations require bounded expiry and
-cleanup; activated reservations remain held through lifecycle teardown.
-
-The membership and topology lifecycle specification must define separate
-`NodeRecord` and `GatewayRecord` schemas; trusted registration and capability
-validation; desired versus observed state; health states; Pod membership and
-parent/child gateway graph; `PENDING`, `VALIDATING`, `PREPARED`, `ACTIVE`,
-`CORDONED`, `DRAINING`, `REMOVED`, and `FAILED` transitions; route-snapshot
-prepare/ack/publish/retire; in-flight generation behavior; and distinct
-graceful-removal and unplanned-failure outcomes. It must state that adding a
-member affects future scheduling only unless a separately accepted active-VM
-reconfiguration protocol says otherwise. It must also define admission-fence
-invalidation, VM route-scope create/retire, persisted required-survivor ACK
-sets, co-located compute/gateway host failure domains, and the conservative V1
-required-member restart policy.
-
-Acceptance criteria:
-
-- The same input and capability set always produce the same plan.
-- A manifest can describe every existing two-node CI deployment without hidden
-  environment policy.
-- Every process can identify exactly which manifest fields it consumes.
-- A create request submitted on node C may explicitly place QEMU on node A.
-- Validation rejects resource, capability, port, path, and namespace conflicts
-  before processes start.
-- A newly registered node or gateway is not routable or schedulable until all
-  required route-snapshot acknowledgements complete.
-- A requested removal is rejected if it would withdraw active VM resources or
-  a gateway's sole route without an accepted migration or replacement policy.
-- **Extended:** A coordinator crash at every create/activation/abort boundary converges to
-  one committed VM or full cleanup; no candidate is orphaned.
-- **Extended:** A cordon, gateway drain, health exclusion, capability change, or node-instance
-  change cannot activate a candidate captured before that change.
-
-Risk:
-
-- A complete schema can expose assumptions currently scattered across scripts.
-  Compatibility adapters should read old configuration during migration; the
-  new schema must not inherit every accidental script behavior.
-
-## 9. Phase 5: Establish User-Space Semantic Authorities
-
-Purpose: converge Mode A and Mode B only after their shared contracts exist,
-without moving cluster-control decisions into a per-VM data-plane process.
-
-Actions:
-
-- Make the user-space control plane authoritative for capacity inventory, VM
-  identity/incarnation allocation, admitted resource plans, host placement,
-  admission, and lifecycle transitions.
-- Make each per-VM user-space node runtime authoritative for the admitted VM's
-  runtime route state, page-consistency state, request correlation, and
-  CPU/memory dispatch.
-- Require the node runtime to consume and validate its admitted identity and plan; it
-  must not independently re-plan the VM or allocate another identity.
-- Move KVM and TCG execution behind the typed local executor interface and
-  delete the independent `slave_daemon` process entry point. The executor may
-  remain as an internal implementation module or helper QEMU process, but it
-  has no direct cross-node or legacy IPC endpoint.
-- Make kernel and gateway state derived, versioned cache/configuration.
-- Replace field-by-field IOCTL and environment injection with one
-  manifest-bound accelerator context. Unsupported legacy setters must fail or
-  be removed; they are not a second configuration authority.
-- Reject missing, stale, or incompatible derived state explicitly.
-- Route each semantic operation through the contract from Phase 2 regardless
-  of KVM/TCG or kernel acceleration.
-
-Acceptance criteria:
-
-- Disabling kernel acceleration does not change VM identity, placement,
-  routing, lifecycle, or consistency semantics.
-- Enabling kernel acceleration changes only a capability-selected data path.
-- KVM and TCG produce the same contract-level events for equivalent workloads.
-- Kernel `logic_core` is no longer an independent semantic authority.
-- Control-plane and per-VM runtime ownership do not overlap or silently
-  overwrite each other.
-- The executor has no direct cross-node endpoint, and a separate-process or
-  in-process executor produces the same contract-level result.
-
-Risk:
-
-- Mode A migration must not silently drop kernel-only dependencies. Preserve a
-  known-good KVM regression fixture while each dependency is migrated onto the
-  canonical contracts.
-
-## 10. Phase 6: Implement VM Runtime Isolation
-
-Purpose: give every VM a first-class runtime object and remove accidental local
-resource sharing.
-
-The runtime object includes at least:
-
-```text
-schema_version
-vm_id
-vm_incarnation
-physical_node_id
-primary_vnode
-host_node
-local_vcpu_count
-local_memory_mb
-qemu_socket_path
-shm_path
-node_runtime_endpoint
-local_executor_endpoint
-legacy master_port/slave_port compatibility endpoints
-sidecar_port/control_port
-hostfwd ports
-log_dir
-temp_dir
-capabilities selected
-resource reservation
-route namespace and generation
-```
-
-Actions:
-
-- Generate and validate the manifest defined in Phase 4.
-- Pass one consistent identity and runtime object to QEMU, node runtime, local
-  executor, and gateway on each participating node.
-- Derive all exclusive names from the manifest.
-- Do not add compatibility readers for current NODE/VM configuration. Launch
-  requires the admitted manifest, route snapshot, dispatch projection, and
-  capability profile.
-
-Acceptance criteria:
-
-- Two Mode B VMs run on one physical node without port, SHM, socket, route,
-  request-ID, temp-file, or log collision.
-- Two VMs may use identical raw vnode IDs and guest ports.
-- Deleting one VM does not unlink or truncate another VM's resources.
-
-Risk:
-
-- Any launch entry point that lacks the runtime object must fail closed or be
-  deleted; it must not synthesize identity from positional arguments.
-
-## 11. Phase 7: Implement Placement, Admission, and Member Lifecycle
-
-Purpose: turn static resource plans into reliable multi-VM creation.
-
-Actions:
-
-- Extend planner output with explicit `host_node`, host overhead, selected
-  capabilities, and per-node process plans.
-- Implement the deterministic compact/spread algorithms from Phase 4.
-- Replace the one-resource-provider-per-host assumption with explicit
-  `physical_host_id` grouping. Validate per-node capacity and aggregate host
-  CPU/memory/accelerator/overhead capacity without double counting.
-- Make node registration and runtime profiles carry explicit instance
-  namespaces and leased data/control/local-service ports and socket paths;
-  reject host-wide collisions before admission.
-- Allocate VM identity before candidate-manifest/reservation emission; prepare
-  VM route scope, guest/host resources, and participants under one eligibility
-  fence before a durable activation decision.
-- Implement planned, route-scope-prepared, reservations-prepared,
-  participants-prepared, activation-decided, committed, starting, running,
-  failed, retiring, and stopped transitions through typed prepare/activate/
-  abort/query operations.
-- Make every operation idempotent and clean up partial startup by named owner.
-- Report structured admission and startup failure reasons.
-- Implement member registration, validation, cordon, drain, and removal as
-  control-plane operations rather than edits to a live gateway map.
-- Publish route snapshots through prepare/ack/commit/retire. A gateway receives
-  an immutable snapshot and performs packet lookups against one complete
-  generation; no partially updated route map is observable.
-- Make a new compute member eligible only for future placement. Reject removal
-  when a current VM depends on its vCPU, memory, directory, storage, or
-  required control-plane role.
-- Require a verified alternate path before draining a gateway. On unplanned
-  failure, surface a documented degraded/paused/failed VM state when no safe
-  alternative exists.
-- Persist the exact survivor RequiredAckSet for every route transaction. A
-  departing or failed gateway is optional drain evidence, never a required ACK.
-- **Extended:** Treat co-located compute/gateway roles as one host-removal/failure-domain
-  transaction while retaining role-local state for independent process faults.
-
-Acceptance criteria:
-
-- **Minimum usable:** Four concurrent VM creations cannot double-allocate CPU, memory, ports, SHM,
-  or host overhead.
-- **Minimum usable:** Failure during each normal startup step releases exactly the resources created before
-  that step.
-- **Minimum usable:** The request origin does not implicitly become QEMU host.
-- **Minimum usable:** A node loss follows the documented stop/pause policy and never leaves the
-  VM falsely reported as running.
-- **Minimum usable:** Adding a member does not alter an existing VM manifest or placement.
-- **Minimum usable:** Draining a busy compute member and removing a sole gateway both fail without
-  producing a route black hole.
-- **Minimum usable:** A route snapshot can be replaced while traffic is active without a packet
-  observing a partial route table or crossing VM namespaces.
-- **Minimum usable:** Lost vCPU/block/memory results during a route-generation change preserve one semantic
-  operation identity across result query/reroute.
-
-Extended acceptance adds coordinator restart at every lifecycle boundary,
-multi-scope host-role transactions, automatic degraded-state recovery, and
-full failure-injection coverage. Those tests must not block the first usable
-release once the minimum usable criteria above pass.
-
-Risk:
-
-- Durable coordinator failover is deferred unless the Phase 4 specification
-  promotes it into V1. The implementation must state that limit clearly.
-
-## 12. Phase 8: Refactor Kernel Accelerator Contexts
-
-Purpose: make Mode A multi-VM-safe without restoring a second control plane.
-
-This phase is a minimum usable release gate, not optional hardening. Mode A may
-remain disabled on hosts that lack the capability, but a host that advertises
-Mode A for multiple VMs must provide independent contexts and teardown.
-
-Deliverables:
-
-- `docs/specs/kernel-accelerator.md`
-
-Short-term gate:
-
-- Keep Mode A single-VM-per-physical-node.
-- Admission rejects a second Mode A VM until explicit contexts pass isolation
-  tests.
-
-Target:
-
-- Add an explicit create/attach per-VM kernel context as selected by the
-  architecture baseline.
-- Move VM identity, local node identity, route cache, mappings, dirty capture,
-  request namespace, and page metadata into that context.
-- Make every ioctl and mmap resolve an attached context.
-- Retain only shared, context-tagged infrastructure as module globals.
-- Define reference counting and teardown for QEMU, node-runtime roles,
-  executor workers, and control descriptors that share one VM context.
-
-Acceptance criteria:
-
-- Two Mode A VMs coexist without state, request, mapping, or route collision.
-- Closing one descriptor or stopping one VM does not clear another context.
-- Mode A passes the same semantic tests as Mode B; only capability evidence and
-  performance differ.
-
-Risk:
-
-- This is the largest kernel change. It starts only after Mode B contracts and
-  multi-instance isolation are stable.
-
-## 13. Phase 9: Implement Pluggable Fault Engines
-
-Purpose: improve fault handling without making UFFD, root, or a custom kernel a
-baseline dependency.
-
-This phase is extended hardening after the minimum usable system. The first
-usable release still requires one correct no-root fallback and one correct KVM
-dirty/resync path, but does not require every fault mechanism to be a fully
-pluggable production engine.
-
-Actions:
-
-- Implement the `fault_engine_ops` contract from Phase 4 for
-  SIGSEGV/mprotect, UFFD, KVM dirty-log/fetch, and kernel dirty capture.
-- Keep signal handlers async-signal-safe and move blocking work to the engine's
-  worker model.
-- Define registration against QEMU RAMBlocks and KVM memslots.
-- Preserve page version and dirty state when selecting an engine at VM startup.
-- Do not support live engine switching until a state-transfer protocol exists.
-
-Acceptance criteria:
-
-- No-root environments retain a correct fallback.
-- UFFD-capable hosts can select UFFD explicitly and report why selection failed.
-- KVM does not accidentally use host protection behavior that invalidates its
-  RAM/EPT assumptions.
-- All engines pass the same consistency contract tests.
-
-Risk:
-
-- UFFD policy and feature support vary by kernel and container runtime.
-
-## 14. Phase 10: Regenerate CI Around Contracts and Manifest
-
-Purpose: make tests exercise architecture rather than handcrafted scripts.
-
-Actions:
-
-- **Minimum usable smoke matrix:** generate bounded manifests for flat and
-  fractal TCG contract tests, flat and fractal KVM guest tests, one-node kernel
-  acceleration, and two Mode B VMs on one physical host; include two independent compute-node
-  instances on one physical host with distinct ports/sockets and aggregate
-  resource accounting; after Phase 8, include two Mode A VMs on one physical
-  host to prove context isolation.
-- **Minimum usable evidence:** record the capability report, manifest digest,
-  actual QEMU resource arguments, remote vCPU/memory evidence, and cleanup
-  result. KVM guest cells require login or SSH; TCG contract cells require real
-  instruction execution and checked CPU/memory results, not guest OS login.
-  Kernel/multi-instance isolation cells may use bounded contract workloads;
-  they do not replace the KVM guest cells.
-- **Extended matrix:**
-  - flat and fractal TCG guest boot/login/SSH, multi-vCPU workload, concurrent
-    remote progress as the normal path, bounded local fallback, and STOP,
-    following `vcpu-handoff.md` Section 8.1;
-  - mixed accelerator/no-accelerator clusters;
-  - deterministic network fault injection for loss, duplication, reordering,
-    delay, and route-generation replacement;
-  - lifecycle fault injection for QEMU, node runtime, local executor, and
-    gateway failure at startup and at runtime;
-  - coordinator restart, route rollback/retirement races, and broad engine
-    equivalence tests;
-  - duplicate `VCPU_RUN`, dirty version gaps, force sync, block flush/error
-    propagation, VM ID reuse protection, and same-host multi-VM isolation;
-  - bounded process lists, protocol records, tail logs, and cleanup evidence
-    for every extended run.
-
-Acceptance criteria:
-
-- **Minimum usable:** CI can tell whether a failure is capability, launch,
-  routing, memory, CPU state, or guest boot.
-- **Minimum usable:** Logs do not fill disk.
-- **Minimum usable:** Tests do not require hidden production workarounds.
-- **Minimum usable:** KVM guest success requires login or SSH and evidence that
-  remote vCPU and remote memory paths were exercised. TCG contract success
-  requires bounded real execution with checked CPU/memory results and completed
-  remote operations. Process survival, a listening port, or a stub is not a
-  success oracle for either backend. A TCG guest login failure does not block
-  this profile, and a TCG contract pass does not establish guest OS usability.
-- **Minimum usable:** Every smoke test has a fixed timeout and leaves no process, SHM object, route, or
-  unbounded artifact behind.
-- **Extended:** TCG guest acceptance requires the separate Section 8.1 gate;
-  it must not be inferred from Minimum TCG contract results.
-- **Extended:** Network and lifecycle fault injection, exhaustive crash
-  matrices, rollback/retirement races, and broad engine-equivalence coverage
-  are required before claiming operational hardening.
-
-Risk:
-
-- More test infrastructure work before feature work.
-
-## 14.1 Extended: Hosted Host-OS Portability Acceptance
-
-This section is Extended only. It does not raise Minimum gates or reorder the
-established Minimum implementation sequence. Implementing hosted portability
-still requires a written hypervisor-adapter specification before code lands.
-That future adapter specification must take each appliance's real
-`physical_host_id` and correlated failure domain as a trusted operator
-inventory/configuration or hypervisor/provider attestation input; it must not
-derive those facts from an endpoint, hostname, or appliance-local observation.
-Where that trusted mapping is unavailable, the adapter must not claim
-cross-appliance aggregate capacity or correlated-host failure coverage it
-cannot establish. This is not a demand to implement cross-platform support now.
-
-Acceptance criteria:
-
-1. On at least one non-Linux host, a declared hypervisor adapter starts a Linux
-   host appliance that carries WaveVM control plane, node runtime,
-   gateway/sidecar, and executor—not a substitute WaveVM guest.
-2. Without nested KVM, only a TCG execution plan is admitted. Without a
-   usable `wavevm.ko`, Mode A is disabled and Mode B is selected, but KVM
-   Mode B remains allowed when nested KVM has passed its probe. With those
-   independent fallbacks, the appliance completes the same manifest-bound
-   control-plane path and a minimum guest smoke; unsupported capabilities
-   fail closed or record an explicit pre-admission downgrade.
-3. Nested KVM may be advertised only after a KVM probe inside the appliance
-   succeeds. Mode A may be advertised only after kernel-accelerator probing and
-   per-VM context/teardown checks succeed. The Mode A context requirement must
-   not be imposed on KVM Mode B. Outer host capabilities are never assumed to
-   be inherited.
-4. Flat/fractal routing, membership, route generation, resource accounting,
-   stop/cleanup, manifest identity/incarnation, and lifecycle semantics match
-   the native Linux path. Outer NAT/bridging is an adapter responsibility and
-   must not change manifest endpoints, port/socket leases, identity, or mTLS
-   bindings.
-5. Evidence records the outer hypervisor, appliance image/profile, capability
-   probes, actual resource parameters, and failure reasons, without hidden
-   workarounds. Outer CPU, memory, and hypervisor overhead are accounted
-   honestly. `physical_host_id` and correlated failure domains still name the
-   real physical host via the adapter's declared trusted mapping, so multiple
-   appliances on one machine must not be treated as independent physical hosts
-   that double-count CPU, memory, or host overhead.
-6. Adapter or capability failure must not let the control plane report a false
-   VM `RUNNING`; bounded diagnostics and cleanup evidence remain.
-
-Native non-Linux user-space ports and native Mode A/kernel accelerator ports
-remain separate Extended items with their own contracts; they are out of scope
-for this hosted-portability acceptance set.
-
-## 15. Suggested Near-Term Order
-
-Use one dependency order:
-
-```text
-1. Freeze the architecture baseline and inventory current behavior.
-2. Specify memory consistency, vCPU handoff, and device authority.
-3. Specify identity, route scope, topology, wire ABI, and local IPC ABI.
-4. Specify capabilities, manifest, membership, placement, admission, and
-   lifecycle.
-5. Establish the control-plane and per-VM node-runtime user-space authorities,
-   including the local executor ABI.
-6. Implement Mode B multi-instance isolation and explicit placement/lifecycle.
-7. Implement the minimum usable node/gateway membership operations.
-8. Refactor kernel accelerator contexts and prove two-VM Mode A isolation.
-9. Regress KVM guest execution and TCG bounded execution against the shared
-   semantic contracts, then run the Minimum flat/fractal smoke matrix.
-10. Complete Extended TCG guest acceptance, then add fault-engine plugins and
-    extended deterministic failure testing as their dependencies permit.
-```
-
-During specification phases, narrowly scoped fixes may continue when they
-restore already intended behavior and add bounded regression evidence. Such a
-fix must not introduce a new protocol rule, authority, production switch, or
-cross-component assumption that the pending specifications have not decided.
-Broad TCG, consistency, routing, or lifecycle rewrites wait for their contract.
-
-## 16. What Not To Do
-
-Do not:
-
-- Delete `kernel_backend.c` just to simplify the tree.
-- Keep expanding `kernel_backend.c` as another master implementation.
-- Delete or merge `master_core` and `slave_daemon` merely to remove a process
-  hop before the node-runtime/executor ABI and its regression coverage exist.
-- Give an executor a direct cross-node route or allow gateway delivery to
-  bypass the target node runtime.
-- Treat a `ROUTE` file edit, route-learning observation, heartbeat, or gateway
-  `ADD_ROUTE` packet as a complete member join or leave operation.
-- Remove a member from scheduling or routing before an acknowledged replacement
-  route snapshot and the required VM/allocation drain conditions exist.
-- Move resource planning into QEMU.
-- Move resource planning into gateway.
-- Make TCG depend on KVM-only state.
-- Make KVM depend on TCG-only signal behavior.
-- Add per-test production switches.
-- Let CI scripts become the only source of runtime truth.
-- Ignore multi-VM when adding a new global variable.
-
-## 17. Migration Checklist For Future Patches
-
-For every future patch, answer:
-
-- Does this change alter canonical Mode B semantics?
-- Does this change only accelerate an existing semantic operation?
-- Does it work for both KVM and TCG, or is the backend-specific reason documented?
-- Does it preserve multi-VM isolation?
-- Does it introduce a new global singleton?
-- Does it require root or kernel module as baseline?
-- Does it preserve flat and fractal topology assumptions?
-- Does it route production cross-node traffic through sidecar/gateway?
-- If it changes membership or gateway topology, does it use the accepted
-  membership state machine and prepared/acknowledged route generation? Does it
-  preserve existing VM allocations and reject unsafe removal?
-- Does it preserve the node-runtime/executor boundary? If it changes process
-  placement, are identity, ordering, queues, backpressure, and failure
-  semantics still explicit and covered?
-- Does it preserve the intended normal-path concurrency, batching, and QoS
-  behavior? If it serializes or blocks work, is that bounded and specified as
-  a backpressure or failure path?
-- Does it have a bounded test/logging strategy?
-- Which accepted subsystem specification authorizes its behavior?
-- Does it change a wire or local IPC ABI, and if so, where is compatibility
-  specified?
-
-A patch that cannot answer these questions should not be merged.
-
-## 18. Strategic Direction
-
-The strategic decision is:
-
-```text
-Do not remove Mode A.
-Do not keep Mode A as a separate semantic implementation.
-Converge on Mode B canonical semantics and make Mode A an accelerator.
-```
-
-This keeps the project useful in restricted environments while preserving a path to high-performance KVM deployments.
-
-The immediate implementation target is the minimum usable profile: complete
-the user-space authorities, Mode B isolation, basic membership lifecycle, and
-per-VM Mode A contexts, KVM guest acceptance, and bounded TCG contract tests
-before treating the Minimum profile as usable. Extended TCG guest acceptance,
-fault-engine, and failure-injection work follow that gate and must not be used
-to postpone the Minimum distributed VM path.
+1. On at least one non-Linux host, the adapter starts a Linux host appliance
+   carrying control plane, node runtime, gateway/sidecar, and executor; it is
+   not a substitute WaveVM guest.
+2. Without nested KVM, only TCG execution plans are admitted. Without usable
+   wavevm.ko, Mode A is disabled and Mode B selected, while KVM Mode B remains
+   valid when its independent probe passes. The appliance completes the same
+   manifest-bound control path and guest smoke; unsupported capabilities fail
+   or record explicit policy-allowed pre-admission fallback. TCG guest smoke
+   here requires Phase 10 acceptance, not just the Minimum instruction gate.
+3. KVM and Mode A are advertised only after their respective in-appliance
+   probes and context/teardown checks pass. Mode A context requirements do not
+   apply to KVM Mode B, and outer-host capabilities are never assumed inherited.
+4. Flat/fractal routing, membership, generations, accounting, stop/cleanup,
+   identity/incarnation, and lifecycle match native Linux semantics. NAT and
+   bridging must preserve reachable manifest endpoints, leases, and mTLS
+   identity bindings.
+5. Evidence records hypervisor, appliance image/profile, probes, actual
+   resource parameters, and typed failures without hidden workarounds. Account
+   for outer CPU/memory/hypervisor overhead. Trusted physical_host_id mapping
+   prevents appliances on one machine from double-counting capacity or being
+   mistaken for independent failure domains.
+6. Adapter/capability failure cannot produce false RUNNING. Diagnostics and
+   cleanup remain bounded and identity-scoped.
+
+Native non-Linux user-space and native Mode A/kernel ports are separate
+Extended capabilities, not implied by hosted portability. Their contracts must
+map the same semantic authorities, local execution/IPC lifetimes, capability
+reporting, identity, and acceptance behavior to the target OS; unsupported
+mechanics fail explicitly rather than changing the VM contract.
+
+**Extended boundary: after Phase 13 and the explicitly selected native-port
+contracts.** These labels organize delivery scope, not implementation status.
+
+---
+
+## Implementation Order
+
+Use the following dependency order when implementing from zero or restructuring
+an affected path. Each phase requires its relevant public contracts and working
+prerequisite capabilities; inventories and empty placeholders cannot satisfy it.
+
+| Phase | Executable capability |
+| --- | --- |
+| 0 | Identity, canonical records, wire/local IPC foundations. |
+| 1 | Unified per-VM node runtime and typed local executor management. |
+| 2 | Validated membership, capability probes, route compilation and fabric. |
+| 3 | Memory consistency and baseline restricted-host/KVM fault paths. |
+| 4 | QEMU integration, KVM/TCG execution, vCPU and device coordination. |
+| 5 | Production placement, admission, activation, readiness and lifecycle. |
+| 6 | Integrated multi-VM and same-host compute-instance isolation. |
+| 7 | Dynamic members, cordon/drain and gateway replacement. |
+| 8 | Real per-VM kernel acceleration and context isolation. |
+| 9 | Complete Minimum production integration and acceptance matrix. |
+| 10 | Extended TCG guest usability. |
+| 11 | Extended fault engines, coverage and performance/scaling work. |
+| 12 | Extended recovery, HA, migration and live reconfiguration. |
+| 13 | Extended hosted portability and separately specified native ports. |
+
+Isolation and concurrency apply from the first affected state/queue, not only
+when Phase 6 or Phase 9 is reached. Later phases integrate and verify them at
+broader scope. Extended items may proceed independently when their actual
+prerequisites are met; numbering does not impose unrelated dependencies, and
+hosted TCG guest acceptance still depends on Phase 10.
+
+## Maintenance Review
+
+For an affected production path, identify its owning contract and consumers;
+verify identity/authorization, state authority, lifetimes, ordering, failure
+semantics, and selected profile. Preserve the node-runtime/fabric boundary and
+explicit physical-host resource accounting. Explain any change to queues,
+blocking, copies, network hops, batching, fairness, or synchronization scope.
+Use bounded verification proportional to those changes. Fix implementation
+conflicts or justify a target change under baseline Section 0.1; do not derive
+architecture from whichever code happens to exist.

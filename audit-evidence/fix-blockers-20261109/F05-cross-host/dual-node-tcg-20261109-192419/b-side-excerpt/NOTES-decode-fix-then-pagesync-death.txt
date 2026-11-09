@@ -1,0 +1,9 @@
+=== B slave1 VCPU decode (post truncated-TCG fix) ===
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=2
+[WaveVM-Slave] TCG req eip=0xffffffff91539281 cs=0x10 cr0=0x80050033 cr3=0x1ba10000 efer=0xd01 oldex=-1 int=0x10 halted=0
+[WVM-TCG-IMPORT] pid=55026 cpu=0 eip=0xffffffff91539281 rsp=0xffffb54d00727e00 rflags=0x2 cr0=0x80050033 cr3=0x1ba10000 cr4=0x6e0 efer=0xd01 hflags=0x40c2b0/0x1 oldex=-1 env_eip=0xffffffff91539281 env_rsp=0xffffb54d00727e00
+[WVM-TCG-KICK-BUDGET] cpu=0 delay_us=8000 req_budget=8000 shm=0
+[WaveVM-User] sigsegv (handler)
+[WaveVM-User] request_page_sync gpa=0x1ba10000 write=0 slave=1
+=== qemu procs ===
+NO_QEMU

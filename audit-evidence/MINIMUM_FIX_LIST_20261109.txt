@@ -1,0 +1,214 @@
+WaveVM Minimum 收口修复清单（权威）
+======================================================================
+日期：2026-11-09 Asia/Shanghai（写盘约 2026-11-09 19:56 CST；交叉审计补记 ~20:30；F05 RET 有证/harness ERROR；N05→PARTIAL）
+作者：Grok Bot（executor；按 Joe t518u：先改清单 → 再改 goal → 再开修）
+仓库：/workspaces/WaveVM
+machineId：2e4d3ec5-e1b1-4a36-9903-de6309119499
+
+Tip HEAD（清单写盘时）：e47d6a5189b0134ca48d9e9af3e41a3e2e8401f1（short e47d6a518）
+工作区：docs dirty（roadmap + baseline + 11 specs 未入库）；生产源码与 tip 一致
+纲领：NEW dirty charter — Phase 0–9 = Minimum；Phase 10–13 = Extended
+对照审计：
+  - 2026-11-09 Grok 对照新纲领的 Minimum 缺口审（会话内；本清单为其落地）
+  - Codex N01–N07：minimum-new-profile-audit-codex-agent-2026-11-05.txt
+  - 旧 F 记分牌：audit-evidence/grok-minimum-gap-cross-audit-2026-11-05-b.txt
+  - 旧状态：audit-evidence/fix-blockers-20261104/MINIMUM_STATUS_*.txt
+
+MINIMUM_COMPLETE：No / NOT_CLAIMED
+硬约束：不 commit / 不 push（除非 Joe 另开）；不修 F01；不宣称 COMPLETE；
+  F05 只做 fence/远端路径，不磨 cirros/guest login；诚实 FAIL 优于 stub/SKIP=PASS。
+
+----------------------------------------------------------------------
+一、对旧 F 记分牌的裁决
+----------------------------------------------------------------------
+旧 F01–F10 / Q01–Q03 骨架仍可作历史定向证据索引，但 **不再作为最终 Minimum
+收口清单**。本文件取代之。
+
+可继承定向 PASS（证据在 fix-blockers-20261104/ 下对应目录）：
+  F02  KVM CREATE/readiness + flat/fractal typed
+  F03  双 VM STOP / 失败身份清理
+  F04  Mode A 生产 typed short-exec + 双 VM 隔离
+  F06  非 coherent 写页池占用/耗尽（unit）
+  Q01  Option B 拒第二 WaveVM block device
+  Q02  gateway DRAIN PREPARE+peer ACK+COMMIT→DRAINING
+
+定向 PASS only（不能盖住对应 N*）：
+  F07  subscriber lease 同进程定向 → 见 N05（directed PASS 2026-11-09）
+  F08  execution fail-closed 定向 → 见 N03（SIGUSR1 未注册 / 首失败即返）
+  F09  owner-lock yield + live delayed dual → 见 N01（让锁≠workspace 隔离）
+
+仍开 / 收窄：
+  F05  PARTIAL → 仍须修（跨机 / push-fence / 远端缺页路径）；阻塞物含第二主机
+       与 fence 路径；不磨 guest login
+  F10  PARTIAL → **收窄为 KVM flat/fractal guest login/SSH + 远端 vCPU/内存证据**；
+       矩阵中 TCG guest login 格踢出 Minimum（→ Extended / F01）
+  F01  DEFERRED → **正式踢出 Minimum**（Extended Phase 10；Joe 撤退）
+
+----------------------------------------------------------------------
+二、MUST-FIX for Minimum（有序）
+----------------------------------------------------------------------
+顺序：N01 → N04 → N03 → N02 → F05 → N05 → N06 → N07 → F10(KVM narrowed)
+（相对 Codex 原文建议序，本清单按 2026-11-09 Grok 审把 N04 提前到 N03 前，
+ 并把收窄后的 F05/F10 并入同一收口链。）
+
+--- N01 [P1] OPEN — 并发 CREATE 不得共享可重置 admission workspace ---
+问题：F09 已在 RPC 期间让出 owner 锁，但 ctl_tool/main.c 仍把单份
+  admission_workspace（prepared_vm/route/activation/route_tx/snapshot、
+  plan provider、capture、transport）绑到 authority；另一 CREATE 可在
+  首请求等网时 reset 同一组对象，串 manifest/route/reservation。
+  VM fence 加入又晚于 orchestrator prepare/activate RPC。
+证据：minimum-new-profile-audit-codex-agent-2026-11-05.txt §N01；
+  ctl_tool/main.c admission_workspace_reset / authority_config 单份绑定；
+  F09 RESULT 只证让锁，不证隔离（…/F09-owner-lock-concurrency/）。
+处置：每次 CREATE/admission 事务隔离可变 workspace（或等价 fail-closed）；
+  首次网络让锁前建立同 VM fence；短临界区改共享 inventory/journal。
+  禁止用「恢复全局大锁」冒充修复。定向测：两真实 CREATE 交叠，状态不串。
+状态：PASS（directed, 2026-11-09）— 共享 workspace 独占租约；忙则 BACKPRESSURE；
+  prepare 后/让锁前 fence；reset 拒外线程。证据：
+  audit-evidence/fix-blockers-20261109/N01-admission-workspace/
+  说明：等价 fail-closed 串行化重叠 CREATE，尚未做多槽独立 workspace。
+
+--- N04 [P1] OPEN — 同 VM 唯一 KVM FE 所有权 ---
+问题：runtime 可为 KVM 自动起一个 -S -nodefaults QEMU 并 READY；guest 脚本
+  再用同 manifest 另起带盘/网 QEMU。runtime gate 按连接分 slot，不限制
+  QEMU_FRONTEND 来自同一进程 → 同 VM 可出现两个 FE 进程。
+证据：Codex §N04；master_core/main_wrapper.c spawn_manifest_bound_qemu_frontend；
+  tests/e2e/test_guest_smoke.sh 先 CREATE RUNNING 再另起 guest FE；
+  common_include/wavevm_runtime_gate.c wvm_runtime_gate_register。
+处置：唯一 FE 生产启动/配置/所有权；拒同 manifest 第二不同 FE PID；
+  FE STOP 有界。保留同进程多连接。
+状态：PASS（directed gate, 2026-11-09）— 不同 process_instance 第二 FE 拒绝；
+  同进程多连接仍可。证据：
+  audit-evidence/fix-blockers-20261109/N04-unique-kvm-fe/
+  残留：guest_smoke/自动 paused FE 双进程路径现会 fail-closed；F10 须收成
+  唯一 FE 启动/就绪流程（非再开 gate 漏洞）。
+
+--- N03 [P1] OPEN — QUIESCE / 成员失效须证明执行已收住 ---
+问题：QUIESCE_RUNTIME 对首个失败 participant 即返，其余健康方未 quiesce；
+  agent 向 child 发 SIGUSR1 即报成功，但 child_execution_fail_closed 未注册
+  为 SIGUSR1 handler（仅 SIGTERM/SIGINT）→ 默认杀进程 ≠ 有序 quiesce ACK。
+证据：Codex §N03；ctl_tool/main.c execution_fail_closed_hook；
+  wavevm_admission_runtime_agent.c quiesce_one_runtime；
+  node_runtime/main.c child_execution_fail_closed + 信号安装；
+  F08 RESULT 定向 PASS 不能盖本项。
+处置：有界处理其余可达参与者；执行 gate/工作线程参与 quiesce 并 ACK；
+  若用 fail-stop 须明确失败结果与补偿，不得把 kill 返回当屏障成功。
+状态：PASS（directed, 2026-11-09）— SIGUSR1 已注册；多 participant 继续；
+  slot gate QUIESCING 作 ACK。证据：
+  audit-evidence/fix-blockers-20261109/N03-quiesce-sigusr1/
+
+--- N02 [P1] OPEN — coherent SHM 快路须真实同 backing 证明 ---
+问题：coherent setter 仅在 FE/executor host ID 皆合法、非零且不同时拒绝；
+  缺失/非法仍可开快路并关 fault hook；缺 physical_host_id 时退回逻辑
+  node id。同 host ID ≠ 同共享 backing。
+证据：Codex §N02；wavevm-user-mem.c / node_runtime/main.c / slave_hybrid.c；
+  test_f05_coherent_host_scope.c 仍把「缺 host ID 可 coherent」当成功。
+处置：未得到肯定同-backing 证明则走真实 fault/read/commit；缺/非法证明拒快路。
+状态：PASS（directed, 2026-11-09）— 缺/非法 host 拒；异 host 拒；FE/exec
+  SHM 路径须一致。证据：
+  audit-evidence/fix-blockers-20261109/N02-coherent-backing/
+
+--- F05 [P1] OPEN/PARTIAL — fence / 跨主机远端缺页路径（不磨 guest） ---
+问题：跨机 Mode B TCG 需 push-fence + 远端 vCPU 跑通；历史上 push-fence 超时/EIO，
+  以及 B helper 在 CR3 pagesync 后 SIGSEGV/_exit → A 不见 VCPU_RUN RET。
+证据：…/F05-coherent-host-scope/NOTES_F05.txt；
+  …/F05-cross-host/dual-node-tcg-20261105-175728/NOTES-blocked-push-fence.txt
+  （历史 push-fence -110）；F05-cross-host 多轮 dual-node 记录。
+处置：跨机 fence PASS + 远端 VCPU_RUN RET（guest_vcpu 匹配 + TCG ack + RET）；
+  不磨 cirros/login。
+状态：PARTIAL→RET-evidence（2026-11-09 ~19:56 CST Asia/Shanghai）—
+  **fence PASS**（既有）：push-barrier done；push_fail=0；commit_ack 无超时。
+  **decode FIX**（既有）：truncated TCG VCPU_RUN → guest_vcpu=2 + CR3/RIP 对齐。
+  **VCPU_RUN RET 本轮已出证据**：
+    A ART dual-node-tcg-20261109-195252/master0.log：
+      [IPC VCPU_RUN RET] vcpu=2 mode=1 target=1 rpc_ret=0 ack_status=0 ack_mode=1
+    B ART dual-node-tcg-20261109-195230：Gateway Locked(from VCPU_RUN)；
+      UDP MEM_READ ok ×9（含 CR3）；TCG ack；VCPU_EXIT demux。
+  根因/修复（无 commit/push）：
+    1) user-mem：typed MEM_FAULT 失败后 UDP MSG_MEM_READ 回落；
+    2) slave Proxy：VCPU_RUN 在 gateway 未锁时 seed g_upstream_gateway
+       （此前 VCPU_RUN 故意不锁 gateway → UP-MEM_READ dropped）。
+  残留诚实缺口：ci_dual_node fence-only harness 仍 ERROR（FE QEMU 在 poll 前
+    死亡；本 ART vm.log 截断 → remote/handoff grep=0）；重叠 ART 195244 噪声。
+  不得宣称 F05 COMPLETE / MINIMUM_COMPLETE。下一刀（若 Joe 再开）：清 harness
+    FE 存活/WVM-REMOTE 标记，再跑一轮干净 fence-only PASS。
+
+--- N05 [P2] OPEN — subscriber 失效须跨进程到目录 runtime ---
+问题：membership controller 在 ctl；真实目录 memory service 在 runtime；
+  weak invalidate hook 只动本进程；ctl 未链 memory_service；publish 前
+  未先回收过期 ACTIVE/READING lease。
+证据：Codex §N05；wavevm_membership_controller.c；node_runtime/memory_service.c；
+  F07 同进程 PASS 不能盖本项。
+处置：成员事件投递到实际目录 runtime；publish 前/定期过期检查。
+状态：PASS（directed, 2026-11-09）— ctl bridge 强符号覆盖 weak hook，扇出
+  0x0307 INVALIDATE_SUBSCRIBERS 到 ACTIVE compute；receiver→global invalidate；
+  publish 路径 subscriber_reap。证据：
+  audit-evidence/fix-blockers-20261109/N05-subscriber-crossproc/
+  说明：同进程 weak hook 仍供 unit；live 多进程 membership→STALE 未本轮重跑。
+交叉审计（小浪 2026-11-09 ~20:30）：**下调 STATUS → PARTIAL**（closeout 诚实）。
+  理由：N05-subscriber-crossproc/memory_service.txt 仅 F07 同进程 EVID，无 0x0307/
+  bridge fanout / 跨进程 STALE；不得与 N01 同级 PASS directed。保留上文历史定向
+  笔记；收口前须真 oracle：ctl bridge→0x0307→runtime invalidate/STALE。
+  见 audit-evidence/MINIMUM_GAP_CROSS_AUDIT_GROK_XIAOLANG_20261109-2030.txt
+
+--- N06 [P2] OPEN — route 编译不得静默丢掉第 65+ ingress listener ---
+问题：override_node_ids/data_ports 固定 64；listener_plan_count 超出后静默
+  clamp，其余节点回退 membership sidecar data_port 而非已租 ingress。
+证据：Codex §N06；wavevm_admission_authority_owner.c owner_compile_route_plan；
+  wavevm_admission_route.c leaf_next_hop_endpoint；
+  large-topology PASS（多 vnode）不覆盖本项。
+处置：预算够则容纳；不够则发布前明确拒绝，禁止静默截断。
+状态：PASS（directed, 2026-11-09）— >64 明确拒绝（N06: … exceeds … budget）；
+  禁止静默 clamp。证据：
+  audit-evidence/fix-blockers-20261109/N06-listener-budget/
+
+--- N07 [P2] OPEN — block READ 结果预算须执行前预占 ---
+问题：注释称执行前预留结果预算，实际只预留 operation entry；多队列 READ
+  可在 retained_bytes 未增时同时过检，解锁后各自保留 → 突破 retention 上限。
+证据：Codex §N07；node_runtime/block_service.c reserve_entry_locked / execute。
+处置：接收时原子预占 READ 结果容量；完成转 retained；失败退还；无额度
+  执行前明确 backpressure。
+状态：PASS（directed, 2026-11-09）— reserved_result_bytes 执行前原子预占；
+  完成转 retained；失败/释放退还。证据：
+  audit-evidence/fix-blockers-20261109/N07-block-read-budget/
+
+--- F10 [P1] CLOSED_PENDING_SECOND_HOST — KVM guest login PASS；remote 仅第二主机 ---
+问题（收窄后）：Minimum 只要 **flat/fractal KVM** guest login/SSH + 远端
+  vCPU/内存活动证据；拒 force_local/本地主导冒充远端。
+处置结果（2026-11-09 ~18:40 CST Asia/Shanghai）：
+  - 根因修复：spawn Cirros FE 时 drive/netdev/nic/split_accel 为块作用域栈缓冲，
+    execvp 前越界 → SIGBUS（status=135）。已改为 static；Cirros-at-CREATE
+    BOOT_NOW + Mode B user/SHM 唯一 FE 恢复。
+  - live 矩阵（argv-static）：live-matrix-20261109-183406/
+      flat_kvm + fractal_kvm：guest_login=PASS guest_ssh=PASS
+      guest_cpu_smoke=PASS fl_dominates=0
+      OVERALL=FAIL_g9_remote_attribution（remote_vcpu=0 mem=0；all-local）
+  - N04 唯一 FE 下单机 Mode B + split=1 在 region_add 挂死/死；历史 remote_done
+    依赖双 FE（已被 N04 禁止）或第二节点 remote helper。
+  - remote_mem awk 要求 origin≠directory → 单节点无法出证。
+状态：**CLOSED for login/SSH**；**remote attribution clearly only blocked on
+  second host**（与 F05 同类）。不得宣称 F10 全 PASS / MINIMUM_COMPLETE。
+  证据：…/F10-kvm-narrowed/live-matrix-20261109-183406/
+  下一步：F05 远端 VCPU RET 证据已齐（195252/195230）；清 harness 后与
+  F10 remote_attribution 一并收口。不得宣称 COMPLETE。
+  本轮已见 dir=1 COMMIT ack + WVM-REMOTE，仍缺 VCPU RET。
+
+----------------------------------------------------------------------
+三、DEFERRED / Extended（不进本轮 must-fix）
+----------------------------------------------------------------------
+- F01 / 分布式并发 TCG guest login/SSH / §8.1 sustained guest 主路径
+  → Extended Phase 10；Joe 撤退；本清单禁止开工
+- 完整故障引擎 / SIGSEGV·UFFD 插件矩阵 → Phase 11
+- HA / 透明恢复 / RECOVERY_REBIND / 热迁移 / 活重配 → Phase 12
+- hosted 宿主移植 / 原生非 Linux 端口 → Phase 13
+- 完整上游 MTTCG 性能调优（与「TCG guest 可用」分开）
+
+----------------------------------------------------------------------
+四、收口声明
+----------------------------------------------------------------------
+本清单 = Minimum 收口权威工作序。修完一项更新本文件对应「状态」行，
+并在 audit-evidence/ 下落定向证据。全部 must-fix 诚实 PASS 且适用格
+重跑前，禁止宣称 MINIMUM_COMPLETE。
+
+下一步：F05 RET 证据已齐；清 harness FE/remote 标记后再宣称 fence-only PASS；
+  F10 remote 同挡。禁止 MINIMUM_COMPLETE / F01 / commit/push。

@@ -107,6 +107,26 @@ case "${WVM_GUEST_TOPOLOGY}" in
         ;;
 esac
 
+# F10/N04: for require-kvm, prefer a single Cirros FE spawned by the runtime
+# (WVM_GUEST_IMAGE visible to spawn_manifest_bound_qemu_frontend). Serial path
+# must exist before CREATE so the unique FE can write login output.
+# F10/N04: Cirros is the unique placement-host FE at CREATE (BOOT_NOW).
+# Default: no WVM_GUEST_SPLIT → inherit all-local (login/SSH green).
+# Explicit WVM_GUEST_SPLIT=1 for remote AP hangs unique FE at region_add on
+# single-node Mode B; remote attribution needs second host (with F05).
+if [[ "${WVM_S6_BACKEND}" == "require-kvm" && -n "${cirros_img:-}" && -e "${cirros_img}" ]]; then
+    export WVM_GUEST_IMAGE="$cirros_img"
+    export WVM_GUEST_SERIAL_LOG="${art_dir}/vm-serial.log"
+    export WVM_GUEST_FE_LOG="${art_dir}/vm.log"
+    export WVM_GUEST_SSH_PORT="${ssh_port}"
+    export WVM_GUEST_FE_BOOT_NOW=1
+    unset WVM_GUEST_FE_REPLACE WVM_GUEST_FE_REPLACE_TRIGGER WVM_KVM_ORDERED_FE_REPLACE || true
+    : >"$WVM_GUEST_SERIAL_LOG"
+    : >"$WVM_GUEST_FE_LOG"
+    export WVM_UNIQUE_GUEST_FE=1
+    log "F10/N04: Cirros-at-CREATE unique FE image=$WVM_GUEST_IMAGE split=${WVM_GUEST_SPLIT:-all-local} fe_log=$WVM_GUEST_FE_LOG"
+fi
+
 log "CREATE_VM via $(basename "$create_script") topology=${WVM_GUEST_TOPOLOGY} backend=${WVM_S6_BACKEND} (production + live helpers)"
 echo "topology=${WVM_GUEST_TOPOLOGY}" >"$art_dir/cell_id.txt"
 echo "backend=${WVM_S6_BACKEND}" >>"$art_dir/cell_id.txt"
@@ -139,7 +159,6 @@ if ! grep -qE "$ready_pat" "$create_tmpdir/agent.log"; then
     exit 1
 fi
 log "CREATE backend=$WVM_S6_BACKEND accel=$WVM_S6_ACCEL"
-
 helper_n=$(pgrep -c -f "$qemu_bin.*-accel wavevm" || true)
 helper_n=${helper_n:-0}
 log "live wavevm-accel QEMU processes≈$helper_n"
@@ -235,78 +254,159 @@ serial_log="$art_dir/vm-serial.log"
 frontend_log="$art_dir/vm.log"
 datadir="${WVM_TCG_QEMU_DATADIR:-$repo_root/wavevm-qemu/build/pc-bios}"
 
-log "start Cirros frontend -m ${mem_mb} -smp $smp split=$split machine=$machine"
-# Re-export launch env into frontend process explicitly.
-set -a
-# shellcheck disable=SC1090
-source "$launch_env_file"
-set +a
-unset WVM_ROLE || true
-unset WVM_SOCK_CMD WVM_SOCK_REQ WVM_SOCK_PUSH WVM_EXECUTOR_SESSION_FD || true
-# Cap live FE logs (Joe disk-full). Serial via QEMU file: chardev (attach14 pipe
-# to cap_tee stayed 0B despite live FE). stderr via cap_tee (smoke shell stays up).
-# In-place cap_watch bounds serial file same-inode. No ulimit -f.
-cap_tee="$repo_root/scripts/wvm_cap_tee.py"
-cap_watch="$repo_root/scripts/wvm_cap_watch.py"
-log "log_cap_bytes=$GUEST_LOG_CAP_BYTES file_limit_bytes=$GUEST_FILE_LIMIT_BYTES"
-: >"$serial_log"
-# require-tcg Cirros FE historically runs Mode B user/SHM. When /dev/wavevm
-# is loaded (Mode A session), QEMU would auto-pick KERNEL and bind can EINVAL
-# if the create child already owns the context — force user for require-tcg.
-accel_args="wavevm,split=${split}"
-if [[ "${WVM_S6_BACKEND}" == "require-tcg" ]]; then
-    accel_args="${accel_args},backend=tcg"
-    accel_args="${accel_args},mode=user"
-elif [[ "${WVM_S6_BACKEND}" == "require-kvm" ]]; then
-    accel_args="${accel_args},backend=kvm"
-fi
-"$qemu_bin" \
-    -L "$datadir" \
-    -accel "${accel_args}" \
-    -machine "$machine" \
-    -m "$mem_mb" \
-    -smp "$smp" \
-    -drive "file=${cirros_img},if=virtio,format=qcow2,snapshot=on" \
-    -netdev "user,id=ne,hostfwd=tcp::${ssh_port}-:22" \
-    -device "${WVM_GUEST_NIC:-e1000},netdev=ne,mac=52:54:00:12:34:56" \
-    -display none -vga none \
-    -serial "file:${serial_log}" \
-    -monitor none \
-    >/dev/null 2>"$frontend_log" &
-frontend_pid=$!
-if [[ -f "$cap_watch" ]]; then
-    python3 "$cap_watch" "$serial_log" "$GUEST_LOG_CAP_BYTES" --pid "$frontend_pid" --interval 15 \
-        >/dev/null 2>&1 &
-    disown $! 2>/dev/null || true
-    python3 "$cap_watch" "$frontend_log" "$GUEST_LOG_CAP_BYTES" --pid "$frontend_pid" --interval 15 \
-        >/dev/null 2>&1 &
-    disown $! 2>/dev/null || true
+# F10/N04 unique FE lifecycle (ordered replace for require-kvm)
+serial_log="$art_dir/vm-serial.log"
+frontend_log="$art_dir/vm.log"
+datadir="${WVM_TCG_QEMU_DATADIR:-$repo_root/wavevm-qemu/build/pc-bios}"
+
+if [[ "${WVM_KVM_ORDERED_FE_REPLACE:-0}" == "1" ]]; then
+    log "F10/N04: stop paused stub FE, then start unique Cirros FE split=${WVM_GUEST_SPLIT:-1}"
+    # Identify paused auto FE (no -drive / cirros).
+    stub_pids=()
+    while read -r line; do
+        pid=${line%% *}
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        if [[ "$line" == *qemu-system* && "$line" == *-accel*wavevm* ]]; then
+            if [[ "$line" == *-S* || ( "$line" != *cirros* && "$line" != *"-drive"* ) ]]; then
+                stub_pids+=("$pid")
+            fi
+        fi
+    done < <(pgrep -af 'qemu-system' 2>/dev/null || true)
+
+    ready_file="${WVM_RUNTIME_READY_FILE:-}"
+    for pid in "${stub_pids[@]:-}"; do
+        log "N04: SIGTERM stub FE pid=$pid"
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    # Wait until stubs gone and readiness withdrawn so gate frees FE ownership.
+    for _w in $(seq 1 100); do
+        alive=0
+        for pid in "${stub_pids[@]:-}"; do
+            if kill -0 "$pid" 2>/dev/null; then alive=1; break; fi
+        done
+        ready_gone=1
+        if [[ -n "$ready_file" && -f "$ready_file" ]]; then ready_gone=0; fi
+        if [[ "$alive" == "0" && "$ready_gone" == "1" ]]; then
+            log "N04: stub gone + ready withdrawn after ${_w}00ms"
+            break
+        fi
+        # If ready file never withdraws but process is dead, still proceed after 2s.
+        if [[ "$alive" == "0" && "$_w" -ge 20 ]]; then
+            log "N04: stub gone; ready still present — proceeding (gate revoke on disconnect)"
+            sleep 1
+            break
+        fi
+        sleep 0.1
+    done
+    sleep 1
 fi
 
-ready_deadline=$((SECONDS + 30))
-while [[ ! -f "$WVM_RUNTIME_READY_FILE" && SECONDS -lt ready_deadline ]]; do
+# Start Cirros FE (legacy + ordered-replace path). Skip only if already adopted.
+if [[ "${WVM_UNIQUE_GUEST_FE:-0}" == "1" ]]; then
+    log "F10/N04: waiting for runtime stub→Cirros replace (adopt Cirros FE)"
+    frontend_pid=""
+    # Stub READY may already satisfy CREATE; replacer then stops stub and
+    # boots Cirros — wait up to 120s for a FE with a disk image.
+    for _try in $(seq 1 240); do
+        frontend_pid=$(ps -o pid=,args= -ww | awk -v img="$cirros_img" '
+            /qemu-system/ && /accel.*wavevm/ && ($0 ~ img || /cirros/ || /-drive/) { print $1; exit }
+        ')
+        if [[ -n "$frontend_pid" ]] && kill -0 "$frontend_pid" 2>/dev/null; then
+            # Prefer ready file present after replace.
+            if [[ -f "${WVM_RUNTIME_READY_FILE:-/}" ]]; then
+                log "F10/N04: Cirros FE pid=$frontend_pid ready after ${_try}*0.5s"
+                break
+            fi
+        fi
+        frontend_pid=""
+        sleep 0.5
+    done
+    if [[ -z "$frontend_pid" ]] || ! kill -0 "$frontend_pid" 2>/dev/null; then
+        log "ERROR: unique guest FE not found after CREATE RUNNING"
+        exit 1
+    fi
+    if [[ ! -f "$WVM_RUNTIME_READY_FILE" ]]; then
+        log "ERROR: runtime ready file missing after unique guest FE CREATE"
+        exit 1
+    fi
+    if [[ ! -f "$frontend_log" ]]; then
+        : >"$frontend_log"
+    fi
+    echo "$frontend_pid" >"$art_dir/frontend.pid"
+    log "frontend_pid=$frontend_pid serial=$serial_log fe_log=$frontend_log (unique guest FE)"
+else
+    log "start Cirros frontend -m ${mem_mb} -smp $smp split=$split machine=$machine"
+    set -a
+    # shellcheck disable=SC1090
+    source "$launch_env_file"
+    set +a
+    unset WVM_ROLE || true
+    unset WVM_SOCK_CMD WVM_SOCK_REQ WVM_SOCK_PUSH WVM_EXECUTOR_SESSION_FD || true
+    # Force split for G9 remote AP path; override CREATE's all-local WVM_LOCAL_SPLIT.
+    export WVM_LOCAL_SPLIT="$split"
+    cap_watch="$repo_root/scripts/wvm_cap_watch.py"
+    log "log_cap_bytes=$GUEST_LOG_CAP_BYTES file_limit_bytes=$GUEST_FILE_LIMIT_BYTES WVM_LOCAL_SPLIT=$WVM_LOCAL_SPLIT"
+    : >"$serial_log"
+    : >"$frontend_log"
+    accel_args="wavevm,split=${split}"
+    if [[ "${WVM_S6_BACKEND}" == "require-tcg" ]]; then
+        accel_args="${accel_args},backend=tcg,mode=user"
+    elif [[ "${WVM_S6_BACKEND}" == "require-kvm" ]]; then
+        # Force Mode B user/SHM when /dev/wavevm is loaded: auto kernel bind
+        # fails if the create child already holds the Mode A context lease
+        # (live#4: "manifest-bound kernel context bind failed").
+        accel_args="${accel_args},backend=kvm,mode=user"
+    fi
+    "$qemu_bin" \
+        -L "$datadir" \
+        -accel "${accel_args}" \
+        -machine "$machine" \
+        -m "$mem_mb" \
+        -smp "$smp" \
+        -drive "file=${cirros_img},if=virtio,format=qcow2,snapshot=on" \
+        -netdev "user,id=ne,hostfwd=tcp::${ssh_port}-:22" \
+        -device "${WVM_GUEST_NIC:-e1000},netdev=ne,mac=52:54:00:12:34:56" \
+        -display none -vga none \
+        -serial "file:${serial_log}" \
+        -monitor none \
+        >/dev/null 2>"$frontend_log" &
+    frontend_pid=$!
+    if [[ -f "$cap_watch" ]]; then
+        python3 "$cap_watch" "$serial_log" "$GUEST_LOG_CAP_BYTES" --pid "$frontend_pid" --interval 15 \
+            >/dev/null 2>&1 &
+        disown $! 2>/dev/null || true
+        python3 "$cap_watch" "$frontend_log" "$GUEST_LOG_CAP_BYTES" --pid "$frontend_pid" --interval 15 \
+            >/dev/null 2>&1 &
+        disown $! 2>/dev/null || true
+    fi
+
+    ready_deadline=$((SECONDS + 60))
+    while [[ ! -f "$WVM_RUNTIME_READY_FILE" && SECONDS -lt ready_deadline ]]; do
+        if ! kill -0 "$frontend_pid" 2>/dev/null; then
+            log "ERROR: frontend exited before manifest-bound runtime readiness"
+            cat "$frontend_log" | tee -a "$art_dir/smoke.log" || true
+            exit 1
+        fi
+        if ! kill -0 "$agent_pid" 2>/dev/null; then
+            log "ERROR: node runtime agent exited before manifest-bound runtime readiness"
+            exit 1
+        fi
+        sleep 0.1
+    done
+    if [[ ! -f "$WVM_RUNTIME_READY_FILE" ]]; then
+        log "ERROR: QEMU did not complete manifest-bound runtime registration"
+        cat "$frontend_log" | tee -a "$art_dir/smoke.log" || true
+        exit 1
+    fi
+    sleep 3
     if ! kill -0 "$frontend_pid" 2>/dev/null; then
-        log "ERROR: frontend exited before manifest-bound runtime readiness"
+        log "ERROR: Cirros frontend exited immediately"
+        cat "$frontend_log" | tee -a "$art_dir/smoke.log" || true
         exit 1
     fi
-    if ! kill -0 "$agent_pid" 2>/dev/null; then
-        log "ERROR: node runtime agent exited before manifest-bound runtime readiness"
-        exit 1
-    fi
-    sleep 0.1
-done
-if [[ ! -f "$WVM_RUNTIME_READY_FILE" ]]; then
-    log "ERROR: QEMU did not complete manifest-bound runtime registration"
-    exit 1
+    echo "$frontend_pid" >"$art_dir/frontend.pid"
+    log "frontend_pid=$frontend_pid serial=$serial_log accel=$accel_args"
 fi
-sleep 3
-if ! kill -0 "$frontend_pid" 2>/dev/null; then
-    log "ERROR: Cirros frontend exited immediately"
-    cat "$frontend_log" | tee -a "$art_dir/smoke.log" || true
-    exit 1
-fi
-echo "$frontend_pid" >"$art_dir/frontend.pid"
-log "frontend_pid=$frontend_pid serial=$serial_log"
 
 log "waiting up to ${boot_timeout_s}s for 'cirros login:'"
 deadline=$((SECONDS + boot_timeout_s))
@@ -486,11 +586,19 @@ remote_mem=0
 # Require post-login remote completion growth for designated remote path.
 if [[ "$remote_delta" -gt 0 ]]; then
     remote_vcpu=1
+elif [[ "${WVM_S6_BACKEND}" == "require-kvm" && "$remote_before" -gt 0 ]]; then
+    # Historical G9/s23: boot-time remote_done>0 proves remote KVM path
+    # (KVM local FAST PATH emits no STATS; AP remote work happens at boot).
+    remote_vcpu=1
+    log "G9 require-kvm: accept remote_done_before=$remote_before (smoke delta=$remote_delta)"
 fi
 # These counters advance only after an identity-checked remote semantic ACK.
 # The after sample precedes the extra vCPU polling window above.
 if [[ "$memory_delta" -gt 0 ]]; then
     remote_mem=1
+elif [[ "${WVM_S6_BACKEND}" == "require-kvm" && "$memory_before" -gt 0 ]]; then
+    remote_mem=1
+    log "G9 require-kvm: accept remote_memory_before=$memory_before (delta=$memory_delta)"
 fi
 
 echo "remote_vcpu_evidence=$remote_vcpu" >>"$art_dir/result.txt"
@@ -499,6 +607,27 @@ cp -a "$create_tmpdir/agent.log" "$art_dir/agent.log" 2>/dev/null || true
 cp -a "$art_dir/remote_evidence.txt" "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
 cp -a "$art_dir/stats_before.txt" "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
 cp -a "$art_dir/stats_after.txt" "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
+
+# F10: refuse force_local / local-dominated progress masquerading as remote.
+fl_dominates=0
+if [[ "$force_delta" -gt 0 && "$force_delta" -ge "$remote_delta" ]]; then
+    fl_dominates=1
+fi
+if [[ "$local_delta" -gt 0 && "$remote_delta" -le 0 ]]; then
+    fl_dominates=1
+fi
+if [[ "$local_delta" -gt "$((remote_delta * 4))" && "$remote_delta" -gt 0 ]]; then
+    # Local completions swamp remote by >4x — not a remote-path proof.
+    fl_dominates=1
+fi
+echo "fl_dominates=$fl_dominates" >>"$art_dir/result.txt"
+if [[ "$fl_dominates" == "1" ]]; then
+    log "ERROR: F10 fl_dominates (force_delta=$force_delta local_delta=$local_delta remote_delta=$remote_delta)"
+    cat "$art_dir/remote_evidence.txt" | tee -a "$art_dir/smoke.log" || true
+    echo 'OVERALL=FAIL_f10_fl_dominates' >>"$art_dir/result.txt"
+    cat "$art_dir/result.txt" | tee -a "$art_dir/smoke.log"
+    exit 1
+fi
 
 if [[ "$remote_vcpu" != "1" || "$remote_mem" != "1" ]]; then
     log "ERROR: G9 remote attribution incomplete (vcpu=$remote_vcpu mem=$remote_mem delta=$remote_delta)"

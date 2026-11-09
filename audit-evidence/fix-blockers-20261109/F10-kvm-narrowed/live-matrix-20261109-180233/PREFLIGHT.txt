@@ -1,0 +1,5 @@
+preflight 2026-11-09 18:02:33 CST
+crw-rw----+ 1 root kvm 10, 232 11月  9 17:58 /dev/kvm
+crw-rw-rw-  1 root kvm 10, 264 11月  9 17:54 /dev/wavevm
+wavevm                 45056  0
+fix=runtime_stub_to_cirros_replace split=1 mode=user

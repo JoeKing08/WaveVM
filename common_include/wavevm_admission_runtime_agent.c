@@ -671,12 +671,28 @@ static int quiesce_one_runtime(
     if (wvm_runtime_gate_quiesce(&slot->gate, error, error_len) != 0) {
         return -1;
     }
+    /*
+     * N03 ACK surface: slot gate must be QUIESCING before we report success.
+     * kill(SIGUSR1) delivers the child fail-closed handler (now registered);
+     * ESRCH means the child already exited (fail-stop) and cannot accept work.
+     * Do not treat a bare kill() as the only barrier without the gate check.
+     */
+    if (slot->gate.state != WVM_RUNTIME_GATE_QUIESCING) {
+        set_error(error, error_len,
+                  "N03: runtime slot gate is not QUIESCING after quiesce");
+        return -EIO;
+    }
     pid = owned->runtime_pids[index];
     if (pid > 0) {
-        if (kill(pid, SIGUSR1) != 0 && errno != ESRCH) {
-            set_error(error, error_len,
-                      "cannot signal admitted runtime child to quiesce");
-            return -errno;
+        if (kill(pid, SIGUSR1) != 0) {
+            if (errno == ESRCH) {
+                /* Child already gone — fail-stop; cannot accept new work. */
+                owned->runtime_pids[index] = 0;
+            } else {
+                set_error(error, error_len,
+                          "cannot signal admitted runtime child to quiesce");
+                return -errno;
+            }
         }
     }
     if (error && error_len) {

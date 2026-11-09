@@ -15,6 +15,20 @@ specifications.
 This specification is normative for new Mode A work. It defines an accelerator
 for the canonical Mode B semantics, not a second distributed control plane.
 
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Accelerate authorized node-runtime operations. User space retains VM, route, consistency, placement and lifecycle semantics. |
+| State and mutation | Each VM context owns its mappings, requests and derived caches. IOCTL/mmap/work access requires attached identity, permission and a live reference; shared workers remain context-tagged. |
+| Allowed implementation dependencies | Public kernel/user ABI records, admitted manifest/configuration projections, and local OS data-plane primitives. No private control-plane state or second logic authority. |
+| Interactions and lifetime | Sections 3, 4 and 7 own attach/publication/reference safety. Context release obeys [lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement), including delayed TX, VMA and completion work. |
+| Concurrency and cost | Section 6 requires per-context progress, bounded queues/fairness and explicit blocking/lock constraints. Describe copies, wakes and mode transitions; global infrastructure cannot serialize unrelated VM execution. |
+| Failure and verification | Sections 1.2, 7 and 10 govern honest context capability, failure propagation and real two-context isolation before multi-VM admission. |
+
 ## 1. Goal and Non-Goals
 
 The goal is for an available kernel module to accelerate selected local
@@ -87,7 +101,7 @@ CREATE-to-RUNNING/READY evidence cannot satisfy Minimum KVM guest login/SSH,
 TCG execution-contract tests, or remote-resource acceptance criteria. Full TCG
 guest acceptance is Extended; its deferral does not weaken context isolation.
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - Requiring the module, root, or a custom kernel for a correct Mode B VM.
 - Making a module-global socket, VM ID, route table, mapping, or request table
@@ -231,7 +245,7 @@ writes must not be a new production configuration path.
 | Current legacy IOCTL family | Migration role |
 | --- | --- |
 | `IOCTL_WVM_REMOTE_RUN` | Context-bound acceleration of a validated vCPU handoff; not an independent remote execution protocol. |
-| `IOCTL_SET_MEM_LAYOUT` | Compatibility adapter for manifest-authorized RAM registration only. |
+| `IOCTL_SET_MEM_LAYOUT` | If exposed, context-bound manifest-authorized RAM registration only; no unbound legacy adapter. |
 | `IOCTL_WAIT_IRQ` | Context-bound local interrupt wait/notification with typed timeout/error result. |
 | VM ID, epoch, route, placement, gateway setters | Deprecated field injection. Replace with complete derived manifest/route snapshot prepare/commit. |
 | `IOCTL_RPC_SYNC_ACK` | Remove or assign a typed owner before stable ABI exposure; an unhandled numeric command is not a semantic feature. |
@@ -340,6 +354,15 @@ another VM's independent work.
 - Config/route snapshot replacement uses one complete immutable object per
   context. Readers use an old or new complete snapshot, never a field-by-field
   mixture.
+- Implement context-independent progress and bounded shared-worker fairness.
+  Adding per-context structures without removing a global execution/wait
+  bottleneck does not establish parallel acceleration. Queue, copy, wakeup,
+  and context-switch costs must be explicit; compare acceleration with the
+  equivalent Mode B contract workload under declared host conditions.
+
+Context teardown participates in [lifecycle resource retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement).
+Local reference counts supplement, rather than replace, its operation fencing
+and late-completion requirements.
 
 ## 7. Failure, Teardown, and Fallback
 
@@ -355,7 +378,7 @@ another VM's independent work.
 | Route/configuration generation mismatch | Reject operation and request user-space refresh; never use a nearby/global cached entry. |
 
 Mode A failure after a VM begins running is not permission to continue with
-undefined state. V1 pauses or fails the affected VM according to the memory and
+undefined state. Minimum pauses or fails the affected VM according to the memory and
 vCPU contracts. A future hot fallback to Mode B requires a quiesced,
 manifest-validated transition that proves no dirty, handoff, or interrupt state
 is lost.
@@ -371,27 +394,18 @@ require separate end-to-end evidence.
 | --- | --- |
 | `master_core/kernel_backend.c` | Keep page metadata, route caches, requests, sockets, and shared queues context-owned or explicitly context-tagged; enforce the isolation gate in Section 1.2. |
 | `master_core/module-common.[ch]` | Keep only module-wide registries/workers that carry an explicit context reference. |
-| `common_include/wavevm_ioctl.h` | Introduce versioned context lifecycle/configuration/operation envelopes while retaining adapters during migration. |
+| `common_include/wavevm_ioctl.h` | Define context lifecycle/configuration/operation envelopes; reject unbound legacy setters instead of retaining a second configuration path. |
 | Module `g_module_transport` (UDP socket + TX rings); per-context `diff_queue`/`dir_locks` | Shared transport slots and workers must carry explicit context references; keep dirty queues and GPA shard locks per-context. |
 | `wavevm-qemu/accel/wavevm/` | Create/attach only through the local prepared manifest and validate context identity for each operation. |
 | `master_core/logic_core.c` / node runtime | Remain semantic authority; kernel completion returns to this contract rather than inventing a parallel RPC path. |
 
-## 9. Compatibility and Migration
+## 9. Compatibility Boundary
 
-1. Inventory every module-global variable, IOCTL, mmap path, workqueue item,
-   wait queue, socket, request cache, and teardown path.
-2. Add read-only capability discovery and reject unsupported multi-VM Mode A
-   before changing data-plane behavior.
-3. Implement explicit create/attach/detach context lifecycle while adapting
-   legacy setters to a complete manifest-derived configuration object.
-4. Move mappings, page/dirty metadata, vCPU state, route cache, request cache,
-   and transport bindings into `wvm_kernel_ctx` one domain at a time.
-5. Add context references to every asynchronous callback/work item, then make
-   teardown quiesce and drain those references before freeing memory.
-6. Replace field-by-field route/placement/VM setters with atomic snapshot
-   publication and generation validation.
-7. Enable more than one Mode A VM only after isolation, teardown, and
-   semantic-equivalence acceptance tests pass.
+No legacy module-global VM state, unbound setter, or second configuration ABI
+is required. Every operation uses an explicitly created and attached per-VM
+context with manifest-derived configuration and lifetime-safe references.
+Multi-context capability is advertised only when the isolation acceptance
+conditions in Section 1.2 pass.
 
 ## 10. Acceptance Tests
 

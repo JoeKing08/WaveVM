@@ -1,0 +1,18 @@
+guest_matrix run_id=f10-kvm-ordered-20261109-180906 out_dir=audit-evidence/fix-blockers-20261109/F10-kvm-narrowed/live-matrix-20261109-180906 tip=e47d6a518 have_kvm=1
+cells_default=flat_kvm,fractal_kvm (Minimum Phase 9)
+cells_extended_opt_in=flat_tcg,fractal_tcg
+2026年 11月 09日 星期一 18:09:06 CST
+=== CELL flat_kvm topology=flat backend=require-kvm ===
+RESULT=flat_kvm FAIL rc=1
+=== CELL fractal_kvm topology=fractal backend=require-kvm ===
+RESULT=fractal_kvm FAIL rc=1
+==== SUMMARY ====
+pass=0 fail=2 skip=0 blocked=0
+ran=flat_kvm fractal_kvm
+tip=e47d6a518
+out_dir=audit-evidence/fix-blockers-20261109/F10-kvm-narrowed/live-matrix-20261109-180906
+MATRIX_RESULT=FAIL
+MINIMUM_COMPLETE=NOT_CLAIMED_BY_GUEST_MATRIX
+NOTE: Minimum Phase 9 = KVM flat/fractal login/SSH + remote attribution;
+NOTE: TCG guest login is Extended; SKIP≠PASS; MATRIX_PASS≠MINIMUM_COMPLETE.
+2026年 11月 09日 星期一 18:09:56 CST

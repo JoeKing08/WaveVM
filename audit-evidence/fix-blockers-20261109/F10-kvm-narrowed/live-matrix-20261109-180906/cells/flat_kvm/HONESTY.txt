@@ -1,0 +1,7 @@
+cell=flat_kvm
+topology=flat
+backend=require-kvm
+accel=disabled
+rc=1
+overall=FAIL
+honesty=GUEST_E2E_FAIL_see_log

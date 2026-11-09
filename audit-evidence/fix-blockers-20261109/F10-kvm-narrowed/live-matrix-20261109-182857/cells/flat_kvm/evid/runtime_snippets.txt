@@ -1,0 +1,10 @@
+=== backend/topology snippets ===
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[System] spawned manifest-bound QEMU frontend pid=28392 accel=wavevm,backend=kvm,mode=user bin=/workspaces/WaveVM/wavevm-qemu/build-native/qemu-system-x86_64 mem_mb=256 smp=2
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-bd261f42c3120ee3
+[Hybrid] Mode: KVM FAST PATH. Listening on 127.0.0.1:26390
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-bd261f42c3120ee3 (Size: 256 MB)
+=== child runtime logs (names) ===
+/tmp/wavevm-create-vm-single.zoR8dU/runtime/vm-256-1-1.manifest
+/tmp/wavevm-create-vm-single.zoR8dU/runtime/vm-256-1-1.manifest.dispatch
+/tmp/wavevm-create-vm-single.zoR8dU/runtime/vm-256-1-1.manifest.route

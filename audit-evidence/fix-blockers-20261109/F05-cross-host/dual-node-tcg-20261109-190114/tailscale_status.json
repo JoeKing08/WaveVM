@@ -1,0 +1,234 @@
+{
+  "Version": "1.104.5-t788384763-gd9218e278",
+  "TUN": true,
+  "BackendState": "Running",
+  "HaveNodeKey": true,
+  "AuthURL": "",
+  "TailscaleIPs": [
+    "100.116.196.65",
+    "fd7a:115c:a1e0::bc38:c442"
+  ],
+  "Self": {
+    "ID": "ntKLtpBXXv11CNTRL",
+    "NodeID": 6854732022316443,
+    "PublicKey": "nodekey:1eb1f0e7d9831b77f6cbaa1c4c382d9e4bd4f49b0603424b30f2b845bc34c441",
+    "HostName": "wavevm-f05-a",
+    "DNSName": "wavevm-f05-a.tail9c16ac.ts.net.",
+    "OS": "linux",
+    "UserID": 7693224122637248,
+    "TailscaleIPs": [
+      "100.116.196.65",
+      "fd7a:115c:a1e0::bc38:c442"
+    ],
+    "AllowedIPs": [
+      "100.116.196.65/32",
+      "fd7a:115c:a1e0::bc38:c442/128"
+    ],
+    "Addrs": [
+      "39.71.167.118:36103",
+      "39.71.167.118:37461",
+      "192.168.10.129:41641"
+    ],
+    "CurAddr": "",
+    "Relay": "nue",
+    "PeerRelay": "",
+    "RxBytes": 0,
+    "TxBytes": 0,
+    "Created": "2026-11-09T10:51:22.305895017Z",
+    "LastWrite": "0001-01-01T00:00:00Z",
+    "LastSeen": "0001-01-01T00:00:00Z",
+    "LastHandshake": "0001-01-01T00:00:00Z",
+    "Online": true,
+    "ExitNode": false,
+    "ExitNodeOption": false,
+    "Active": false,
+    "PeerAPIURL": [
+      "http://100.116.196.65:64210",
+      "http://[fd7a:115c:a1e0::bc38:c442]:57292"
+    ],
+    "TaildropTarget": 0,
+    "NoFileSharingReason": "",
+    "Capabilities": [
+      "HTTPS://TAILSCALE.COM/s/DEPRECATED-NODE-CAPS#see-https://github.com/tailscale/tailscale/issues/11508",
+      "default-auto-update",
+      "https://tailscale.com/cap/file-sharing",
+      "https://tailscale.com/cap/is-admin",
+      "https://tailscale.com/cap/is-owner",
+      "https://tailscale.com/cap/ssh",
+      "https://tailscale.com/cap/tailnet-lock",
+      "never-gso-equal-tail",
+      "probe-udp-lifetime",
+      "ssh-behavior-v1",
+      "ssh-env-vars",
+      "store-appc-routes",
+      "tailnet-display-name"
+    ],
+    "CapMap": {
+      "default-auto-update": [
+        true
+      ],
+      "https://tailscale.com/cap/file-sharing": null,
+      "https://tailscale.com/cap/is-admin": null,
+      "https://tailscale.com/cap/is-owner": null,
+      "https://tailscale.com/cap/ssh": null,
+      "https://tailscale.com/cap/tailnet-lock": null,
+      "never-gso-equal-tail": null,
+      "probe-udp-lifetime": null,
+      "ssh-behavior-v1": null,
+      "ssh-env-vars": null,
+      "store-appc-routes": null,
+      "tailnet-display-name": [
+        "262213181@qq.com"
+      ]
+    },
+    "InNetworkMap": true,
+    "InMagicSock": false,
+    "InEngine": false,
+    "KeyExpiry": "2027-05-08T10:51:22Z"
+  },
+  "Health": [],
+  "MagicDNSSuffix": "tail9c16ac.ts.net",
+  "CurrentTailnet": {
+    "Name": "262213181@qq.com",
+    "StableID": "TgqCkBV5z321CNTRL",
+    "MagicDNSSuffix": "tail9c16ac.ts.net",
+    "MagicDNSEnabled": true
+  },
+  "CertDomains": null,
+  "ExtraRecords": null,
+  "Peer": {
+    "nodekey:1202d90cdc3bc517d2b26039cad3b0534f8e7e027b77eaf251308d644c33cd21": {
+      "ID": "nzP56fJbe121CNTRL",
+      "NodeID": 7510660078473101,
+      "PublicKey": "nodekey:1202d90cdc3bc517d2b26039cad3b0534f8e7e027b77eaf251308d644c33cd21",
+      "HostName": "wavevm-ci-a",
+      "DNSName": "wavevm-ci-a.tail9c16ac.ts.net.",
+      "OS": "linux",
+      "UserID": 7693224122637248,
+      "TailscaleIPs": [
+        "100.115.205.34",
+        "fd7a:115c:a1e0::4c01:cdbc"
+      ],
+      "AllowedIPs": [
+        "100.115.205.34/32",
+        "fd7a:115c:a1e0::4c01:cdbc/128"
+      ],
+      "Addrs": null,
+      "CurAddr": "",
+      "Relay": "",
+      "PeerRelay": "",
+      "RxBytes": 0,
+      "TxBytes": 0,
+      "Created": "2026-04-26T02:52:46.124161248Z",
+      "LastWrite": "0001-01-01T00:00:00Z",
+      "LastSeen": "2026-04-26T03:12:43.1Z",
+      "LastHandshake": "0001-01-01T00:00:00Z",
+      "Online": false,
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "Active": false,
+      "PeerAPIURL": [
+        "http://100.115.205.34:59388",
+        "http://[fd7a:115c:a1e0::4c01:cdbc]:58753"
+      ],
+      "TaildropTarget": 5,
+      "NoFileSharingReason": "",
+      "InNetworkMap": true,
+      "InMagicSock": true,
+      "InEngine": false,
+      "Expired": true,
+      "KeyExpiry": "2026-10-23T02:52:46Z"
+    },
+    "nodekey:32758f7b20db1fb6a42c5bee8ec4ce2378ef749ae6e30087a08b876260b2ff22": {
+      "ID": "nSGmro8RjA21CNTRL",
+      "NodeID": 8673880583530903,
+      "PublicKey": "nodekey:32758f7b20db1fb6a42c5bee8ec4ce2378ef749ae6e30087a08b876260b2ff22",
+      "HostName": "wavevm-ci-b",
+      "DNSName": "wavevm-ci-b.tail9c16ac.ts.net.",
+      "OS": "linux",
+      "UserID": 7693224122637248,
+      "TailscaleIPs": [
+        "100.114.255.35",
+        "fd7a:115c:a1e0::6001:ffbb"
+      ],
+      "AllowedIPs": [
+        "100.114.255.35/32",
+        "fd7a:115c:a1e0::6001:ffbb/128"
+      ],
+      "Addrs": null,
+      "CurAddr": "",
+      "Relay": "",
+      "PeerRelay": "",
+      "RxBytes": 0,
+      "TxBytes": 0,
+      "Created": "2026-04-26T02:49:15.812630959Z",
+      "LastWrite": "0001-01-01T00:00:00Z",
+      "LastSeen": "2026-04-26T03:12:43.1Z",
+      "LastHandshake": "0001-01-01T00:00:00Z",
+      "Online": false,
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "Active": false,
+      "PeerAPIURL": [
+        "http://100.114.255.35:59692",
+        "http://[fd7a:115c:a1e0::6001:ffbb]:42067"
+      ],
+      "TaildropTarget": 5,
+      "NoFileSharingReason": "",
+      "InNetworkMap": true,
+      "InMagicSock": true,
+      "InEngine": false,
+      "Expired": true,
+      "KeyExpiry": "2026-10-23T02:49:15Z"
+    },
+    "nodekey:ed97b0eae4bd8234dbc1697a923f9120f924403607e9838c1e4e237b57b2f65c": {
+      "ID": "nFqWhLLjCJ11CNTRL",
+      "NodeID": 2202971793833042,
+      "PublicKey": "nodekey:ed97b0eae4bd8234dbc1697a923f9120f924403607e9838c1e4e237b57b2f65c",
+      "HostName": "wavevm-f05-b",
+      "DNSName": "wavevm-f05-b.tail9c16ac.ts.net.",
+      "OS": "linux",
+      "UserID": 7693224122637248,
+      "TailscaleIPs": [
+        "100.114.246.92",
+        "fd7a:115c:a1e0::5738:f65d"
+      ],
+      "AllowedIPs": [
+        "100.114.246.92/32",
+        "fd7a:115c:a1e0::5738:f65d/128"
+      ],
+      "Addrs": null,
+      "CurAddr": "192.168.10.131:41641",
+      "Relay": "nue",
+      "PeerRelay": "",
+      "RxBytes": 179624,
+      "TxBytes": 6349048,
+      "Created": "2026-11-09T10:51:23.308275156Z",
+      "LastWrite": "2026-11-09T19:01:01.461680865+08:00",
+      "LastSeen": "0001-01-01T00:00:00Z",
+      "LastHandshake": "2026-11-09T19:00:25.780772589+08:00",
+      "Online": true,
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "Active": true,
+      "PeerAPIURL": [
+        "http://100.114.246.92:48840",
+        "http://[fd7a:115c:a1e0::5738:f65d]:34376"
+      ],
+      "TaildropTarget": 1,
+      "NoFileSharingReason": "",
+      "InNetworkMap": true,
+      "InMagicSock": true,
+      "InEngine": true,
+      "KeyExpiry": "2027-05-08T10:51:23Z"
+    }
+  },
+  "User": {
+    "7693224122637248": {
+      "ID": 7693224122637248,
+      "LoginName": "262213181@qq.com",
+      "DisplayName": "Joe King"
+    }
+  },
+  "ClientVersion": null
+}

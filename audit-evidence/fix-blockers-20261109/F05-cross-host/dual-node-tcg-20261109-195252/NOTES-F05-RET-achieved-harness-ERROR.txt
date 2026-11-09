@@ -1,0 +1,52 @@
+F05 cross-host dual-node TCG — RET achieved (2026-11-09 Asia/Shanghai ~19:52–19:54)
+================================================================================
+A ART: dual-node-tcg-20261109-195252 (this dir)
+B ART: dual-node-tcg-20261109-195230 on 30b14f91-…169f1 (b-side-excerpt/)
+Hosts: A 100.116.196.65 wavevm-f05-a ; B 100.114.246.92 wavevm-f05-b
+Authorized: t529u / pt529u (finish remaining F05 then Minimum self-audit STOP)
+
+Verdict (honest)
+----------------
+Remote VCPU_RUN RET path CLOSED this turn:
+  master0.log: [IPC VCPU_RUN RET] vcpu=2 mode=1 target=1 rpc_ret=0 ack_status=0 ack_mode=1
+  B slave1: guest_vcpu=2 + UDP MEM_READ ok (CR3 + pages) + TCG ack + VCPU_EXIT demux
+
+Harness fence-only script: ERROR (FE QEMU dead by poll1; overlapping ART 195244 noise).
+  f05_fence_only_result: fence_done=1 push_fail=0 sent=1 ack=1 remote=0 handoff=0 q_alive=NO
+  vm.log truncated (3 lines) — WVM-REMOTE/HANDOFF greps missed in this ART; RET still in master0.
+
+Not claimed: F05 COMPLETE / MINIMUM_COMPLETE / cirros login / clean harness PASS.
+No commit/push.
+
+Root cause of remaining pagesync death (pre-fix)
+------------------------------------------------
+1) Decode (earlier): truncated TCG VCPU_RUN wire → guest_vcpu=0 — FIXED prior turn.
+2) Typed MEM_FAULT: CLI master has no V1 memory service → ENOTCONN (−107).
+3) UDP MEM_READ fallback was attempted but Proxy UP path dropped packets because
+   g_gateway_known stayed 0: VCPU_RUN intentionally skipped gateway lock
+   ("do not steal gateway"), and no prior DN packet had locked it.
+
+Fixes landed this turn (no commit/push)
+---------------------------------------
+wavevm-qemu/accel/wavevm/wavevm-user-mem.c
+  - request_page_over_udp_slave(): MSG_MEM_READ via g_fd_req after typed fail
+  - AUTO_ROUTE target on first try; install_page_bytes on MEM_ACK
+
+slave_daemon/slave_hybrid.c
+  - Log UP-MEM_READ sendto result / gateway-unknown drops
+  - F05: seed g_upstream_gateway from VCPU_RUN source when still unlocked
+    → "[Proxy] Gateway Locked (from VCPU_RUN): 127.0.0.1:19200"
+
+Rebuilt A qemu + legacy slave; HTTP-copied to B. Master left as .f05fix-5s
+(attempted ENOTCONN→logic_core master rebuild segfaulted; reverted).
+
+B evidence (b-side-excerpt/NOTES-b-pagesync-ret.txt)
+----------------------------------------------------
+Gateway Locked (from VCPU_RUN): 127.0.0.1:19200
+guest_vcpu=2; UP-MEM_READ sent=44; UDP MEM_READ ok ×9 (incl CR3 0x1c210000)
+TCG ack … cr3=0x1c210000; VCPU_EXIT demux → 127.0.0.1:19200
+master1: [Slave MEM_READ] forward … ret=0 + MEM_ACK forwarded ×9
+
+A evidence
+----------
+master0: fence push-barrier done; VCPU_RUN vcpu=2; VCPU_RUN RET … ack_status=0 ack_mode=1

@@ -25,6 +25,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <inttypes.h>
 #include <linux/kvm.h>
 #include <errno.h>
@@ -4573,11 +4574,19 @@ void* kvm_worker_thread(void *arg) {
                 struct wvm_ipc_cpu_run_req local_req;
                 struct wvm_ipc_cpu_run_req *run_req = NULL;
                 void *net_payload_ptr = pkt + sizeof(struct wvm_header);
+                const size_t tcg_req_bytes =
+                    offsetof(struct wvm_ipc_cpu_run_req, ctx) +
+                    sizeof(wvm_tcg_context_t);
 
                 memset(&local_req, 0, sizeof(local_req));
 
                 if (h->payload_len >= sizeof(struct wvm_ipc_cpu_run_req)) {
                     memcpy(&local_req, net_payload_ptr, sizeof(local_req));
+                    run_req = &local_req;
+                } else if (h->mode_tcg &&
+                           h->payload_len >= tcg_req_bytes) {
+                    /* Truncated TCG cpu_run_req (prefix + tcg ctx). */
+                    memcpy(&local_req, net_payload_ptr, tcg_req_bytes);
                     run_req = &local_req;
                 } else {
                     local_req.mode_tcg = h->mode_tcg ? 1 : 0;
@@ -4818,11 +4827,17 @@ static int spawn_tcg_processes(int base_id) {
                 const char *ph = getenv("WVM_PHYSICAL_HOST_ID");
                 const char *fe = getenv("WVM_FE_PHYSICAL_HOST_ID");
                 const char *ex = getenv("WVM_EXECUTOR_PHYSICAL_HOST_ID");
+                const char *shm = getenv("WVM_SHM_FILE");
+                const char *fe_shm = getenv("WVM_FE_SHM_FILE");
                 if (ph && *ph) {
                     if (!fe || !*fe)
                         setenv("WVM_FE_PHYSICAL_HOST_ID", ph, 0);
                     if (!ex || !*ex)
                         setenv("WVM_EXECUTOR_PHYSICAL_HOST_ID", ph, 0);
+                }
+                /* N02: inherit FE backing identity into helper env. */
+                if ((!fe_shm || !*fe_shm) && shm && *shm) {
+                    setenv("WVM_FE_SHM_FILE", shm, 0);
                 }
             }
 
@@ -5412,8 +5427,30 @@ if (hdr->magic != htonl(WVM_MAGIC)) {
                             (unsigned long long)rid, g_gateway_known);
                 }
                 
-                if (g_gateway_known) 
-                    sendto(sockfd, pkt, msgs[i].msg_len, 0, (struct sockaddr*)&g_upstream_gateway, sizeof(struct sockaddr_in));
+                if (g_gateway_known) {
+                    ssize_t up = sendto(sockfd, pkt, msgs[i].msg_len, 0,
+                                        (struct sockaddr *)&g_upstream_gateway,
+                                        sizeof(struct sockaddr_in));
+                    if (msg_type == MSG_MEM_READ) {
+                        static int mem_up_log;
+                        if (mem_up_log < 40) {
+                            fprintf(stderr,
+                                    "[Proxy] UP-MEM_READ len=%u to %s:%u sent=%zd err=%d\n",
+                                    (unsigned)msgs[i].msg_len,
+                                    inet_ntoa(g_upstream_gateway.sin_addr),
+                                    (unsigned)ntohs(g_upstream_gateway.sin_port),
+                                    up, up < 0 ? errno : 0);
+                            mem_up_log++;
+                        }
+                    }
+                } else if (msg_type == MSG_MEM_READ) {
+                    static int mem_nogw;
+                    if (mem_nogw < 20) {
+                        fprintf(stderr,
+                                "[Proxy] UP-MEM_READ dropped (gateway unknown)\n");
+                        mem_nogw++;
+                    }
+                }
             }
             // 2. Downstream (Gateway / external -> Local QEMU)
             else {
@@ -5448,7 +5485,11 @@ if (hdr->magic != htonl(WVM_MAGIC)) {
                     continue;
                 }
 
-                /* VCPU_RUN is request/reply: remember client, do not steal gateway. */
+                /* VCPU_RUN is request/reply: remember client.
+                 * F05: if no gateway is locked yet, seed upstream from the
+                 * VCPU_RUN source (local master) so helper MEM_READ/COMMIT can
+                 * UP-forward. Do not overwrite an already-locked gateway.
+                 */
                 if (msg_type == MSG_VCPU_RUN) {
                     uint64_t rid = WVM_NTOHLL(hdr->req_id);
                     if (tcg_pending_vcpu_reply_put(rid, &src_addrs[i]) != 0) {
@@ -5469,6 +5510,16 @@ if (hdr->magic != htonl(WVM_MAGIC)) {
                             core_idx,
                             (unsigned)ntohs(tcg_endpoints[core_idx].cmd_addr.sin_port),
                             (unsigned)msgs[i].msg_len);
+                    if (!g_gateway_init_done &&
+                        __sync_bool_compare_and_swap(&g_gateway_init_done, 0, 1)) {
+                        memcpy(&g_upstream_gateway, &src_addrs[i],
+                               sizeof(struct sockaddr_in));
+                        g_gateway_known = 1;
+                        fprintf(stderr,
+                                "[Proxy] Gateway Locked (from VCPU_RUN): %s:%u\n",
+                                inet_ntoa(src_addrs[i].sin_addr),
+                                (unsigned)ntohs(src_addrs[i].sin_port));
+                    }
                 } else if (!g_gateway_init_done) {
                     if (__sync_bool_compare_and_swap(&g_gateway_init_done, 0, 1)) {
                         memcpy(&g_upstream_gateway, &src_addrs[i], sizeof(struct sockaddr_in));
@@ -5797,3 +5848,123 @@ int wavevm_executor_runtime_main(
     }
     return 0;
 }
+
+/*
+ * F05 / ci_dual_node legacy CLI entry.
+ * Production admitted path remains wavevm_executor_runtime_main().
+ * Build standalone slave with -DWAVEVM_SLAVE_LEGACY_CLI.
+ */
+#ifdef WAVEVM_SLAVE_LEGACY_CLI
+#include <sys/wait.h>
+
+int main(int argc, char **argv)
+{
+    char cerr[128];
+
+    g_nonblock_recv = (getenv("WVM_NONBLOCK_RECV") != NULL);
+    g_executor_local_only = 0; /* accept local master UDP on dual-node */
+
+    {
+        struct stat st = {0};
+        if (stat("/var/lib/wavevm", &st) == -1)
+            mkdir("/var/lib/wavevm", 0755);
+        if (stat("/var/lib/wavevm/chunks", &st) == -1)
+            mkdir("/var/lib/wavevm/chunks", 0755);
+        if (wvm_block_chunk_store_set_dir("/var/lib/wavevm/chunks", cerr,
+                                          sizeof(cerr)) != 0) {
+            fprintf(stderr, "[LegacySlave] chunk dir: %s\n", cerr);
+        }
+    }
+
+    g_num_cores = get_allowed_cores();
+    if (argc >= 2)
+        g_service_port = atoi(argv[1]);
+    if (argc >= 3) {
+        g_num_cores = atoi(argv[2]);
+        if (g_num_cores <= 0)
+            g_num_cores = 1;
+    }
+    if (argc >= 4) {
+        g_ram_mb = atoi(argv[3]);
+        if (g_ram_mb <= 0)
+            g_ram_mb = 1024;
+        g_slave_ram_size = (uint64_t)g_ram_mb * 1024 * 1024;
+    }
+    if (argc >= 5)
+        g_base_id = atoi(argv[4]);
+    if (argc >= 6)
+        g_executor_ctrl_port = atoi(argv[5]);
+    /* argv[6] VM id optional; default 0 for dual-node fract plan */
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-vfio") == 0 && i + 1 < argc)
+            g_vfio_config_path = argv[i + 1];
+    }
+
+    printf("[Init] WaveVM Hybrid Slave V28.0 (Legacy CLI / F05)\n");
+    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d, VM=%u\n",
+           g_service_port, g_num_cores, g_ram_mb, g_base_id,
+           (unsigned)g_slave_vm_id);
+
+    init_kvm_global();
+    if (g_kernel_context_bind_failed) {
+        fprintf(stderr,
+                "[KernelContext] refusing legacy executor after context mismatch\n");
+        return 1;
+    }
+
+    /* F05 dual-node hides /dev/kvm → TCG PROXY. */
+    if (g_kvm_available && getenv("WVM_FORCE_TCG") == NULL) {
+        printf("[Hybrid] Mode: KVM FAST PATH. Listening on 0.0.0.0:%d\n",
+               g_service_port);
+        if (pthread_create(&g_dirty_sender_thread, NULL, dirty_sync_sender_thread,
+                           NULL) != 0) {
+            perror("dirty sender");
+            return 1;
+        }
+        g_dirty_sender_started = 1;
+        pthread_t *threads = malloc(sizeof(pthread_t));
+        if (!threads)
+            return 1;
+        if (pthread_create(&threads[0], NULL, kvm_worker_thread, (void *)0) != 0)
+            return 1;
+        pthread_join(threads[0], NULL);
+        free(threads);
+    } else {
+        printf("[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 0.0.0.0:%d\n",
+               g_service_port);
+        if (spawn_tcg_processes(g_base_id) != 0) {
+            fprintf(stderr, "[Hybrid] TCG helpers failed\n");
+            return 1;
+        }
+        sleep(1);
+        int proxy_threads = (int)(g_num_cores / 2);
+        if (proxy_threads < 1)
+            proxy_threads = 1;
+        free(g_tcg_proxy_socks);
+        g_tcg_proxy_socks =
+            calloc((size_t)proxy_threads, sizeof(*g_tcg_proxy_socks));
+        g_tcg_proxy_sock_capacity = proxy_threads;
+        g_tcg_proxy_sock_count = 0;
+        if (!g_tcg_proxy_socks)
+            return 1;
+        pthread_t *threads = malloc(sizeof(pthread_t) * (size_t)proxy_threads);
+        if (!threads)
+            return 1;
+        for (long i = 0; i < proxy_threads; i++) {
+            g_tcg_proxy_socks[i] = -1;
+            if (pthread_create(&threads[i], NULL, tcg_proxy_thread, NULL) != 0) {
+                fprintf(stderr, "[Hybrid] proxy thread create failed\n");
+                return 1;
+            }
+        }
+        /* Keep process alive while helpers run. */
+        while (wait(NULL) > 0) {
+        }
+        for (long i = 0; i < proxy_threads; i++)
+            pthread_join(threads[i], NULL);
+        free(threads);
+    }
+    return 0;
+}
+#endif /* WAVEVM_SLAVE_LEGACY_CLI */

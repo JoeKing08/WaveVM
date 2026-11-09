@@ -17,6 +17,20 @@ scripts, environment variables, `NODE`/`ROUTE` files, and positional process
 arguments are not production inputs; they are test history to be removed or
 rewritten as manifest renderers.
 
+## Subsystem Boundary Contract
+
+This summary indexes the owning rules; it does not duplicate their definitions.
+Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+
+| Boundary | Required contract |
+| --- | --- |
+| Responsibility and authority | Own VM identity lifetime, candidate/admitted manifests, durable activation and overall lifecycle coordination. Domain operations and their internal reclamation remain with their subsystem owners. |
+| State and mutation | Coordinator APIs mutate transaction/lifecycle records; participants persist identity-bound observations and idempotent decisions. Neither a participant nor a cached manifest independently declares RUNNING. |
+| Allowed implementation dependencies | Public membership/snapshot, placement/reservation, canonical record and participant-control contracts. Orchestration invokes those interfaces rather than accessing domain-private queues, globals or structures. |
+| Interactions and lifetime | Sections 5.2 and 6.3 own cross-domain activation and resource retirement. Admission fences, route references, engine/context references and name leases retain their individual owners. |
+| Concurrency and cost | Section 7 orders one transaction while independent VMs and participants may progress concurrently. Do not hold shared authority locks over remote prepare/ACK/drain waits or insert control-plane work into every memory/vCPU operation. |
+| Failure and verification | Sections 5.3, 6 and 10 define restart reconciliation, uncertain effects, partial cleanup and profile acceptance. Basic replay/compensation is Minimum; HA and transparent recovery are Extended. |
+
 ## 1. Goal and Non-Goals
 
 The goal is for one successful VM creation to produce one immutable,
@@ -36,7 +50,7 @@ VmRequest
   -> RUNNING or one explicit failed/aborted outcome
 ```
 
-Non-goals for V1:
+Non-goals for Minimum:
 
 - Live migration, hot-add, hot-remove, or implicit rebalancing of a running
   VM.
@@ -334,7 +348,7 @@ operation is only its crash-safe handoff into the runtime process.
 
 The candidate manifest is immutable once distributed for prepare. The admitted
 manifest is the same candidate bound to one activation record. The following
-changes are not V1 in-place updates and require a stop followed by a new
+changes are not Minimum in-place updates and require a stop followed by a new
 incarnation unless a later specification defines an acknowledged
 reconfiguration protocol:
 
@@ -384,7 +398,7 @@ that a committed reservation is safe to reclaim.
 | `RUNNING` | Guest execution is admitted. | `PAUSING`, `STOPPING`, `DEGRADED`, `FAILED` |
 | `PAUSING` | New vCPU handoffs are blocked while current work reaches a defined boundary. | `PAUSED`, `STOPPING`, `FAILED` |
 | `PAUSED` | Guest execution is quiesced but identity and reservations remain held. | `RUNNING`, `STOPPING`, `FAILED` |
-| `DEGRADED` | A required component/path failed; V1 must pause or fail rather than silently rebind it. | `PAUSING`, `STOPPING`, `FAILED` |
+| `DEGRADED` | A required component/path failed; Minimum must pause or fail rather than silently rebind it. | `PAUSING`, `STOPPING`, `FAILED` |
 | `STOPPING` | Quiesce, flush, and compensating teardown are in progress. | `RETIRING`, `FAILED` |
 | `RETIRING` | Route scope, subscriber state, completion caches, local names, contexts, and reservations are being retired. | `STOPPED`, `FAILED` |
 | `STOPPED` | Retirement acknowledgements and resource release are recorded; namespace is quarantined by the allocator. | `ABSENT` only after safe namespace reuse |
@@ -508,7 +522,7 @@ After `ACTIVATION_DECIDED`, coordinator restart follows this query rule:
 4. If no activation record exists, the transaction is abortable after prepared
    lease expiry and all prepared-route/reservation records are removed.
 
-V1 has no automatic coordinator failover, but coordinator restart must recover
+Minimum has no automatic coordinator failover, but coordinator restart must recover
 the same durable transaction record. A failure after activation but before any
 guest traffic may end in `ABORTED` only after every participant confirms
 teardown; a failure after `RUNNING` follows `FAILED -> STOPPING -> RETIRING`.
@@ -527,16 +541,19 @@ For a normal stop the coordinator:
 2. Waits for in-flight vCPU, memory, and storage operations to reach their
    documented completion, abort, or uncertain-result states. It does not
    discard an outstanding operation merely because a wall-clock deadline fired.
-3. Performs required memory fences and storage flushes, then stops QEMU,
-   executors, sidecar bindings, and optional kernel contexts in dependency
-   order.
+3. Performs required memory fences and storage flushes, then stops guest work
+   producers and execution in dependency order. Keep memory/storage services,
+   sidecar/control bindings, and context references needed for outstanding
+   completions, queries, fencing, and retirement ACKs until those obligations
+   finish; stopping guest execution does not authorize transport teardown.
 4. Deletes local names only after their owner has stopped and detaches every
    manifest-bound file descriptor/mapping.
 5. Enters `RETIRING`, removes every directory subscriber for the incarnation,
    retires the VM route scope only after its active-operation references and
    query/retry horizon finish, and collects every required route-retirement ACK.
-6. Releases reservations only after route, local-name, context, completion-cache,
-   and subscriber teardown records are complete. It then records `STOPPED` and
+6. Releases remaining service bindings/contexts and reservations only after
+   route, local-name, context, completion-cache, and subscriber teardown records
+   are complete. It then records `STOPPED` and
    hands VM-ID reuse to the namespace allocator in `identity-routing.md`.
 
 Stopping VM A never removes VM B's route scope, predecessor generation,
@@ -550,12 +567,12 @@ the VM as `DEGRADED`, `PAUSED`, or `FAILED` according to the affected
 subsystem's contract and preserves the existing manifest/incarnation while it
 collects recovery evidence.
 
-V1 distinguishes failures deliberately:
+Minimum distinguishes failures deliberately:
 
-| Event | V1 outcome |
+| Event | Minimum outcome |
 | --- | --- |
 | Noncritical local child restart with unchanged registered node instance | It may restart only against the exact manifest and local role. The new `local_runtime_instance_id` must re-register before serving traffic. |
-| Required executor or QEMU process loses state | Pause/fail the VM unless that executor's specification later proves an explicit state-safe local recovery. V1 does not infer safety from process restart. |
+| Required executor or QEMU process loses state | Pause/fail the VM unless that executor's specification later proves an explicit state-safe local recovery. Minimum does not infer safety from process restart. |
 | Registered node agent or physical host replacement | New `node_instance_id`; required existing VM enters `PAUSED` or `FAILED`. No automatic rebind occurs. |
 | Gateway replacement with a prepared alternate route | Continue only through the membership/route transaction; it does not change the resource member identity captured by the manifest. |
 
@@ -570,6 +587,50 @@ Any future restart-in-place for a required member needs a named
 ownership, capability validation, exact manifest/route references, state
 recovery proof for memory/vCPU/storage, and an old-process fencing rule. A
 heartbeat or a successful listener bind is not a rebind protocol.
+
+### 6.3 Cross-Subsystem Resource Retirement
+
+This section owns the lifecycle/IPC/memory/vCPU/storage/kernel reclamation
+contract. Its logical stages refine `STOPPING` and `RETIRING`; they do not add
+wire states or require identical hook APIs in every subsystem.
+
+| Stage | Coordinator obligation | Subsystem obligation |
+| --- | --- | --- |
+| Quiesce | Close admission of new guest work for the affected VM incarnation and collect local gate acknowledgements. | Reject new unrelated work, stop work producers at their safe boundaries, and retain resources required by existing operations. |
+| Drain | Request completion, cancellation, or fencing of the captured operation set. | Account for queued work, executing work, callbacks, mapping references, and result/query retention; report confirmed versus uncertain outcomes. |
+| Finalize | Authorize dependent resource release after the required proofs. | Detach references, release resources in dependency order, and return idempotent, identity-bound teardown results. |
+
+Quiescence must still admit required completion ACKs, memory fences,
+invalidation confirmations, result queries, cancellation, and teardown traffic.
+A blanket IPC shutdown before draining is prohibited. An operation admitted
+before gate closure must either be included in the drain set or rejected
+atomically; it cannot disappear between the gate check and in-flight accounting.
+
+Each subsystem owns its internal drain algorithm and exposes a completion
+contract to lifecycle. Lifecycle coordinates those contracts rather than
+manipulating private queues, page structures, device state, or kernel lists.
+Independent operations and unrelated VMs may drain concurrently; only actual
+reference and semantic dependencies impose an order.
+
+An in-flight request retains its manifest/route references, result destination,
+and borrowed or transferred buffers until its completion/cancellation contract
+permits release. A local counter reaching zero, a timeout, transport close, or
+a cancellation request alone does not prove that remote side effects stopped.
+Unreachable participants require a defined instance/operation fencing proof;
+late replies must not mutate a retired incarnation or reused local object.
+
+When the proof is unavailable, return `TEARDOWN_INCOMPLETE` or the relevant
+uncertain-operation result, keep necessary identity/resource quarantine, and
+retain bounded retry/reconciliation metadata. Do not report `STOPPED`, release
+an uncertain allocation for reassignment, or free an object still reachable by
+local work merely to satisfy a deadline. Logs and retries remain bounded.
+Releasing a reservation follows the admission owner's API after the required
+route, subscriber, process, mapping, context, and name-owner confirmations.
+
+Pause uses the same safe execution boundary but retains reservations and
+resources required for resume; it is not final reclamation. Minimum restart
+reconciliation follows Section 5.3. HA, transparent recovery, and migration
+remain Extended and are not prerequisites for this fail-closed retirement rule.
 
 ## 7. Concurrency, Idempotency, and Errors
 
@@ -618,31 +679,22 @@ queries the recorded result before creating a new action.
 | `wavevm-qemu/accel/wavevm/` | Bind every connection, SHM registration, and accelerator operation to manifest identity/digest. |
 | `master_core/kernel_backend.c` | Attach only to a prepared per-VM kernel context from `kernel-accelerator.md`. |
 
-## 9. Compatibility and Migration
+## 9. Compatibility Boundary
 
-1. Inventory every environment variable, route file, port, SHM name, and
-   launch-script field consumed by QEMU, node runtimes, executors, sidecars,
-   gateways, and the kernel module.
-2. Use the canonical manifest parser and digest validator in user space. No
-   production path renders legacy configuration from it.
-3. Make all local names derived from the manifest namespace before accepting a
-   second VM on one physical node.
-4. Add candidate route-scope, prepared reservation/participant, activation
-   fence, commit, abort, and query replies around existing launch order without
-   changing memory or vCPU packet semantics first.
-5. Gate QEMU/executor acceptance on manifest validation and expose structured
-   lifecycle status to the control tool.
-6. Remove direct user-authored per-VM `NODE`/`ROUTE` injection. Generated
-   manifests and route snapshots are the only production inputs, and fixtures
-   must be regenerated from those records.
+No legacy environment-variable, static route, or launch-script configuration
+is a production input. QEMU, node runtimes, executors, gateways, and kernel
+contexts consume identity-bound manifests, route snapshots, and typed lifecycle
+records. Local names derive from the admitted manifest; unsupported or stale
+records reject before guest traffic is enabled.
 
 ## 10. Acceptance Tests
 
-The first eight tests below and the final guest-readiness test form the
-minimum usable lifecycle gate. Coordinator crash matrices, pre-activation
-races, and independent host/process replacement are extended hardening; they
-remain required for an operationally hardened deployment but do not block the
-first correct distributed VM.
+Minimum covers ordinary create/activation, idempotency, partial-start cleanup,
+basic durable restart reconciliation, rejection of stale eligibility,
+fail-closed required-process loss, and safe VM-scoped retirement. Targeted
+checks must cover those behaviors. Exhaustive crash/race/failure matrices,
+HA, and transparent replacement are Extended; that broader coverage does not
+defer the underlying Minimum rules.
 
 - The same canonical request, member snapshot, and capability set produce the
   same manifest digest and placement plan.
@@ -664,12 +716,17 @@ first correct distributed VM.
   activation, commit, abort, and start message. The result is exactly one
   running/committed VM with all reservations held, or full compensating teardown
   with no leaked route scope, port, SHM name, context, or capacity.
-- **Extended:** Race every pre-activation stage with cordon, gateway drain, health exclusion,
-  capability change, and node/gateway instance replacement. A stale eligibility
-  fence cannot reach `RUNNING`.
-- **Extended:** Restart a noncritical local child, required executor, node agent, and physical
-  host independently. V1 permits only the documented local-child re-registration;
-  required member identity changes visibly pause/fail rather than rebind.
+- **Minimum usable:** Representative pre-activation cordon, gateway drain,
+  health exclusion, capability change, and node/gateway instance replacement
+  invalidate their captured fence before `RUNNING`. Exhaustive interleavings
+  at every boundary are Extended.
+- **Minimum usable:** Noncritical child restart requires documented same-role
+  re-registration. Loss of a required QEMU/executor or replacement of a required
+  member pauses/fails rather than silently rebinding. Comprehensive independent
+  host/process failure matrices and transparent replacement are Extended.
+- **Minimum usable:** Quiescence rejects new guest work while permitting
+  required ACK/fence/query/cleanup traffic. A late callback or uncertain remote
+  operation cannot access freed resources or authorize namespace reuse.
 - **Minimum usable:** VM A route-scope retirement while VM B shares a gateway leaves VM B's current
   and draining routes, local names, reservations, and subscriber state intact.
 - **Minimum usable:** KVM guest acceptance requires login or SSH and proof that
