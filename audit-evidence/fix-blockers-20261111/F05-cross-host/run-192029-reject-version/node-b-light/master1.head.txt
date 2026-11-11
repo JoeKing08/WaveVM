@@ -1,0 +1,104 @@
+[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (legacy CLI PhysID: 1, VM: 0)
+[GW-FINAL] id=1 ip=127.0.0.1 port=9000
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[V30-Init] rx_threads=1 poll_timeout=100ms (shared socket)
+[V30-RX] Thread 0: bound port=19200, shared socket fd=3
+[Config] DHT Ring Size: 2 Virtual Nodes (from 2 Physical).
+[GW-SET] id=0 ip=100.116.196.65 port=19120
+[GW-SET] id=1 ip=127.0.0.1 port=19220
+[Config] VM 0 placement: 3 vCPUs, 3 x 1GiB memory chunks (compact).
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 1024 MB >= Reservation 1073741824 bytes.
+[Init] Identity Mapped: PhysID 1 -> VirtualID 1 (Primary)
+[System] Initializing SHM: /wvm_fract_node1 (Size: 1024 MB)
+[+] Memory Ready at 0x7c3b705fe000
+[System] Control Socket: /tmp/wvm_user_1.sock
+[+] WaveVM V29 Node Ready. Waiting for QEMU...
+[Swarm] New neighbor discovered: 0
+[Autonomous] Node started in SHADOW mode. Auto-scaling into cluster...
+[Lifecycle] Transition to WARMING
+[TX-HDR] msg=40 len=52 payload=16 target=0 slave=1 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=0 slave=1 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=0 slave=1 req=0
+[Lifecycle] Transition to ACTIVE. Participating in Owner Set.
+[HB RX] src_port=19220 src_id=0 target_id=1 epoch=0 local=0
+[HB RX] rid=0
+[HB LOGIC] src=0 vm=0 state=1 epoch=0
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100005000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=1
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[TX-HDR] msg=29 len=4148 payload=4112 target=0 slave=1 req=0
+[PTA-DBG] sent=4148 errno=0
+[TX-HDR] msg=3 len=37 payload=1 target=0 slave=1 req=1
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100007000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=2
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[TX-HDR] msg=29 len=4148 payload=4112 target=0 slave=1 req=0
+[PTA-DBG] sent=4148 errno=0
+[TX-HDR] msg=3 len=37 payload=1 target=0 slave=1 req=2
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[TX-HDR] msg=29 len=4148 payload=4112 target=0 slave=1 req=0
+[PTA-DBG] sent=4148 errno=0
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100008000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=3
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100048000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=4
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10004e000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=5
+[TX-HDR] msg=3 len=37 payload=1 target=0 slave=1 req=3
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[TX-HDR] msg=29 len=4148 payload=4112 target=0 slave=1 req=0
+[PTA-DBG] sent=4148 errno=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[PTA-DBG] sent=4148 errno=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[PTA-DBG] sent=4148 errno=0
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100050000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=6
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[PTA-DBG] sent=4148 errno=0
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100051000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=7
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100055000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=8
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100057000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=9
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[PTA-DBG] sent=4148 errno=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[PTA-DBG] sent=4148 errno=0
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100058000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=10
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19220 sock=3 len=4148
+[PTA-DBG] sent=4148 errno=0
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100059000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=11
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10005d000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=12
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10005e000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=13
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10005f000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=14
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100067000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=15
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006a000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=16
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006b000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=17
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006c000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=18
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006d000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=19
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006f000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=20
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100070000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=21
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100074000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=22
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100075000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=23
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100078000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=24
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10007b000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=25
+==== reject-version samples ====
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100005000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=1
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100007000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=2
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100008000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=3
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100048000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=4
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10004e000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=5
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100050000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=6
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100051000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=7
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100055000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=8
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100057000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=9
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100058000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=10
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100059000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=11
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10005d000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=12
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10005e000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=13
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10005f000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=14
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x100067000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=15
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006a000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=16
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006b000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=17
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006c000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=18
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006d000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=19
+[COMMIT_SYNC RX] reject-version src=0 target=1 gpa=0x10006f000 commit=0x2 local=0x1 off=0 sz=4096 pl=4116 flags=0x4 rid=20
+==== counts ====
+reject-version=33089
+lines=33148

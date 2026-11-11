@@ -31,6 +31,23 @@ trap cleanup EXIT
 export PATH="${HOME}/.local/bin:/home/box/.local/bin:${PATH}"
 make -C "$repo_root/ctl_tool" -B -j2 >/dev/null
 make -C "$repo_root/node_runtime" -j2 >/dev/null
+# CREATE→RUNNING requires manifest-bound QEMU_FRONTEND registration to
+# publish readiness (master_core publish_runtime_ready). tcg_helper_stub
+# only holds the session FD and never registers, so CREATE stays
+# IN_PROGRESS/COMMITTED. Same default as test_gateway_drain_prepare_commit.sh.
+export WVM_S6_REAL_QEMU="${WVM_S6_REAL_QEMU:-1}"
+if [[ -z "${WVM_S6_QEMU_BIN:-}" ]]; then
+    for cand in \
+        "$repo_root/wavevm-qemu/build/qemu-system-x86_64" \
+        "$repo_root/wavevm-qemu/build/x86_64-softmmu/qemu-system-x86_64"; do
+        if [[ -x "$cand" ]]; then
+            export WVM_S6_QEMU_BIN="$cand"
+            break
+        fi
+    done
+fi
+s6_real_qemu=${WVM_S6_REAL_QEMU:-0}
+s6_qemu_bin=${WVM_S6_QEMU_BIN:-}
 s6_select_tcg_helper
 
 common_objs=(

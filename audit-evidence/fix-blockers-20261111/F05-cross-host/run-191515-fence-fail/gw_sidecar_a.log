@@ -1,0 +1,200 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19121
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 6 cores (allowed=6). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19121 (Static)
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19120 fd=4 local=0.0.0.0:19120
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[TRACE] post-magic msg=29 len=4148
+[TRACE] pre-route target=0 src=0 msg=29 valid=1
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx len=4148 magic=0x57564d58
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx-big len=4148 magic=0x57564d58
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[GW-PRE-PUSH] route_id=0 target=0 src_id=0 msg=29 len=4148 valid=1
+[GW-POST-PUSH] route_id=0 r=4148 len=4148
+[Gateway] rx-stats big=1459 small=3
+[Gateway] rx-stats big=2518 small=3
+[Gateway] rx-stats big=3529 small=3
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] rx-stats big=4604 small=14
+[Gateway] rx-stats big=6020 small=98
+[Gateway] rx-stats big=8392 small=283
+[Gateway] rx-stats big=9390 small=560
+[Gateway] rx-stats big=10313 small=778
+[Gateway] rx-stats big=10851 small=968
+[Gateway] rx-stats big=11486 small=1183
+[Gateway] rx-stats big=14184 small=1502
+[Gateway] rx-stats big=15304 small=1798
+[Gateway] rx-stats big=16822 small=2062
+[Gateway] rx-stats big=17731 small=2341
+[Gateway] rx-stats big=18624 small=2609
+[Gateway] rx-stats big=19727 small=2900
+[Gateway] rx-stats big=20650 small=3224
+[Gateway] rx-stats big=22876 small=3314
+[Gateway] rx-stats big=23898 small=3314
+[Gateway] rx-stats big=26504 small=3462
+[Gateway] rx-stats big=27367 small=3699
+[Gateway] rx-stats big=28240 small=3971
+[Gateway] rx-stats big=29078 small=4202
+[Gateway] rx-stats big=29641 small=4378
+[Gateway] rx-stats big=30449 small=4632
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=31821 small=4884
+[Gateway] rx-stats big=32992 small=5141
+[Gateway] rx-stats big=34010 small=5442
+[Gateway] rx-stats big=35436 small=5736
+[Gateway] rx-stats big=36395 small=6007
+[Gateway] rx-stats big=37795 small=6309
+[Gateway] rx-stats big=38358 small=6536
+[Gateway] rx-stats big=39532 small=6699
+[Gateway] rx-stats big=41159 small=6958
+[Gateway] rx-stats big=42205 small=7239
+[Gateway] rx-stats big=43364 small=7506
+[Gateway] rx-stats big=44326 small=7791
+[Gateway] rx-stats big=45601 small=8069
+[Gateway] rx-stats big=46575 small=8323
+[Gateway] rx-stats big=47819 small=8656
+[Gateway] rx-stats big=48781 small=8900
+[Gateway] rx-stats big=49906 small=9178
+[Gateway] rx-stats big=50871 small=9454
+[Gateway] rx-stats big=51963 small=9734
+[Gateway] rx-stats big=52907 small=10006
+[Gateway] rx-stats big=53478 small=10211
+[Gateway] rx-stats big=55537 small=10447
+[Gateway] rx-stats big=56532 small=10751
+[Gateway] rx-stats big=57437 small=11035
+[Gateway] rx-stats big=58249 small=11321
+[Gateway] rx-stats big=59228 small=11618
+[Gateway] rx-stats big=60104 small=11914
+[Gateway] rx-stats big=61182 small=12217
+[Gateway] rx-stats big=62000 small=12515
+[Gateway] rx-stats big=62850 small=12808
+[Gateway] rx-stats big=63739 small=13091

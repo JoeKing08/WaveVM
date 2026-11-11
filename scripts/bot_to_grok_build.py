@@ -65,6 +65,18 @@ STRIP_LINE_PREFIXES = (
     re.compile(r"^\[Sent from machine [^\]]+\]\s*"),
 )
 
+# [In reply to t421s1711: "quoted text"]
+IN_REPLY_RE = re.compile(
+    r"\[In reply to\s+([^:\]]+):\s*\"(.*?)\"\]\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+HIDDEN_USER_MARKERS = (
+    "[GROK_BOT_HIDDEN_PROMPT]",
+    "<memory_context>",
+    "<system-reminder>",
+)
+HIDDEN_USER_LABEL = "〔隐藏提示，非普通发言〕"
+
 USER_TS_RE = re.compile(
     r"<timestamp>\s*([^<]+?)\s*</timestamp>",
     re.IGNORECASE,
@@ -138,6 +150,129 @@ def strip_user_text(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+def _norm_text(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def is_hidden_user_text(text: str) -> bool:
+    s = (text or "").lstrip()
+    if s.startswith(HIDDEN_USER_LABEL):
+        s = s[len(HIDDEN_USER_LABEL):].lstrip()
+    return any(s.startswith(m) for m in HIDDEN_USER_MARKERS)
+
+
+def label_hidden_user_text(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith(HIDDEN_USER_LABEL):
+        return text
+    return f"{HIDDEN_USER_LABEL}\n{text}"
+
+
+def split_in_reply_quotes(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Pull [In reply to id: "quote"] out of user text.
+
+    The quoted body belongs to the original speaker (usually the assistant).
+    The user bubble keeps a short pointer like （回复 t421s1711）.
+    """
+    quotes: list[tuple[str, str]] = []
+
+    def repl(m: re.Match[str]) -> str:
+        ref_id = m.group(1).strip()
+        quoted = m.group(2).strip()
+        quotes.append((ref_id, quoted))
+        return f"（回复 {ref_id}）\n"
+
+    new = IN_REPLY_RE.sub(repl, text or "")
+    new = re.sub(r"\n{3,}", "\n\n", new).strip()
+    return new, quotes
+
+
+def _coerce_args(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def format_send_to_user_text(args: dict[str, Any]) -> str:
+    """Render a SendToUser payload as readable assistant text."""
+    parts: list[str] = []
+    typ = args.get("type") or "text"
+    content = args.get("content")
+    if content:
+        parts.append(str(content).strip())
+
+    widget = args.get("widget")
+    if typ == "widget" or widget:
+        w = widget if isinstance(widget, dict) else {}
+        lines: list[str] = []
+        prompt = str(w.get("prompt") or "").strip()
+        help_t = str(w.get("helpText") or "").strip()
+        if prompt:
+            lines.append(f"〔选项〕{prompt}")
+        if help_t:
+            lines.append(help_t)
+        for opt in w.get("options") or []:
+            if isinstance(opt, dict):
+                label = opt.get("label") or opt.get("value") or ""
+            else:
+                label = str(opt)
+            if label:
+                lines.append(f"- {label}")
+        if w.get("allowCustom"):
+            lines.append("（可自己填写）")
+        if lines:
+            parts.append("\n".join(lines))
+
+    if typ == "attachment" or (typ != "text" and args.get("url")):
+        alt = str(args.get("alt") or "").strip()
+        url = str(args.get("url") or "").strip()
+        if alt or url:
+            line = "〔附件〕" + (alt or url)
+            if alt and url:
+                line += f"\n{url}"
+            parts.append(line)
+
+    for img in args.get("images") or []:
+        if isinstance(img, dict):
+            alt = img.get("alt") or ""
+            url = img.get("url") or ""
+            parts.append("〔图片〕" + str(alt or url))
+        elif img:
+            parts.append(f"〔图片〕{img}")
+
+    return "\n\n".join(p for p in parts if p).strip()
+
+
+def send_to_user_content(name: str, inp: Any) -> str | None:
+    """Visible SendToUser text, including CallDynamicTool wrappers.
+
+    Returns None if this is not a SendToUser call. Returns "" if it is a
+    SendToUser with no visible text (still skip the tool_call).
+    """
+    if not isinstance(inp, dict):
+        inp = {}
+    args: dict[str, Any] | None = None
+    if name == "SendToUser":
+        args = inp
+    elif name == "CallDynamicTool":
+        tname = inp.get("toolName") or inp.get("tool_name") or ""
+        if tname == "SendToUser":
+            if "arguments" in inp:
+                args = _coerce_args(inp.get("arguments"))
+            else:
+                args = inp
+    if args is None:
+        return None
+    return format_send_to_user_text(_coerce_args(args))
+
+
 def tool_meta(name: str) -> tuple[str, str, bool]:
     if name in TOOL_META:
         return TOOL_META[name]
@@ -186,6 +321,9 @@ class SessionBuilder:
         self.updated_at: float | None = None
         self._clock: float | None = None
         self._pending_tools: dict[str, dict[str, Any]] = {}
+        self._send_tool_ids: set[str] = set()
+        self._last_agent_text: str | None = None
+        self._agent_texts: set[str] = set()
 
     def _next_event_id(self) -> str:
         self.event_n += 1
@@ -257,6 +395,8 @@ class SessionBuilder:
             ts,
         )
         self.num_chat_messages += 1
+        self._last_agent_text = text
+        self._agent_texts.add(_norm_text(text))
 
     def add_thought(self, text: str, ts: float) -> None:
         if not text:
@@ -544,6 +684,7 @@ def convert_messages(msgs: list[dict[str, Any]], builder: SessionBuilder) -> Non
     clock = 0.0
     turn_open = False
     prompt_id: str | None = None
+    last_visible_user: str | None = None
 
     def close_turn(ts: float) -> None:
         nonlocal turn_open, prompt_id
@@ -552,6 +693,12 @@ def convert_messages(msgs: list[dict[str, Any]], builder: SessionBuilder) -> Non
             turn_open = False
             prompt_id = None
 
+    def tool_id_of(part: dict[str, Any]) -> str:
+        tid = part.get("id") or part.get("tool_use_id") or part.get("toolUseId") or f"call-{uuid.uuid4()}"
+        if isinstance(tid, str) and "\n" in tid:
+            tid = tid.split("\n", 1)[0]
+        return tid
+
     for msg in msgs:
         role = msg.get("role")
         content = msg.get("message", {}).get("content") or []
@@ -559,7 +706,6 @@ def convert_messages(msgs: list[dict[str, Any]], builder: SessionBuilder) -> Non
             content = [content]
 
         if role == "user":
-            close_turn(clock)
             text_parts = [
                 p.get("text", "")
                 for p in content
@@ -567,60 +713,91 @@ def convert_messages(msgs: list[dict[str, Any]], builder: SessionBuilder) -> Non
             ]
             text = "\n".join(text_parts)
             ts = parse_user_timestamp(text, clock + 1)
+            cleaned = strip_user_text(text)
+            cleaned, quotes = split_in_reply_quotes(cleaned)
+
+            # Quoted text belongs to the original speaker. The user bubble keeps
+            # only a short pointer. Re-emit an assistant quote only if it has
+            # not already appeared as an agent message.
+            for ref_id, quoted in quotes:
+                if not quoted:
+                    continue
+                # t415u is a user message; do not attribute that quote to the assistant.
+                if re.match(r"^t\d+u$", ref_id, re.I):
+                    continue
+                if _norm_text(quoted) in builder._agent_texts:
+                    continue
+                clock = max(clock + 0.01, ts - 0.001)
+                builder.add_agent_message(quoted, clock)
+
+            hidden = is_hidden_user_text(cleaned)
+            if hidden and cleaned:
+                cleaned = label_hidden_user_text(cleaned)
+
+            # Re-injected continuation of the same user prompt: no second bubble.
+            if (
+                cleaned
+                and not hidden
+                and last_visible_user is not None
+                and _norm_text(cleaned) == _norm_text(last_visible_user)
+            ):
+                clock = max(clock + 1, ts)
+                turn_open = True
+                if prompt_id is None:
+                    prompt_id = str(uuid.uuid4())
+                continue
+
+            close_turn(clock)
             clock = max(clock + 1, ts)
-            builder.add_user(text, clock)
+            builder.add_user(cleaned, clock)
+            if cleaned and not hidden:
+                last_visible_user = cleaned
             turn_open = True
             prompt_id = str(uuid.uuid4())
             continue
 
         if role == "assistant":
             clock += 0.5
-            # Prefer SendToUser content as agent_message_chunk
-            send_texts: list[str] = []
-            thoughts: list[str] = []
-            tool_uses: list[dict[str, Any]] = []
+            has_send = False
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "tool_use":
+                    continue
+                if send_to_user_content(part.get("name") or "", part.get("input") or {}) is not None:
+                    has_send = True
+                    break
+
+            # Walk parts in order so speech and tools stay in the original sequence.
             for part in content:
                 if not isinstance(part, dict):
                     continue
                 ptype = part.get("type")
                 if ptype == "tool_use":
                     name = part.get("name") or ""
-                    if name == "SendToUser":
-                        inp = part.get("input") or {}
-                        if isinstance(inp, dict) and inp.get("content"):
-                            send_texts.append(str(inp["content"]))
-                        # still record as tool for fidelity? skip — content is the message
+                    inp = part.get("input") or {}
+                    send_text = send_to_user_content(name, inp)
+                    tid = tool_id_of(part)
+                    if send_text is not None:
+                        builder._send_tool_ids.add(tid)
+                        if send_text:
+                            builder.add_agent_message(send_text, clock)
+                        clock += 0.01
                     else:
-                        tool_uses.append(part)
+                        builder.add_tool_call(tid, name, inp, clock)
+                        clock += 0.01
                 elif ptype == "text":
                     t = (part.get("text") or "").strip()
-                    if t:
-                        thoughts.append(t)
+                    if not t:
+                        continue
+                    if has_send:
+                        builder.add_thought(t, clock)
+                    else:
+                        builder.add_agent_message(t, clock)
+                    clock += 0.01
                 elif ptype == "thinking":
                     t = (part.get("thinking") or part.get("text") or "").strip()
                     if t:
-                        thoughts.append(t)
-
-            for t in thoughts:
-                # If we also have SendToUser, treat plain text as thought
-                if send_texts:
-                    builder.add_thought(t, clock)
-                else:
-                    # no SendToUser — surface as agent message
-                    builder.add_agent_message(t, clock)
-                clock += 0.01
-
-            for t in send_texts:
-                builder.add_agent_message(t, clock)
-                clock += 0.01
-
-            for tu in tool_uses:
-                tid = tu.get("id") or f"call-{uuid.uuid4()}"
-                # tool ids sometimes contain newline-joined dual ids
-                if isinstance(tid, str) and "\n" in tid:
-                    tid = tid.split("\n", 1)[0]
-                builder.add_tool_call(tid, tu.get("name") or "tool", tu.get("input") or {}, clock)
-                clock += 0.01
+                        builder.add_thought(t, clock)
+                        clock += 0.01
 
             turn_open = True
             continue
@@ -634,12 +811,14 @@ def convert_messages(msgs: list[dict[str, Any]], builder: SessionBuilder) -> Non
                     # some shapes nest tool_result fields at top level
                     if "result" not in part and "content" not in part:
                         continue
-                tid = part.get("tool_use_id") or part.get("toolUseId") or ""
-                if isinstance(tid, str) and "\n" in tid:
-                    tid = tid.split("\n", 1)[0]
+                tid = tool_id_of(part)
                 name = part.get("name")
-                if name == "SendToUser":
-                    # message already emitted from tool_use input
+                if name == "SendToUser" or tid in builder._send_tool_ids:
+                    # Visible text already emitted from the tool_use input.
+                    continue
+                # CallDynamicTool SendToUser results without a tracked id
+                inp = part.get("input") or {}
+                if send_to_user_content(name or "", inp) is not None:
                     continue
                 result = part.get("result")
                 if result is None:

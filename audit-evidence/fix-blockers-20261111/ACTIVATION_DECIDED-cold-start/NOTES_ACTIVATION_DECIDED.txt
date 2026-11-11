@@ -1,0 +1,64 @@
+ACTIVATION_DECIDED cold-start live oracle
+========================================
+Date: 2026-11-11 ~18:00 CST Asia/Shanghai
+Host: Ubuntu 2404 (machineId 2e4d3ec5-e1b1-4a36-9903-de6309119499)
+Tree: /workspaces/WaveVM tip 7945349fa (no commit/push)
+Score: PASS
+
+Contract (goal / runtime-manifest-lifecycle §5.3 / wvm_admission_orchestrator_recover):
+  persist durable ACTIVATION_DECIDED → coordinator process exits → new
+  address space reopens the same journal → recover/replay/compensate
+  toward COMMITTED/RUNNING, or fail-closed without inventing RUNNING.
+
+Harness (new, durable):
+  tests/control-plane/test_activation_decided_cold_start.c
+  tests/control-plane/test_activation_decided_cold_start.sh
+  Production recover path: common_include/wavevm_admission_recovery.c
+  (wvm_admission_orchestrator_recover / recover_activation).
+  Route-op lookup matches ctl_tool/admission_recovery.c
+  find_route_operation_for_snapshot (prepared_route_snapshot_key →
+  journal route_entries → operation_id).
+
+Method:
+  persist: wvm_admission_orchestrator_run with
+    ORCHESTRATOR_TEST_PARTICIPANT_COMMIT (post-activation commit fault)
+    leaves journal at ACTIVATION_DECIDED + activation fence; process exits.
+  recover: new process opens the same journal, asserts state=8,
+    rebuilds deterministic prepare inputs (request_id …44), looks up
+    durable route operation_id from the journal (not leftover memory),
+    leaves in-memory route_transaction.state = ABORTED, then calls
+    wvm_admission_orchestrator_recover.
+  Clean rebuild of the helper from current sources (gcc -Werror, plus
+    -Wno-unused-function because the TU includes test_coordinator.c
+    with WVM_SKIP_COORDINATOR_MAIN).
+  Existing test_coordinator.c only change: wrap int main with
+    #ifndef WVM_SKIP_COORDINATOR_MAIN so this helper can reuse fixtures.
+
+Live result (2026-11-11, this tree):
+  persist pid=8184 journal=/tmp/wavevm-activation-cold.roV0xG/control.journal
+  EVID ACTIVATION_DECIDED_persist: vm_id=256 incarnation=1 state=8 fence=1
+    route_entries=1 has_route_key=1 has_candidate=1
+    operation_id=00000000000000000000000000000055
+  recover pid=8190 (new address space, same journal)
+  EVID ACTIVATION_DECIDED_cold_open: vm_id=256 incarnation=1 state=8
+  EVID ACTIVATION_DECIDED_route_lookup: found=1 route_entries=1
+    operation_id=00000000000000000000000000000055
+  EVID ACTIVATION_DECIDED_recover: rc=0 err=(none) state_before=8 state_after=11
+  EVID ACTIVATION_DECIDED_replay: forwarded=1
+  state 8 = WVM_LIFECYCLE_ACTIVATION_DECIDED
+  state 11 = WVM_LIFECYCLE_RUNNING
+  Shell: test_activation_decided_cold_start: PASS
+
+What this is not:
+  Not a production wavevm_ctl binary SIGKILL mid-CREATE (the DECIDED
+    window is too short to poll reliably). It is a two-process oracle
+    of the same recover function ctl mid-flight recovery calls, with
+    journal-derived route operation_id (the piece in-process
+    test_coordinator recover still held in memory).
+  membership_controller was NULL in this recover input, so the optional
+    republish of membership route + dependency_acquire was not exercised.
+  test_create_vm_recover.sh still covers live ctl restart from
+    RUNNING/COMMITTED, not DECIDED.
+
+Artifacts: persist.stdout/stderr, recover.stdout/stderr, control.journal,
+  copies of the harness sources in this directory.

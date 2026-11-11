@@ -1,0 +1,10 @@
+LIVE START 2026-11-11 18:03:38 CST
+===== START gateway_drain 2026-11-11 18:03:38 CST =====
+===== PASS gateway_drain rc=0 18:03:58 =====
+===== START gateway_drain_prepare_commit 2026-11-11 18:03:58 CST =====
+===== PASS gateway_drain_prepare_commit rc=0 18:04:21 =====
+===== START cordon_drain_compute 2026-11-11 18:04:21 CST =====
+===== PASS cordon_drain_compute rc=0 18:04:30 =====
+===== START create_vm_dual_mode_b 2026-11-11 18:04:30 CST =====
+===== FAIL create_vm_dual_mode_b rc=1 18:05:04 =====
+/workspaces/WaveVM/audit-evidence/fix-blockers-20261111/PHASE9-same-host/run_live.sh: 行 40: _dual_mode_a.sh: 未找到命令

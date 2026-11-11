@@ -365,6 +365,23 @@ static void copyset_set(copyset_t *cs, uint32_t node_id) {
 #endif
 }
 
+static int page_has_subscriber(const page_meta_t *page, uint32_t node_id)
+{
+    if (!page || node_id >= WVM_MAX_SLAVES) {
+        return 0;
+    }
+#ifdef __KERNEL__
+    return (int)((page->subscribers.bits[node_id / 64] >> (node_id % 64)) & 1UL);
+#else
+    for (uint32_t i = 0; i < page->subscribers.count; i++) {
+        if (page->subscribers.ids[i] == node_id) {
+            return 1;
+        }
+    }
+    return 0;
+#endif
+}
+
 static void register_page_subscriber(page_meta_t *page, uint32_t node_id) {
     if (!page || node_id >= WVM_MAX_SLAVES) return;
 
@@ -2542,12 +2559,36 @@ static void log_commit_sync_decision(const char *reason, struct wvm_header *hdr,
                                      uint16_t sz, uint16_t pl_len)
 {
     static int log_count;
+    static unsigned accept_total, reject_ver_total, idempotent_total, other_total;
+    unsigned *counter;
+    unsigned total;
     int is_accept = !strcmp(reason, "accept");
+    int is_idempotent = !strcmp(reason, "accept-idempotent");
+    int is_reject_ver = !strcmp(reason, "reject-version");
 
     if (!(hdr->flags & WVM_FLAG_NEED_ACK)) {
         return;
     }
+    if (is_accept) {
+        counter = &accept_total;
+    } else if (is_idempotent) {
+        counter = &idempotent_total;
+    } else if (is_reject_ver) {
+        counter = &reject_ver_total;
+    } else {
+        counter = &other_total;
+    }
+    total = __sync_fetch_and_add(counter, 1) + 1U;
     if (is_accept && __sync_fetch_and_add(&log_count, 1) >= 120) {
+        if ((total % 1000U) == 0U && g_ops->log) {
+            g_ops->log("[COMMIT_SYNC RX] totals accept=%u reject-version=%u "
+                       "idempotent=%u other=%u",
+                       accept_total, reject_ver_total, idempotent_total,
+                       other_total);
+        }
+        return;
+    }
+    if (is_idempotent && total > 32 && (total % 1000U) != 0U) {
         return;
     }
     if (g_ops->log) {
@@ -2824,6 +2865,26 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                         // [FIX-H8] 传 NULL 让 force_sync_client 走安全的重新查找+拷贝路径，
                         // 避免释放锁后解引用 page 指针导致的数据竞争
                         uint64_t local_version = page->version;
+                        /*
+                         * Directory protocol (memory-consistency.md §4.2): a
+                         * lost-ACK retry must replay the successful completion
+                         * instead of ESTALE. After an accept we register the
+                         * writer as a subscriber and advance to next(base).
+                         * The same writer presenting that same base again is
+                         * an idempotent replay, not a conflicting new write.
+                         */
+                        if (commit_epoch == g_curr_epoch &&
+                            commit_counter + 1U == local_counter &&
+                            page_has_subscriber(page, src_id)) {
+                            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
+                            log_commit_sync_decision("accept-idempotent", hdr,
+                                                     source_node_id, gpa,
+                                                     commit_version,
+                                                     local_version,
+                                                     off, sz, pl_len);
+                            send_commit_ack_if_needed(hdr, source_node_id, 1);
+                            return;
+                        }
                         pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
                         force_sync_client(gpa, NULL, src_id);
                         log_commit_sync_decision("reject-version", hdr, source_node_id,

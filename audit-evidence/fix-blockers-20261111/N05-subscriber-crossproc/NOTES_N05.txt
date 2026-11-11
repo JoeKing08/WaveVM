@@ -1,0 +1,80 @@
+N05 subscriber cross-process invalidate — true oracle
+Date: 2026-11-11 17:47 CST Asia/Shanghai
+Tip base: 7945349fa (no commit/push this turn)
+Machine: 2e4d3ec5-e1b1-4a36-9903-de6309119499 /workspaces/WaveVM
+
+Disposition: PASS (true oracle, cross-process)
+
+The 2026-11-09 cross-audit downgraded N05 from PASS directed → PARTIAL
+because closeout cited only F07 same-process EVID in memory_service.txt,
+with no 0x0307 / bridge fanout / cross-process STALE and no test_n05*.
+
+This round adds a durable two-process harness and replaces that console
+as the closeout evidence.
+
+Harness (new, not committed):
+  tests/control-plane/test_n05_subscriber_crossproc.sh
+  tests/control-plane/test_n05_subscriber_crossproc.h
+  tests/control-plane/test_n05_subscriber_crossproc_dir.c
+  tests/control-plane/test_n05_subscriber_crossproc_ctl.c
+
+Link split (production split):
+  - directory binary links node_runtime/memory_service.c
+    and does NOT link ctl_tool/subscriber_invalidate_bridge.c
+  - ctl binary links the production bridge strong hook and
+    membership_controller, and does NOT link memory_service
+  - nm checks enforce that split before the run
+
+Chain exercised:
+  1. Directory process installs a global V1 memory service and plants
+     one ACTIVE subscriber for failed member 7:1001 (precondition only).
+  2. Ctl process registers two compute members, drives them to ACTIVE
+     through the real membership route-commit + activate_member path,
+     and binds wvm_ctl_subscriber_invalidate_bridge_bind.
+  3. Ctl calls wvm_membership_controller_mark_monitor_health(...,
+     UNREACHABLE) on 7:1001 — the production trigger for
+     maybe_invalidate_subscribers_locked.
+  4. The strong ctl hook captures membership and fans out
+     WVM_ENVELOPE_MSG_INVALIDATE_SUBSCRIBERS (0x0307) over a Unix
+     socket to the directory process. Fanout to the failed leaf has
+     no listener (best-effort skip, failed=1).
+  5. Directory decodes the 12-byte payload and calls
+     wvm_memory_service_global_invalidate_subscriber_instance
+     (same function the production admission_receiver 0x0307 case
+     invokes). ACTIVE lease becomes STALE.
+
+Live evidence (this directory):
+  Command: bash tests/control-plane/test_n05_subscriber_crossproc.sh
+  Result: test_n05_subscriber_crossproc: PASS
+  directory pid=6492  ctl pid=6494  (distinct processes)
+
+  evid.txt / dir.stdout:
+    EVID N05_directory_recv: opcode=0x0307 failed_node=7 failed_inst=1001 payload_bytes=12 pid=6492
+    EVID N05_global_invalidate: rc=0 err=(none)
+    EVID N05_ACTIVE_to_STALE=1
+    test_n05_directory: PASS
+
+  ctl.stdout:
+    EVID N05_membership_unreachable: node=7 inst=1001
+    EVID N05_bridge_fanout: sent=1 failed=1 opcode=0x0307 last_type=0x307 dir_pid=6492 stale=1 ctl_pid=6494
+    test_n05_ctl: PASS
+
+  ctl.stderr (production bridge logs):
+    test_n05_ctl: submit type=0x307 to 11:1100 rc=0 stale=1 dir_pid=6492
+    [wvm_ctl] N05: invalidate fanout failed node=7 inst=1001 rc=-113 err=no listener for node=7 inst=1001 (best-effort skip)
+    [wvm_ctl] N05: subscriber invalidate fanout failed_member=7:1001 sent=1 failed=1
+
+Honest limits:
+  - The ACTIVE lease is planted as a test precondition (not created by a
+    live typed MEM_READ). Invalidate / STALE is production code.
+  - Directory applies 0x0307 via the same global_invalidate function the
+    admission_receiver 0x0307 case calls; the full receiver is not
+    linked into this helper (avoids pulling the entire admission stack).
+  - Transport is a test Unix-socket submit used only by the bridge's
+    transport->submit pointer (the production hook and payload layout
+    are unchanged). Failed-leaf fanout is best-effort, as in production.
+  - F07 same-process unit path remains in test_memory_service.sh; it is
+    no longer the N05 closeout oracle.
+
+No production source change was required for this oracle; the 11-09
+bridge/receiver/reap path was already present at tip 7945349fa.

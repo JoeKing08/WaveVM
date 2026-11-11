@@ -1,0 +1,22 @@
+COMMIT without PREPARE: status=6 recorded_state=0 applied_revision=0
+CREATE_VM attempt=0 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=9428758946459550275
+gateway after CREATE: member 2 901 902 state=4 kind=2 deps=1
+revisions 16 4 16
+member_count 3
+member 2 901 902 state=4 kind=2 deps=1
+member 2 911 912 state=4 kind=2 deps=0
+member 1 801 802 state=4 kind=1 deps=1
+DRAIN PREPARE: status=0 recorded_state=4 applied_revision=16 op=00000000000000000000000000050045
+DRAIN COMMIT: status=0 recorded_state=6 applied_revision=17
+revisions 17 5 18
+member_count 3
+member 2 901 902 state=6 kind=2 deps=1
+member 2 911 912 state=4 kind=2 deps=0
+member 1 801 802 state=4 kind=1 deps=1
+DRAIN COMMIT replay: status=0 recorded_state=6 applied_revision=17
+production gateway DRAIN PREPARE+peer ACK+COMMIT→DRAINING: PASS
+CREATE_VM dependency_acquire + membership predecessor route: wired
+boundary: one-scope successor builder in ctl (EXECUTOR names successor GW);
+  cold recover republishes membership route+dependency_acquire (mid-flight);
+  drain peer ROUTE_* manifest_generation binds membership dependency;
+  Mode A / guest E2E not started.

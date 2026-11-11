@@ -1,0 +1,36 @@
+Mode A kernel dual-context isolation
+====================================
+Date: 2026-11-11 18:54–18:55 CST Asia/Shanghai
+Host: Ubuntu 2404 (machineId 2e4d3ec5-e1b1-4a36-9903-de6309119499)
+Tree: /workspaces/WaveVM tip 7945349fa (no commit/push)
+Score: PASS
+
+Method:
+  Clean rebuild of wavevm.ko from current sources:
+    make -C /lib/modules/7.0.0-42-generic/build M=/workspaces/WaveVM/master_core clean modules
+    wavevm.ko mtime 2026-11-11 18:54:54 +0800 vermagic 7.0.0-42-generic
+    (did not reuse the 2026-11-05 object)
+  Privileged insmod of that ko; /dev/wavevm appeared and was mode 666
+    (same chmod as scripts/ci_dual_node.sh).
+  dmesg: "wavevm: context-bound local accelerator loaded"
+  Rebuilt tests/mode-a isolation binaries from current sources, then ran:
+    test_two_vm_isolation
+    test_two_vm_context_bind
+
+Results:
+  test_two_vm_isolation: PASS
+    two fds, bind VM 1001 / 1002
+    QUERY_CAPS: magic 0x574b4358 version 4, max=64 active=2
+    feature_bits=0x1 (CONTEXT_BIND; SINGLE_CONTEXT not set)
+    distinct GPA maps 0x100000000 / 0x200000000
+    pattern isolation DEAD**** / BEEF****; sibling teardown leaves VM2 intact
+  test_two_vm_context_bind: PASS
+    dual bind active=2; SET_MEM_LAYOUT both; peer survived unbind
+    same-FD UNBIND race cycles=64 mappings=6
+
+This closes the 18:07 CST BLOCKED cell (device absent; sudo could not
+run in the no-new-privs agent shell). Production dual CREATE RUNNING
+from the earlier same-host pack still stands.
+
+Does not claim guest E2E, and does not close Phase 9 overall (F05/F10
+remain).

@@ -1,0 +1,133 @@
+aggregator.c: In function ‘push_to_aggregator’:
+aggregator.c:1927:16: warning: unused variable ‘g_my_node_id’ [-Wunused-variable]
+ 1927 |     extern int g_my_node_id;
+      |                ^~~~~~~~~~~~
+aggregator.c: At top level:
+aggregator.c:1794:13: warning: ‘smart_backoff’ defined but not used [-Wunused-function]
+ 1794 | static void smart_backoff(int attempts) {
+      |             ^~~~~~~~~~~~~
+aggregator.c:534:12: warning: ‘parse_hex_digest_env’ defined but not used [-Wunused-function]
+  534 | static int parse_hex_digest_env(const char *name, uint8_t digest[32])
+      |            ^~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c: In function ‘candidate_record_matches_transaction’:
+../common_include/wavevm_control_plane.c:2761:12: warning: ‘manifest_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2761 |     return memcmp(manifest_id.value, transaction->manifest_id,
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2762 |                   sizeof(transaction->manifest_id)) == 0 &&
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2698:32: note: ‘manifest_id.value’ was declared here
+ 2698 |     struct wvm_canonical_field manifest_id;
+      |                                ^~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2753:31: warning: ‘manifest_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2753 |         !have_admission_tx_id ||
+../common_include/wavevm_control_plane.c:2698:32: note: ‘manifest_id.value_bytes’ was declared here
+ 2698 |     struct wvm_canonical_field manifest_id;
+      |                                ^~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2763:20: warning: ‘manifest_digest.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2763 |                    memcmp(manifest_digest.value, candidate_manifest_digest,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2764 |                           WVM_SHA256_DIGEST_BYTES) == 0 &&
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2699:32: note: ‘manifest_digest.value’ was declared here
+ 2699 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2754:58: warning: ‘manifest_digest.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2754 |         manifest_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2699:32: note: ‘manifest_digest.value_bytes’ was declared here
+ 2699 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2700:32: warning: ‘vm_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2700 |     struct wvm_canonical_field vm_id;
+      |                                ^~~~~
+../common_include/wavevm_control_plane.c:2755:64: warning: ‘vm_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2751 |     if (next < 0 || !have_manifest_id || !have_manifest_digest ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2752 |         !have_vm_id || !have_vm_incarnation || !have_request_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2753 |         !have_admission_tx_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~                                
+ 2754 |         manifest_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~     
+ 2755 |         manifest_digest.value_bytes != WVM_SHA256_DIGEST_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+ 2756 |         vm_id.value_bytes != 4 || vm_incarnation.value_bytes != 8 ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~                                  
+../common_include/wavevm_control_plane.c:2700:32: note: ‘vm_id.value_bytes’ was declared here
+ 2700 |     struct wvm_canonical_field vm_id;
+      |                                ^~~~~
+../common_include/wavevm_control_plane.c:2766:20: warning: ‘vm_incarnation.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2766 |                    read_be64(vm_incarnation.value) ==
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2701:32: note: ‘vm_incarnation.value’ was declared here
+ 2701 |     struct wvm_canonical_field vm_incarnation;
+      |                                ^~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2756:32: warning: ‘vm_incarnation.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2751 |     if (next < 0 || !have_manifest_id || !have_manifest_digest ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2752 |         !have_vm_id || !have_vm_incarnation || !have_request_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2753 |         !have_admission_tx_id ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~
+ 2754 |         manifest_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2755 |         manifest_digest.value_bytes != WVM_SHA256_DIGEST_BYTES ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2756 |         vm_id.value_bytes != 4 || vm_incarnation.value_bytes != 8 ||
+      |         ~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2701:32: note: ‘vm_incarnation.value_bytes’ was declared here
+ 2701 |     struct wvm_canonical_field vm_incarnation;
+      |                                ^~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2768:20: warning: ‘request_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2768 |                    memcmp(request_id.value, transaction->request_id,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2769 |                           sizeof(transaction->request_id)) == 0 &&
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2702:32: note: ‘request_id.value’ was declared here
+ 2702 |     struct wvm_canonical_field request_id;
+      |                                ^~~~~~~~~~
+../common_include/wavevm_control_plane.c:2756:67: warning: ‘request_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2756 |         vm_id.value_bytes != 4 || vm_incarnation.value_bytes != 8 ||
+../common_include/wavevm_control_plane.c:2702:32: note: ‘request_id.value_bytes’ was declared here
+ 2702 |     struct wvm_canonical_field request_id;
+      |                                ^~~~~~~~~~
+../common_include/wavevm_control_plane.c:2770:20: warning: ‘admission_tx_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2770 |                    memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2771 |                           sizeof(transaction->admission_tx_id)) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2757:57: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2757 |         request_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c: In function ‘activation_record_matches_transaction’:
+../common_include/wavevm_control_plane.c:2814:12: warning: ‘admission_tx_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2814 |     return memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2815 |                   sizeof(transaction->admission_tx_id)) == 0 &&
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2809:68: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2809 |     if (next < 0 || !have_admission_tx_id || !have_manifest_digest ||
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2816:20: warning: ‘manifest_digest.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2816 |                    memcmp(manifest_digest.value, candidate_manifest_digest,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2817 |                           WVM_SHA256_DIGEST_BYTES) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2810:62: warning: ‘manifest_digest.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2810 |         admission_tx_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value_bytes’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios

@@ -1,0 +1,4 @@
+EVID ACTIVATION_DECIDED_cold_open: vm_id=256 incarnation=1 state=8 pid=8190 journal=/tmp/wavevm-activation-cold.roV0xG/control.journal
+EVID ACTIVATION_DECIDED_route_lookup: found=1 route_entries=1 operation_id=00000000000000000000000000000055
+EVID ACTIVATION_DECIDED_recover: rc=0 err=(none) state_before=8 state_after=11 pid=8190
+EVID ACTIVATION_DECIDED_replay: forwarded=1

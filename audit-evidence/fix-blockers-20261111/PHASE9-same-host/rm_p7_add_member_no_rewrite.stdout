@@ -1,0 +1,4 @@
+add-member-no-rewrite: register A+gateway
+add-member-no-rewrite: activate VM route on A+GW
+add-member-no-rewrite: register B (new member)
+PASS RM-P7-add-member-no-rewrite (join leaves ACTIVATED route gen=1 digest intact; B stays PENDING; cannot activate on old op)

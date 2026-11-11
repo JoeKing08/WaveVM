@@ -1,0 +1,8 @@
+revisions 6 2 6
+member_count 1
+member 1 801 802 state=4 kind=1 deps=0
+cordon: status=0 recorded_state=5 applied_revision=7
+create after cordon: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+drain-compute: status=0 recorded_state=6 applied_revision=8
+stale cordon after drain: status=6 recorded_state=0 applied_revision=0
+production cordon/drain-compute entry: PASS

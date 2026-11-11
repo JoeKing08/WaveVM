@@ -1,0 +1,228 @@
+[19:20:29] [tcg/A] cleanup
+[19:20:29] [tcg/A] ART_DIR=/tmp/wavevm-test-results/dual-node-tcg-20261111-192029
+[19:20:29] [tcg/A] TCG Mode B/B: do not load wavevm.ko; temporarily hide /dev/kvm for pure TCG
+[19:20:29] [tcg/A] tailscale reuse socket=/run/tailscale/tailscaled.sock host=wavevm-f05-a ip=100.116.196.65 peer=wavevm-f05-b
+[19:20:29] [tcg/A] peer wavevm-f05-b selected at 100.114.246.92
+[19:20:29] [tcg/A] peer ip 100.114.246.92
+[19:20:29] [tcg/A] F05 env role=a host=b9d31200e9414d3e NUMA=2048:1024 MEM=3072
+[19:20:29] [tcg/A] start gateway gw_l2 listen=19520 upstream=127.0.0.1:19599 ctrl=19521
+[19:20:29] [tcg/A] start gateway gw_l1a listen=19320 upstream=127.0.0.1:19520 ctrl=19321
+[19:20:29] [tcg/A] start gateway gw_sidecar_a listen=19120 upstream=127.0.0.1:19320 ctrl=19121
+[19:20:29] [tcg/A] start master0 then slave0
+[19:20:30] [tcg/A] node-b tailscale peer selected at 100.114.246.92; WaveVM ports are UDP, so QEMU/RPC logs are the readiness check
+[19:20:38] [tcg/A] start QEMU accel=tcg local_split=2
+[19:20:38] [tcg/A] F05 fence-only mode: poll fence/remote markers (no guest login grind)
+[19:21:29] [tcg/A] ci heartbeat
+processes: gw=3 master=1 slave=1 qemu=3
+[19:22:08] [tcg/A] fence-only poll 1: Q=yes fence_done=14 push_fail=14 remote=10 sent=0 ack=0 handoff=58 commit_ack=0 commit_to=0
+ERROR: push-fence failed observed
+[19:22:08] [tcg/A] summary ART_DIR=/tmp/wavevm-test-results/dual-node-tcg-20261111-192029
+processes: gw=3 master=1 slave=1 qemu=3
+WVM-REMOTE(cpu2)=10
+VCPU_RUN(cpu2)=0
+VCPU_RETURN(cpu2,node1)=0
+--- gw_l2.log tail ---
+[Gateway] rx-stats big=46765 small=23036
+[Gateway] rx-stats big=47809 small=23548
+[Gateway] rx-stats big=48725 small=24007
+[Gateway] rx-stats big=49311 small=24294
+[Gateway] rx-stats big=50341 small=24805
+[Gateway] rx-stats big=51274 small=25271
+[Gateway] rx-stats big=52339 small=25798
+[Gateway] rx-stats big=53237 small=26247
+[Gateway] rx-stats big=54295 small=26726
+[Gateway] rx-stats big=55267 small=27213
+[Gateway] rx-stats big=56363 small=27757
+[Gateway] rx-stats big=57234 small=28192
+[Gateway] rx-stats big=58133 small=28642
+[Gateway] rx-stats big=59158 small=29134
+[Gateway] rx-stats big=60077 small=29593
+[Gateway] rx-stats big=61174 small=30142
+[Gateway] rx-stats big=62108 small=30607
+[Gateway] rx-stats big=63382 small=31183
+[Gateway] rx-stats big=64329 small=31657
+[Gateway] rx-stats big=65222 small=32103
+--- gw_l1a.log tail ---
+[Gateway] rx-stats big=47269 small=13631
+[Gateway] rx-stats big=48313 small=13935
+[Gateway] rx-stats big=49199 small=14249
+[Gateway] rx-stats big=49823 small=14468
+[Gateway] rx-stats big=50909 small=14766
+[Gateway] rx-stats big=51845 small=15086
+[Gateway] rx-stats big=52922 small=15367
+[Gateway] rx-stats big=53827 small=15681
+[Gateway] rx-stats big=54914 small=15899
+[Gateway] rx-stats big=55882 small=16228
+[Gateway] rx-stats big=56978 small=16552
+[Gateway] rx-stats big=57845 small=16873
+[Gateway] rx-stats big=58770 small=17174
+[Gateway] rx-stats big=59807 small=17389
+[Gateway] rx-stats big=60738 small=17698
+[Gateway] rx-stats big=61862 small=17982
+[Gateway] rx-stats big=62798 small=18295
+[Gateway] rx-stats big=64103 small=18518
+[Gateway] rx-stats big=65102 small=18856
+[Gateway] rx-stats big=66002 small=19160
+--- gw_sidecar_a.log tail ---
+[Gateway] rx-stats big=58575 small=13042
+[Gateway] rx-stats big=59642 small=13332
+[Gateway] rx-stats big=60526 small=13635
+[Gateway] rx-stats big=61962 small=13875
+[Gateway] rx-stats big=63011 small=14133
+[Gateway] rx-stats big=63947 small=14448
+[Gateway] rx-stats big=65042 small=14707
+[Gateway] rx-stats big=65953 small=15014
+[Gateway] rx-stats big=67539 small=15219
+[Gateway] rx-stats big=68477 small=15538
+[Gateway] rx-stats big=69642 small=15845
+[Gateway] rx-stats big=70510 small=16155
+[Gateway] rx-stats big=71472 small=16452
+[Gateway] rx-stats big=73331 small=16653
+[Gateway] rx-stats big=74254 small=16951
+[Gateway] rx-stats big=75425 small=17228
+[Gateway] rx-stats big=76374 small=17537
+[Gateway] rx-stats big=78296 small=17754
+[Gateway] rx-stats big=79266 small=18066
+[Gateway] rx-stats big=80191 small=18371
+--- slave0.log tail ---
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x730dfdc00000..0x730e3dc00000 gpa=0x100000000 size=0x40000000 blocks=2
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x71fd47e00000..0x71fd87e00000 gpa=0x100000000 size=0x40000000 blocks=2
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x71fd95ea0000..0x71fd95ec0000 gpa=0xfeda0000 size=0x20000 blocks=3
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x730e3dea0000..0x730e3dec0000 gpa=0xfeda0000 size=0x20000 blocks=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x71fd95e00000..0x71fd95ec0000 gpa=0 size=0xc0000 blocks=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x71fd95f00000..0x71fe15e00000 gpa=0x100000 size=0x7ff00000 blocks=5
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x730e3de00000..0x730e3dec0000 gpa=0 size=0xc0000 blocks=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x730e3df00000..0x730ebde00000 gpa=0x100000 size=0x7ff00000 blocks=5
+[Hybrid] TCG install notify fd=5 -> push port 30306
+[SLAVE-BIND] port=19105 ok
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+--- master0.log tail ---
+[IPC COMMIT_SYNC] nack gpa=0x13f7dd000 dir=1 rid=32132
+[IPC COMMIT_SYNC] nack gpa=0x13f7de000 dir=1 rid=32133
+[IPC COMMIT_SYNC] nack gpa=0x13f7df000 dir=1 rid=32134
+[IPC COMMIT_SYNC] nack gpa=0x13f7e1000 dir=1 rid=32135
+[IPC COMMIT_SYNC] nack gpa=0x13f7e2000 dir=1 rid=32136
+[IPC COMMIT_SYNC] nack gpa=0x13f7e3000 dir=1 rid=32137
+[IPC COMMIT_SYNC] nack gpa=0x13f7e4000 dir=1 rid=32138
+[IPC COMMIT_SYNC] nack gpa=0x13f7e6000 dir=1 rid=32139
+[IPC COMMIT_SYNC] nack gpa=0x13f7e7000 dir=1 rid=32140
+[IPC COMMIT_SYNC] nack gpa=0x13f7ec000 dir=1 rid=32141
+[IPC COMMIT_SYNC] nack gpa=0x13f7ee000 dir=1 rid=32142
+[IPC COMMIT_SYNC] nack gpa=0x13f7f6000 dir=1 rid=32143
+[IPC COMMIT_SYNC] nack gpa=0x13f7f8000 dir=1 rid=32144
+[IPC COMMIT_SYNC] nack gpa=0x13f7f9000 dir=1 rid=32145
+[IPC COMMIT_SYNC] nack gpa=0x13f7fb000 dir=1 rid=32146
+[IPC COMMIT_SYNC] nack gpa=0x13f800000 dir=1 rid=32147
+[IPC COMMIT_SYNC] nack gpa=0x13f801000 dir=1 rid=32148
+[IPC COMMIT_SYNC] nack gpa=0x13f802000 dir=1 rid=32149
+[IPC COMMIT_SYNC] nack gpa=0x13f804000 dir=1 rid=32150
+[IPC COMMIT_SYNC] nack gpa=0x13f806000 dir=1 rid=32151
+--- vm.log tail ---
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WaveVM-User] handoff dirty flush pages=31318 skipped_zero=0 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31318
+[WVM-PUSH-BARRIER] rx cookie=13
+[WVM-PUSH-BARRIER] ack cookie=13
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=-5 flush=31318
+[WVM-TCG-HANDOFF] cpu=2 push-fence failed ret=-5 flush=31318
+[WaveVM-User] handoff dirty rollback pages=31318
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-PUSH-APPLY] pid=24216 n=40000 type=29 gpa=0x339000 version=0x1 local=0x2 t=7094022632
+[WaveVM-User] handoff dirty flush pages=31318 skipped_zero=0 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31318
+[WVM-PUSH-BARRIER] rx cookie=14
+[WVM-PUSH-BARRIER] ack cookie=14
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=-5 flush=31318
+[WVM-TCG-HANDOFF] cpu=2 push-fence failed ret=-5 flush=31318
+[WaveVM-User] handoff dirty rollback pages=31318
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WaveVM-User] handoff dirty flush pages=31318 skipped_zero=0 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31318
+--- serial tail ---
+[    0.102304] Booting paravirtualized kernel on bare hardware
+[    0.102771] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+[    0.103325] setup_percpu: NR_CPUS:8192 nr_cpumask_bits:3 nr_cpu_ids:3 nr_node_ids:2
+[    0.111423] percpu: Embedded 60 pages/cpu s208896 r8192 d28672 u1048576
+[    0.113418] Built 2 zonelists, mobility grouping on.  Total pages: 773852
+[    0.113456] Policy zone: Normal
+[    0.113606] Kernel command line: LABEL=cirros-rootfs ro console=tty1 console=ttyS0
+[    0.114553] Unknown kernel command line parameters "LABEL=cirros-rootfs", will be passed to user space.
+[    0.116597] mem auto-init: stack:off, heap alloc:on, heap free:off
+[    0.247333] Memory: 2973856K/3145192K available (16393K kernel code, 4383K rwdata, 10840K rodata, 3244K init, 6548K bss, 171076K reserved, 0K cma-reserved)
+[    0.254511] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=3, Nodes=2
+[    0.255895] ftrace: allocating 50600 entries in 198 pages
+[    0.343249] ftrace: allocated 198 pages with 4 groups
+[    0.351759] rcu: Hierarchical RCU implementation.
+[    0.351841] rcu: 	RCU restricting CPUs from NR_CPUS=8192 to nr_cpu_ids=3.
+[    0.351928] 	Rude variant of Tasks RCU enabled.
+[    0.351939] 	Tracing variant of Tasks RCU enabled.
+[    0.352024] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[    0.352054] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=3
+[    0.378962] NR_IRQS: 524544, nr_irqs: 448, preallocated irqs: 16
+[    0.389591] Console: colour *CGA 80x25
+[    0.392004] printk: console [tty1] enabled
+[    0.408217] printk: console [ttyS0] enabled
+[    0.410513] mempolicy: Enabling automatic NUMA balancing. Configure with numa_balancing= or the kernel.numa_balancing sysctl
+[    0.411901] ACPI: Core revision 20210730
+[    0.421535] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    0.427124] APIC: Switch to symmetric I/O mode setup
+[    0.433082] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    0.452537] tsc: Marking TSC unstable due to TSCs unsynchronized
+[    0.453140] Calibrating delay loop (skipped), value calculated using timer frequency.. 6143.86 BogoMIPS (lpj=12287736)
+[    0.453656] pid_max: default: 32768 minimum: 301
+[    0.454702] LSM: Security Framework initializing
+[    0.455581] landlock: Up and running.
+[    0.455672] Yama: becoming mindful.
+[    0.458896] AppArmor: AppArmor initialized
+[    0.464588] Dentry cache hash table entries: 524288 (order: 10, 4194304 bytes, vmalloc)
+[    0.466669] Inode-cache hash table entries: 262144 (order: 9, 2097152 bytes, vmalloc)
+[    0.467208] Mount-cache hash table entries: 8192 (order: 4, 65536 bytes, vmalloc)
+[    0.467386] Mountpoint-cache hash table entries: 8192 (order: 4, 65536 bytes, vmalloc)
+[    0.486314] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    0.486527] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    0.486855] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    0.487100] Spectre V2 : Mitigation: Retpolines
+[    0.487173] Spectre V2 : Spectre v2 / SpectreRSB mitigation: Filling RSB on context switch
+[    0.487281] Spectre V2 : Spectre v2 / SpectreRSB : Filling RSB on VMEXIT
+[    0.487556] Speculative Store Bypass: Vulnerable
+[    0.636718] Freeing SMP alternatives memory: 44K
+[    0.762418] smpboot: CPU0: AMD QEMU Virtual CPU version 2.5+ (family: 0x6, model: 0x6, stepping: 0x3)
+[    0.771338] Performance Events: PMU not available due to virtualization, using software events only.
+[    0.772915] rcu: Hierarchical SRCU implementation.
+[    0.777614] NMI watchdog: Perf NMI watchdog permanently disabled
+[    0.783704] smp: Bringing up secondary CPUs ...
+[    0.787731] x86: Booting SMP configuration:
+[    0.787935] .... node  #0, CPUs:      #1
+[    0.043931] calibrate_delay_direct() dropping min bogoMips estimate 0 = 6715552
+[    0.889254] 
+[    0.889427] .... node  #1, CPUs:   #2
+[    0.983244] smp: Brought up 2 nodes, 3 CPUs
+[    0.983516] smpboot: Max logical packages: 3
+[    0.983623] smpboot: Total of 3 processors activated (18555.13 BogoMIPS)
+--- timeout counts ---
+/tmp/wavevm-test-results/dual-node-tcg-20261111-192029/gw_l1a.log:0
+/tmp/wavevm-test-results/dual-node-tcg-20261111-192029/gw_l2.log:0
+/tmp/wavevm-test-results/dual-node-tcg-20261111-192029/gw_sidecar_a.log:0
+/tmp/wavevm-test-results/dual-node-tcg-20261111-192029/master0.log:0
+/tmp/wavevm-test-results/dual-node-tcg-20261111-192029/slave0.log:0
+/tmp/wavevm-test-results/dual-node-tcg-20261111-192029/vm.log:0
+/tmp/wavevm-test-results/dual-node-tcg-20261111-192029/vm-serial.log:0
+--- log sizes ---
+    207 /tmp/wavevm-test-results/dual-node-tcg-20261111-192029/gw_l1a.log
+    197 /tmp/wavevm-test-results/dual-node-tcg-20261111-192029/gw_l2.log
+    213 /tmp/wavevm-test-results/dual-node-tcg-20261111-192029/gw_sidecar_a.log
+  32293 /tmp/wavevm-test-results/dual-node-tcg-20261111-192029/master0.log
+     57 /tmp/wavevm-test-results/dual-node-tcg-20261111-192029/slave0.log
+    396 /tmp/wavevm-test-results/dual-node-tcg-20261111-192029/vm.log
+    156 /tmp/wavevm-test-results/dual-node-tcg-20261111-192029/vm-serial.log
+  33519 总计
+[19:22:09] [tcg/A] cleanup

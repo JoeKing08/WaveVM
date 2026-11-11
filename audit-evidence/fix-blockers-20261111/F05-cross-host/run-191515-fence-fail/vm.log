@@ -1,0 +1,367 @@
+[WaveVM] /dev/kvm not available (backend=auto mode=user), stay on TCG path
+qemu-system-x86_64: -accel wavevm,split=2: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-SHM] guest RAM attached gpa=0 size=0x80000000 hva=0x77b443fff000
+[WaveVM-User] N02 coherent REFUSED: missing/invalid FE/executor physical host proof (fault path kept)
+[WaveVM-User] ram_block hva=0x77b443fff000..0x77b4c3fff000 gpa=0 size=0x80000000 blocks=1
+[WaveVM] dedup region_add gpa=0 size=0x80000000 count=1
+[WaveVM] dirty log tracking enabled (kvm=0 slave=0 coherent=0).
+[WaveVM-User] volatile RAM range registered [0xc0000, 0x100000)
+[WaveVM-User] master async push listener active fd=12
+[WaveVM-User] V31 Master TCG Handoff Dirty Flush Active
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x77b403ffe000..0x77b443ffe000 gpa=0x100000000 size=0x40000000 blocks=2
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x77b44409f000..0x77b4440bf000 gpa=0xfeda0000 size=0x20000 blocks=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x77b443fff000..0x77b4440bf000 gpa=0 size=0xc0000 blocks=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x77b4440ff000..0x77b4c3fff000 gpa=0x100000 size=0x7ff00000 blocks=5
+[WVM-TCG-STATS] cpu=1 remote_done=0 local_done=1 force_local_used=0
+[WVM-TCG-LOCAL] cpu=1 n=0 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x1ebace0 lock=0x0/lr=0 halted=1 intreq=0x0 exit_req=0
+[WaveVM] region_add gpa=0 size=0xd8000 count=6
+[WaveVM-User] ram_block hva=0x77b443fff000..0x77b4440d7000 gpa=0 size=0xd8000 blocks=6
+[WaveVM] region_add gpa=0xf0000 size=0x7ff10000 count=7
+[WaveVM-User] ram_block hva=0x77b4440ef000..0x77b4c3fff000 gpa=0xf0000 size=0x7ff10000 blocks=7
+[WVM-TCG-STATS] cpu=1 remote_done=0 local_done=2 force_local_used=0
+[WaveVM] dedup region_add gpa=0 size=0x80000000 count=7
+[WVM-TCG-LOCAL] cpu=1 n=1 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x539851c lock=0x0/lr=0 halted=1 intreq=0x0 exit_req=1
+[WVM-TCG-STATS] cpu=1 remote_done=0 local_done=3 force_local_used=0
+[WVM-TCG-LOCAL] cpu=1 n=2 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x5743e8e lock=0x0/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=1 remote_done=0 local_done=4 force_local_used=0
+[WVM-TCG-LOCAL] cpu=1 n=3 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xa77e71e lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=4 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xbb59b9e lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=5 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xc15f3f5 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=6 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xc532690 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=7 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xcc99e53 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=8 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xcde2621 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=9 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xd072690 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=10 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xd30228e lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=11 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0xd5bfc1f lock=0xf000ff53/lr=0 halted=1 intreq=0x800 exit_req=0
+[WVM-TCG-SIPI] cpu=2 SIPI pending, calling do_cpu_sipi (sipi_vector from APIC)
+[WVM-TCG-SIPI] cpu=2 after SIPI: cs=0x1000 cs.base=0x10000 eip=0x0 cr0=0x60000010
+[WVM-TCG-SIPI] cpu=2 running BIOS trampoline locally
+[WVM-TCG-LOCAL] cpu=0 n=0 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x3 r9=0x0 guest_tsc=0xd89cef0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=1 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x3 r9=0x0 guest_tsc=0xd904716 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=2 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x3 r9=0x0 guest_tsc=0xd90f5c6 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=3 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x3 r9=0x0 guest_tsc=0xd918df0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=4 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x3 r9=0x0 guest_tsc=0xd922374 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=12 ret=65537 rip=0xfd120 cs=0x8 cr0=0x11 rdi=0x0 rax=0xc06 r9=0x0 guest_tsc=0xd927b6b lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-SIPI] cpu=2 iter=1 tr=65537 eip=0xfd120 halted=1 intreq=0x0
+[WVM-TCG-SIPI] cpu=2 trampoline HLTed after 1 iters
+[WVM-TCG-SIPI] cpu=2 BIOS trampoline done, AP parked
+[WVM-TCG-LOCAL] cpu=0 n=5 ret=65536 rip=0xef570 cs=0x8 cr0=0x11 rdi=0x0 rax=0x3 r9=0x0 guest_tsc=0xd984f88 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=13 ret=65539 rip=0xfd120 cs=0x8 cr0=0x11 rdi=0x0 rax=0xc06 r9=0x0 guest_tsc=0x102ad728 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=14 ret=65539 rip=0xfd120 cs=0x8 cr0=0x11 rdi=0x0 rax=0xc06 r9=0x0 guest_tsc=0x10e150f2 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=6 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 r9=0x0 guest_tsc=0x1160afcb lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=7 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 r9=0x0 guest_tsc=0x11921bed lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=8 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 r9=0x0 guest_tsc=0x11bec69b lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=9 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 r9=0x0 guest_tsc=0x11f5986a lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=10 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 r9=0x0 guest_tsc=0x1225c2d8 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=11 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 r9=0x0 guest_tsc=0x1252a817 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=15 ret=65539 rip=0xfd120 cs=0x8 cr0=0x11 rdi=0x0 rax=0xc06 r9=0x0 guest_tsc=0x129dd4b4 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=12 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0x0 r9=0x0 guest_tsc=0x12c92a41 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=16 ret=65539 rip=0xfd120 cs=0x8 cr0=0x11 rdi=0x0 rax=0xc06 r9=0x0 guest_tsc=0x12e8b165 lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WaveVM] dedup region_add gpa=0 size=0xc0000 count=7
+[WaveVM] region_add gpa=0xc0000 size=0x18000 count=8
+[WaveVM-User] ram_block hva=0x77b4440bf000..0x77b4440d7000 gpa=0xc0000 size=0x18000 blocks=8
+[WaveVM] region_add gpa=0xd8000 size=0x18000 count=9
+[WaveVM-User] ram_block hva=0x77b4440d7000..0x77b4440ef000 gpa=0xd8000 size=0x18000 blocks=9
+[WaveVM] region_add gpa=0xf0000 size=0x10000 count=10
+[WaveVM-User] ram_block hva=0x77b4440ef000..0x77b4440ff000 gpa=0xf0000 size=0x10000 blocks=10
+[WaveVM] dedup region_add gpa=0x100000 size=0x7ff00000 count=10
+[WaveVM] region_add gpa=0xc0000 size=0x28000 count=11
+[WaveVM-User] ram_block hva=0x77b4440bf000..0x77b4440e7000 gpa=0xc0000 size=0x28000 blocks=11
+[WaveVM] region_add gpa=0xe8000 size=0x8000 count=12
+[WaveVM-User] ram_block hva=0x77b4440e7000..0x77b4440ef000 gpa=0xe8000 size=0x8000 blocks=12
+[WVM-TCG-LOCAL] cpu=1 n=17 ret=65539 rip=0xfd120 cs=0x8 cr0=0x11 rdi=0x0 rax=0xc06 r9=0x0 guest_tsc=0x1437976c lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=1
+[WVM-TCG-LOCAL] cpu=1 n=18 ret=65539 rip=0xfd120 cs=0x8 cr0=0x11 rdi=0x0 rax=0xc06 r9=0x0 guest_tsc=0x143c568a lock=0xf000ff53/lr=0 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=13 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x153a2cfc lock=0x0/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=14 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x15675338 lock=0x0/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=15 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x15ef6e9d lock=0x0/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=16 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x162accbe lock=0x0/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=17 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x16c7837e lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=18 ret=65536 rip=0xf7cf2 cs=0x8 cr0=0x11 rdi=0x0 rax=0xb5 r9=0x0 guest_tsc=0x17ebd826 lock=0xf000ff53/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=19 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x189e5f54 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=20 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x19342e88 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=21 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x19e3da95 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=22 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x1a5d3b89 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=23 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1a8f76cb lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=24 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1ae8b1f6 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=25 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1b9aa47a lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=26 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1c4e9995 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=27 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1d5f1169 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=28 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1e219e04 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=29 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x1ea6c111 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=30 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1ef2fabf lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=31 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x1fa3c23e lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=32 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x2018cdbb lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=33 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x208999c7 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=34 ret=65536 rip=0xf7cf2 cs=0x8 cr0=0x11 rdi=0x0 rax=0xb5 r9=0x0 guest_tsc=0x2152d858 lock=0xf000ff53/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=35 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x218add09 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=36 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x21bf627d lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=37 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x21f2ac12 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=38 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x22766a50 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=39 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x2305e2b3 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=40 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x23cb458b lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=41 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x240e18a5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=42 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x243d9cef lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=43 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x2479ddb7 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=44 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x24a9fa64 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=45 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x24e08cf0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=46 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x250b9956 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=47 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x25602865 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=48 ret=65536 rip=0x7cd8 cs=0xf000 cr0=0x10 rdi=0xeb684 rax=0xb5 r9=0x0 guest_tsc=0x2634c796 lock=0x70000/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=49 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x26f00ad5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=50 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x27a4f905 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=51 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x281c69b1 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=52 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x284a1f81 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=53 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x293094f6 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=54 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x29648b00 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=55 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x29d74206 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=56 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x2a62a6f8 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=57 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x2b3dabcc lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=58 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x2bbd5c7c lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=59 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x2bed9f2a lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=60 ret=65536 rip=0xf7cf2 cs=0x8 cr0=0x11 rdi=0x0 rax=0xb5 r9=0x0 guest_tsc=0x2c2947c4 lock=0xf000ff53/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=61 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x2cfd3fe8 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=62 ret=65536 rip=0xf7cf2 cs=0x8 cr0=0x11 rdi=0x0 rax=0xb5 r9=0x0 guest_tsc=0x2dac66d0 lock=0xf000ff53/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=63 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x2dfd3df1 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=64 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x2ed529f0 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=65 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x2f69153c lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=66 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x302823aa lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=67 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x30d95bea lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=68 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x315769b5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=69 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x3187e83e lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=70 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x31b6096a lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=71 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x31eb8ee4 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=72 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x32191a9e lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=73 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x324cfbdc lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=74 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x32969b00 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=75 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x32e4f310 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=76 ret=65536 rip=0x60e5 cs=0xf000 cr0=0x10 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x33351d6c lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=77 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x33e2885b lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=78 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x34aef2c5 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=79 ret=65536 rip=0x8854 cs=0xf000 cr0=0x10 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x34fdc9a3 lock=0xf000ff53/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=200 ret=65536 rip=0xed52a cs=0x8 cr0=0x11 rdi=0x8836 rax=0xb5 r9=0x0 guest_tsc=0x6839e4b5 lock=0x31e28813/lr=0 halted=0 intreq=0x40 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=400 ret=65536 rip=0xffffffff8eeb9224 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1e9028 rax=0xfffedb0c r9=0xffff9efac105fe10 guest_tsc=0x2a32b08a1 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=600 ret=65536 rip=0xffffffff8eeb9224 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1e9028 rax=0xfffedb0c r9=0xffff9efac105fe10 guest_tsc=0x2a38a3b5b lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=800 ret=65536 rip=0xffffffff8eeb9224 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1e9028 rax=0xfffedb0d r9=0xffff9efac105fe10 guest_tsc=0x2a3fe651e lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=1000 ret=65536 rip=0xffffffff8eeb9224 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1e9028 rax=0xfffedb0d r9=0xffff9efac105fe10 guest_tsc=0x2a45d1094 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=1200 ret=65536 rip=0xffffffff8eeb9224 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1e9028 rax=0xfffedb0e r9=0xffff9efac105fe10 guest_tsc=0x2a4d67271 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=1400 ret=65536 rip=0xffffffff8eeb9224 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1e9028 rax=0xfffedb0e r9=0xffff9efac105fe10 guest_tsc=0x2a53e8164 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=1600 ret=65536 rip=0xffffffff8eeb9224 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1e9028 rax=0xfffedb0f r9=0xffff9efac105fe10 guest_tsc=0x2a5aa3c81 lock=0x0/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=0 n=1800 ret=65536 rip=0xffffffff8eeb77f7 cs=0x10 cr0=0x80050033 rdi=0x380 rax=0xe9d14890 r9=0x0 guest_tsc=0x2e9d14a2a lock=0x0/lr=-1 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=19 ret=65539 rip=0xfff0 cs=0xf000 cr0=0x60000010 rdi=0x0 rax=0x0 r9=0x0 guest_tsc=0x306445f52 lock=0xf000ff53/lr=0 halted=1 intreq=0x800 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=20 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x30735c2c2 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=21 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x307386240 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=22 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x307390042 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=23 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x307398f66 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=24 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073a1bfc lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=25 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073aa862 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=26 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073b345c lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=27 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073bbfaa lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=28 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073c4b64 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=29 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073cd626 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=30 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073d623a lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=31 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073dee34 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=32 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073e7898 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=33 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073f01c0 lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=34 ret=65536 rip=0xffffffff8cc5790a cs=0x10 cr0=0x80050033 rdi=0xffffffff8e2f0458 rax=0xffff9efbfffd0ec0 r9=0x0 guest_tsc=0x3073f8bba lock=0xfff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=1 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=2 force_local_used=0
+[WVM-TCG-LOCAL] cpu=1 n=35 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffff9efb3dd30b80 rax=0x1 r9=0x0 guest_tsc=0x31be245a8 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=3 force_local_used=0
+[WVM-TCG-STATS] cpu=0 remote_done=0 local_done=4 force_local_used=0
+[WVM-TCG-LOCAL] cpu=1 n=36 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x2 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x31dca708b lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=37 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x6 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x31e18f4fd lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=38 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0xa rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x31f171c38 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=39 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0xe rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x31f94e43d lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-SIPI] cpu=2 OS SIPI pending
+[WVM-TCG-SIPI] cpu=2 running OS trampoline locally
+[WVM-TCG-LOCAL] cpu=1 n=40 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x12 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x320b40ffa lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=41 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x16 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32109fd21 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=42 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x1a rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x321be510a lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=43 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x1e rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32283db7f lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=44 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x22 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x323414299 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=45 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x26 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x324057ad5 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=46 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x2a rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x324b32b42 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=47 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x2e rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x3257e3979 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=48 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x32 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x3262887cc lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=49 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x36 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x326e4c76d lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=50 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x3a rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x327b718e7 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=51 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x3e rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x3286db30b lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=52 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x42 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x3290ab073 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=53 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x46 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x329f86538 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=54 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x4a rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32a8edef8 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=55 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x4e rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32b4d6b68 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=56 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x52 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32c0d9fe5 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=57 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x56 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32cc74791 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=58 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x5a rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32d71ca1d lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=59 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x5e rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32e2b3c9d lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=60 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x62 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32eecf9f7 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=61 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x66 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x32fb901bc lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-SIPI] cpu=2 OS trampoline done after 1 iters tr=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 efer=0xd01 rsp=0xffffad1dc06d3e78 intreq=0x0 hflags=0x40c2b0 hflags2=0x1 mp=0
+[WVM-TCG-SIPI] cpu=2 OS trampoline done, ready for remote dispatch
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=253 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x202
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=252 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-LOCAL] cpu=1 n=62 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x6a rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x3307b7a87 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=252 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-LOCAL] cpu=1 n=63 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x70 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x33090ec41 lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=3 interrupts=1 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-LOCAL] cpu=1 n=64 ret=65537 rip=0xffffffff8d9b603b cs=0x10 cr0=0x80050033 rdi=0x74 rax=0xffffffff8d9b5f30 r9=0x0 guest_tsc=0x3309fadfa lock=0x0/lr=-1 halted=1 intreq=0x0 exit_req=0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=251 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-LOCAL] cpu=1 n=65 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330e5a199 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=66 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330e8fb47 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=67 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330eab099 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=68 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330ec0e97 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=69 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330ecbf6b lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=70 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330ed744d lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=71 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330ee21e3 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=72 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330eec80d lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=73 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330ef6c45 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=74 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330f012cb lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=75 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330f0b995 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=76 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330f15df1 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=77 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330f2004f lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=78 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330f2a333 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=79 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8f1aea88 rax=0x1 r9=0x0 guest_tsc=0x330f34535 lock=0x1/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=88 interrupts=87 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x202
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x212 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x212
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x202
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x216 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x216
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x202
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x202
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x216 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x216
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x202
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x202 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x202
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x206
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x212 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-WAKE-STATE] cpu=2 halted=1 intreq=0x2 has_work=1 irr=236 ppr=0x10 apic_pending=1 pic_output=0 eflags=0x212
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-TCG-WAKE] cpu=2 local wake exec intreq=0x2
+[WVM-TCG-STACK] phase=master-local-wake cpu=2 rip=0xffffffff8d9b603b rsp=0xffffad1dc06d3e78 ret=0 q0=0xffffffff8d9b5f3e q1=0xffffad1dc06d3e90 q2=0xffffffff8cc4ba45 q3=0xffffad1dc06d3ea0
+[WVM-TCG-WAKE] cpu=2 local wake ret=65537 iters=1 interrupts=0 rip=0xffffffff8d9b603b cs=0x10 eflags=0x206 hflags=0x40c2b0 hflags2=0x1 halted=1 intreq=0x0
+[WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 cr3=0x12c610000 efer=0xd01 rsp=0xffffad1dc07b3e70 oldex=-1
+[WVM-DBG] cpu=2 kvm_enabled=0 vcpu_sock=19 split=2
+[WVM-TCG-LOCAL] cpu=1 n=200 ret=65536 rip=0xffffffff8cd397b1 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06080 rax=0x1ff r9=0xffff9efb3dd30cc0 guest_tsc=0x350b3484e lock=0x1ff/lr=0 halted=0 intreq=0x0 exit_req=0
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-PUSH-APPLY] pid=23418 n=1 type=29 gpa=0 version=0x1 local=0x2 t=6708691969
+[WVM-PUSH-APPLY] pid=23418 n=2 type=29 gpa=0x1000 version=0x1 local=0x2 t=6708713252
+[WVM-PUSH-APPLY] pid=23418 n=3 type=29 gpa=0x2000 version=0x1 local=0x2 t=6708713289
+[WVM-PUSH-APPLY] pid=23418 n=4 type=29 gpa=0x3000 version=0x1 local=0x2 t=6708713290
+[WVM-PUSH-APPLY] pid=23418 n=5 type=29 gpa=0x6000 version=0x1 local=0x2 t=6708713290
+[WVM-PUSH-APPLY] pid=23418 n=6 type=29 gpa=0x7000 version=0x1 local=0x2 t=6708713291
+[WVM-PUSH-APPLY] pid=23418 n=7 type=29 gpa=0x8000 version=0x1 local=0x2 t=6708713292
+[WVM-PUSH-APPLY] pid=23418 n=8 type=29 gpa=0x9000 version=0x1 local=0x2 t=6708713293
+[WVM-PUSH-APPLY] pid=23418 n=9 type=29 gpa=0xa000 version=0x1 local=0x2 t=6708713293
+[WVM-PUSH-APPLY] pid=23418 n=10 type=29 gpa=0xb000 version=0x1 local=0x2 t=6708713294
+[WVM-PUSH-APPLY] pid=23418 n=11 type=29 gpa=0xc000 version=0x1 local=0x2 t=6708713295
+[WVM-PUSH-APPLY] pid=23418 n=12 type=29 gpa=0xd000 version=0x1 local=0x2 t=6708713308
+[WVM-PUSH-APPLY] pid=23418 n=5000 type=29 gpa=0x12ac56000 version=0x1 local=0x2 t=6720185498
+[WaveVM-User] handoff dirty flush pages=31493 skipped_zero=754939 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31493
+[WVM-PUSH-APPLY] pid=23418 n=10000 type=29 gpa=0x12c224000 version=0x1 local=0x2 t=6731095138
+[WVM-PUSH-BARRIER] rx cookie=1
+[WVM-PUSH-BARRIER] ack cookie=1
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=-5 flush=31493
+[WVM-TCG-HANDOFF] cpu=2 push-fence failed ret=-5 flush=31493
+[WaveVM-User] handoff dirty rollback pages=31493
+[WVM-REMOTE] cpu=2 dispatch #1 rip=0xffffffff8cd397b1 cs=0x10 cr0=0x80050033 cr3=0x12c610000 efer=0xd01 rsp=0xffffad1dc07b3e48 oldex=-1
+[WVM-TCG-LOCAL] cpu=1 n=400 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x1984425ae6 lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=600 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x19848e4f6a lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=800 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x1984f98af4 lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=1000 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x198546f6c0 lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=1200 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x1985abcacd lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=1400 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x19860d31f3 lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=1600 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x198685028c lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-LOCAL] cpu=1 n=1800 ret=65536 rip=0xffffffff8cd39281 cs=0x10 cr0=0x80050033 rdi=0xffffffff8ea06084 rax=0x1 r9=0xffffffffffffffff guest_tsc=0x198714acdc lock=0x1/lr=0 halted=0 intreq=0x2 exit_req=0
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-PUSH-APPLY] pid=23418 n=15000 type=29 gpa=0x939000 version=0x1 local=0x2 t=6739970514
+[WaveVM-User] handoff dirty flush pages=31493 skipped_zero=0 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31493
+[WVM-PUSH-APPLY] pid=23418 n=20000 type=29 gpa=0x12bdaa000 version=0x1 local=0x2 t=6748395131
+[WVM-PUSH-BARRIER] rx cookie=2
+[WVM-PUSH-BARRIER] ack cookie=2
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=-5 flush=31493
+[WVM-TCG-HANDOFF] cpu=2 push-fence failed ret=-5 flush=31493
+[WaveVM-User] handoff dirty rollback pages=31493
+[WVM-REMOTE] cpu=2 dispatch #2 rip=0xffffffff8cd397b1 cs=0x10 cr0=0x80050033 cr3=0x12c610000 efer=0xd01 rsp=0xffffad1dc07b3e48 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WVM-PUSH-APPLY] pid=23418 n=25000 type=29 gpa=0x100352000 version=0x1 local=0x2 t=6759406724
+[WaveVM-User] handoff dirty flush pages=31493 skipped_zero=0 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31493
+[WVM-PUSH-APPLY] pid=23418 n=30000 type=29 gpa=0x13ef66000 version=0x1 local=0x2 t=6770882282
+[WVM-PUSH-BARRIER] rx cookie=3
+[WVM-PUSH-BARRIER] ack cookie=3
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=-5 flush=31493
+[WVM-TCG-HANDOFF] cpu=2 push-fence failed ret=-5 flush=31493
+[WaveVM-User] handoff dirty rollback pages=31493
+[WVM-REMOTE] cpu=2 dispatch #3 rip=0xffffffff8cd397b1 cs=0x10 cr0=0x80050033 cr3=0x12c610000 efer=0xd01 rsp=0xffffad1dc07b3e48 oldex=-1
+[WVM-TCG-HANDOFF] cpu=2 flush begin fd=19
+[WaveVM-User] handoff dirty flush pages=31493 skipped_zero=0 fd=19
+[WVM-TCG-HANDOFF] cpu=2 flush done fd=19 ret=31493
+[WVM-PUSH-APPLY] pid=23418 n=35000 type=29 gpa=0x12c192000 version=0x1 local=0x2 t=6782591390
+[WVM-TCG-HANDOFF] cpu=2 push-fence fd=19 ret=-104 flush=31493
+[WVM-TCG-HANDOFF] cpu=2 push-fence failed ret=-104 flush=31493
+[WaveVM-User] handoff dirty rollback pages=31493
+qemu-system-x86_64: terminating on signal 15 from pid 23620 (<unknown process>)

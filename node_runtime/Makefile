@@ -166,7 +166,16 @@ admission_runtime_agent.o: ../common_include/wavevm_admission_runtime_agent.c
 clean:
 	rm -f $(TARGET) main.o admission_main.o $(MASTER_OBJS) $(SLAVE_OBJS) $(COMMON_OBJS) *.d
 
-.PHONY: all clean
+LEGACY_MASTER = ../master_core/wavevm_node_master
+master_legacy_cli.o: ../master_core/main_wrapper.c runtime_context.h kernel_memory.h ../common_include/wavevm_ioctl.h ../common_include/wavevm_protocol.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DWAVEVM_MASTER_LEGACY_CLI -c $< -o $@
+
+$(LEGACY_MASTER): master_legacy_cli.o master_logic.o master_user.o kernel_memory.o $(COMMON_OBJS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDFLAGS) -lssl -lcrypto
+
+legacy-master: $(LEGACY_MASTER)
+
+.PHONY: all clean legacy-master
 
 host_probe.o: ../common_include/wavevm_host_probe.c ../common_include/wavevm_ioctl.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@

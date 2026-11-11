@@ -144,3 +144,11 @@ Per Joe t531u:
   - No further code fix this round; 2604 closed.
   - Parent will batch commit+push after Grok backup — executor does not commit/push.
 
+=== 2026-11-11 same-host follow-up ===
+Append only; 11-09 Grok×小浪 text above is unchanged.
+2026-11-11 same-host work (no F05/F10 cross-host, no F01):
+  N05 true oracle now PASS (cross-process 0x0307 → STALE).
+  ACTIVATION_DECIDED cold-start now PASS.
+  Phase 9 same-host cells re-run; Phase 9 still not closed.
+  F05/F10 remain PARTIAL (2604 offline). MINIMUM_COMPLETE NOT_CLAIMED.
+See MINIMUM_STATUS_20261111.txt and fix-blockers-20261111/.

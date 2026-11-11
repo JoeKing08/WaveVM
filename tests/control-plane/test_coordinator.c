@@ -1788,6 +1788,7 @@ out:
     return result;
 }
 
+#ifndef WVM_SKIP_COORDINATOR_MAIN
 int main(void)
 {
     struct wvm_capability_record capabilities[8];
@@ -3042,3 +3043,4 @@ int main(void)
     puts("coordinator tests: PASS");
     return 0;
 }
+#endif /* WVM_SKIP_COORDINATOR_MAIN */

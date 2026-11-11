@@ -1,0 +1,59 @@
+
+[19:47:01] [tcg/B] cleanup
+[19:47:01] [tcg/B] ART_DIR=/tmp/wavevm-test-results/dual-node-tcg-20261111-194701
+[19:47:01] [tcg/B] TCG Mode B/B: do not load wavevm.ko; temporarily hide /dev/kvm for pure TCG
+[19:47:01] [tcg/B] tailscale reuse socket=/run/tailscale/tailscaled.sock host=wavevm-f05-b ip=100.114.246.92 peer=wavevm-f05-a
+[19:47:01] [tcg/B] peer ip 100.116.196.65
+[19:47:01] [tcg/B] F05 env role=b host=429a0a31f87843f9 NUMA=2048:1024 MEM=3072
+[19:47:01] [tcg/B] start gateway gw_l1b listen=19420 upstream=100.116.196.65:19520 ctrl=19421
+[19:47:01] [tcg/B] start gateway gw_sidecar_b listen=19220 upstream=127.0.0.1:19420 ctrl=19221
+[19:47:01] [tcg/B] start master1 then slave1
+[19:47:02] [tcg/B] node B ready; holding for node A test
+[19:48:01] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:48:02] [tcg/B] node B hold 1m
+[19:49:01] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:49:02] [tcg/B] node B hold 2m
+[19:50:01] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:50:03] [tcg/B] node B hold 3m
+[19:51:01] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:51:03] [tcg/B] node B hold 4m
+[19:52:01] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:52:03] [tcg/B] node B hold 5m
+[19:53:02] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:53:03] [tcg/B] node B hold 6m
+[19:54:02] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:54:03] [tcg/B] node B hold 7m
+[19:55:02] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:55:03] [tcg/B] node B hold 8m
+[19:56:02] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:56:03] [tcg/B] node B hold 9m
+[19:57:02] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:57:03] [tcg/B] node B hold 10m
+[19:58:03] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:58:04] [tcg/B] node B hold 11m
+[19:59:03] [tcg/B] ci heartbeat
+processes: gw=2 master=1 slave=1 qemu=1
+processes: gw=2 master=1 slave=1 qemu=1
+[19:59:04] [tcg/B] node B hold 12m

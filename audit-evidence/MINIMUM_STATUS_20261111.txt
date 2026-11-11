@@ -1,0 +1,100 @@
+WaveVM Minimum status — 2026-11-11 EOD refresh ~21:30 CST Asia/Shanghai
+MINIMUM_COMPLETE: NOT_CLAIMED / NOT_CLAIMABLE
+Tip: 7945349fa until the later EOD push (tree dirty: harness + F05 source + audit-evidence + conversion script)
+Machine: 2e4d3ec5-e1b1-4a36-9903-de6309119499 /workspaces/WaveVM
+Ubuntu 2604 (machine 30b14f91) is powered off / disconnected; not touched this write-up.
+
+Headline scores (do not treat PARTIAL as CLOSED/PASS):
+  N05: PASS (true oracle, cross-process)
+  ACTIVATION_DECIDED cold-start: PASS
+    (journal DECIDED → recover RUNNING; not a live wvm_ctl SIGKILL mid-CREATE;
+     membership republish not exercised — membership_controller was NULL)
+  Phase 9 same-host pack: cells below; Phase 9 overall still FAIL to close
+    Mode B isolation: PASS (unit + live dual RUNNING / teardown)
+    join/cordon/drain/successor: PASS (live re-run on this tree)
+    concurrency/backpressure: PASS directed (bounded harnesses only; no soak)
+    Mode A two-VM production dual CREATE RUNNING: PASS
+    Mode A kernel cell: PASS (18:55 CST — clean wavevm.ko; /dev/wavevm
+      dual-context feature_bits=0x1 max=64 active=2, no SINGLE_CONTEXT)
+  F05: PARTIAL (not RET CLOSED, not fence-only PASS, not COMPLETE)
+  F10: PARTIAL (not rerun this session; prior login/SSH closeout only; not CLOSED)
+  F01: DEFERRED (Extended; not touched)
+  N01 N02 N03 N04 N06 N07: prior PASS directed unchanged
+    (N02 still path-string equality, not inode st_dev/st_ino same-backing)
+
+Evidence (this day):
+  audit-evidence/fix-blockers-20261111/N05-subscriber-crossproc/
+  audit-evidence/fix-blockers-20261111/ACTIVATION_DECIDED-cold-start/
+  audit-evidence/fix-blockers-20261111/PHASE9-same-host/
+  audit-evidence/fix-blockers-20261111/F05-cross-host/
+Prior cross-audit (history not rewritten; short append only on the 11-09 files):
+  audit-evidence/MINIMUM_GAP_CROSS_AUDIT_GROK_XIAOLANG_20261109-2030.txt
+  audit-evidence/MINIMUM_STATUS_20261109.txt
+
+=== history kept: 2026-11-11 ~18:18 CST (same-host fix block, Joe t533u) ===
+  N05 upgraded from 2026-11-09 PARTIAL → PASS (true oracle, cross-process).
+  ACTIVATION_DECIDED cold-start added as MUST-FIX / Phase-9 cell and PASS.
+  Phase 9 same-host pack scored as in the headline; Phase 9 still FAIL to close.
+  Mode A kernel dual-context isolation PASS 18:55 CST (see
+  fix-blockers-20261111/PHASE9-same-host/mode_a_two_vm/).
+
+=== history kept: 2026-11-11 19:23 CST (F05/F10 continuation; no commit/push) ===
+  Mode A kernel cell remains PASS (18:55 CST; not re-run).
+  Tailscale up both ways (100.116.196.65 ↔ 100.114.246.92, ~1ms LAN). 2604 tree
+  /home/joeking/WaveVM (no .git, SYNC_TIP 620cd762b) received 2404 clean-rebuild
+  master + harness/planner sync.
+  F05 fence-only cross-host remained PARTIAL:
+    run-191515: hygiene/reachability issues (fract_2node.conf both nodes at
+      127.0.0.1); push-fence FAIL ret=-5; VCPU_RUN sent=0/ack=0.
+    run-192029: packets crossed hosts; still fence FAIL; directory
+      reject-version commit=0x2 local=0x1; VCPU_RUN sent=0/ack=0.
+    Typed node_runtime/V1 not migrated. Production still legacy CLI.
+  Evidence then: NOTES_F05_20261111.txt (this notes file stops at 192029),
+    run-191515-fence-fail/, run-192029-reject-version/.
+  F10: not re-run (still PARTIAL). MINIMUM_COMPLETE: NOT_CLAIMED.
+
+=== follow-up: 2026-11-11 19:47 CST run-194714 (still PARTIAL) ===
+  Version-on-wire fix landed in dirty wavevm-qemu/accel/wavevm/wavevm-user-mem.c:
+  aggregator paths now send base, not base+1 (comment: wire log->version is
+  base_version; directory advances to next(base) on accept). Also in the dirty
+  tree: master_core/logic_core.c accept-idempotent handling.
+  run-194714 still fence FAIL (not PASS, not RET CLOSED).
+  From f05_fence_only_result.txt / runner.log:
+    q_alive=yes fence_done=8 push_fail=8 remote=9 sent=0 ack=0 handoff=34
+    commit_ack=20 commit_to=0  (commit_ack was 0 on 192029)
+    push-fence ret=-5; VCPU_RUN(cpu2)=0
+    [WaveVM-User] handoff dirty rollback pages=31315
+    many [IPC COMMIT_SYNC] nack on dir=1
+  Remaining hole named from this fail + the dirty-source comments: legacy
+  fire-and-forget COMMIT_DIFF_SYNC + optimistic local bump + rollback of
+  unconfirmed pages versus a non-idempotent directory (lost-ACK / stale base
+  after the directory had already advanced). Evidence:
+  audit-evidence/fix-blockers-20261111/F05-cross-host/run-194714-fence-fail/
+  NOTES_F05_20261111.txt was not updated for this run.
+
+=== follow-up: 2026-11-11 20:08–20:09 CST rollback-fix rebuild; no scored rerun ===
+  A further rollback-fix was rebuilt on 2404 (verified by sha256/mtime on disk;
+  do not treat these binaries as commit candidates):
+    wavevm-qemu/build-native/qemu-system-x86_64
+      mtime 2026-11-11 20:09:00 +0800
+      sha256 e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e
+    master_core/wavevm_node_master
+      mtime 2026-11-11 20:08:44 +0800
+      sha256 eb0e6ecc21443509cfa79620774a5fa69bde32623877897cbd6f65c26473d995
+  Dirty source in wavevm-user-mem.c matches that intent (re-dirty unconfirmed
+  pages only; do not roll a local version back once the directory has accepted).
+  No scored evidence directory exists after run-194714. There is no run-2010*
+  (or later) result file under audit-evidence/. The 20:10 CST rerun was stopped
+  before scoring when Joe ended the day; 2604 was then powered off (still off /
+  disconnected at this write-up). Do not invent fence numbers for that attempt.
+  Do not claim F05 RET CLOSED or PASS.
+
+=== conversion script (to be included in the later EOD commit) ===
+  scripts/bot_to_grok_build.py and scripts/bot_to_grok_build_README.txt are
+  dirty vs tip 7945349fa. Fixed by 小浪 this evening: SendToUser via
+  CallDynamicTool emitted as assistant bubbles; hidden prompts labeled;
+  duplicate user prompts deduped. Uncommitted as of the start of this EOD prep.
+  Grok Bot session-backup conversion with this script is still in progress
+  elsewhere; do not stage or delete session-backup/Grok Bot/ (2546bb30 artifacts).
+
+MINIMUM_COMPLETE: NOT_CLAIMED / NOT_CLAIMABLE

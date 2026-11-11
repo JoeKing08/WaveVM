@@ -1,0 +1,3 @@
+test_n05_ctl: submit type=0x307 to 11:1100 rc=0 stale=1 dir_pid=6492
+[wvm_ctl] N05: invalidate fanout failed node=7 inst=1001 rc=-113 err=no listener for node=7 inst=1001 (best-effort skip)
+[wvm_ctl] N05: subscriber invalidate fanout failed_member=7:1001 sent=1 failed=1

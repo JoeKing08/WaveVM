@@ -1,0 +1,8 @@
+N6: sibling VM2 still live at /dev/shm/wavevm_ram_wvm-v257-i1-g1-n801-405f2d5fc1e06e61 after VM1 STOP attempt
+dual Mode B CREATE + isolation/teardown (distinct names; one-VM kill preserves other): PASS
+  vm1=status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=7175518801770540875
+  vm2=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=5498102406817719047
+  shm1=/wavevm_ram_wvm-v256-i1-g1-n801-9a28ccc6da66fc8a shm2=/wavevm_ram_wvm-v257-i1-g1-n801-405f2d5fc1e06e61
+  sock1=/tmp/wvm_user_wvm-v256-i1-g1-n801-9a28ccc6da66fc8a.sock sock2=/tmp/wvm_user_wvm-v257-i1-g1-n801-405f2d5fc1e06e61.sock
+  killed_child=14090 preserved_child=14142
+  vm2_replay=status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=5498102406817719047

@@ -1,0 +1,6 @@
+DUAL REALQEMU START 2026-11-11 18:13:45 CST
+===== START create_vm_dual_mode_b 2026-11-11 18:13:45 CST =====
+===== create_vm_dual_mode_b rc=0 18:13:56 =====
+===== START create_vm_dual_mode_a 2026-11-11 18:13:56 CST =====
+===== create_vm_dual_mode_a rc=0 18:14:07 =====
+DUAL REALQEMU DONE 2026-11-11 18:14:07 CST

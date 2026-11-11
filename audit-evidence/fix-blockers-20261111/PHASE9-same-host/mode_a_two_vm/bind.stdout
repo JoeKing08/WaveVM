@@ -1,0 +1,6 @@
+[OK] multi-context advertised (max=64 active_before=0)
+[OK] dual bind active=2
+[OK] SET_MEM_LAYOUT accepted for both contexts
+[OK] peer context survived sibling unbind (active=1)
+[OK] same-FD UNBIND races ioctl/mmap: cycles=64 mappings=6
+Mode A dual-context bind/teardown: PASS

@@ -1,0 +1,49 @@
+F05 cross-host (Mode B TCG fence + remote VCPU RET) — 2026-11-11 Asia/Shanghai CST
+Score: PARTIAL (not CLOSED). MINIMUM_COMPLETE still NOT_CLAIMED.
+
+Hosts (Tailscale up both ways, ~1ms via LAN 192.168.10.129/131):
+  A wavevm-f05-a 100.116.196.65  machine 2e4d3ec5 / 2404  tree /workspaces/WaveVM tip 7945349fa + dirty harness
+  B wavevm-f05-b 100.114.246.92  machine 30b14f91 / 2604  tree /home/joeking/WaveVM (no .git; SYNC_TIP 620cd762b)
+  Synced 2404 → 2604 without commit: clean-rebuilt wavevm_node_master, ci_dual_node.sh, planner, main_wrapper.c, user_backend.c, node_runtime/Makefile, wavevm_node_runtime.
+  qemu-system-x86_64 and wavevm_node_slave hashes already matched; gateway hash already matched.
+  System Tailscale reused (socket /run/tailscale/tailscaled.sock). Auth key not expired. Did not pkill system tailscaled.
+
+Production path this round: still legacy CLI wavevm_node_master + wavevm_node_slave + stub planner.
+  Makefile_User cannot link current main_wrapper.c (no int main; needs node_runtime objects).
+  Clean rebuild: node_runtime 'legacy-master' target, WAVEVM_MASTER_LEGACY_CLI main in main_wrapper.c,
+  user_backend_init allows NULL runtime. Binary 2026-11-11 19:12 CST, contains
+  "legacy CLI PhysID" and "legacy logic_core fallback". NOT wavevm_node_master.f05fix-5s
+  (that backup is a different hash and was not used).
+  Typed node_runtime + V1 memory was NOT migrated this round (ENOTCONN/UDP-only hole remains).
+
+Run 191515 (19:15:15 CST) — fence-only ERROR:
+  Hygiene PASS: port 2226 free, q_alive=yes, FE -accel wavevm,split=2, Cirros SMP including CPU #2.
+  Root cause: fract_2node.conf had NODE 0/1 both at 127.0.0.1, so A sent dir=1 COMMIT_SYNC to its
+  own :19220. commit_ack=0, push-fence ret=-5, VCPU_RUN sent=0/ack=0, WVM-REMOTE cpu=2 seen.
+  Evidence: fix-blockers-20261111/F05-cross-host/run-191515-fence-fail/
+
+Harness fix after 191515 (kept): write_common_config takes peer Tailscale IPs;
+  start master before slave (avoid helper SHM open-before-create);
+  refuse to pkill/replace system tailscaled if the system socket exists but sudo query fails.
+
+Run 192029 (19:20:29 CST) — fence-only ERROR, but packets now cross the hosts:
+  Conf on A: NODE 1 100.114.246.92 19220; master0 [GW-SET] id=1 ip=100.114.246.92 port=19220.
+  Conf on B: NODE 0 100.116.196.65 19120; master1 [GW-SET] id=0 ip=100.116.196.65 port=19120.
+  poll 1: q_alive=yes fence_done=14 push_fail=14 remote=10 sent=0 ack=0 handoff=58 commit_ack=0 commit_to=0
+  B master1 received COMMITs: [COMMIT_SYNC RX] reject-version src=0 target=1
+    gpa in ram1 (>=0x100000000) commit=0x2 local=0x1 (directory epoch/counter CAS:
+    commit_counter must equal local_counter, then advance; 2!=1 → NACK + force_sync).
+  ~33089 reject-version on B. No guest_vcpu=2 / TCG ack on slave1.
+  WVM-REMOTE cpu=2 on FE (dispatch attempted) but no IPC VCPU_RUN / RET because push-fence failed first
+  (fail_gpa typically 0x13ffd7000, ret=-5).
+  N02 coherent REFUSED on B helper is expected for cross-host (fault path kept).
+  Evidence: fix-blockers-20261111/F05-cross-host/run-192029-reject-version/
+    (B light logs also under that tree if synced; otherwise 2604 /tmp/wvm-f05-b-192017-snapshot)
+
+Hole to name (leave PARTIAL):
+  1) Directory COMMIT_SYNC reject-version (0x2 vs 0x1) on remote node for ram1 pages;
+     push-fence cannot drain; RET path not reached.
+  2) Production still legacy master/slave + UDP, not typed node_runtime + V1 memory.
+
+Not claimed: F05 RET CLOSED, fence-only PASS, MINIMUM_COMPLETE.
+/dev/kvm restored on both hosts after the TCG runs (was temporarily hidden as /dev/kvm.off).

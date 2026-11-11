@@ -1,0 +1,3 @@
+EVID N05_membership_unreachable: node=7 inst=1001
+EVID N05_bridge_fanout: sent=1 failed=1 opcode=0x0307 last_type=0x307 dir_pid=6492 stale=1 ctl_pid=6494
+test_n05_ctl: PASS

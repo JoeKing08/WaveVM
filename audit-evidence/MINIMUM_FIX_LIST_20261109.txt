@@ -212,3 +212,50 @@ MINIMUM_COMPLETE：No / NOT_CLAIMED
 
 下一步：F05 RET 证据已齐；清 harness FE/remote 标记后再宣称 fence-only PASS；
   F10 remote 同挡。禁止 MINIMUM_COMPLETE / F01 / commit/push。
+
+=== 2026-11-11 same-host follow-up ===
+Append only; 11-09 history above is unchanged. No commit/push.
+Tip now 7945349fa. MINIMUM_COMPLETE still NOT_CLAIMED.
+
+--- N05 [P2] STATUS update: PARTIAL → PASS (true oracle, 2026-11-11 17:47 CST) ---
+Durable two-process harness (new): tests/control-plane/test_n05_subscriber_crossproc*.
+ctl production bridge fans out 0x0307; directory process runs
+wvm_memory_service_global_invalidate_subscriber_instance; ACTIVE→STALE=1.
+Evidence: audit-evidence/fix-blockers-20261111/N05-subscriber-crossproc/
+No production source change (bridge already at tip). Replaces the F07-only
+closeout rejected by the 11-09 cross-audit.
+
+--- ACTIVATION_DECIDED cold-start: added to MUST-FIX / Phase-9 cell; PASS ---
+Two-process oracle of wvm_admission_orchestrator_recover:
+persist ACTIVATION_DECIDED (state=8, fence=1, durable route_entries=1) →
+process exit → new pid reopens journal, looks up operation_id from
+prepared_route_snapshot_key (same as ctl mid-flight recover), recover rc=0
+state_after=11 RUNNING.
+Harness: tests/control-plane/test_activation_decided_cold_start.c/.sh
+plus #ifndef WVM_SKIP_COORDINATOR_MAIN around test_coordinator.c main.
+Evidence: audit-evidence/fix-blockers-20261111/ACTIVATION_DECIDED-cold-start/
+Not a live wvm_ctl SIGKILL mid-CREATE (window too short); membership
+republish path was not exercised (membership_controller=NULL).
+
+--- Phase 9 same-host pack (2026-11-11 18:02–18:14 CST) ---
+Phase 9 still FAIL to close. Cells:
+  Mode B isolation: PASS (unit + live dual RUNNING/teardown).
+  join/cordon/drain/successor: PASS (live re-run this tree; Q02 drain
+    PREPARE+COMMIT→DRAINING included).
+  concurrency/backpressure: PASS directed (bounded only; no soak).
+  Mode A two-VM: PARTIAL — production dual CREATE RUNNING PASS after
+    giving dual_mode_{a,b}.sh the same WVM_S6_REAL_QEMU=1 default as
+    test_gateway_drain_prepare_commit.sh (stub run stayed COMMITTED/
+    IN_PROGRESS, kept as *.stub-run.*). /dev/wavevm kernel isolation
+    BLOCKED (no device; sudo needs password; no SINGLE_CONTEXT proof).
+Evidence: audit-evidence/fix-blockers-20261111/PHASE9-same-host/
+
+F05 / F10 unchanged PARTIAL; 2604 still offline; not CLOSED.
+N02 inode same-backing still not proven (left as prior weak directed PASS).
+
+=== 2026-11-11 18:55 Mode A kernel follow-up ===
+Mode A two-VM kernel cell: BLOCKED → PASS.
+Clean rebuild + insmod of master_core/wavevm.ko; test_two_vm_isolation and
+test_two_vm_context_bind both PASS (max=64 active=2, no SINGLE_CONTEXT).
+Evidence: audit-evidence/fix-blockers-20261111/PHASE9-same-host/mode_a_two_vm/
+Phase 9 still FAIL to close (F05/F10). MINIMUM_COMPLETE still NOT_CLAIMED.

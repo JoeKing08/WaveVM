@@ -1,0 +1,4 @@
+multi-vm-isolation tests: PASS
+NOTE: Mode B Phase 6 local-name slice — namespace/socket/shm/path
+      uniqueness, exclusive bind, and one-VM teardown isolation.
+      Does not load /dev/wavevm, drive dual kernel contexts, or run guest E2E.

@@ -1,0 +1,209 @@
+WaveVM EOD staging inventory — 2026-11-11 ~21:30 CST Asia/Shanghai
+Prepared on Ubuntu 2404 only (machineId 2e4d3ec5-e1b1-4a36-9903-de6309119499).
+Repo: /workspaces/WaveVM  tip 7945349fa (origin/main). Dirty tree.
+THIS FILE IS AN INVENTORY ONLY. Do not treat it as a git add / commit / push.
+Parent will stage at commit time. Ubuntu 2604 was not touched.
+
+-------------------------------------------------------------------------------
+A) Paths that SHOULD be committed
+-------------------------------------------------------------------------------
+
+Tracked, modified (include; all are source / tests / scripts / status notes):
+  audit-evidence/MINIMUM_FIX_LIST_20261109.txt
+  audit-evidence/MINIMUM_GAP_CROSS_AUDIT_GROK_XIAOLANG_20261109-2030.txt
+  audit-evidence/MINIMUM_STATUS_20261109.txt
+  master_core/logic_core.c
+  master_core/main_wrapper.c
+  master_core/user_backend.c
+  node_runtime/Makefile
+  scripts/bot_to_grok_build.py
+  scripts/bot_to_grok_build_README.txt
+  scripts/ci_dual_node.sh
+  tests/control-plane/test_coordinator.c
+  tests/control-plane/test_create_vm_dual_mode_a.sh
+  tests/control-plane/test_create_vm_dual_mode_b.sh
+  wavevm-qemu/accel/wavevm/wavevm-user-mem.c
+
+Untracked sources for the same-host / N05 / ACTIVATION_DECIDED pack:
+  tests/control-plane/test_n05_subscriber_crossproc.h
+  tests/control-plane/test_n05_subscriber_crossproc.sh
+  tests/control-plane/test_n05_subscriber_crossproc_ctl.c
+  tests/control-plane/test_n05_subscriber_crossproc_dir.c
+  tests/control-plane/test_activation_decided_cold_start.c
+  tests/control-plane/test_activation_decided_cold_start.sh
+
+Untracked audit status + 20261111 evidence (text / logs / notes / journals;
+NOT binaries). Directory:
+  audit-evidence/MINIMUM_STATUS_20261111.txt
+  audit-evidence/fix-blockers-20261111/N05-subscriber-crossproc/
+  audit-evidence/fix-blockers-20261111/ACTIVATION_DECIDED-cold-start/
+  audit-evidence/fix-blockers-20261111/PHASE9-same-host/
+  audit-evidence/fix-blockers-20261111/F05-cross-host/NOTES_F05_20261111.txt
+  audit-evidence/fix-blockers-20261111/F05-cross-host/run-191515-fence-fail/
+  audit-evidence/fix-blockers-20261111/F05-cross-host/run-192029-reject-version/
+  audit-evidence/fix-blockers-20261111/F05-cross-host/run-194714-fence-fail/
+  audit-evidence/fix-blockers-20261111/STAGING_INVENTORY_20261111.txt  (this file)
+
+Include under those evidence dirs: NOTES_*.txt, evid.txt, *.stdout, *.stderr,
+*.rc, *.console, *.journal, f05_fence_only_result.txt, resource_plan.txt,
+fract_2node.conf, *_routes.txt, fe_physical_host_id.txt, peer_ip.txt,
+tailscale_ip.txt (addresses only, 15 bytes; already named in NOTES),
+vm-serial.log, vm.log, runner.log, master*.log, slave*.log, gw_*.log,
+node-b-light/master1.head.txt, and the evidence copies of harness sources
+(test_n05_*.c/h/sh and test_activation_decided_cold_start.c/.sh).
+
+GITIGNORE NOTE: .gitignore contains a global `*.log` rule. `git add` of the
+20261111 evidence tree will silently skip runner/master/slave/gw/vm logs
+unless they are force-added (`git add -f`). Historically 276 *.log files are
+already tracked in this repo, so -f is the established pattern. Largest logs
+here are text (master1.log 2.2MB, master0.log 1.7/1.3/0.9MB), not binaries.
+
+Optional (small untracked source makefiles; not required for the same-host
+pack). Include only if parent wants the legacy build files in this commit:
+  master_core/Makefile_User
+    (NOTES_F05: cannot link current main_wrapper.c — no int main; needs
+     node_runtime objects. Harmless as source, but stale for the production
+     legacy-master path actually used.)
+  slave_daemon/Makefile_Legacy
+    (legacy wavevm_node_slave build against node_runtime objects.)
+
+Session backups already at tip (do not refresh, do not delete):
+  session-backup/Codex/   — keep existing 9 parts + manifest (see section D)
+  session-backup/DSH/     — keep existing 1 part + manifest (see section D)
+Claude Code fresh shards are NOT in session-backup/ yet; parent will copy
+from /home/joeking/tmp-session-redact/20261111-fresh/cc-out/ at commit time
+and then stage the replacements. See section C for Grok Bot.
+
+-------------------------------------------------------------------------------
+B) Paths that MUST be SKIPPED
+-------------------------------------------------------------------------------
+
+Secrets / credentials:
+  SSH Keys & API Tokens/     (present at repo root; NOT tracked; gitignored.
+                               Do not force-add. Do not open or copy.)
+  Any Tailscale auth keys, sudo password files, or anything under a keys/
+  directory that is not already an upstream qemu test fixture.
+  NEW 20261111 tailscale_status.json (4 files) — `tailscale status --json`
+    dumps. No tskey-auth/api material found, but they contain PublicKey /
+    nodekey identity, HaveNodeKey, KeyExpiry, AuthURL. Skip these:
+      F05-cross-host/run-191515-fence-fail/tailscale_status.json
+      F05-cross-host/run-192029-reject-version/tailscale_status.json
+      F05-cross-host/run-194714-fence-fail/tailscale_status.json
+      F05-cross-host/run-194714-fence-fail/node-b/tailscale_status.json
+    Note: similar tailscale_status.json files are already tracked under
+    audit-evidence/fix-blockers-20261104/F05-cross-host/ from earlier
+    commits. Do not retroactively delete those in this EOD commit; just
+    do not add the new 20261111 copies.
+
+Build artifacts / object files / module junk (all untracked under
+master_core/ and node_runtime/):
+  *.o  *.ko  *.cmd  .*.cmd  Module.symvers  modules.order
+  master_core/wavevm.ko  wavevm.mod  wavevm.mod.c  wavevm.mod.o  wavevm.o
+  master_core/kernel_backend.o  .module-common.o  etc.
+  node_runtime/*.o  (long list; none of these belong in the commit)
+
+One-off / unreproducible patched binaries (SKIP; hashes recorded only in
+MINIMUM_STATUS_20261111.txt):
+  master_core/wavevm_node_master                 (gitignored build output;
+                                                  sha256 eb0e6ecc… 20:08 CST)
+  master_core/wavevm_node_master.f05fix-5s
+  master_core/wavevm_node_master.bak-pre-f05-fault
+  master_core/wavevm_node_master.aug-backup
+  /workspaces/WaveVM/wavevm_node_runtime         (ELF at repo root, 853008 bytes)
+  audit-evidence/fix-blockers-20261104/F05-cross-host/rebuild/wavevm_node_master
+  audit-evidence/fix-blockers-20261104/F05-cross-host/rebuild/wavevm_node_master.f05fix
+    (rebuild/main_wrapper.legacy-f05-patched.c is already TRACKED; leave it;
+     do not add the two untracked binaries beside it.)
+  wavevm-qemu/build/qemu-system-x86_64           (2026-11-05 object)
+  wavevm-qemu/build-native/qemu-system-x86_64    (sha256 e9fa9c14… 20:09 CST)
+
+Compiled test binaries (no suffix; do not add). Matching sources are already
+tracked, except the new .c/.sh listed in section A:
+  tests/control-plane/test_f09_owner_lock_yield
+  tests/control-plane/test_n01_admission_workspace_isolation
+  tests/control-plane/test_n06_listener_budget
+  tests/control-plane/test_n07_block_read_budget
+  tests/mode-a/test_memory_authority
+  tests/mode-a/test_targeted_isolation
+  tests/mode-a/test_two_vm_context_bind
+  tests/mode-a/test_two_vm_isolation
+  tests/mode-a/test_worker_failure_isolation
+
+Backups, pycache, leftover qemu optionrom that was previously deleted from git:
+  scripts/__pycache__/
+  scripts/ci_dual_node.sh.bak-f05
+  scripts/ci_dual_node.sh.bak-f05-20261109
+  slave_daemon/slave_hybrid.c.bak-f05-numa
+  slave_daemon/wavevm_node_slave.bak-pre-legacyrebuild
+  slave_daemon/wavevm_node_slave.bak-pre-numa
+  slave_daemon/slave_hybrid_legacy.o
+  wavevm-qemu/accel/wavevm/wavevm-all.c.bak-f05-attach
+  wavevm-qemu/pc-bios/kvmvapic.bin
+  wavevm-qemu/pc-bios/optionrom/kvmvapic.S
+    (both were deleted from git in earlier history, c1b6b426b / b5635c6fb,
+     and have reappeared untracked; do not re-add in this EOD commit.)
+
+devices/:
+  devices/ is untracked and empty (only devices/images/, 0 files). Not
+  source. Skip.
+
+No SharedFolder copies were found in the 20261111 evidence tree.
+
+-------------------------------------------------------------------------------
+C) Grok Bot session-backup is NOT ready
+-------------------------------------------------------------------------------
+Parent is still converting the Grok Bot transcript with the updated
+scripts/bot_to_grok_build.py. Do not stage, replace, or delete the current
+session-backup/Grok Bot/ tree (2546bb30 artifacts, dated 2026-11-09 20:48–
+20:54 CST):
+  2546bb30-1de0-42a2-b44e-de7ff909a3a0.summary.json
+  2546bb30-1de0-42a2-b44e-de7ff909a3a0-updates.jsonl.gz.001
+  2546bb30-1de0-42a2-b44e-de7ff909a3a0-updates.jsonl.gz.manifest.json
+  grokbot-transcript.jsonl.gz.001
+  grokbot-transcript.jsonl.gz.manifest.json
+
+Claude Code fresh redaction is ready outside the repo (not copied yet):
+  /home/joeking/tmp-session-redact/20261111-fresh/cc-out/
+    9d2e8212-b576-4b65-abb8-2d445cea63b3.jsonl.gz.001     8722273 bytes
+    9d2e8212-b576-4b65-abb8-2d445cea63b3.jsonl.gz.manifest.json  498 bytes
+    1 shard; script: "redacted 0 JSON value(s) -> 1 parts";
+    manifest sha256 bd0d9fedd8d1125b575ec40662d0fd7a80952c6d292beddd72b622a2aa256f3d
+  Parent should replace session-backup/Claude Code/ at commit time, then stage.
+  Do not use any earlier-tonight tmp as the source.
+
+-------------------------------------------------------------------------------
+D) Codex / DSH decision: KEEP existing Nov 9 shards (do not refresh)
+-------------------------------------------------------------------------------
+Codex source:
+  /home/joeking/.codex/sessions/2026/11/03/rollout-2026-11-03T09-06-58-01a19ef1-f1cf-7400-9cea-9f7646f368cb.jsonl
+  size 972766378  mtime 2026-11-09 15:42:10 CST Asia/Shanghai
+  Existing backup session-backup/Codex/  9 parts + manifest,
+  dated 2026-11-09 20:37:32–20:37:33 CST, compressed_size_bytes 424042681.
+  Source mtime is earlier than the backup and size matches the 11-09 source;
+  source has not been rewritten since the backup. No refresh.
+
+DSH source:
+  /home/joeking/.dsh/sessions/--workspaces-WaveVM--/session-60d7c145-ff8c-4afe-a6ed-5e7fd7f7046d/session.v4.jsonl.zstd
+  size 14505858  mtime 2026-11-09 17:08:48 CST Asia/Shanghai
+  sha256 17e2ffbe269501ba7e803a90293e170fbeaffbc8f726214a9e9e4892bd90adc7
+  (computed this evening; no prior source hash was stored in the manifest,
+   which only hashes the redacted gzip archive.)
+  Existing backup session-backup/DSH/  1 part + manifest,
+  dated 2026-11-09 20:33:43 CST, compressed_size_bytes 9297015.
+  Source mtime is earlier than the backup; size unchanged. No refresh.
+
+-------------------------------------------------------------------------------
+E) Unsafe / easy-to-miss items (must not be committed)
+-------------------------------------------------------------------------------
+  - SSH Keys & API Tokens/ (gitignored, untracked; leave it alone)
+  - 20261111 tailscale_status.json (4 files) — see section B
+  - master_core/wavevm_node_master* binaries and wavevm.ko / *.o / *.cmd
+  - 20261104 F05 rebuild binaries (wavevm_node_master, wavevm_node_master.f05fix)
+  - repo-root wavevm_node_runtime ELF
+  - qemu build / build-native binaries
+  - compiled test binaries listed above
+  - current session-backup/Grok Bot/ (not ready; do not delete)
+  - do not `git add` the live redact tmp under /home/joeking/tmp-session-redact/
+    (it is outside the repo)
+
+End of inventory. No git add / commit / push was performed while writing this.

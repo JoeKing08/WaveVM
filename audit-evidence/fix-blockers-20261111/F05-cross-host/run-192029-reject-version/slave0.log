@@ -1,0 +1,59 @@
+[Hybrid] Using Physical Cores: 6
+[Init] WaveVM Hybrid Slave V28.0 (Legacy CLI / F05)
+[Init] Config: Port=19105, Cores=2, RAM=2048 MB, BaseID=0, VM=0
+[Hybrid] TCG guest RAM mapped path=/dev/shm//wvm_fract_node0 bytes=2147483648
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 0.0.0.0:19105
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[Hybrid] TCG helper runtime gate=<unset> socket=/tmp/wvm_user_0.sock namespace=<unset>
+[Hybrid] TCG helper runtime gate=<unset> socket=/tmp/wvm_user_0.sock namespace=<unset>
+[Hybrid] TCG NUMA helper layout ram0=2048M ram1=1024M
+[Hybrid] TCG NUMA helper layout ram0=2048M ram1=1024M
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM-SHM] slave will attempt JOIN SHM '/wvm_fract_node0' size=0xc0000000 (coherent after proven map)
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 4...
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 4, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-SHM] slave will attempt JOIN SHM '/wvm_fract_node0' size=0xc0000000 (coherent after proven map)
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 3...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 3, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] helper clock enabled virtual=1647 deadline=-1
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x80000000 hva=0x730e3de00000
+[WaveVM-User] N02 coherent REFUSED: missing/invalid FE/executor physical host proof (fault path kept)
+[WaveVM-User] ram_block hva=0x730e3de00000..0x730ebde00000 gpa=0 size=0x80000000 blocks=1
+[WaveVM-Slave] helper clock enabled virtual=1132 deadline=-1
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x80000000 hva=0x71fd95e00000
+[WaveVM-User] N02 coherent REFUSED: missing/invalid FE/executor physical host proof (fault path kept)
+[WaveVM-User] ram_block hva=0x71fd95e00000..0x71fe15e00000 gpa=0 size=0x80000000 blocks=1
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 1)
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 0)
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x730dfdc00000..0x730e3dc00000 gpa=0x100000000 size=0x40000000 blocks=2
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x71fd47e00000..0x71fd87e00000 gpa=0x100000000 size=0x40000000 blocks=2
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x71fd95ea0000..0x71fd95ec0000 gpa=0xfeda0000 size=0x20000 blocks=3
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x730e3dea0000..0x730e3dec0000 gpa=0xfeda0000 size=0x20000 blocks=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x71fd95e00000..0x71fd95ec0000 gpa=0 size=0xc0000 blocks=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x71fd95f00000..0x71fe15e00000 gpa=0x100000 size=0x7ff00000 blocks=5
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x730e3de00000..0x730e3dec0000 gpa=0 size=0xc0000 blocks=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x730e3df00000..0x730ebde00000 gpa=0x100000 size=0x7ff00000 blocks=5
+[Hybrid] TCG install notify fd=5 -> push port 30306
+[SLAVE-BIND] port=19105 ok
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+qemu-system-x86_64: terminating on signal 15 from pid 24491 ()
+qemu-system-x86_64: terminating on signal 15 from pid 24491 ()

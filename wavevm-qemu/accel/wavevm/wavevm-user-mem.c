@@ -1019,6 +1019,15 @@ typedef struct WVMHandoffDirtyJournal {
     size_t capacity;
 } WVMHandoffDirtyJournal;
 
+/* Active journal for the in-flight FE handoff flush so the push-fence
+ * reply can confirm accepted GPAs without changing the fence signature. */
+static WVMHandoffDirtyJournal *g_active_handoff_journal;
+
+struct wvm_commit_confirm {
+    uint64_t gpa;
+    uint64_t result_version;
+};
+
 // 线程局部
 static __thread int t_com_sock = -1;
 static __thread uint64_t t_memory_deadline_us;
@@ -2513,15 +2522,65 @@ static int append_handoff_dirty_record(WVMHandoffDirtyJournal **journalp,
     return 0;
 }
 
+static void confirm_handoff_dirty_one_locked(WVMHandoffDirtyJournal *journal,
+                                               uint64_t gpa,
+                                               uint64_t result_version)
+{
+    if (!journal) {
+        return;
+    }
+    for (size_t i = 0; i < journal->count; i++) {
+        WVMHandoffDirtyRecord *rec = &journal->items[i];
+        if (rec->gpa != gpa) {
+            continue;
+        }
+        rec->commit_confirmed = true;
+        if (result_version != 0) {
+            rec->new_version = result_version;
+        }
+        set_local_page_version(rec->gpa, rec->new_version);
+        return;
+    }
+}
+
+static void confirm_all_unconfirmed_handoff_locked(WVMHandoffDirtyJournal *journal)
+{
+    if (!journal) {
+        return;
+    }
+    for (size_t i = 0; i < journal->count; i++) {
+        WVMHandoffDirtyRecord *rec = &journal->items[i];
+        if (rec->commit_confirmed) {
+            continue;
+        }
+        rec->commit_confirmed = true;
+        set_local_page_version(rec->gpa, rec->new_version);
+    }
+}
+
+static void apply_handoff_confirm_list(WVMHandoffDirtyJournal *journal,
+                                       const struct wvm_commit_confirm *items,
+                                       uint32_t count)
+{
+    if (!journal || !items || count == 0) {
+        return;
+    }
+    pthread_mutex_lock(&g_dirty_flush_lock);
+    for (uint32_t i = 0; i < count; i++) {
+        confirm_handoff_dirty_one_locked(journal, items[i].gpa,
+                                         items[i].result_version);
+    }
+    pthread_mutex_unlock(&g_dirty_flush_lock);
+}
+
+/* Re-dirty unconfirmed pages only. Never roll a local version back once
+ * the directory has accepted that page (lost-ACK retry must send next(base)). */
 static void rollback_handoff_dirty_locked(WVMHandoffDirtyJournal *journal)
 {
     for (size_t i = 0; journal && i < journal->count; i++) {
         WVMHandoffDirtyRecord *rec = &journal->items[i];
         if (rec->commit_confirmed) {
             continue;
-        }
-        if (get_local_page_version(rec->gpa) == rec->new_version) {
-            set_local_page_version(rec->gpa, rec->old_version);
         }
         cpu_physical_memory_set_dirty_range(rec->ra, 4096,
                                             1 << DIRTY_MEMORY_MIGRATION);
@@ -2532,21 +2591,39 @@ void wavevm_user_mem_finish_handoff_dirty(WVMHandoffDirtyJournal *journal,
                                           int commit_ok)
 {
     static int finish_log_count;
+    size_t confirmed = 0, unconfirmed = 0;
 
     if (!journal) {
+        if (g_active_handoff_journal == journal) {
+            g_active_handoff_journal = NULL;
+        }
         return;
     }
 
-    if (!commit_ok) {
-        pthread_mutex_lock(&g_dirty_flush_lock);
+    pthread_mutex_lock(&g_dirty_flush_lock);
+    if (commit_ok) {
+        /* Successful fence drain is the batch equivalent of accept ACKs. */
+        confirm_all_unconfirmed_handoff_locked(journal);
+    } else {
         rollback_handoff_dirty_locked(journal);
-        pthread_mutex_unlock(&g_dirty_flush_lock);
-        if (finish_log_count < 20) {
-            fprintf(stderr,
-                    "[WaveVM-User] handoff dirty rollback pages=%zu\n",
-                    journal->count);
-            finish_log_count++;
+    }
+    for (size_t i = 0; i < journal->count; i++) {
+        if (journal->items[i].commit_confirmed) {
+            confirmed++;
+        } else {
+            unconfirmed++;
         }
+    }
+    if (g_active_handoff_journal == journal) {
+        g_active_handoff_journal = NULL;
+    }
+    pthread_mutex_unlock(&g_dirty_flush_lock);
+    if (finish_log_count < 20) {
+        fprintf(stderr,
+                "[WaveVM-User] handoff dirty finish ok=%d confirmed=%zu "
+                "unconfirmed=%zu pages=%zu\n",
+                commit_ok, confirmed, unconfirmed, journal->count);
+        finish_log_count++;
     }
 
     free_handoff_dirty_journal(journal);
@@ -2634,6 +2711,11 @@ static int flush_dirty_to_ipc(int ipc_fd,
                 cur_ver = 1;
             }
 
+            /* Wire log->version is base_version (memory-consistency.md §4.2);
+             * the directory advances to next(base) on accept. The gated path
+             * already sends cur_ver via request_commit_on_fd; the legacy
+             * COMMIT_DIFF_SYNC path must do the same or remote directories
+             * reject-version (commit=base+1, local=base). */
             uint64_t ver = cur_ver + 1;
             if (append_handoff_dirty_record(&journal, gpa, ra, cur_ver, ver) < 0) {
                 int saved_errno = ENOMEM;
@@ -2710,7 +2792,7 @@ static int flush_dirty_to_ipc(int ipc_fd,
                     free_handoff_dirty_journal(journal);
                     return commit_ret;
                 }
-            } else if (send_full_page_diff_to_ipc_fd(ipc_fd, gpa, ver, hva) < 0) {
+            } else if (send_full_page_diff_to_ipc_fd(ipc_fd, gpa, cur_ver, hva) < 0) {
                 int saved_errno = errno;
                 if (journal_out) {
                     *journal_out = journal;
@@ -2730,13 +2812,20 @@ static int flush_dirty_to_ipc(int ipc_fd,
                 free_handoff_dirty_journal(journal);
                 return -EIO;
             }
-            set_local_page_version(gpa, ver);
+            /*
+             * Legacy COMMIT_DIFF_SYNC: do not bump the local version until
+             * a directory accept ACK (or successful fence, which is the
+             * batch equivalent) confirms the page. Optimistic cur+1 plus
+             * fence-fail rollback was resending stale base=1 after the
+             * directory had already advanced to 2.
+             */
             flushed++;
         }
     }
 
     if (journal_out) {
         *journal_out = journal;
+        g_active_handoff_journal = journal;
         journal = NULL;
     }
     pthread_mutex_unlock(&g_dirty_flush_lock);
@@ -3158,9 +3247,12 @@ static int process_writable_batch_full_snapshot(WritablePage *batch_head,
             }
             set_local_page_version(curr->gpa, ack.result_version);
         } else {
-            uint64_t ver = get_local_page_version(curr->gpa) + 1;
-            add_to_aggregator(curr->gpa, ver, 0, 4096, current_snapshot, 0);
-            set_local_page_version(curr->gpa, ver);
+            uint64_t base = get_local_page_version(curr->gpa);
+            if (base == 0) {
+                base = 1;
+            }
+            add_to_aggregator(curr->gpa, base, 0, 4096, current_snapshot, 0);
+            set_local_page_version(curr->gpa, base + 1);
         }
         committed++;
     }
@@ -3398,12 +3490,12 @@ static int flush_coherent_dirty_bitmap_locked(void *current_snapshot)
                 }
                 set_local_page_version(gpa, ack.result_version);
             } else {
-                uint64_t ver = get_local_page_version(gpa);
-                if (ver == 0) {
-                    ver = 1;
+                uint64_t base = get_local_page_version(gpa);
+                if (base == 0) {
+                    base = 1;
                 }
-                add_to_aggregator(gpa, ver + 1, 0, 4096, current_snapshot, 0);
-                set_local_page_version(gpa, ver + 1);
+                add_to_aggregator(gpa, base, 0, 4096, current_snapshot, 0);
+                set_local_page_version(gpa, base + 1);
             }
             coherent_discard_preimage(gpa, snapshot_generation);
             committed++;
@@ -3555,9 +3647,12 @@ static void *diff_harvester_thread_fn(void *arg) {
                     }
                     uint64_t gpa = blk->gpa_start + off;
                     void *hva = (void *)(blk->hva_start + off);
-                    uint64_t ver = get_local_page_version(gpa);
-                    add_to_aggregator(gpa, ver + 1, 0, 4096, hva, 0);
-                    set_local_page_version(gpa, ver + 1);
+                    uint64_t base = get_local_page_version(gpa);
+                    if (base == 0) {
+                        base = 1;
+                    }
+                    add_to_aggregator(gpa, base, 0, 4096, hva, 0);
+                    set_local_page_version(gpa, base + 1);
                 }
             }
             flush_aggregator();
@@ -3672,6 +3767,28 @@ static int memory_push_fence(int fd, uint64_t timeout_us, bool include_helpers)
         return result;
     }
     memcpy(&result, response, sizeof(result));
+    {
+        uint32_t nconf = 0;
+        memcpy(&nconf, response + 4, sizeof(nconf));
+        if (nconf > 0) {
+            size_t bytes = (size_t)nconf * sizeof(struct wvm_commit_confirm);
+            struct wvm_commit_confirm *items = malloc(bytes);
+            int list_ret;
+
+            if (!items) {
+                discard_memory_ipc(fd);
+                return -ENOMEM;
+            }
+            list_ret = memory_ipc_transfer(fd, items, bytes, false, deadline);
+            if (list_ret != 0) {
+                free(items);
+                discard_memory_ipc(fd);
+                return list_ret;
+            }
+            apply_handoff_confirm_list(g_active_handoff_journal, items, nconf);
+            free(items);
+        }
+    }
     return result > 0 ? -result : result;
 }
 

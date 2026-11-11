@@ -1,0 +1,18 @@
+{
+  "info": {
+    "id": "3398a380-c0dc-43f6-b63f-f45710b637c4",
+    "cwd": "/home/joeking"
+  },
+  "session_summary": "WaveVM Minimum closeout 2026-11-11",
+  "generated_title": "WaveVM Minimum closeout 2026-11-11",
+  "created_at": "2026-10-12T08:27:00.000000Z",
+  "updated_at": "2026-11-11T14:10:01.210000Z",
+  "last_active_at": "2026-11-11T14:10:01.210000Z",
+  "num_messages": 12118,
+  "num_chat_messages": 2651,
+  "current_model_id": "grok-4.7",
+  "chat_format_version": 1,
+  "grok_home": "/home/joeking/.grok",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off"
+}

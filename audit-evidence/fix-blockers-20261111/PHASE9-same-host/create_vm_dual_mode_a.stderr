@@ -1,0 +1,5 @@
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+vm=mode-a-vm1 attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2952170459170499540
+vm=mode-a-vm1 attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=2952170459170499540
+vm=mode-a-vm2 attempt=0 status=14 recorded_state=9 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=1476099087154330520
+vm=mode-a-vm2 attempt=1 status=0 recorded_state=11 vm_id=257 vm_incarnation=1 manifest_generation=1 route_scope_id=1476099087154330520

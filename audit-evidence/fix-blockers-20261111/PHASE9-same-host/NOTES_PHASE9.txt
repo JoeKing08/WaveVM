@@ -1,0 +1,75 @@
+Phase 9 same-host pack — 2026-11-11 re-run
+==========================================
+Date: 2026-11-11 18:02–18:14 CST Asia/Shanghai
+Host: Ubuntu 2404 (machineId 2e4d3ec5-e1b1-4a36-9903-de6309119499)
+Tree: /workspaces/WaveVM tip 7945349fa (no commit/push)
+Phase 9 overall: still FAIL to close (this pack is same-host only).
+
+Cells
+-----
+1) Mode B multi-VM / same-host isolation: PASS
+   Unit (18:02–18:03 CST):
+     test_mode_b_multivm.sh PASS (capability/digest only; no live VMs)
+     test_multivm_isolation.sh PASS (namespace/socket/shm/path uniqueness;
+       not /dev/wavevm, not dual kernel contexts)
+   Live (18:13:45–18:13:56 CST), after harness default fix:
+     test_create_vm_dual_mode_b.sh PASS
+     s6: using real QEMU helper
+       /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64
+       datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+     vm1 status=0 recorded_state=11 (RUNNING) vm_id=256
+     vm2 status=0 recorded_state=11 (RUNNING) vm_id=257
+     distinct shm/sock names; killed_child=14090 preserved_child=14142;
+     vm2_replay status=0 recorded_state=11
+   First run (18:04:30–18:05:04, kept as *.stub-run.*) used
+     tcg_helper_stub (real_qemu=0) and stuck at
+     status=14 (IN_PROGRESS) recorded_state=9 (COMMITTED) — expected:
+     drain harness comments that the stub never registers QEMU_FRONTEND
+     readiness. Scripts now default WVM_S6_REAL_QEMU=1 and auto-detect
+     the in-tree qemu-system-x86_64, same as
+     test_gateway_drain_prepare_commit.sh.
+
+2) join / cordon / drain / successor: PASS (re-run on this tree)
+   join unit: test_rm_p7_add_member_no_rewrite.sh PASS
+     (join leaves ACTIVATED route gen=1 digest intact; B stays PENDING)
+   live gateway CORDON + DRAIN fail-closed:
+     test_gateway_drain.sh PASS 18:03:38–18:03:58
+     CORDON status=0 recorded_state=5; CREATE after cordon status=6;
+     DRAIN COMMIT without PREPARE status=6 fail-closed
+   live DRAIN PREPARE + peer ACK + COMMIT → DRAINING (Q02 re-run):
+     test_gateway_drain_prepare_commit.sh PASS 18:03:58–18:04:21
+     CREATE_VM status=0 recorded_state=11 vm_id=256
+     DRAIN PREPARE status=0 recorded_state=4 applied_revision=16
+     DRAIN COMMIT status=0 recorded_state=6 applied_revision=17
+     DRAIN COMMIT replay status=0 recorded_state=6
+   successor unit: test_gateway_drain_successor.sh PASS
+   live compute cordon/drain:
+     test_cordon_drain_compute.sh PASS 18:04:21–18:04:30
+     cordon recorded_state=5; create after cordon status=6;
+     drain-compute recorded_state=6
+
+3) Representative concurrency / backpressure: PASS directed (bounded only)
+   test_rm_p7_concurrent_create.sh PASS (4-way capacity + exclusive
+     port/SHM lease fail-closed)
+   test_r05_multi_vcpu_race.sh PASS (structural single-writer guard +
+     bounded unguarded tear evidence)
+   No unbounded soak was run (skipped by design; would not be a
+     bounded profile). N01 BACKPRESSURE remains prior PASS directed
+     and was not re-soaked this turn.
+
+4) Mode A two-VM isolation: PARTIAL
+   Production dual CREATE path (18:13:56–18:14:07 CST), after the same
+   real-QEMU default: test_create_vm_dual_mode_a.sh PASS
+     Mode A dual CREATE RUNNING: PASS
+     vm1/vm2 status=0 recorded_state=11 vm_id=256/257
+     sibling VM2 still live after VM1 STOP
+   Kernel /dev/wavevm two-context isolation: BLOCKED
+     /dev/wavevm absent; master_core/wavevm.ko exists in the tree;
+     `sudo -n` requires a password — did not insmod and did not
+     guess a password. Cannot run test_two_vm_isolation or prove
+     SINGLE_CONTEXT reject this turn.
+   The dual_mode_a script itself does not claim /dev/wavevm isolation.
+
+Binaries actually run were rebuilt from current sources (make -B
+inside each live script; gcc -Werror for unit helpers).
+No F05/F10 cross-host work (2604 offline). No F01/TCG guest login.

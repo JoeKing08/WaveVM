@@ -1752,11 +1752,13 @@ struct dsm_driver_ops u_ops = {
 // --- 初始化入口 ---
 int user_backend_init(int my_node_id, int port,
                       const struct wvm_node_runtime_context *runtime) {
-    if (!runtime || !runtime->manifest || !runtime->dispatch ||
-        !runtime->runtime_gate ||
-        runtime->runtime_gate->state != WVM_RUNTIME_GATE_ACTIVE ||
-        runtime->manifest->vm_id == 0 ||
-        runtime->manifest->vm_id != g_my_vm_id) {
+    /* NULL runtime is the F05/legacy CLI path (no admitted gate). */
+    if (runtime &&
+        (!runtime->manifest || !runtime->dispatch ||
+         !runtime->runtime_gate ||
+         runtime->runtime_gate->state != WVM_RUNTIME_GATE_ACTIVE ||
+         runtime->manifest->vm_id == 0 ||
+         runtime->manifest->vm_id != g_my_vm_id)) {
         fprintf(stderr, "[WaveVM] user_backend_init: runtime context is invalid\n");
         return -1;
     }

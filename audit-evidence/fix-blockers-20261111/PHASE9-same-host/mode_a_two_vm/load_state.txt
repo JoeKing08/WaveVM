@@ -1,0 +1,5 @@
+date=2026-11-11 18:55:20 CST
+kernel=7.0.0-42-generic
+ko=/workspaces/WaveVM/master_core/wavevm.ko rebuilt=2026-11-11 18:54:54 +0800
+crw-rw-rw- 1 root kvm 10, 264 11月 11 18:55 /dev/wavevm
+wavevm                 45056  0

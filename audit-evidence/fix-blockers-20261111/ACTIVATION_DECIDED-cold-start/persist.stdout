@@ -1,0 +1,1 @@
+EVID ACTIVATION_DECIDED_persist: vm_id=256 incarnation=1 state=8 fence=1 pid=8184 journal=/tmp/wavevm-activation-cold.roV0xG/control.journal route_entries=1 has_route_key=1 has_candidate=1 operation_id=00000000000000000000000000000055

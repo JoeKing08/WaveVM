@@ -1,0 +1,2 @@
+test_n05_directory: planted ACTIVE subscriber failed=7:1001 runtime=2001 pid=6492
+test_n05_directory: recv opcode=0x0307 failed=7:1001 bytes=12

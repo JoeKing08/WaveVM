@@ -144,7 +144,13 @@ Grok Bot 会话 → Grok Build 会话：给写项目的 AI 看的用法说明
 --------------------------------------
   - 用户文本 → user_message_chunk
     （去掉行首 [tNu]、[Sent from machine …]；优先取 <user_query> 正文）
-  - 助手对用户可见文本：优先 SendToUser 的 content → agent_message_chunk
+  - [In reply to id: "…"]：引用正文归原说话人。用户气泡只保留「（回复 id）」和用户自己的新话；
+    助手引用若尚未作为 agent_message 出现，则补一条助手消息（不把助手的话留在用户气泡里）
+  - 隐藏 prompt（[GROK_BOT_HIDDEN_PROMPT]、<memory_context> 等）仍记为用户消息，
+    但在开头注明「〔隐藏提示，非普通发言〕」
+  - 连续完全重复的可见用户消息（例如工具超时后被再注入的同一条）只保留一条，后续当作同一 turn 继续
+  - 助手对用户可见文本：SendToUser（含经 CallDynamicTool 包装的，以及选项卡片、附件）→ agent_message_chunk；
+    对应的 tool_call / tool_result 不再单独展示
   - 其它 tool_use → tool_call；对应 tool_result → tool_call_update（结果约截断 50KB）
   - 每个 turn 结束 → turn_completed（method=_x.ai/session/update，stop_reason=end_turn）
   - summary 里：current_model_id=grok-4.7，agent_name=grok-build-plan，sandbox_profile=off

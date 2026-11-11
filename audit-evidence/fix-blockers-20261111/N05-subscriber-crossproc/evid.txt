@@ -1,0 +1,3 @@
+EVID N05_directory_recv: opcode=0x0307 failed_node=7 failed_inst=1001 payload_bytes=12 pid=6492
+EVID N05_global_invalidate: rc=0 err=(none)
+EVID N05_ACTIVE_to_STALE=1

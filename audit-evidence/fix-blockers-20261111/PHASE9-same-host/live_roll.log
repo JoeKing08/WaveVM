@@ -1,0 +1,204 @@
+LIVE START 2026-11-11 18:03:38 CST
+===== START gateway_drain 2026-11-11 18:03:38 CST =====
+===== PASS gateway_drain rc=0 18:03:58 =====
+revisions 11 3 11
+member_count 2
+member 2 901 902 state=4 kind=2 deps=0
+member 1 801 802 state=4 kind=1 deps=0
+drain COMMIT without PREPARE: status=6 recorded_state=0 applied_revision=0
+gateway cordon: status=0 recorded_state=5 applied_revision=12
+create after gateway cordon: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+cordon again on CORDONED: status=6 recorded_state=0 applied_revision=0
+production gateway CORDON + DRAIN fail-closed entry: PASS
+boundary: 换血 PREPARE+ACK+COMMIT covered by test_gateway_drain_prepare_commit.sh
+  (CREATE_VM now wires dependency_acquire). one-scope successor builder in ctl PREPARE path;
+  Mode A / guest E2E not started.
+----- stderr tail gateway_drain -----
+ 2770 |                    memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2771 |                           sizeof(transaction->admission_tx_id)) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2757:57: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2757 |         request_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c: In function ‘activation_record_matches_transaction’:
+../common_include/wavevm_control_plane.c:2814:12: warning: ‘admission_tx_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2814 |     return memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2815 |                   sizeof(transaction->admission_tx_id)) == 0 &&
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2809:68: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2809 |     if (next < 0 || !have_admission_tx_id || !have_manifest_digest ||
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2816:20: warning: ‘manifest_digest.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2816 |                    memcmp(manifest_digest.value, candidate_manifest_digest,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2817 |                           WVM_SHA256_DIGEST_BYTES) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2810:62: warning: ‘manifest_digest.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2810 |         admission_tx_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value_bytes’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../slave_daemon/slave_hybrid.c: In function ‘init_kvm_global’:
+../slave_daemon/slave_hybrid.c:1212:25: warning: ignoring return value of ‘ftruncate’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1212 |                         ftruncate(fd, nodes[i].size);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../slave_daemon/slave_hybrid.c:1251:21: warning: ignoring return value of ‘ftruncate’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+ 1251 |                     ftruncate(shm_fd, g_slave_ram_size);
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../slave_daemon/slave_hybrid.c: At top level:
+../slave_daemon/slave_hybrid.c:689:12: warning: ‘get_chunk_fd_safe’ defined but not used [-Wunused-function]
+  689 | static int get_chunk_fd_safe(uint64_t chunk_id) {
+      |            ^~~~~~~~~~~~~~~~~
+===== START gateway_drain_prepare_commit 2026-11-11 18:03:58 CST =====
+===== PASS gateway_drain_prepare_commit rc=0 18:04:21 =====
+COMMIT without PREPARE: status=6 recorded_state=0 applied_revision=0
+CREATE_VM attempt=0 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=9428758946459550275
+gateway after CREATE: member 2 901 902 state=4 kind=2 deps=1
+revisions 16 4 16
+member_count 3
+member 2 901 902 state=4 kind=2 deps=1
+member 2 911 912 state=4 kind=2 deps=0
+member 1 801 802 state=4 kind=1 deps=1
+DRAIN PREPARE: status=0 recorded_state=4 applied_revision=16 op=00000000000000000000000000050045
+DRAIN COMMIT: status=0 recorded_state=6 applied_revision=17
+revisions 17 5 18
+member_count 3
+member 2 901 902 state=6 kind=2 deps=1
+member 2 911 912 state=4 kind=2 deps=0
+member 1 801 802 state=4 kind=1 deps=1
+DRAIN COMMIT replay: status=0 recorded_state=6 applied_revision=17
+production gateway DRAIN PREPARE+peer ACK+COMMIT→DRAINING: PASS
+CREATE_VM dependency_acquire + membership predecessor route: wired
+boundary: one-scope successor builder in ctl (EXECUTOR names successor GW);
+  cold recover republishes membership route+dependency_acquire (mid-flight);
+  drain peer ROUTE_* manifest_generation binds membership dependency;
+  Mode A / guest E2E not started.
+----- stderr tail gateway_drain_prepare_commit -----
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2702:32: note: ‘request_id.value’ was declared here
+ 2702 |     struct wvm_canonical_field request_id;
+      |                                ^~~~~~~~~~
+../common_include/wavevm_control_plane.c:2756:67: warning: ‘request_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2756 |         vm_id.value_bytes != 4 || vm_incarnation.value_bytes != 8 ||
+../common_include/wavevm_control_plane.c:2702:32: note: ‘request_id.value_bytes’ was declared here
+ 2702 |     struct wvm_canonical_field request_id;
+      |                                ^~~~~~~~~~
+../common_include/wavevm_control_plane.c:2770:20: warning: ‘admission_tx_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2770 |                    memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2771 |                           sizeof(transaction->admission_tx_id)) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2757:57: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2757 |         request_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2703:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2703 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c: In function ‘activation_record_matches_transaction’:
+../common_include/wavevm_control_plane.c:2814:12: warning: ‘admission_tx_id.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2814 |     return memcmp(admission_tx_id.value, transaction->admission_tx_id,
+      |            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2815 |                   sizeof(transaction->admission_tx_id)) == 0 &&
+      |                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2809:68: warning: ‘admission_tx_id.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2809 |     if (next < 0 || !have_admission_tx_id || !have_manifest_digest ||
+../common_include/wavevm_control_plane.c:2783:32: note: ‘admission_tx_id.value_bytes’ was declared here
+ 2783 |     struct wvm_canonical_field admission_tx_id;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2816:20: warning: ‘manifest_digest.value’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2816 |                    memcmp(manifest_digest.value, candidate_manifest_digest,
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 2817 |                           WVM_SHA256_DIGEST_BYTES) == 0
+      |                           ~~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+../common_include/wavevm_control_plane.c:2810:62: warning: ‘manifest_digest.value_bytes’ may be used uninitialized [-Wmaybe-uninitialized]
+ 2810 |         admission_tx_id.value_bytes != WVM_IDENTITY_ID_BYTES ||
+../common_include/wavevm_control_plane.c:2784:32: note: ‘manifest_digest.value_bytes’ was declared here
+ 2784 |     struct wvm_canonical_field manifest_digest;
+      |                                ^~~~~~~~~~~~~~~
+s6: using real QEMU helper /workspaces/WaveVM/wavevm-qemu/build/qemu-system-x86_64 datadir=/workspaces/WaveVM/wavevm-qemu/build/pc-bios
+===== START cordon_drain_compute 2026-11-11 18:04:21 CST =====
+===== PASS cordon_drain_compute rc=0 18:04:30 =====
+revisions 6 2 6
+member_count 1
+member 1 801 802 state=4 kind=1 deps=0
+cordon: status=0 recorded_state=5 applied_revision=7
+create after cordon: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+drain-compute: status=0 recorded_state=6 applied_revision=8
+stale cordon after drain: status=6 recorded_state=0 applied_revision=0
+production cordon/drain-compute entry: PASS
+===== START create_vm_dual_mode_b 2026-11-11 18:04:30 CST =====
+===== FAIL create_vm_dual_mode_b rc=1 18:05:04 =====
+----- stderr tail create_vm_dual_mode_b -----
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: TLS accept ok
+--- child runtime logs ---

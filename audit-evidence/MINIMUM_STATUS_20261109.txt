@@ -14,3 +14,18 @@ Post cross-audit (Grok 1957 self-audit + 小浪 2030 independent):
   Phase 9: FAIL to close
 Combined audit: audit-evidence/MINIMUM_GAP_CROSS_AUDIT_GROK_XIAOLANG_20261109-2030.txt
 小浪 raw: audit-evidence/fix-blockers-20261109/xiaolang-cross-audit-20261109-2030.md
+
+=== 2026-11-11 same-host follow-up ===
+Append only; 11-09 body above is unchanged.
+N05 upgraded PARTIAL → PASS (true cross-proc oracle).
+ACTIVATION_DECIDED cold-start added and PASS.
+Phase 9 same-host pack re-run; Phase 9 still FAIL to close.
+F05/F10 still PARTIAL (2604 offline). MINIMUM_COMPLETE still NOT_CLAIMED.
+See audit-evidence/MINIMUM_STATUS_20261111.txt and
+audit-evidence/fix-blockers-20261111/.
+
+=== 2026-11-11 18:55 Mode A kernel follow-up ===
+Mode A kernel dual-context isolation now PASS. See MINIMUM_STATUS_20261111.txt.
+MINIMUM_COMPLETE still NOT_CLAIMED. F05/F10 still PARTIAL.
+
+[append 2026-11-11 19:23 CST] F05/F10 still PARTIAL (not CLOSED). See audit-evidence/MINIMUM_STATUS_20261111.txt and fix-blockers-20261111/F05-cross-host/NOTES_F05_20261111.txt. MINIMUM_COMPLETE still NOT_CLAIMED.

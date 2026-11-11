@@ -1,0 +1,3 @@
+[OK] structural single-writer guard (WVM_SLAVE_VCPU_COUNT)
+[OK] unguarded dual-writer race evidence tear=1095 faults=33 writes=4480/4805
+R05 multi-vCPU race proof: PASS

@@ -1,0 +1,11 @@
+F05_FENCE_ONLY=1
+poll=1
+q_alive=yes
+fence_done=3
+push_fail=3
+remote=4
+sent=0
+ack=0
+handoff=14
+commit_ack=0
+commit_to=0

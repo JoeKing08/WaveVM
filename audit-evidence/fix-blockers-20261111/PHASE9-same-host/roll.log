@@ -1,0 +1,47 @@
+2026-11-11 18:02:58 CST
+===== START mode_b_multivm 18:02:58 =====
+===== PASS mode_b_multivm rc=0 =====
+    - Isolated by (vm_id, gpa) tuple
+  Scenario B: Co-located VMs with shared memory node
+    - VM 256 and VM 257 on node 17 (KVM)
+    - Both use node 19 for memory
+    - Kernel context isolation per VM
+    - Runtime name namespace isolation per VM
+
+Test 5: Verify cluster has heterogeneous capability mix
+  Cluster record set:
+    - 3 nodes (2 executor + 1 memory-only)
+    - 5 capability records total
+    - 2 execution capabilities (KVM, TCG)
+    - 3 Mode B memory capabilities
+  ✓ Cluster supports both execution modes
+  ✓ Cluster includes memory-only participant
+
+=== Mode B multi-VM capability and digest computation PASS ===
+NOTE: This test verifies capability structure construction and digest calculation.
+      It does not run actual VMs or validate GPA/version/directory runtime behavior.
+mode-b-multivm: PASS
+===== START multivm_isolation 18:02:59 =====
+===== PASS multivm_isolation rc=0 =====
+multi-vm-isolation tests: PASS
+NOTE: Mode B Phase 6 local-name slice — namespace/socket/shm/path
+      uniqueness, exclusive bind, and one-VM teardown isolation.
+      Does not load /dev/wavevm, drive dual kernel contexts, or run guest E2E.
+===== START gateway_drain_successor 18:03:00 =====
+===== PASS gateway_drain_successor rc=0 =====
+gateway-drain-successor test: ok
+===== START rm_p7_concurrent_create 18:03:01 =====
+===== PASS rm_p7_concurrent_create rc=0 =====
+rm-p7-concurrent-create: PASS
+NOTE: 4-way capacity + exclusive port/SHM lease fail-closed.
+===== START r05_multi_vcpu_race 18:03:01 =====
+===== PASS r05_multi_vcpu_race rc=0 =====
+[OK] structural single-writer guard (WVM_SLAVE_VCPU_COUNT)
+[OK] unguarded dual-writer race evidence tear=1095 faults=33 writes=4480/4805
+R05 multi-vCPU race proof: PASS
+===== START rm_p7_add_member_no_rewrite 18:03:02 =====
+===== PASS rm_p7_add_member_no_rewrite rc=0 =====
+add-member-no-rewrite: register A+gateway
+add-member-no-rewrite: activate VM route on A+GW
+add-member-no-rewrite: register B (new member)
+PASS RM-P7-add-member-no-rewrite (join leaves ACTIVATED route gen=1 digest intact; B stays PENDING; cannot activate on old op)

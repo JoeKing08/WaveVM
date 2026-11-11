@@ -1,0 +1,33 @@
+[Hybrid] Using Physical Cores: 6
+[Init] WaveVM Hybrid Slave V28.0 (Legacy CLI / F05)
+[Init] Config: Port=19205, Cores=1, RAM=1024 MB, BaseID=1, VM=0
+[Hybrid] TCG guest RAM mapped path=/dev/shm//wvm_fract_node1 bytes=1073741824
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 0.0.0.0:19205
+[Hybrid] Spawning 1 QEMU-TCG instances (Tri-Channel Isolation)...
+[Hybrid] TCG helper runtime gate=<unset> socket=/tmp/wvm_user_1.sock namespace=<unset>
+[Hybrid] TCG NUMA helper layout ram0=2048M ram1=1024M
+[WaveVM] backend=tcg (mode=user), skip KVM bootstrap
+[WaveVM-SHM] slave will attempt JOIN SHM '/wvm_fract_node1' size=0xc0000000 (coherent after proven map)
+qemu-system-x86_64: -accel wavevm,backend=tcg: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 3...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 3, vcpu_dispatch: sync, role_slave=1).
+[WaveVM-Slave] helper clock enabled virtual=3681 deadline=-1
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-SHM] guest RAM JOINED (no wipe) gpa=0 size=0x80000000 hva=0x794a0be00000
+[WaveVM-User] N02 coherent REFUSED: missing/invalid FE/executor physical host proof (fault path kept)
+[WaveVM-User] ram_block hva=0x794a0be00000..0x794a8be00000 gpa=0 size=0x80000000 blocks=1
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 1)
+[WaveVM-User] TCG slave dirty flush is handoff-synchronous
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x7949cbc00000..0x794a0bc00000 gpa=0x100000000 size=0x40000000 blocks=2
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[Hybrid] TCG install notify fd=4 -> push port 36706
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x794a0bea0000..0x794a0bec0000 gpa=0xfeda0000 size=0x20000 blocks=3
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x794a0be00000..0x794a0bec0000 gpa=0 size=0xc0000 blocks=4
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x794a0bf00000..0x794a8be00000 gpa=0x100000 size=0x7ff00000 blocks=5
+[SLAVE-BIND] port=19205 ok
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.

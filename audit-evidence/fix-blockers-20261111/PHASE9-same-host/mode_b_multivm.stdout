@@ -1,0 +1,55 @@
+=== WaveVM Mode B Multi-VM Isolation Test ===
+
+Test 1: Configure three nodes with different capability profiles
+  ✓ Node 17: KVM + Mode B (executor)
+  ✓ Node 18: TCG + Mode B (executor)
+  ✓ Node 19: Mode B only (memory-only)
+
+Test 2: Verify capability constraints
+  Node 17 capabilities: KVM execution + Mode B memory
+    - Can execute VM with KVM backend
+    - Can serve Mode B page protocol
+  Node 18 capabilities: TCG execution + Mode B memory
+    - Can execute VM with TCG backend
+    - Can serve Mode B page protocol
+  Node 19 capabilities: Mode B memory only
+    - CANNOT execute VM (no vCPU slots)
+    - CAN serve Mode B page protocol
+    - Suitable for memory-only participant role
+
+Test 3: Mode B isolation properties
+  Each VM has isolated:
+    - GPA namespace (guest physical address space)
+    - Page version tracking per-VM
+    - Directory node assignment per-page
+    - Commit operation identity (vm_id + operation_id)
+  Mode B protocol ensures:
+    - READ returns page + version + directory identity
+    - COMMIT requires base_version match
+    - ACK carries directory authority
+
+Test 4: Multi-VM deployment scenarios
+  Scenario A: Two VMs on different executor nodes
+    - VM 256 on node 17 (KVM)
+    - VM 257 on node 18 (TCG)
+    - Both use node 19 for remote memory
+    - Isolated by (vm_id, gpa) tuple
+  Scenario B: Co-located VMs with shared memory node
+    - VM 256 and VM 257 on node 17 (KVM)
+    - Both use node 19 for memory
+    - Kernel context isolation per VM
+    - Runtime name namespace isolation per VM
+
+Test 5: Verify cluster has heterogeneous capability mix
+  Cluster record set:
+    - 3 nodes (2 executor + 1 memory-only)
+    - 5 capability records total
+    - 2 execution capabilities (KVM, TCG)
+    - 3 Mode B memory capabilities
+  ✓ Cluster supports both execution modes
+  ✓ Cluster includes memory-only participant
+
+=== Mode B multi-VM capability and digest computation PASS ===
+NOTE: This test verifies capability structure construction and digest calculation.
+      It does not run actual VMs or validate GPA/version/directory runtime behavior.
+mode-b-multivm: PASS

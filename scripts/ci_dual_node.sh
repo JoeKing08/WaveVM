@@ -114,6 +114,11 @@ start_tailscale() {
     log "tailscale reuse socket=$WVM_TS_SOCKET host=$THIS_HOST ip=$TAIL_IP peer=$PEER_HOST"
     return
   fi
+  # Never replace a live system tailscaled just because this sudo query failed.
+  if [ -S /run/tailscale/tailscaled.sock ] || [ -S /var/run/tailscale/tailscaled.sock ]; then
+    echo "ERROR: system Tailscale socket is present but not queryable; refusing to pkill/replace it" >&2
+    exit 1
+  fi
   # F05 local: reuse live ephemeral daemon so peer IP stays stable across restarts.
   if sudo tailscale --socket="${WVM_TS_SOCKET:-/tmp/tailscaled.sock}" ip -4 >/dev/null 2>&1; then
     WVM_TS_SOCKET=/tmp/tailscaled.sock
@@ -222,11 +227,16 @@ wait_peer_services() {
 }
 
 write_common_config() {
+  # Cross-host: peer vnode must use the peer's Tailscale/LAN IP. A 127.0.0.1
+  # entry for NODE 1 makes node-A send COMMITs to its own :19220 (nothing
+  # listens), so every dir=1 COMMIT_SYNC is NACKed and push-fence fails.
+  local node0_ip="${1:-127.0.0.1}"
+  local node1_ip="${2:-127.0.0.1}"
   CFG="$ART_DIR/fract_2node.conf"
-  cat >"$CFG" <<'EOCFG'
+  cat >"$CFG" <<EOCFG
 # NODE <physical_id> <ip> <sidecar_port> <cpu_capacity> <memory_gib> <dht_slots>
-NODE 0 127.0.0.1 19120 2 2 1
-NODE 1 127.0.0.1 19220 1 1 1
+NODE 0 $node0_ip 19120 2 2 1
+NODE 1 $node1_ip 19220 1 1 1
 # VM <vm_id> <vcpus> <memory_mb> <compact|spread>
 VM 0 3 3072 compact
 EOCFG
@@ -373,7 +383,7 @@ f05_export_runtime_env() {
 
 start_node_a() {
   local node_b_ip="$1"
-  write_common_config
+  write_common_config 127.0.0.1 "$node_b_ip"
   load_vm0_plan
   f05_export_runtime_env a
   echo "$WVM_PHYSICAL_HOST_ID" >"$ART_DIR/fe_physical_host_id.txt"
@@ -392,13 +402,14 @@ EOF_A_L2
   start_gateway gw_l1a 19320 127.0.0.1 19520 "$ART_DIR/l1a_routes.txt" 19321
   start_gateway gw_sidecar_a 19120 127.0.0.1 19320 "$ART_DIR/sidecar_a_routes.txt" 19121
 
-  log "start slave0/master0"
-  env WVM_SHM_FILE=/wvm_fract_node0 WVM_ENV_SOCK_PATH=/tmp/wvm_user_0.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_0.sock stdbuf -oL -eL \
-    "$ROOT/slave_daemon/wavevm_node_slave" 19105 "$NODE0_CORES" "$NODE0_MEM_MB" "$NODE0_VNODE" 19121 \
-    >"$ART_DIR/slave0.log" 2>&1 &
+  log "start master0 then slave0"
   env WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 WVM_ENV_SOCK_PATH=/tmp/wvm_user_0.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_0.sock stdbuf -oL -eL \
     "$ROOT/master_core/wavevm_node_master" "$NODE0_MEM_MB" 19100 "$CFG" 0 19121 19105 1 \
     >"$ART_DIR/master0.log" 2>&1 &
+  sleep 1
+  env WVM_SHM_FILE=/wvm_fract_node0 WVM_ENV_SOCK_PATH=/tmp/wvm_user_0.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_0.sock stdbuf -oL -eL \
+    "$ROOT/slave_daemon/wavevm_node_slave" 19105 "$NODE0_CORES" "$NODE0_MEM_MB" "$NODE0_VNODE" 19121 \
+    >"$ART_DIR/slave0.log" 2>&1 &
 
   log "node-b tailscale peer selected at $node_b_ip; WaveVM ports are UDP, so QEMU/RPC logs are the readiness check"
   sleep 8
@@ -532,7 +543,7 @@ EOF_A_L2
 
 start_node_b() {
   local node_a_ip="$1"
-  write_common_config
+  write_common_config "$node_a_ip" 127.0.0.1
   load_vm0_plan
   f05_export_runtime_env b
   cat >"$ART_DIR/sidecar_b_routes.txt" <<'EOF_B_SC'
@@ -545,13 +556,14 @@ EOF_B_L1
   start_gateway gw_l1b 19420 "$node_a_ip" 19520 "$ART_DIR/l1b_routes.txt" 19421
   start_gateway gw_sidecar_b 19220 127.0.0.1 19420 "$ART_DIR/sidecar_b_routes.txt" 19221
 
-  log "start slave1/master1"
-  env WVM_SHM_FILE=/wvm_fract_node1 WVM_ENV_SOCK_PATH=/tmp/wvm_user_1.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_1.sock stdbuf -oL -eL \
-    "$ROOT/slave_daemon/wavevm_node_slave" 19205 "$NODE1_CORES" "$NODE1_MEM_MB" "$NODE1_VNODE" 19221 \
-    >"$ART_DIR/slave1.log" 2>&1 &
+  log "start master1 then slave1"
   env WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_fract_node1 WVM_ENV_SOCK_PATH=/tmp/wvm_user_1.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_1.sock stdbuf -oL -eL \
     "$ROOT/master_core/wavevm_node_master" "$NODE1_MEM_MB" 19200 "$CFG" 1 19221 19205 1 \
     >"$ART_DIR/master1.log" 2>&1 &
+  sleep 1
+  env WVM_SHM_FILE=/wvm_fract_node1 WVM_ENV_SOCK_PATH=/tmp/wvm_user_1.sock WVM_RUNTIME_SOCKET=/tmp/wvm_user_1.sock stdbuf -oL -eL \
+    "$ROOT/slave_daemon/wavevm_node_slave" 19205 "$NODE1_CORES" "$NODE1_MEM_MB" "$NODE1_VNODE" 19221 \
+    >"$ART_DIR/slave1.log" 2>&1 &
 
   log "node B ready; holding for node A test"
   ss -tlnp 2>/dev/null | grep -E '19220|19200|19205|19420|19421|19221' || true

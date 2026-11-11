@@ -1,0 +1,12 @@
+revisions 11 3 11
+member_count 2
+member 2 901 902 state=4 kind=2 deps=0
+member 1 801 802 state=4 kind=1 deps=0
+drain COMMIT without PREPARE: status=6 recorded_state=0 applied_revision=0
+gateway cordon: status=0 recorded_state=5 applied_revision=12
+create after gateway cordon: status=6 recorded_state=0 vm_id=0 vm_incarnation=0 manifest_generation=0 route_scope_id=0
+cordon again on CORDONED: status=6 recorded_state=0 applied_revision=0
+production gateway CORDON + DRAIN fail-closed entry: PASS
+boundary: 换血 PREPARE+ACK+COMMIT covered by test_gateway_drain_prepare_commit.sh
+  (CREATE_VM now wires dependency_acquire). one-scope successor builder in ctl PREPARE path;
+  Mode A / guest E2E not started.
