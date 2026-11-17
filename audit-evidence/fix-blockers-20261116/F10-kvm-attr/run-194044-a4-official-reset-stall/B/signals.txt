@@ -1,0 +1,38 @@
+=== time ===
+2026年 11月 16日 星期一 19:50:04 CST
+=== skip/error ===
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/slave1.log:[Slave KVM] EXCEPTION_PAYLOAD enabled
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/slave1.log:[Slave VCPU Init] guest_vcpu=2 fd=7 run=0x71032f6a3000
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/slave1.log:[kvm-import] profile SET_MSRS partial nmsrs=96 ret=13
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/slave1.log:[kvm-import] profile SET skipped i=13 index=0x17b value=0xffffffffffffffff ret=0 errno=11
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=75600000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=75601000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=13ec32000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=4146000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=75600000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=75601000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=13ec32000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=0 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=1000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=2000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=3000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=4000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=5000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=6000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=7000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=8000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=9000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=a000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=b000 dir=0 src=1 ret=0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:[Logic] MEM_WRITE forward gpa=c000 dir=0 src=1 ret=0
+=== counts ===
+MEM-STATS=/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/gw_l1b.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/gw_sidecar_b.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/master1.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-194031/slave1.log:0
+partial=1
+skipped=1
+hard-fail=0
+ErrorAck=0
+VCPU-RUN=10
+guest_vcpu2=1

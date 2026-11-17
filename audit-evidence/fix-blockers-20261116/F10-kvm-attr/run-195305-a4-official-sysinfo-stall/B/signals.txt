@@ -1,0 +1,12 @@
+=== time ===
+2026年 11月 16日 星期一 20:00:35 CST
+MEM-STATS=/tmp/wavevm-test-results/dual-node-kvm-20261116-195255/gw_l1b.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-195255/gw_sidecar_b.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-195255/master1.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-195255/slave1.log:0
+ErrorAck=0
+guest_vcpu2=1
+triple=6171
+[Slave KVM] EXCEPTION_PAYLOAD enabled
+[kvm-import] profile SET_MSRS partial nmsrs=96 ret=13
+[kvm-import] profile SET skipped i=13 index=0x17b value=0xffffffffffffffff ret=0 errno=11

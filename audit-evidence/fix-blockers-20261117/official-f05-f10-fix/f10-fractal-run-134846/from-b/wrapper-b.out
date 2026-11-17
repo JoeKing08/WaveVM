@@ -1,0 +1,6 @@
+[wavevm] official f10 typed cell role=node-b topology=fractal placement=spread entry=wvm_ctl+wavevm_node_runtime
+[official f10 fractal 13:49:09/B] waiting for join bundle in /mnt/hgfs/SharedFolder/wavevm-official-f10-fractal
+[official f10 fractal 13:49:09/B] starting agent B ip=100.114.246.92 ctl=100.116.196.65:17101 host=4799159562654991353
+[official f10 fractal 13:49:09/B] agent B up pid=7590; holding for node A
+[official f10 fractal 13:50:39/B] node A signaled DONE
+[official f10 fractal 13:50:43/B] node B stopped

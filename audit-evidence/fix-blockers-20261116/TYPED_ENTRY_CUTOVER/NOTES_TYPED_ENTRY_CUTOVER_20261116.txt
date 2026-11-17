@@ -1,0 +1,194 @@
+WaveVM typed official entry cutover — 2026-11-16
+时区 / timezone: CST Asia/Shanghai (UTC+8)
+
+================================================================
+结论 / Verdict
+================================================================
+正式入口现在是 typed 控制路径，不再是独立的 master/slave CLI。
+
+Official production entry is now:
+  scripts/wavevm
+    -> ctl_tool/wvm_ctl serve
+    -> wavevm_node_runtime agent
+    -> CREATE_VM on the control socket
+
+Independent wavevm_node_master / wavevm_node_slave are no longer a
+supported or advertised production entry. Sources remain in-tree only
+for historical non-production harnesses, and those binaries now refuse
+to start unless WAVEVM_ALLOW_LEGACY_CLI=1.
+
+Phase 1 不能如实写成已关闭。
+Cannot honestly call Phase 1 closed:
+  - typed official entry exists and was proven live on 2404
+  - independent master/slave production entry is disabled/unadvertised,
+    but the binaries and scripts/ci_dual_node.sh still exist as an
+    opt-in historical harness (F05/F10/A4 still launch them with the
+    allow flag)
+  - Phase 1 acceptance also requires more than a same-host smoke
+
+未宣称 / Not claimed:
+  MINIMUM_COMPLETE, F05 CLOSED, F10 CLOSED, Phase 9 closed.
+A4 official cell remains FAIL / deferred (Joe override this turn;
+  recommended QEMU HALT-WAKE wiring fix was not started; prior A4
+  evidence was left in place).
+F01 / TCG guest OS login stays skipped.
+No commit, no push.
+Typed runtime gate was not silently flipped. The admitted
+wavevm_node_runtime child still activates its per-manifest gate as
+before; the legacy CLI ENOTCONN fallback was not "fixed" by enabling
+that gate on the independent master/slave path.
+
+================================================================
+改了什么 / What changed
+================================================================
+New official entry:
+  scripts/wavevm  (smoke/start/status/stop)
+  It reuses the existing typed cell
+  tests/control-plane/test_create_vm_single_node.sh
+  and never launches wavevm_node_master / wavevm_node_slave.
+
+Docs / build:
+  README.md — official entry is wvm_ctl + wavevm_node_runtime
+  Makefile (new top-level) — `make` builds only node_runtime + ctl_tool;
+    `make legacy-cli` is explicitly non-production
+  node_runtime/Makefile, slave_daemon/Makefile,
+    slave_daemon/Makefile_Legacy, master_core/Makefile_User — comments
+  .github/workflows/wavevm-ci.yml — official artifacts are
+    wavevm_node_runtime + wvm_ctl; smoke is scripts/wavevm smoke
+  deploy/github_actions_tailscale.md — same
+  scripts/wavevm_manifest_qemu.sh — annotated as a helper, not the entry
+
+Retire independent master/slave as production entry:
+  master_core/main_wrapper.c (WAVEVM_MASTER_LEGACY_CLI main)
+  slave_daemon/slave_hybrid.c (WAVEVM_SLAVE_LEGACY_CLI main)
+    Exit 78 unless WAVEVM_ALLOW_LEGACY_CLI is set and not "0".
+  scripts/ci_dual_node.sh — header states it is not the official entry;
+    exports WAVEVM_ALLOW_LEGACY_CLI=1 so the historical F05/F10/A4
+    harness can still run. A4 official cell was not rerun.
+
+Not done (intentionally):
+  Did not rm legacy sources.
+  Did not migrate cross-host F05/F10 official cells onto typed entry.
+  Did not start the deferred A4 QEMU wiring fix.
+  Did not enable the typed runtime gate on the legacy CLI path.
+
+================================================================
+现场证据 / Live proof (2404 only)
+================================================================
+Host: 2404 / A  (joeking, /workspaces/WaveVM)
+2604 was not used for this cutover proof.
+
+1) Legacy refuse (20:13:22 CST Asia/Shanghai)
+   audit-evidence/fix-blockers-20261116/TYPED_ENTRY_CUTOVER/run-20261116-201322-legacy-refuse/
+   env -u WAVEVM_ALLOW_LEGACY_CLI ./master_core/wavevm_node_master  -> rc=78
+   env -u WAVEVM_ALLOW_LEGACY_CLI ./slave_daemon/wavevm_node_slave   -> rc=78
+   WAVEVM_ALLOW_LEGACY_CLI=0 ./master_core/wavevm_node_master       -> rc=78
+   WAVEVM_ALLOW_LEGACY_CLI=1 ./master_core/wavevm_node_master       -> rc=1
+     (warning + Usage; did not start services)
+
+2) Same-host official smoke, TCG helper stub (FAIL for RUNNING)
+   20:13:37–20:14:16 CST Asia/Shanghai
+   run-20261116-201337-same-host-smoke/
+   Official control path DID start: wvm_ctl + wavevm_node_runtime agent,
+   membership reached ACTIVE, CREATE_VM reached COMMITTED
+   (status=14 recorded_state=9 vm_id=256 incarnation=1).
+   Live ready never arrived. ctl stayed at
+   "admission submit type=0x305 ... rc=-11 err=admitted runtime is starting".
+   Child waited for QEMU frontend registration. On the TCG path,
+   spawn_manifest_bound_qemu_frontend() is a no-op (helpers are supposed
+   to register as the frontend). The session-fd stub does not, so
+   CREATE stayed IN_PROGRESS. No master/slave was launched.
+   This run is kept as honest evidence; it is not a PASS.
+
+3) Same-host official smoke, in-tree QEMU helper (PASS)
+   20:16:36–20:16:53 CST Asia/Shanghai
+   run-20261116-201636-same-host-smoke-real-qemu/
+   Command: scripts/wavevm smoke --real-qemu --state-dir <that run/state>
+   Result:
+     single-node CREATE_VM prepare→activate→commit→RUNNING: PASS
+     backend=require-tcg accel=disabled
+     status=0 recorded_state=11 vm_id=256 vm_incarnation=1
+     manifest_generation=1
+     route_scope_id=1962781254278207605
+     tcg_helper=/workspaces/WaveVM/wavevm-qemu/build-native/qemu-system-x86_64
+   Entry processes were wvm_ctl + wavevm_node_runtime (admitted child)
+   plus in-tree qemu-system-x86_64 TCG helpers. No wavevm_node_master /
+   wavevm_node_slave. This is a control-path RUNNING proof, not a
+   guest OS login and not a cross-host F05/F10 cell.
+   After the cell stopped, no leftover official/qemu processes remained.
+
+After the passing run, scripts/wavevm default was changed to auto-use
+the in-tree QEMU helper when present, because that is what actually
+reaches RUNNING. --stub still forces the session-fd stub.
+
+Process snapshots in the passing run were taken before start and after
+teardown, so they do not list mid-run PIDs. Mid-run proof is
+state/evidence/agent.log and create_result.txt.
+
+================================================================
+二进制哈希 / Hashes (sha256)
+================================================================
+wavevm_node_runtime
+  bfa1114659fea62f4dcc19671c3927b619703714ee6fca8caf7b35e472ec7c66
+  rebuilt 2026-11-16 from current dirty sources (F05/F10 changes
+  already in logic_core.c / slave_hybrid.c / main_wrapper.c).
+  The legacy-CLI guard is compiled only into the standalone master
+  binary, not into this runtime.
+
+ctl_tool/wvm_ctl
+  bc74d51f4dcc7b563ef63629316b8e38551d1505205a0fd99e0f213894c13f85
+  unchanged this turn
+
+master_core/wavevm_node_master  (legacy CLI, not official)
+  5318791544862cd505b160dc0dc4aeb1b78868b75243107f0645af73e3fa31df
+  previous live F05/F10 binary was
+  298899f082c23fe0d1fa5f40e3d9ef4ce325afa271b307247c8c641cabf481be
+
+slave_daemon/wavevm_node_slave  (legacy CLI, not official)
+  f8728d3568be7c3eecc552d157d9aa3cea49ebee462e970820ffd1ac9b138032
+  previous live F05/F10 binary was
+  151192866eb9f39ca8521f5bd92bb69329706f0c492cdc67905aeb1e61fe732e
+
+wavevm-qemu/build-native/qemu-system-x86_64
+  e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e
+  unchanged
+
+scripts/wavevm
+  639e04b819c13b0aec86c426ead14ff49e0561a6dd9eaaf9a64d4b7d9b516a0c
+  (after default auto-QEMU tweak; passing smoke used the previous
+  script hash d66ddb103d363500ac3d6a6b0acbb3e443db2c687f955e001bc88878ff5cf375
+  with explicit --real-qemu)
+
+scripts/ci_dual_node.sh
+  6285303c4c1a7360f3b8d90926708c19ebfdf4ff0c933b0763348260f55bf156
+  (was 46c0369918dde340cd7a805e6c8c768a1c2191ef933747b9a0b9bbb8ff3ee553
+   before the non-production header + WAVEVM_ALLOW_LEGACY_CLI export)
+
+================================================================
+仍走 legacy 的残留 / What still uses legacy
+================================================================
+- scripts/ci_dual_node.sh (F05/F10/A4 historical harness), only with
+  WAVEVM_ALLOW_LEGACY_CLI=1
+- artifacts/fract-kvm-test, artifacts/fract-tcg-test,
+  artifacts/flat-tcg-test historical runners — they will now refuse
+  unless the allow flag is set; they were not migrated this turn
+- stub planner wvm_ctl_plan used by ci_dual_node.sh
+- legacy sources still compile via `make legacy-cli` /
+  node_runtime legacy-master / slave_daemon Makefile_Legacy
+
+Typed path leftovers (not entry-cutover blockers, still open):
+  N02 not same-backing inode proof; ACTIVATION_DECIDED missing a live
+  crash window; unprivileged Mode A bind /dev/wavevm is EPERM; typed
+  MEM_FAULT ENOTCONN→UDP fallback still exists on the legacy CLI path.
+
+================================================================
+建议下一步 / Recommended next
+================================================================
+1) A4 official cell remains FAIL/deferred. The recommended QEMU
+   HALT-WAKE wiring fix (keep AP cpu=2 in local 1s HALT-WAKE until a
+   post-login burn) was deferred by Joe and was not started.
+2) After A4, migrate the cross-host F05/F10 official cells off
+   ci_dual_node's independent master/slave launch and onto the typed
+   official entry. Until that happens, those cells remain legacy
+   evidence and cannot close Phase 9 by themselves.
+3) Do not call Phase 1 or Minimum complete yet.

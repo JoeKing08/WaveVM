@@ -1,0 +1,39 @@
+F10 Mode B attr-only — run-191003-legacy-mem-fwd
+Times: 19:02:59–19:12:23 CST Asia/Shanghai (2026-11-16)
+Path: WVM_F10_ATTR_ONLY=1, mode=user,backend=kvm, typed gate OFF
+Machines: 2404 node-a ART=/tmp/wavevm-test-results/dual-node-kvm-20261116-190303
+          2604 node-b ART=/tmp/wavevm-test-results/dual-node-kvm-20261116-190259
+
+Binaries (rebuilt from source; slave/QEMU unchanged this turn)
+  master  298899f082c23fe0d1fa5f40e3d9ef4ce325afa271b307247c8c641cabf481be
+  ci_dual_node.sh  5f4986d6e3cf21ab2f3c195255b66dfc3f4ba8993bc074fe5c0e53597f57e272
+  slave   151192866eb9f39ca8521f5bd92bb69329706f0c492cdc67905aeb1e61fe732e (unchanged, MCG_CTL skip)
+  qemu    e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e (unchanged)
+
+Official scorer (poll 12 early PASS, QEMU still alive):
+  remote_vcpu_evidence=1 remote_mem_evidence=1 fl_dominates=0
+  remote=10 remote_done_cpu2=688 sent=691 ack=690 remote_mem_peer=2665
+  commit_ack=0 commit_to=0 fence_done=0 push_fail=0 q_alive=yes
+  VERDICT=PASS
+
+Final log counts (after early exit / last score while QEMU still flushing):
+  WVM-REMOTE cpu=2 dispatch lines=10 (frontend log cap)
+  RET ack_status=0 ack_mode=0: 729; ack_status=-1: 0; ack_mode=1: 0
+  [WVM-TCG-STATS] cpu=2 remote_done=720 local_done=0 force_local_used=0
+  [WVM-MEM-STATS] on A master0: 40 lines (20 unique prints x2: g_ops->log + stderr)
+    origin=1 directory=0 instance=1 directory_instance=0
+    remote_reads=0 remote_commits climbed 1,149,305,...,2665,2821
+    These are real directory-owner applies of forwarded MSG_MEM_WRITE, not synthetic lines.
+  COMMIT_SYNC ack=0 (supporting only; this path is legacy MSG_MEM_WRITE)
+  B: MEM_WRITE forward first 20 logged, all ret=0, dir=0 src=1; ignored=0; WVM-MEM-STATS=0 (B is not owner)
+  Gateway: MSG_MEM_WRITE on the wire, len=4140 msg=2 src=1 target=0 (trace is sampled, like VCPU 14148)
+  B import: EXCEPTION_PAYLOAD enabled; SET_MSRS partial nmsrs=96 ret=13; skipped i=13 index=0x17b errno=11;
+    ErrorAck=0 (no ErrorAck lines). guest_vcpu=2.
+  No terminal handoff failure. A cleaned at 19:10:13 after PASS; B cleaned at 19:12:23. No leftovers.
+
+Trigger note: mid-boot did not dispatch this run (cpu=2 stayed in 1s HALT-WAKE). Cirros had already
+reached login. A single 5s vCPU2 affinity burn (/tmp/wvm-aff2 over SSH :2226) triggered remote
+dispatch at 19:10:07; this is not a login grind.
+
+F05 TCG fence-only was not rerun. TCG 4400 send path was not changed.
+No commit / no push. Typed gate stayed OFF. No Mode A / root QEMU.

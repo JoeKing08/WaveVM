@@ -54,6 +54,9 @@ typedef struct WaveVMAccelState {
 
 extern int g_wvm_local_split;
 
+/* AP SHUTDOWN / FAIL_ENTRY must not reset the whole WaveVM guest. */
+bool wavevm_should_park_ap_shutdown(CPUState *cpu);
+
 /* Called with vCPUs stopped, before the frontend's first resume. */
 int wavevm_publish_initial_ram(uint64_t gpa, void *hva, uint64_t bytes,
                                uint64_t *published_pages);

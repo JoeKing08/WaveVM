@@ -1,0 +1,22 @@
+remote=1
+remote_defer=1
+sent=0
+ack_mode0=0
+ack_mode1=0
+fence_done=0
+push_fail=0
+remote_done_cpu2=0
+remote_done_sum=0
+local_done_sum=0
+force_local_sum=0
+mem_stats_raw=1
+remote_mem_peer=1
+remote_vcpu_evidence_kvm=0
+remote_vcpu_evidence_tcg=0
+remote_vcpu_evidence=0
+remote_mem_evidence=1
+entry=typed_wvm_ctl_node_runtime
+legacy_cli=0
+mem_samples_begin
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=7217 directory=801 directory_instance=802 operation=000000000000000100d04e0600000000 gpa=105828352 remote_reads=1 remote_commits=0
+mem_samples_end

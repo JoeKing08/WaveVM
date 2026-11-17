@@ -1,0 +1,336 @@
+NOTES: official A4 rewritten onto typed production entry
+Date: 2026-11-16  (times below are Asia/Shanghai CST, UTC+8)
+Author context: Joe t584u "那要不改了先？" — stop scoring official A4 on
+ci_dual_node.sh + WAVEVM_ALLOW_LEGACY_CLI; rewrite the official cross-host
+cell onto scripts/wavevm -> wvm_ctl serve + wavevm_node_runtime agent +
+CREATE_VM.
+
+================================================================================
+Official test entry NOW
+================================================================================
+  scripts/wavevm a4 --role node-a|node-b
+    (or WAVEVM_OFFICIAL_ROLE=node-a|node-b)
+
+  Path: scripts/wavevm a4
+        -> tests/e2e/test_a4_official_typed.sh
+        -> ctl_tool/wvm_ctl serve
+        -> gateway_service/wavevm_gateway (enrolled)
+        -> wavevm_node_runtime agent on A and B (Tailscale IPs)
+        -> CREATE_VM spread, 3 vCPUs, 3072MiB, disabled require-kvm
+        -> unique Cirros FE: -accel wavevm,backend=kvm,mode=user,split=2
+
+  It never sets WAVEVM_ALLOW_LEGACY_CLI and refuses if wavevm_node_master
+  or wavevm_node_slave are visible. Historical scripts/ci_dual_node.sh is
+  not the official entry for this cell going forward.
+
+  Phase 1 is NOT closed: leftover legacy binaries still exist on disk
+  (opt-in only; not deleted tonight). Cross-host F05/F10 have not been
+  migrated to this entry. Typed runtime gate stayed OFF.
+
+  This does NOT close MINIMUM_COMPLETE, F05, F10, Phase 9, or Phase 1.
+
+================================================================================
+Stopped historical-harness rerun (prior turn; kept)
+================================================================================
+  run-203426-a4-official-kernel-shutdown-stall (A ART dual-node-kvm-20261116-203426
+  started 20:34:26; B 20:34:05) was stopped ~20:37:22 CST. Saved, not overwritten.
+  Also kept: run-202925 (login+SSH, official scorer PASS markers, but every
+  post-login remote slice triple-faulted; NOT F10 CLOSED), earlier FAILs
+  194044 / 195305, and TYPED_ENTRY_CUTOVER notes.
+
+================================================================================
+Typed official runs tonight
+================================================================================
+
+1) Join-bundle bring-up bugs (fixed, not scored)
+   - seed profile encode failed when DATA/SVC/control ports were not unique
+     and strictly increasing.
+   - cp -a to /mnt/hgfs/SharedFolder returns rc=1 even after a successful
+     copy (vmhgfs cannot preserve mode/owner). With set -e this aborted
+     after certs and never wrote join.env / READY_FOR_B. Fixed by using
+     cp -f for SharedFolder copies.
+
+2) run-205604-login-ssh-no-remote-smp2
+   Start A 20:56:04 CST, B 20:56:00 CST.
+   multi-ACTIVE 20:56:17 CST.
+   CREATE_VM SUCCESS 20:56:17 CST  status=0 recorded_state=11 vm_id=256.
+   Unique Cirros FE, Mode B user+KVM, split=2, but -smp 2 (runtime used
+   local_vcpu_assignments.count=2, not the full guest topology).
+   login_ok=1 ssh_ok=1 at 20:57:29 CST Asia/Shanghai.
+   Scorer: VERDICT=FAIL
+     remote=0 sent=0 ack_mode0=0 ack_mode1=0 remote_done_cpu2=0
+     remote_mem_peer=0 mem_stats_raw=0
+     remote_vcpu_evidence=0 remote_mem_evidence=0
+     ap_shutdown=0 wvm_reset=0 kvm_shutdown=0 q_alive=1
+     entry=typed_wvm_ctl_node_runtime legacy_cli=0
+   Honest: login+SSH on the typed official path, same run had no vCPU 2
+   so no remote evidence. Runtime then was bfa11146.
+
+3) SMP fix in master_core/main_wrapper.c (uncommitted)
+   Unique guest FE now raises smp to the full admitted topology
+   (max guest_vcpu_index+1 from typed cpu_dispatch, and/or
+   WVM_GUEST_SMP / WVM_CREATE_VCPUS). Rebuilt wavevm_node_runtime only
+   (QEMU not rebuilt). New runtime sha256:
+     10e56972767c0988e2f9f7b2f1efe300c1d506a9869f956246884fe74d64766e
+
+4) run-210126-login-ssh-smp3-unpinned-burn
+   Start A 21:01:26 CST. FE log: "unique guest FE smp 2 -> 3".
+   QEMU: -accel wavevm,backend=kvm,mode=user,split=2 -m 3072 -smp 3.
+   CREATE_VM SUCCESS 21:01:36 CST vm_id=256.
+   login_ok=1 ssh_ok=1 at 21:02:33 CST Asia/Shanghai.
+   Scorer: VERDICT=FAIL  (same zeros as above for remote/mem; q_alive=1,
+   ap_shutdown=0, no WVM-RESET).
+   Honest: cpu=2 SIPI completed locally and stayed in HALT-WAKE stay-local
+   (mp=3 halted=1) as designed. The harness burned with unpinned `dd`,
+   which ran on a local CPU, so vCPU 2 was never woken. Affinity-to-cpu2
+   burn was then copied from the official historical helper into the
+   typed script (not by invoking ci_dual_node.sh).
+
+5) run-210352-midboot-remote-stall
+   Start A 21:03:52 CST, B 21:03:50 CST, FE -smp 3 split=2.
+   CREATE_VM SUCCESS 21:04:03 CST vm_id=256.
+   After SIPI park and a few stay-local slices, WVM-WAKE (OS SIPI,
+   mp_state RUNNABLE) then:
+     [WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffff97aa62a7 cs=0x10
+   (Linux kernel, mid-boot). vm.log and serial both froze at
+   21:04:14 CST Asia/Shanghai, last serial line
+   "info: initramfs: up at 1.04". remote=1, ap_shutdown=0, no further
+   FE log (first remote slice hung; no SHUTDOWN/RESET). login_ok=0.
+   Operator-stopped 21:08:43 CST; official scorer not reached.
+   This is the same class of mid-boot kernel remoting hang/regression
+   seen on QEMU 82a5ac67 in historical official FAIL 203426, now
+   reproduced on the typed official entry.
+
+================================================================================
+Hashes (sha256)
+================================================================================
+  wavevm_node_runtime (after SMP fix, used for runs 210126 and 210352):
+    10e56972767c0988e2f9f7b2f1efe300c1d506a9869f956246884fe74d64766e
+  wavevm_node_runtime (typed-entry cutover binary, used for run 205604):
+    bfa1114659fea62f4dcc19671c3927b619703714ee6fca8caf7b35e472ec7c66
+  ctl_tool/wvm_ctl:
+    bc74d51f4dcc7b563ef63629316b8e38551d1505205a0fd99e0f213894c13f85
+  scripts/wavevm (a4 hook):
+    7896b7692c7e692a91aca3e44625748aa320f4e05c222d3118b40fe75c5698a6
+  tests/e2e/test_a4_official_typed.sh (final, with affinity burn):
+    59b9154396cb667c807bced140bc6954c2c97c29391aacf2d8f3f47785de0e79
+  gateway_service/wavevm_gateway:
+    d9878a59aead02197305bb3f4b4d5df16fe696e3e351b5e2ba791347c12a14f1
+  qemu-system-x86_64 (NOT rebuilt tonight; known remote-slice issues):
+    82a5ac679ffc3ceef86198c4080b534ec8bede10f43a0e868dd3d2e0cf6721a1
+
+  Leftover legacy binaries remain on disk (not official entry, not deleted):
+    wavevm_node_master 5318791544862cd505b160dc0dc4aeb1b78868b75243107f0645af73e3fa31df
+    wavevm_node_slave  f8728d3568be7c3eecc552d157d9aa3cea49ebee462e970820ffd1ac9b138032
+
+  2604: official runtime/ctl/scripts synced via SharedFolder.
+        Previous 2604 runtime/ctl backed up under
+        /home/joeking/WaveVM/audit-evidence-bin-backup-20261116-a4-typed-entry/
+        (and .bfa11146). Master/slave left untouched.
+
+================================================================================
+Leftovers
+================================================================================
+  Both 2404 and 2604 were cleaned after the last run (21:08:47–21:08:48 CST).
+  No qemu-system-x86_64, wvm_ctl, wavevm_node_runtime, wavevm_gateway,
+  wavevm_node_master, or wavevm_node_slave left running.
+  Tailscale still up. SharedFolder still mounted.
+  No tailscale_status.json and no password files in evidence.
+
+================================================================================
+Recommended next
+================================================================================
+  Official A4 is now entered only through scripts/wavevm a4. Cross-host
+  enrollment, CREATE_VM RUNNING, unique Mode B KVM Cirros FE, and Cirros
+  login+SSH are proven on that path (run-205604 and run-210126).
+
+  The remaining official-cell hole, on the SAME run, is real remote vCPU
+  + official WVM-MEM-STATS (origin!=directory). Two honest blockers:
+
+  1) Do not remote a freshly woken kernel AP mid-boot (cs=0x10). HALT-WAKE
+     stay-local is correct for halted/idle APs but is not sufficient: when
+     the OS SIPI makes cpu=2 RUNNABLE during initramfs, the first remote
+     slice hangs QEMU 82a5ac67 and freezes serial (run-210352, same class
+     as historical 203426). Need a defer-until-userspace/post-login policy
+     and/or a fix of remote KVM execution on this QEMU. Then rerun
+     scripts/wavevm a4 with the already-landed cpu2 affinity burn.
+
+  2) Do not treat historical scorer PASS on ci_dual_node.sh as official
+     any longer. Do not flip WAVEVM_ALLOW_LEGACY_CLI to get a score.
+     Do not hard-delete leftover legacy binaries until that is an
+     explicit, careful step.
+
+  No commit/push was made.
+
+==============================================================================
+ADDENDUM 2026-11-16 22:45 CST Asia/Shanghai (resume after Joe t589u)
+==============================================================================
+Host display had frozen; both VMs were up again at 22:26 CST but Tailscale was
+logged out and SharedFolder unmounted. Recreated SUDO_ASKPASS, remounted
+vmhgfs-fuse, tailscale up with auth-key=file:... . IPs 100.116.196.65 /
+100.114.246.92. Secrets were not printed.
+
+Code / hashes (sha256), uncommitted, no push:
+- wavevm-qemu/accel/wavevm/wavevm-cpu.c: defer remoting cpu>0 until sticky
+  userspace (CPL/RPL==3 / Linux user CS 0x33). HALT-WAKE stay-local plus a
+  last-line-of-defense local slice before [WVM-REMOTE] dispatch (covers
+  OS-SIPI / WVM-WAKE that skipped HALT-WAKE). QEMU rebuilt incrementally
+  22:30:38 CST to
+  cc21279841df98f5ec0b229690a477e72db323cfdf6bf8b8d9168c52a94d0fec
+  and synced to 2604 via SharedFolder (prior 82a5ac67 backed up, not deleted).
+- tests/e2e/test_a4_official_typed.sh
+  7944a602b94f7f4758bd3c1a46a5dca8fd63920928dc2e68966e7090a17a15f4
+  READY_FOR_B now published only after gw+A are COMMITTED+ACTIVE (A6: B
+  enrolled first; A7: B started the same second as A and stuck PREPARED).
+- tests/control-plane/check_local_active_cluster.c
+  427e912c28e33cafc495643913ed2a479ae90326dbb2ad8119f9b1d154307814
+Unchanged, already in sync on both VMs:
+- wavevm_node_runtime 10e56972767c0988e2f9f7b2f1efe300c1d506a9869f956246884fe74d64766e
+- wvm_ctl bc74d51f4dcc7b563ef63629316b8e38551d1505205a0fd99e0f213894c13f85
+- scripts/wavevm 7896b7692c7e692a91aca3e44625748aa320f4e05c222d3118b40fe75c5698a6
+Typed runtime gate was not enabled. Legacy master/slave binaries were not
+deleted. No commit/push.
+
+Runs (all scripts/wavevm a4 only; prior 205604/210126/210352 left intact):
+
+- run-223118-enrollment-race-b-first (A6, 22:31:15 B / 22:31:18 A through 22:34:30)
+  B registered first; gateway ACK outside its proof. No CREATE_VM.
+
+- run-223502-enrollment-race-b-prepared (A7, 22:35:02-22:39:32)
+  READY after gateway REGISTER + 2s. gw+A COMMITTED+ACTIVE; B 811:812 stuck
+  PREPARED has_enroll_act=0. No CREATE_VM.
+
+- run-223955-qemu-sigbus-shm (A8, 22:39:55-22:40:22)  official remoting-path attempt
+  Serialized READY after gw+A COMMITTED. multi-ACTIVE 22:40:04.
+  CREATE_VM SUCCESS 22:40:05 status=0 recorded_state=11 vm_id=256, FE
+  -smp 3 split=2 Mode B user+KVM, QEMU cc212798 pid=8127.
+  QEMU exited 22:40:19 status=135 (SIGBUS). vm.log stops at
+  "[WaveVM] region_add gpa=0 size=0xc0000000 count=1" (next successful-run
+  line is wavevm_attach_shared_ram_ptr memcpy of the full 3GiB into POSIX
+  SHM). After reboot /dev/shm was default tmpfs 2.9G (half of 5.7Gi), too
+  small for that memcpy. login=0 ssh=0 remote=0 mem_stats=0 q_alive=0.
+  Scorer VERDICT=FAIL. This is not a remoting-deferral result.
+
+- run-224323-local-enroll-gw-not-ready (A9, 22:43:23-22:44:31)
+  /dev/shm remounted size=6G on both VMs, then one retry. Gateway ACK
+  outside its proof when A registered in the same second; gateway stuck
+  PREPARED, A COMMITTED. Harness refused READY_FOR_B. Stopped; no further
+  official rerun tonight. Remaining gap: wait for gateway COMMITTED before
+  starting agent A.
+
+Official cell verdict: FAIL.
+Same-run Cirros login/SSH AND real remote vCPU AND official [WVM-MEM-STATS]
+is still not proven on the typed official entry. Login+SSH remains proven
+only on earlier runs 205604 / 210126 (QEMU 82a5ac67, no remotes). run-210352
+mid-boot remote hang stands. Defer-until-userspace QEMU cc212798 was not
+exercised past SHM attach. Do not claim MINIMUM_COMPLETE, F05 CLOSED, F10
+CLOSED, Phase 9, or Phase 1.
+
+Leftover process state: both VMs cleaned after A9 (no qemu / wvm_ctl /
+wavevm_node_runtime / wavevm_gateway). /dev/shm left remounted at 6G until
+the next reboot (default will return to about half of RAM).
+
+
+==============================================================================
+ADDENDUM 2026-11-16 22:57 CST Asia/Shanghai (Joe t590u 继续)
+==============================================================================
+Both VMs were up, leftover-clean, SharedFolder mounted, Tailscale running
+(100.116.196.65 / 100.114.246.92). /dev/shm was already 6G on both and was
+left at 6G.
+
+Harness fix (uncommitted, no push):
+- tests/control-plane/check_gateway_active_cluster.c
+  a085216ad7b16237489498a217e6a8e6aaa2e133149e3b8e31253bc138a9ece2
+  waits for gateway 901:902 COMMITTED+ACTIVE (REGISTER accepted is not enough).
+- tests/e2e/test_a4_official_typed.sh
+  4235c82b5b9006426a8fe449a226653728683d931776e40f21c211606b10d54e
+  start agent A only after gateway COMMITTED; READY_FOR_B still only after
+  gw+A COMMITTED+ACTIVE. Synced to 2604 via SharedFolder.
+
+QEMU (also uncommitted):
+- A10 used cc21279841df98f5ec0b229690a477e72db323cfdf6bf8b8d9168c52a94d0fec
+- After A10, wavevm-cpu.c bound-slice install switched from signal(SIGRTMIN)
+  to sigaction without SA_RESTART, plus cpu_exit in the handler. Rebuilt
+  22:55:31 CST to
+  897b8126d82c6757ba0570ce6fb6b8b50db02d733421794b5f6bd9ef0b9d0adb
+  and synced to 2604 (cc212798 backed up, not deleted).
+
+Unchanged and already in sync:
+- wavevm_node_runtime 10e56972767c0988e2f9f7b2f1efe300c1d506a9869f956246884fe74d64766e
+- wvm_ctl bc74d51f4dcc7b563ef63629316b8e38551d1505205a0fd99e0f213894c13f85
+- scripts/wavevm 7896b7692c7e692a91aca3e44625748aa320f4e05c222d3118b40fe75c5698a6
+Typed runtime gate stayed off. No commit/push. No fake acks/stats.
+
+Runs (scripts/wavevm a4 only; prior dirs left intact):
+
+- run-225140-login-ssh-defer-no-remote (A10, 22:51:40-22:53:13)
+  Enrollment serialization and 6G SHM attach worked. Cirros login+SSH
+  22:53:01, vCPU2 burn rc=0, q_alive=1. Mid-boot remoting deferred correctly
+  (cs=0x10). Then the deferred local kvm_cpu_exec never returned; remote=0
+  mem_stats=0. Scorer FAIL.
+
+- run-225555-login-ssh-slice-still-stuck (A11, 22:55:56-22:57:12)
+  One retry on QEMU 897b8126. Same official picture: login+SSH 22:57:01,
+  burn rc=0, q_alive=1, remote=0, no "local slice done" log. Signal-based
+  1s bound is not interrupting KVM_RUN on this vCPU thread. Stopped.
+
+Official cell verdict: FAIL.
+Same-run Cirros login/SSH is now proven on the typed official entry with
+defer-until-userspace (A10 and A11). Real remote vCPU and official
+[WVM-MEM-STATS] are still not proven. Do not claim MINIMUM_COMPLETE, F05
+CLOSED, F10 CLOSED, Phase 9, or Phase 1.
+
+Leftover process state: both VMs cleaned after A11. /dev/shm left at 6G
+until the next reboot.
+
+
+==============================================================================
+ADDENDUM 2026-11-17 08:42 CST Asia/Shanghai (Joe t595u)
+==============================================================================
+After the overnight reboot both VMs were up but SharedFolder was unmounted,
+/dev/shm had reverted to ~2.9G / 2.7G, 2404 Tailscale was NeedsLogin, and
+2604 Tailscale was Running with a stale/empty peer map. Recreated askpass,
+remounted vmhgfs-fuse, remounted /dev/shm size=6G on both, re-upped 2404
+Tailscale (auth-key=file, hostname wavevm-f05-a). IPs 100.116.196.65 /
+100.114.246.92. Secrets were not printed.
+
+QEMU fix (uncommitted, no push):
+- wavevm-qemu/accel/wavevm/wavevm-cpu.c
+  Deferred local kvm_cpu_exec is now bounded by a SIGEV_THREAD timer
+  callback (not a signal to the vCPU thread). The callback sets
+  kvm_run->immediate_exit, then cpu_exit() and qemu_cpu_kick().
+  Rebuilt 08:33:06 CST to
+  b03c7eca766b854f19cf8d2678ff7e11c3fa889ba2583556e076edb569502727
+  Synced to 2604 via SharedFolder after a hash-verified recopy.
+  Prior QEMU 897b8126 and cc212798 backed up, not deleted.
+
+Unchanged and already in sync:
+- wavevm_node_runtime 10e56972767c0988e2f9f7b2f1efe300c1d506a9869f956246884fe74d64766e
+- wvm_ctl bc74d51f4dcc7b563ef63629316b8e38551d1505205a0fd99e0f213894c13f85
+- scripts/wavevm 7896b7692c7e692a91aca3e44625748aa320f4e05c222d3118b40fe75c5698a6
+- tests/e2e/test_a4_official_typed.sh
+  4235c82b5b9006426a8fe449a226653728683d931776e40f21c211606b10d54e
+Typed runtime gate stayed off. No commit/push. No fake acks/stats.
+
+Runs (scripts/wavevm a4 only; prior dirs left intact):
+
+- run-083344-ts-peer-missing (A12, 08:33:42-08:38:22)
+  Agent B TLS connect to A:17101 timed out; tailscale ping had no matching
+  peer. No CREATE_VM. 2604 was force-reauthed; bidirectional ping 1-4ms.
+  Not a remoting result.
+
+- run-083912-login-ssh-userspace-remote-no-ret (A13, 08:39:12-08:41:07)
+  Official remoting-path attempt on QEMU b03c7eca. Kick works (43 slices).
+  Cirros login+SSH 08:40:34/35, q_alive=1. Userspace remoting started:
+  dispatch #0 and WVM-SEND at rip=0x401810 cs=0x33. No RET, no
+  [WVM-MEM-STATS]. Scorer remote=1 / remote_vcpu_evidence=1 is a real
+  [WVM-REMOTE] dispatch. Official cell still FAIL because official remote
+  mem and honest KVM RET (ack_status=0 ack_mode=0) are missing. Stopped.
+
+Official cell verdict: FAIL.
+Same-run Cirros login/SSH is proven, and this run also has a real
+userspace remote vCPU dispatch+SEND. Official remote mem is not proven.
+Do not claim MINIMUM_COMPLETE, F05 CLOSED, F10 CLOSED, Phase 9, or Phase 1.
+
+Leftover process state: both VMs cleaned after A13. /dev/shm left at 6G
+until the next reboot.

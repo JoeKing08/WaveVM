@@ -1,0 +1,24 @@
+# Official WaveVM production build.
+# Builds the typed entry only: wavevm_node_runtime and wvm_ctl.
+# Independent master/slave CLIs are not official production targets.
+.PHONY: all runtime ctl clean legacy-cli
+
+all: runtime ctl
+
+runtime:
+	$(MAKE) -C node_runtime
+
+ctl:
+	$(MAKE) -C ctl_tool
+
+clean:
+	$(MAKE) -C node_runtime clean
+	$(MAKE) -C ctl_tool clean
+
+# Non-production historical CLIs. Not the official entry.
+# The resulting binaries require WAVEVM_ALLOW_LEGACY_CLI=1 at runtime.
+legacy-cli:
+	@echo "NOTE: legacy-cli is not a supported production entry."
+	@echo "Official entry: scripts/wavevm (wvm_ctl + wavevm_node_runtime)."
+	$(MAKE) -C node_runtime legacy-master
+	$(MAKE) -C slave_daemon -f Makefile_Legacy

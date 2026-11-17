@@ -47,6 +47,7 @@
 #include "qemu/guest-random.h"
 #include "sysemu/hw_accel.h"
 #include "kvm-cpus.h"
+#include "accel/wavevm/wavevm-accel.h"
 
 #include "hw/boards.h"
 
@@ -2629,6 +2630,15 @@ int kvm_cpu_exec(CPUState *cpu)
                         cpu->cpu_index, (unsigned long long)sd_kr.rip,
                         sd_sr.cs.selector, (unsigned long long)sd_sr.cs.base,
                         (unsigned long long)sd_kr.rflags, kvm_io_count, kvm_mmio_count);
+            }
+            if (wavevm_should_park_ap_shutdown(cpu)) {
+                fprintf(stderr,
+                        "[KVM-SHUTDOWN] cpu=%d AP shutdown parked; "
+                        "not requesting VM reset\n",
+                        cpu->cpu_index);
+                cpu->halted = 1;
+                ret = EXCP_HLT;
+                break;
             }
             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             ret = EXCP_INTERRUPT;

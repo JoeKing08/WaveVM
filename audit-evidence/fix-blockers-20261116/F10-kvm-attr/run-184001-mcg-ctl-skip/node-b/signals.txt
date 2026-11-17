@@ -1,0 +1,15 @@
+=== skip/error ===
+[Slave KVM] EXCEPTION_PAYLOAD enabled
+[Slave VCPU Init] guest_vcpu=2 fd=7 run=0x76dd26a66000
+[kvm-import] profile SET_MSRS partial nmsrs=96 ret=13
+[kvm-import] profile SET skipped i=13 index=0x17b value=0xffffffffffffffff ret=0 errno=11
+=== counts ===
+MEM-STATS=/tmp/wavevm-test-results/dual-node-kvm-20261116-183952/gw_l1b.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-183952/gw_sidecar_b.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-183952/master1.log:0
+/tmp/wavevm-test-results/dual-node-kvm-20261116-183952/slave1.log:0
+partial=1
+skipped=1
+hard-fail=0
+ErrorAck=0
+VCPU-RUN=10

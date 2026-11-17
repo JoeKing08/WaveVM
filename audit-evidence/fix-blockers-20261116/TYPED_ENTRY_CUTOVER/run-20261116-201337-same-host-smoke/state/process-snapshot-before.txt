@@ -1,0 +1,6 @@
+time=2026-11-16 20:13:37 CST
+state_dir=audit-evidence/fix-blockers-20261116/TYPED_ENTRY_CUTOVER/run-20261116-201337-same-host-smoke/state
+official_entry=wvm_ctl+wavevm_node_runtime
+legacy_entry=not-supported
+--- processes ---
+34469 bash --noprofile --norc -c  cd /workspaces/WaveVM STAMP=$(date +%Y%m%d-%H%M%S) EVID="audit-evidence/fix-blockers-20261116/TYPED_ENTRY_CUTOVER/run-${STAMP}-same-host-smoke" mkdir -p "$EVID" echo "evid=$EVID" | tee "$EVID/meta.txt" echo "time_start=$(date "+%Y-%m-%d %H:%M:%S %Z")" | tee -a "$EVID/meta.txt" echo "host=$(hostname) user=$(id -un)" | tee -a "$EVID/meta.txt" sha256sum wavevm_node_runtime ctl_tool/wvm_ctl master_core/wavevm_node_master slave_daemon/wavevm_node_slave scripts/wavevm | tee "$EVID/hashes-before.txt" # pre-smoke process snapshot pgrep -af "wvm_ctl|wavevm_node_runtime|wavevm_node_master|wavevm_node_slave|qemu-system" | tee "$EVID/procs-before.txt" || true ./scripts/wavevm smoke --state-dir "$EVID/state" >"$EVID/smoke.log" 2>&1 rc=$? echo "smoke_rc=$rc" | tee -a "$EVID/meta.txt" echo "time_end=$(date "+%Y-%m-%d %H:%M:%S %Z")" | tee -a "$EVID/meta.txt" pgrep -af "wvm_ctl|wavevm_node_runtime|wavevm_node_master|wavevm_node_slave|qemu-system" | tee "$EVID/procs-after.txt" || true echo "----- smoke.log tail -----" tail -n 80 "$EVID/smoke.log" echo "SMOKE_RC=$rc EVID=$EVID" exit 0 

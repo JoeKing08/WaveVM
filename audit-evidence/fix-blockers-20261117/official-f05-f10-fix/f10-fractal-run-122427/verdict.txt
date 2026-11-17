@@ -1,0 +1,65 @@
+VERDICT=PARTIAL
+cell=f10
+topology=fractal
+placement=spread
+backend=require-kvm
+accel=disabled
+entry=typed_wvm_ctl_node_runtime
+legacy_cli=0
+login_ok=1
+ssh_ok=1
+login_at=2026-11-17 12:25:44 CST
+ssh_at=2026-11-17 12:25:44 CST
+q_alive=1
+remote=1
+remote_defer=131
+sent=0
+ack_mode0=0
+ack_mode1=0
+fence_done=0
+push_fail=0
+remote_done_cpu2=0
+remote_mem_peer=15738
+mem_stats_raw=24
+remote_vcpu_evidence=0
+remote_vcpu_evidence_kvm=0
+remote_vcpu_evidence_tcg=0
+remote_mem_evidence=1
+ap_shutdown=0
+0
+wvm_reset=0
+0
+kvm_shutdown=0
+0
+handoff_fail=0
+0
+note=moving this test does not close F05, F10, Phase 1, Phase 9, or MINIMUM_COMPLETE
+remote=1
+remote_defer=131
+sent=0
+ack_mode0=0
+ack_mode1=0
+fence_done=0
+push_fail=0
+remote_done_cpu2=0
+remote_done_sum=0
+local_done_sum=0
+force_local_sum=0
+mem_stats_raw=24
+remote_mem_peer=15738
+remote_vcpu_evidence_kvm=0
+remote_vcpu_evidence_tcg=0
+remote_vcpu_evidence=0
+remote_mem_evidence=1
+entry=typed_wvm_ctl_node_runtime
+legacy_cli=0
+mem_samples_begin
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=00000000000000010090000000000000 gpa=36864 remote_reads=1 remote_commits=0
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=000000000000000100f0250000000000 gpa=2486272 remote_reads=606 remote_commits=0
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=00000000000000010000580000000000 gpa=5767168 remote_reads=1406 remote_commits=0
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=00000000000000010040860000000000 gpa=8798208 remote_reads=2143 remote_commits=0
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=00000000000000010000ad0000000000 gpa=11337728 remote_reads=2763 remote_commits=0
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=00000000000000010030d40000000000 gpa=13905920 remote_reads=3390 remote_commits=0
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=00000000000000010060fb0000000000 gpa=16474112 remote_reads=4018 remote_commits=0
+agent-b.log: [WVM-MEM-STATS] vm=256 incarnation=1 manifest=1 origin=811 instance=812 runtime=812 pid=5809 directory=801 directory_instance=802 operation=000000000000000100d0200100000000 gpa=18927616 remote_reads=4613 remote_commits=0
+mem_samples_end

@@ -1,0 +1,2 @@
+[LegacyCLI] wavevm_node_master is not the official production entry; continuing because WAVEVM_ALLOW_LEGACY_CLI is set. Official entry: scripts/wavevm (wvm_ctl + wavevm_node_runtime).
+Usage: ./master_core/wavevm_node_master <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> <CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH] [VM_ID]

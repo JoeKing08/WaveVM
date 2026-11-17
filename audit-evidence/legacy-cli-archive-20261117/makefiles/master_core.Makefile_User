@@ -1,0 +1,18 @@
+# WARNING: This Makefile builds a non-production historical CLI
+# (wavevm_node_master). It is not the official production entry.
+# Official build: $(MAKE) -C ../node_runtime and $(MAKE) -C ../ctl_tool.
+# Official start: ../scripts/wavevm
+# The binary refuses to start unless WAVEVM_ALLOW_LEGACY_CLI=1.
+CC = gcc
+CFLAGS = -Wall -O2 -msse4.2 -I../common_include -pthread
+TARGET = wavevm_node_master
+SRCS = logic_core.c user_backend.c main_wrapper.c
+
+all: $(TARGET)
+
+$(TARGET): $(SRCS)
+	$(CC) $(CFLAGS) -o $@ $^
+
+clean:
+	rm -f $(TARGET)
+

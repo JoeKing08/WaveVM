@@ -1,0 +1,37 @@
+VERDICT=FAIL
+entry=typed_wvm_ctl_node_runtime
+legacy_cli=0
+login_ok=1
+ssh_ok=1
+login_at=2026-11-16 22:57:01 CST
+ssh_at=2026-11-16 22:57:01 CST
+q_alive=1
+remote=0
+sent=0
+ack_mode0=0
+ack_mode1=0
+remote_done_cpu2=0
+remote_mem_peer=0
+mem_stats_raw=0
+remote_vcpu_evidence=0
+remote_mem_evidence=0
+ap_shutdown=0
+0
+wvm_reset=0
+0
+kvm_shutdown=0
+0
+remote=0
+sent=0
+ack_mode0=0
+ack_mode1=0
+remote_done_cpu2=0
+remote_done_sum=0
+local_done_sum=0
+force_local_sum=0
+mem_stats_raw=0
+remote_mem_peer=0
+remote_vcpu_evidence=0
+remote_mem_evidence=0
+entry=typed_wvm_ctl_node_runtime
+legacy_cli=0

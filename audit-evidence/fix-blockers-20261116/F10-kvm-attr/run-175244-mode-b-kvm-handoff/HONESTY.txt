@@ -1,0 +1,19 @@
+VERDICT=PARTIAL
+login_touched=1
+login_role=vehicle_only
+guest_login_serial=yes (cirros login appeared without grinding)
+ssh_probe=PASS (echo ssh-ok; 3 processors) 17:55:26 CST Asia/Shanghai
+cpu_smoke=attempted official-style taskset 0,1,2; SSH closed when QEMU died
+remote_vcpu=ATTEMPTED_NOT_COMPLETE
+  WVM-REMOTE cpu=2 dispatch #0
+  IPC VCPU_RUN vcpu=2 mode=0 target=1
+  RPC-CALL msg=5 len=4400 (F05 TCG-truncated size)
+  RET rpc_ret=0 ack_status=-1 ack_mode=0
+  no remote_done / no successful ack_status=0
+remote_mem=0 (no WVM-MEM-STATS)
+QEMU=died terminal handoff failure status=-1 gpa=0
+B_slave=ErrorAck vcpu init/state failed state=-71 (-EPROTO)
+  after wvm_kvm_extended_state_validate(&req->ctx.kvm)
+  SLAVE-RX len=4436 type=5; VCPU-RUN mode=0 vcpu=0 (parsed, not guest 2)
+do_not_claim_F10_CLOSED
+do_not_claim_MINIMUM_COMPLETE

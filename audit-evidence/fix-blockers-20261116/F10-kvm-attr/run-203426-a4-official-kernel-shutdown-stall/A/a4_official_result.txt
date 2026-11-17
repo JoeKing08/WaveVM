@@ -1,0 +1,29 @@
+WVM_A4_OFFICIAL=1
+F10_ATTR_ONLY=0
+accel=kvm
+mode=user,backend=kvm
+topology=fractal_numa_split
+login_ok=0
+ssh_banner_ok=0
+ssh_login_ok=0
+login_touched=0
+vcpu2_burn_ran=0
+vcpu2_burn_rc=1
+poll=6
+q_alive=NO
+remote_vcpu_evidence=0
+remote_mem_evidence=0
+remote=0
+remote_done_cpu2=0
+sent=0
+ack=0
+remote_mem_peer=0
+fl_dominates=0
+fence_done=0
+push_fail=0
+commit_ack=0
+commit_to=0
+handoff_fail=0
+note=COMMIT_SYNC is supporting only; official remote_mem is WVM-MEM-STATS origin!=directory
+note2=honest KVM RET is ack_status=0 ack_mode=0; scorer accepts ack_mode=[01]
+VERDICT=FAIL

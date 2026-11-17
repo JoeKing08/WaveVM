@@ -1,0 +1,9 @@
+Official typed A4 run A7 (22:35:02 CST Asia/Shanghai).
+Harness published READY_FOR_B after gateway REGISTER accepted (2s sleep).
+Gateway 901:902 and compute 801:802 reached COMMITTED+ACTIVE+HEALTHY
+(desired=4). Compute 811:812 stuck PREPARED (desired=3) with
+has_activation_enrollment_operation_id=0 after "ACK is outside its proof"
+when B started at the same second as A. check_multi_active:
+"member 2 missing enrollment activation id". Operator-stopped 22:39:32 CST.
+No Cirros login, no remote vCPU, no WVM-MEM-STATS. Not a remoting result.
+membership_rev=15 topology_rev=4 admission_rev=15, route_count=0.

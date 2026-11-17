@@ -1,0 +1,267 @@
+A4 official cell (2026-11-16, later the same evening) — see
+NOTES_A4_OFFICIAL_20261116.txt and run-194044-a4-official-reset-stall /
+run-195305-a4-official-sysinfo-stall. Official cell VERDICT=FAIL (no
+login/SSH in the official scorer). Do not treat the earlier attr-only
+PASS as F10 CLOSED. No commit / no push.
+
+-------- prior notes (attr-only) --------
+
+F10 KVM 远程归因（remote_vcpu / remote mem）— 2026-11-16 Asia/Shanghai
+====================================================================
+机器: 2404 (2e4d3ec5-e1b1-4a36-9903-de6309119499, /workspaces/WaveVM)
+      2604 (30b14f91-ba5c-40d4-8af3-ac7f5b4169f1, /home/joeking/WaveVM)
+tip: f9fbe187e8d6（与 origin/main 对齐）。无 commit / 无 push。未动 Joe 的
+session-backup / grok_bot_last_prompt.png。未启用 typed runtime gate。
+未强制 Mode A。未声称 F10 CLOSED，未声称 MINIMUM_COMPLETE。
+F05 fence-only 本轮未复跑；TCG 4400 发送路径未改。
+
+TS: wavevm-f05-a 100.116.196.65 ↔ wavevm-f05-b 100.114.246.92（结束后仍在）。
+路径: WVM_F10_ATTR_ONLY=1 + Mode B mode=user,backend=kvm。
+
+结论: F10 Mode B attr-only 计分 PASS（官方 remote_vcpu + 官方 remote_mem
+都是真实完成，不是伪造日志）。不是 F10 CLOSED，也不是 MINIMUM_COMPLETE。
+
+当前最新跑次（run-191003-legacy-mem-fwd）
+--------------------------------------
+目录: audit-evidence/fix-blockers-20261116/F10-kvm-attr/run-191003-legacy-mem-fwd/
+时间: 19:02:59–19:12:23 CST Asia/Shanghai
+master: 298899f082c23fe0d1fa5f40e3d9ef4ce325afa271b307247c8c641cabf481be
+ci_dual_node.sh: 5f4986d6e3cf21ab2f3c195255b66dfc3f4ba8993bc074fe5c0e53597f57e272
+slave: 151192866eb9f39ca8521f5bd92bb69329706f0c492cdc67905aeb1e61fe732e（本轮未改）
+qemu:  e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e（本轮未改）
+
+本轮改动（未提交）
+- master_core/logic_core.c: 本地 master 收到 slave 的 AUTO_ROUTE MSG_MEM_WRITE
+  且本节点不是 directory owner 时，把原包转发到 dir_node（不本地 ACK，
+  只转发 AUTO_ROUTE 首跳以防环）。directory owner 在 write_success 且
+  origin!=本节点 时递增真实 remote_commits，并打印官方 [WVM-MEM-STATS]
+  （字段符合 remote_memory_evidence.awk；约 250ms 限速打印，计数始终加）。
+  这些是真实远端脏页落盘，不是合成日志行。
+- scripts/ci_dual_node.sh: 仅 F10 scorer（f10_score_logs）把
+  ack_status=0 ack_mode=[01] 算作合法 RET。未改 on-wire/KVM ack_mode。
+  F05 fence-only 的 ack_mode=1 grep 未动。
+
+跑次要点
+- 本轮开机过程中 cpu=2 一直停在 1s HALT-WAKE，没有自发远程分发。
+  Cirros 已到登录提示。19:10:07 用既有 /tmp/wvm-aff2 做了一次 ≥5s
+  vCPU2 affinity burn（SSH :2226），触发远程路径。不是登录空转。
+- 2604 import：EXCEPTION_PAYLOAD enabled；profile SET_MSRS partial
+  nmsrs=96 ret=13；skipped i=13 index=0x17b errno=11；随后成功。
+  ErrorAck=0，guest_vcpu=2。
+- 远程 vCPU：WVM-REMOTE cpu=2（dispatch 日志封顶 10 条），RIP=0x40181c。
+  RET ack_status=0 ack_mode=0：729 次；ack_status=-1：0；ack_mode=1：0。
+  [WVM-TCG-STATS] cpu=2 remote_done=720 local_done=0 force_local_used=0。
+  scorer 现已把 ack_mode=0 计入 ack=（poll 12 时 ack=690）。
+- 官方 remote mem：A master0 出现 [WVM-MEM-STATS] origin=1 directory=0，
+  remote_commits 从 1 递增到 2821（20 次限速打印，因 g_ops->log+stderr
+  各写一次，raw=40）。B 侧前 20 条 MEM_WRITE forward 全部 ret=0
+ （dir=0 src=1），ignored=0。网关可见 len=4140 msg=2 的 MEM_WRITE
+  （与 VCPU 14148 一样，网关 trace 有采样，条数少于真实包数）。
+  COMMIT_SYNC ack=0（本路径是 legacy MSG_MEM_WRITE，COMMIT_SYNC 只是辅证）。
+- 计分器 poll 12（19:10:13 CST）提前 PASS：q_alive=yes，
+  remote_vcpu_evidence=1 remote_mem_evidence=1 fl_dominates=0，
+  rd2=688 sent=691 ack=690 mem_peer=2665。随后 cleanup 时最终
+  remote_done=720 / commits=2821。无 terminal handoff failure。
+  QEMU 在 PASS 时仍活着，由脚本 cleanup 结束。
+
+F05 TCG 路径：未复跑。mode_tcg=1 仍发 4400，本轮只改了 legacy
+MSG_MEM_WRITE 转发/统计和 F10 scorer 的 ack_mode 匹配，不改变 TCG
+发送尺寸。F05 fence-only 的 ack_mode=1 计数保持原样。
+
+环境收尾：两端无残留 qemu/master/slave/gateway。/dev/kvm 仍为 660+ACL。TS 仍在。
+
+下一步: 可选复跑 F05 fence-only 做回归。不要声称 MINIMUM_COMPLETE，
+除非 Minimum 其余项也已按诚实标准收口。COMMIT_SYNC 不是 F10 通过条件。
+
+-------- 此前跑次（run-184001-mcg-ctl-skip 当时为 PARTIAL）--------
+
+F10 KVM 远程归因（remote_vcpu / remote mem）— 2026-11-16 Asia/Shanghai
+====================================================================
+机器: 2404 (2e4d3ec5-e1b1-4a36-9903-de6309119499, /workspaces/WaveVM)
+      2604 (30b14f91-ba5c-40d4-8af3-ac7f5b4169f1, /home/joeking/WaveVM)
+tip: f9fbe187e8d6（与 origin/main 对齐）。无 commit / 无 push。未动 Joe 的
+session-backup / grok_bot_last_prompt.png。未启用 typed runtime gate。
+未强制 Mode A。未声称 F10 PASS / CLOSED，未声称 MINIMUM_COMPLETE。
+F05 fence-only 本轮未复跑；TCG 4400 发送路径未改。
+
+TS: wavevm-f05-a 100.116.196.65 ↔ wavevm-f05-b 100.114.246.92（结束后仍在）。
+路径: WVM_F10_ATTR_ONLY=1 + Mode B mode=user,backend=kvm。
+
+结论: 仍为 PARTIAL（官方 remote_vcpu 已实质打通，官方 remote_mem 仍缺）。
+本轮修复了 profile MSR IA32_MCG_CTL (0x17b) 整包失败。交叉主机 KVM
+VCPU_RUN 持续成功：RET ack_status=0 ack_mode=0（KVM，不是 TCG 的
+ack_mode=1），QEMU 一直活着，无 terminal handoff failure。
+[WVM-TCG-STATS] cpu=2 remote_done 最后 12416，local_done=0，force_local=0。
+官方 WVM-MEM-STATS（origin!=directory）全程为 0；COMMIT_SYNC ack 也为 0。
+ci 计分器 ack= 仍为 0，因为它只认 ack_mode=1（TCG 形状）；不要为此把 KVM
+ack_mode 改成 1。
+
+当前最新跑次（run-184001-mcg-ctl-skip）
+--------------------------------------
+目录: audit-evidence/fix-blockers-20261116/F10-kvm-attr/run-184001-mcg-ctl-skip/
+时间: 18:39:52–18:52:41 CST Asia/Shanghai（中途在约 18:41 2404 曾短暂不可达，随后恢复）
+slave: 151192866eb9f39ca8521f5bd92bb69329706f0c492cdc67905aeb1e61fe732e
+master: fe5e0fcce5cbc75c638b87a6495e3317140dfddb5d0b5b579708a9fe784de418
+
+2604 slave 首次 import：
+  [kvm-import] profile SET_MSRS partial nmsrs=96 ret=13
+  [kvm-import] profile SET skipped i=13 index=0x17b value=0xffffffffffffffff ret=0 errno=11
+  其后 import 成功。ErrorAck=0，hard-fail=0。EXCEPTION_PAYLOAD enabled。
+  guest_vcpu=2。
+
+2404 截止停止时（poll 22，QEMU 仍活着，未等到登录提示；dropbear 已开始启动）：
+  [WVM-REMOTE] cpu=2 dispatch #0..#9（日志封顶 10）
+  RET ack_status=0 ack_mode=0：12419 次；ack_status=-1：0；ack_mode=1：0
+  [WVM-TCG-STATS] cpu=2 remote_done=12416 local_done=0 force_local_used=0
+  WVM-MEM-STATS=0（vm/master/slave/B 侧均为 0）
+  无 handoff failure。scorer: remote_vcpu_evidence=1 remote_mem_evidence=0
+
+WVM-MEM-STATS 只由 typed node_runtime/memory_service.c 在远程 read/commit
+完成后打印。本路径是 legacy KVM FAST PATH，typed gate 按要求保持关闭，
+因此即使 cpu2 已远程跑了一万多次，也不会出现该官方 mem 行。不要伪造该日志。
+
+下一步（不需要找 Joe）: 在不打开 typed gate 的前提下，为 legacy KVM
+FAST PATH 补上可审计的官方 remote_mem 证据（或确认该路径应如何把真实的
+远端内存完成记录接到 WVM-MEM-STATS / 等价官方口径）。同时可考虑让 F10
+计分器把 KVM 的 ack_status=0 ack_mode=0 算作合法 RET（现在只认 ack_mode=1）。
+
+未提交代码（不要 commit / 不要 push）
+------------------------------------
+- common_include/wavevm_kvm_state.h
+  本轮: wvm_kvm_profile_msrs_transfer 对部分成功的 SET/GET_MSRS 改为逐项
+  应用；不支持的 MSR（短计数或 EINVAL/EAGAIN/ENXIO/EOPNOTSUPP/ENOTTY）记日志并
+  跳过；EBADF 等硬错误仍失败。ACK 仍带回全部请求 index，以免
+  wvm_kvm_profile_msrs_match 因缺 0x17b 把 QEMU 打死。
+- 其余沿用此前未提交改动：
+  master_core/main_wrapper.c（KVM 14112 / TCG 4400）
+  master_core/logic_core.c
+  scripts/ci_dual_node.sh（F10_ATTR_ONLY / Mode B+kvm）
+  slave_daemon/slave_hybrid.c（GET_SREGS 非致命、reason=、EXCEPTION_PAYLOAD）
+
+F05 TCG 路径：未复跑。mode_tcg=1 仍发 4400 字节，本轮只改了 profile MSR
+import/export 的跳过策略，不改变 TCG 发送尺寸。
+
+环境收尾：两端无残留 qemu/master/slave/gateway。/dev/kvm 仍为 660+ACL。TS 仍在。
+
+-------- 此前跑次摘要（详见旧段落与各 run 目录）--------
+
+F10 KVM 远程归因（remote_vcpu / remote mem）— 2026-11-16 Asia/Shanghai
+====================================================================
+机器: 2404 (2e4d3ec5-e1b1-4a36-9903-de6309119499, /workspaces/WaveVM)
+      2604 (30b14f91-ba5c-40d4-8af3-ac7f5b4169f1, /home/joeking/WaveVM)
+tip: f9fbe187e8d6（与 origin/main 对齐）。无 commit / 无 push。未动 Joe 的
+session-backup / grok_bot_last_prompt.png。未启用 typed runtime gate。
+未强制 Mode A。未声称 F10 PASS / CLOSED，未声称 MINIMUM_COMPLETE。
+F05 fence-only 本轮未复跑；从接线看 TCG 路径未被改坏（见文末）。
+
+TS: wavevm-f05-a 100.116.196.65 ↔ wavevm-f05-b 100.114.246.92（结束后仍在）。
+路径: WVM_F10_ATTR_ONLY=1 + Mode B mode=user,backend=kvm（scripts/ci_dual_node.sh）。
+Cirros 登录不是修复目标。Cirros 无 taskset；能稳定打出 cpu=2 远程分发的车辆
+是静态 affinity helper 在 vCPU2 上空转 ≥5s（短任务会被前端 1s HALT-WAKE
+本地 kvm_cpu_exec 窗口吃掉，不会走到 WVM-REMOTE）。
+
+结论: 仍为 PARTIAL。
+交叉主机 VCPU_RUN 接线已经通：slave 看到 guest vcpu=2，完整 KVM 请求
+14112/在线 14148，wvm_kvm_extended_state_validate 通过。第一次远程分发
+仍以 RET ack_status=-1 ack_mode=0 回来，QEMU terminal handoff failure
+status=-1 退出。remote_done=0，没有官方 WVM-MEM-STATS，没有 COMMIT_SYNC。
+
+当前最新阻塞（run-183152）
+------------------------
+目录: audit-evidence/fix-blockers-20261116/F10-kvm-attr/run-183152-profile-mcg-ctl/
+时间: 18:31:52–18:33:40 CST Asia/Shanghai
+slave: 814d32b3fbf81dedf4df33e2a80053f0f8b7493a39500ee75058b01cec96bb8d
+master: fe5e0fcce5cbc75c638b87a6495e3317140dfddb5d0b5b579708a9fe784de418（未再改）
+qemu: build-native e9fa9c14…（未改）
+
+登录已出现后，一次 5s vCPU2 burn 触发：
+  [IPC VCPU_RUN] sending vcpu=2 mode=0 target=1 req_bytes=14112
+  [RPC-CALL] msg=5 len=14112
+  [WVM-REMOTE] cpu=2 dispatch #0 rip=0x40181c cs=0x33（客户用户态，affinity helper）
+  [IPC VCPU_RUN RET] vcpu=2 target=1 rpc_ret=0 ack_status=-1 ack_mode=0
+  qemu: terminal handoff failure status=-1 gpa=0
+
+2604 slave1.log：
+  [Slave KVM] EXCEPTION_PAYLOAD enabled
+  [VCPU-RUN] mode=0 vcpu=2 … guest_vcpu=2 fd=7
+  validate / DEBUGREGS / sysenter+PAT / XCRS / FPU / LAPIC / VCPU_EVENTS 均过
+  [kvm-import] profile SET_MSRS nmsrs=96 ret=13 errno=11 -> -5
+  逐项探测：0–12 成功，仅
+    profile SET failed i=13 index=0x17b value=0xffffffffffffffff ret=0 errno=11
+  其后 14–95 逐项成功。0x17b = IA32_MCG_CTL（全 1）。
+  批量 ioctl 在第 14 项停下；当前 transfer 仍把部分成功当成 -EIO，整个
+  extended_state_import 失败，ErrorAck reason=extended_state_import state=-5。
+
+下一步（不需要找 Joe）: profile 路径对不支持/EAGAIN 的 CPU-model MSR
+（至少 0x17b MCG_CTL）改为记录并跳过，而不是整包失败；然后再跑一次，
+要求 ack_status=0 且出现官方 WVM-MEM-STATS。
+
+跑次时间线（均为 CST Asia/Shanghai）
+------------------------------------
+1) run-174929-mode-a-eperm/
+   默认 ci_dual_node kvm 混合 Mode A，unprivileged QEMU 绑定 /dev/wavevm EPERM。
+   改走 F10 attr-only Mode B+kvm，不再 insmod wavevm.ko。
+
+2) run-175244-mode-b-kvm-handoff/
+   远程分发发生，但 master 仍发 F05 TCG 截断包 4400/4436。
+   slave 解析为 VCPU-RUN mode=0 vcpu=0，validate -EPROTO (-71)。
+   修复: handle_ipc_cpu_run 按 mode_tcg 选长度（TCG 4400 / KVM 14112）。
+
+3) run-180407-full-kvm-req-getsregs-eio/
+   完整 14112/14148 到达，vcpu=2，随后 GET_SREGS EIO=-5（当时作为致命门）。
+   修复: 先 validate；GET_SREGS 改为非致命（sregs 本来就来自请求）。
+
+4) run-180915-getsregs-nonfatal-still-eio/
+   无 validate/GET_SREGS 失败日志，仍 ErrorAck state=-5（尚无 reason=）。
+   修复: V30 TSC/APIC MSR 移到 extended_state_import（含 LAPIC）之后；ErrorAck 加 reason=。
+
+5) run-181308-import-eio/
+   18:13:08–18:15:17。req_bytes=14112，vcpu=2，validate 过。
+   reason=extended_state_import state=-5。用户态 RIP 0x7fce73f7ad7b（SSH 车辆）。
+
+6) run-181910-profile-msrs-eio/
+   18:18:58–18:20:19。给 import 加了分步日志。
+   [kvm-import] profile_msrs_transfer failed -5（SYSENTER/PAT 已过）。
+   此次在开机中途自发分发，RIP=0xffffffffa8a0000c，未到登录。
+   修复: profile_msrs 移到 LAPIC/FPU/XCR/EVENTS 之后，并记录失败的 MSR。
+
+7) run-182316-events-einval/
+   18:23:16–18:27:24。登录后 5s vCPU2 burn 触发分发，RIP=0x40181c。
+   DEBUG/sysenter/XCRS/FPU/LAPIC 过；SET_VCPU_EVENTS errno=22 (EINVAL)。
+   短 affinity 不会触发远程（被 1s HALT-WAKE 本地窗口吃掉）。
+
+8) run-182921-events-payload-einval/
+   18:29:21–18:30:23。开机中途分发，RIP=0xffffffff8f5bb0d2。
+   SET_VCPU_EVENTS flags=0x1d（NMI_PENDING|SHADOW|SMM|PAYLOAD），
+   exc.nr=255、int.nr=251、mp=0；sanitize 重试 flags 仍为 0x1d，仍 EINVAL。
+   根因: QEMU 在 GET_VCPU_EVENTS 前 enable 了 KVM_CAP_EXCEPTION_PAYLOAD，
+   2604 slave 的 VM 当时没有开这个 cap，VALID_PAYLOAD 被 KVM 拒绝。
+
+9) run-183152-profile-mcg-ctl/   ← 本轮收束
+   slave 开启 EXCEPTION_PAYLOAD（日志确认 enabled），EVENTS 已过。
+   新阻塞见上文：profile MSR 0x17b IA32_MCG_CTL。
+
+未提交代码（不要 commit / 不要 push）
+------------------------------------
+- master_core/main_wrapper.c
+  KVM 发完整 sizeof(wvm_ipc_cpu_run_req)=14112；TCG mode_tcg=1 仍发 4400。
+- master_core/logic_core.c
+  wvm_rpc_call 按 len 识别 TCG/KVM 并设置 hdr->mode_tcg（本轮未再改）。
+- scripts/ci_dual_node.sh
+  F10_ATTR_ONLY、Mode B+kvm、TS 卫生、B 侧 WVM_FE_PHYSICAL_HOST_ID。
+- slave_daemon/slave_hybrid.c
+  GET_SREGS 非致命；ErrorAck reason=；KVM_CAP_EXCEPTION_PAYLOAD。
+- common_include/wavevm_kvm_state.h
+  import 分步日志；profile 移到 LAPIC 之后；VCPU_EVENTS 日志 + sanitize 重试；
+  profile SET 部分失败时逐项打印（目前仍 return -EIO）。
+
+F05 TCG 路径
+------------
+未复跑 F05 fence-only。接线仍在：mode_tcg=1 时 handle_ipc_cpu_run 走
+tcg_req_bytes=4400（注释写明是为了 QEMU helper MAX_PKT_SIZE=8192），
+不会改发 14112。本轮只动了 slave / kvm_state 的 KVM import，没有改
+TCG 发送尺寸。若下轮要封口，可再跑一次 F05 做回归。
+
+环境收尾
+--------
+两端无残留 qemu/master/slave/gateway。/dev/kvm 仍为 660+ACL。TS 仍在。

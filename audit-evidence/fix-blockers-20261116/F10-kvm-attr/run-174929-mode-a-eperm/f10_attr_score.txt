@@ -1,0 +1,15 @@
+remote=0
+sent=0
+ack=0
+remote_done_cpu2=0
+remote_done_sum=0
+local_done_sum=0
+force_local_sum=0
+force_local_cpu2=0
+mem_stats_raw=0
+remote_mem_peer=0
+remote_vcpu_evidence=0
+remote_mem_evidence=0
+fl_dominates=0
+login_touched=0
+stats_cpu=

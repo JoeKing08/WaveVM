@@ -1,0 +1,25 @@
+NOTES — official F05 fractal after unique-FE spawn fix
+Time: 2026-11-17 11:21:21 – 11:34:07 CST (Asia/Shanghai, UTC+8)
+Entry: scripts/wavevm f05 --role node-a|node-b --route-topology fractal
+Runtime sha256: 40e96e7531d29c68fa6759bda085adc160546aaffa14abbfec9838edc747f57c
+Git HEAD: f9fbe187e8d6cb4d103b9ea5edb6aa0d3250479c (no new commit, not pushed)
+
+What this run proved:
+- Unique Cirros FE DID spawn on official require-tcg:
+  qemu -accel wavevm,backend=tcg,mode=user,split=2 -smp 3
+  with Cirros disk + serial. vm.log / vm-serial.log exist.
+- TCG helpers ran with WVM_RUNTIME_GATE_ACTIVE unset (child only).
+- No N04 "frontend already owned" in this run.
+- CREATE_VM SUCCESS, multi-ACTIVE, legacy_cli=0.
+
+VERDICT=FAIL (official scorer; not F05 CLOSED)
+All 24 fence-only polls: q_alive=1 fence_done=0 remote=0 sent=0 ack_mode1=0
+remote_defer=40, all of the form:
+  [WVM-REMOTE-DEFER] cpu=2 stay-local (kernel/boot, not remoting yet) cs=0x10 dpl=0
+No WVM-SEND, no VCPU_RUN RET, no [WVM-MEM-STATS].
+cpu 0/1 accumulated local_done (TCG-STATS); remoting never left kernel/boot deferral
+during the official poll window. Guest serial was still in early kernel init
+(~4.9s guest time). Login was not used as a gate (F01 stays Extended).
+
+The original hole (unique FE never started / helpers stole QEMU_FRONTEND) is fixed
+on this official TCG cell. Official F05 contract evidence is still missing.

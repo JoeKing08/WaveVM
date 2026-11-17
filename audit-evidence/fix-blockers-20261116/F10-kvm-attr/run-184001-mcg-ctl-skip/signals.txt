@@ -1,0 +1,87 @@
+=== time ===
+2026年 11月 16日 星期一 18:52:39 CST
+=== runner polls tail ===
+[18:41:41] [kvm/A] f10-attr poll 1: Q=yes vcpu=1 mem=0 remote=10 rd2=1136 sent=1147 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:42:11] [kvm/A] f10-attr poll 2: Q=yes vcpu=1 mem=0 remote=10 rd2=1648 sent=1661 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:42:41] [kvm/A] f10-attr poll 3: Q=yes vcpu=1 mem=0 remote=10 rd2=2176 sent=2185 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:43:11] [kvm/A] f10-attr poll 4: Q=yes vcpu=1 mem=0 remote=10 rd2=2704 sent=2705 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:43:42] [kvm/A] f10-attr poll 5: Q=yes vcpu=1 mem=0 remote=10 rd2=3216 sent=3223 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:44:12] [kvm/A] f10-attr poll 6: Q=yes vcpu=1 mem=0 remote=10 rd2=3728 sent=3728 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:44:42] [kvm/A] f10-attr poll 7: Q=yes vcpu=1 mem=0 remote=10 rd2=4224 sent=4229 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:45:12] [kvm/A] f10-attr poll 8: Q=yes vcpu=1 mem=0 remote=10 rd2=4736 sent=4737 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:45:42] [kvm/A] f10-attr poll 9: Q=yes vcpu=1 mem=0 remote=10 rd2=5232 sent=5245 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:46:12] [kvm/A] f10-attr poll 10: Q=yes vcpu=1 mem=0 remote=10 rd2=5760 sent=5764 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:46:42] [kvm/A] f10-attr poll 11: Q=yes vcpu=1 mem=0 remote=10 rd2=6272 sent=6286 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:47:13] [kvm/A] f10-attr poll 12: Q=yes vcpu=1 mem=0 remote=10 rd2=6800 sent=6811 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:47:43] [kvm/A] f10-attr poll 13: Q=yes vcpu=1 mem=0 remote=10 rd2=7328 sent=7329 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:48:13] [kvm/A] f10-attr poll 14: Q=yes vcpu=1 mem=0 remote=10 rd2=7840 sent=7849 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:48:43] [kvm/A] f10-attr poll 15: Q=yes vcpu=1 mem=0 remote=10 rd2=8352 sent=8363 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:49:13] [kvm/A] f10-attr poll 16: Q=yes vcpu=1 mem=0 remote=10 rd2=8880 sent=8881 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:49:43] [kvm/A] f10-attr poll 17: Q=yes vcpu=1 mem=0 remote=10 rd2=9408 sent=9408 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:50:13] [kvm/A] f10-attr poll 18: Q=yes vcpu=1 mem=0 remote=10 rd2=9920 sent=9930 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:50:44] [kvm/A] f10-attr poll 19: Q=yes vcpu=1 mem=0 remote=10 rd2=10432 sent=10446 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:51:14] [kvm/A] f10-attr poll 20: Q=yes vcpu=1 mem=0 remote=10 rd2=10960 sent=10963 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:51:44] [kvm/A] f10-attr poll 21: Q=yes vcpu=1 mem=0 remote=10 rd2=11472 sent=11482 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+[18:52:14] [kvm/A] f10-attr poll 22: Q=yes vcpu=1 mem=0 remote=10 rd2=11984 sent=11997 ack=0 mem_peer=0 fl=0 fence=0 push_fail=0 commit_ack=0 commit_to=0
+=== counts ===
+REMOTE=10
+MEM-STATS_vm=0
+MEM-STATS_master=0
+TCG-STATS=806
+COMMIT_SYNC_ack=0
+handoff_fail=0
+RET_ack0_mode0=12419
+RET_ack0_mode1=0
+RET_ack-1=0
+=== last TCG-STATS ===
+[WVM-TCG-STATS] cpu=2 remote_done=12352 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=2 remote_done=12368 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=2 remote_done=12384 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=2 remote_done=12400 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=2 remote_done=12416 local_done=0 force_local_used=0
+=== first REMOTE ===
+[WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffffa66a53b7 cs=0x10 cr0=0x80050033 cr3=0x460c000 efer=0xd01 rsp=0xffffab2280f2f910
+[WVM-REMOTE] cpu=2 dispatch #1 rip=0xffffffffa6db603b cs=0x10 cr0=0x80050033 cr3=0x1011b0000 efer=0xd01 rsp=0xffffab22806d3e78
+[WVM-REMOTE] cpu=2 dispatch #2 rip=0xffffffffa6db603b cs=0x10 cr0=0x80050033 cr3=0x1011b0000 efer=0xd01 rsp=0xffffab22806d3e78
+=== login ===
+LOGIN=no
+failed 20/20: up 519.63. request failed
+failed to read iid from metadata. tried 20
+failed to get instance-id of datasource
+Top of dropbear init script
+Starting dropbear sshd: failed to get instance-id of datasource
+=== score ===
+remote=10
+sent=11997
+ack=0
+remote_done_cpu2=11984
+remote_done_sum=11984
+local_done_sum=0
+force_local_sum=0
+force_local_cpu2=0
+mem_stats_raw=0
+remote_mem_peer=0
+remote_vcpu_evidence=1
+remote_mem_evidence=0
+fl_dominates=0
+login_touched=0
+stats_cpu=c2:rd=11984:ld=0:fl=0
+=== result ===
+F10_ATTR_ONLY=1
+accel=kvm
+login_touched=0
+poll=22
+q_alive=yes
+remote_vcpu_evidence=1
+remote_mem_evidence=0
+remote=10
+remote_done_cpu2=11984
+sent=11997
+ack=0
+remote_mem_peer=0
+fl_dominates=0
+fence_done=0
+push_fail=0
+commit_ack=0
+commit_to=0
+note=COMMIT_SYNC is supporting only; official remote_mem is WVM-MEM-STATS origin!=directory

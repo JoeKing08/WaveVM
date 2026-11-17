@@ -1,0 +1,20 @@
+A4 official cell — run-203426-a4-official-kernel-shutdown-stall
+Times: 20:34:05 (B) / 20:34:26 (A QEMU 20:34:36) – stopped 20:37:22 CST Asia/Shanghai (2026-11-16)
+Path: historical harness ci_dual_node.sh WVM_A4_OFFICIAL=1 (NOT typed official entry)
+Mode B user+kvm, fractal NUMA, typed gate OFF
+ART: A /tmp/wavevm-test-results/dual-node-kvm-20261116-203426
+     B /tmp/wavevm-test-results/dual-node-kvm-20261116-203405
+Binaries: new QEMU 82a5ac67 + current master 53187915 on both;
+B slave temporarily restored to proven F10 15119286 (events-layout isolation).
+
+VERDICT=FAIL (stopped; official scorer still in login-wait).
+After a few HALT-WAKE stay-local samples, cpu=2 was remoted mid-boot in
+the Linux kernel (dispatch #0 rip=0xffffffffaa1b603b cs=0x10). Every
+remote slice returned exit=8 / triple-fault. AP-shutdown parking kept
+WVM-RESET=0 and KVM-SHUTDOWN=0 (no full VM reset). Serial froze at
+metadata failed 1/20 (mtime 20:34); login=0 SSH=0. remote_done climbed
+past 12384 with RET ack_status=0 ack_mode=0, but those are SHUTDOWN
+retries, not successful remote execution.
+
+This isolation run shows the remote SHUTDOWN is not unique to slave
+f8728d35; it also happens with 15119286 + the new QEMU.

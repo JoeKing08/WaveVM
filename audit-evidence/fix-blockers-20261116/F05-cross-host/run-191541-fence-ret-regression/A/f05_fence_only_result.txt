@@ -1,0 +1,6 @@
+F05_FENCE_ONLY=1
+fence_done=37
+push_fail=0
+remote=10
+sent=37
+ack=37

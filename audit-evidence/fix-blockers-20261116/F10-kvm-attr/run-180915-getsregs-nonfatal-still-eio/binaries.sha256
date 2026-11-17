@@ -1,0 +1,3 @@
+master fe5e0fcce5cbc75c638b87a6495e3317140dfddb5d0b5b579708a9fe784de418
+slave_this_run d16ba4358d0e2f37fdb44de84b1b427af6e34e31ab5dbbc6e3f3c36eecfdf88e (GET_SREGS non-fatal; TSC MSRs still before LAPIC)
+slave_next 2c9c569cb3c7965c87ff0e08e004274682b3d591ef76f3da4e41a56e48ba457e

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <time.h>
 
 #define CACHE_INITIAL_BUCKETS 256U
@@ -154,6 +155,30 @@ static int deadline_from_now(uint64_t timeout_ms, struct timespec *deadline)
     deadline->tv_nsec = (long)(nanoseconds % 1000000000U);
     return 0;
 }
+
+
+int wvm_kvm_hva_expose_page(uint8_t *hva)
+{
+    if (!hva) {
+        return -EINVAL;
+    }
+    if (mprotect(hva, WVM_MEMORY_PAGE_BYTES, PROT_READ | PROT_WRITE) != 0) {
+        return errno ? -errno : -EFAULT;
+    }
+    return 0;
+}
+
+int wvm_kvm_hva_conceal_page(uint8_t *hva)
+{
+    if (!hva) {
+        return -EINVAL;
+    }
+    if (mprotect(hva, WVM_MEMORY_PAGE_BYTES, PROT_NONE) != 0) {
+        return errno ? -errno : -EFAULT;
+    }
+    return 0;
+}
+
 
 int wvm_kvm_page_cache_init(
     struct wvm_kvm_page_cache *cache,
@@ -761,9 +786,14 @@ int wvm_kvm_page_cache_global_install_data(
             error, error_len);
     }
     if (result == 0) {
-        memcpy(hva + offset, data, data_bytes);
-        if (mirror && mirror != hva) {
-            memcpy(mirror + offset, data, data_bytes);
+        int expose = wvm_kvm_hva_expose_page(hva);
+        if (expose != 0) {
+            result = expose;
+        } else {
+            memcpy(hva + offset, data, data_bytes);
+            if (mirror && mirror != hva) {
+                memcpy(mirror + offset, data, data_bytes);
+            }
         }
     }
     pthread_mutex_unlock(&g_global_cache.lock);

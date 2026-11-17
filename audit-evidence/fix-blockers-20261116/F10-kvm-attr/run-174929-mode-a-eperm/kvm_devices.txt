@@ -1,0 +1,2 @@
+crw-rw-rw-+ 1 root kvm 10, 232 11月 16 17:13 /dev/kvm
+crw-rw-rw-  1 root kvm 10, 264 11月 16 17:49 /dev/wavevm

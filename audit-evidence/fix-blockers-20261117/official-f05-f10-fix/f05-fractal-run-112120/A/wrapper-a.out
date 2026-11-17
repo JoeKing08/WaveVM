@@ -1,0 +1,81 @@
+[wavevm] official f05 typed cell role=node-a topology=fractal placement=spread entry=wvm_ctl+wavevm_node_runtime
+[official f05 fractal 11:21:21/A] node A starting art=/tmp/wavevm-official-f05-fractal-fix-20261117-112120
+[official f05 fractal 11:21:29/A] seed+certs ready; publishing join bundle A_IP=100.116.196.65
+[official f05 fractal 11:21:29/A] join.env published to /mnt/hgfs/SharedFolder/wavevm-official-f05-fractal (A_IP=100.116.196.65 digest_b=d10df33571a68272...); READY_FOR_B after gateway enrolls
+[official f05 fractal 11:21:29/A] wvm_ctl serve up pid=39072 port=17101
+[official f05 fractal 11:21:30/A] gateway REGISTER accepted pid=39078 advertised control/data=100.116.196.65; waiting for gateway COMMITTED
+[official f05 fractal 11:21:30/A] gateway 901:902 COMMITTED+ACTIVE
+[official f05 fractal 11:21:30/A] gateway up pid=39078; holding READY_FOR_B until A is COMMITTED
+[official f05 fractal 11:21:30/A] agent A up pid=39104; waiting for local gw+A enrollment
+[official f05 fractal 11:21:31/A] local gw+A COMMITTED+ACTIVE; publishing READY_FOR_B
+[official f05 fractal 11:21:31/A] READY_FOR_B published after serialized gw+A enrollment
+[official f05 fractal 11:21:32/A] multi-ACTIVE cluster (gw+A+B) ready
+[official f05 fractal 11:21:32/A] CREATE_VM spread vcpus=3 mem=3221225472 disabled require-tcg unique-FE split=2 topology=fractal
+[official f05 fractal 11:21:32/A] CREATE_VM attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=7261706673813620116
+[official f05 fractal 11:21:33/A] CREATE_VM attempt=1 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=7261706673813620116
+[official f05 fractal 11:21:33/A] CREATE_VM SUCCESS status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=7261706673813620116
+[official f05 fractal 11:21:33/A] QEMU FE observed
+[official f05 fractal 11:21:33/A] F05 fence-only poll (no TCG guest login gate; F01 stays Extended)
+[official f05 fractal 11:21:33/A] settle=30s polls=24 interval=30s
+[official f05 fractal 11:22:03/A] F05 poll 1/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:22:33/A] F05 poll 2/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:23:03/A] F05 poll 3/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:23:33/A] F05 poll 4/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:24:03/A] F05 poll 5/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:24:33/A] F05 poll 6/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:25:03/A] F05 poll 7/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:25:33/A] F05 poll 8/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:26:03/A] F05 poll 9/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:26:33/A] F05 poll 10/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:27:03/A] F05 poll 11/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:27:33/A] F05 poll 12/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:28:03/A] F05 poll 13/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:28:33/A] F05 poll 14/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:29:04/A] F05 poll 15/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:29:34/A] F05 poll 16/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:30:04/A] F05 poll 17/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:30:34/A] F05 poll 18/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:31:04/A] F05 poll 19/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:31:34/A] F05 poll 20/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:32:04/A] F05 poll 21/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:32:34/A] F05 poll 22/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:33:04/A] F05 poll 23/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+[official f05 fractal 11:33:34/A] F05 poll 24/24 q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+VERDICT=FAIL
+cell=f05
+topology=fractal
+placement=spread
+backend=require-tcg
+accel=disabled
+entry=typed_wvm_ctl_node_runtime
+legacy_cli=0
+login_ok=0
+ssh_ok=0
+login_at=
+ssh_at=
+q_alive=1
+remote=0
+remote_defer=40
+sent=0
+ack_mode0=0
+ack_mode1=0
+fence_done=0
+push_fail=0
+remote_done_cpu2=0
+remote_mem_peer=0
+mem_stats_raw=0
+remote_vcpu_evidence=0
+remote_vcpu_evidence_kvm=0
+remote_vcpu_evidence_tcg=0
+remote_mem_evidence=0
+ap_shutdown=0
+0
+wvm_reset=0
+0
+kvm_shutdown=0
+0
+handoff_fail=0
+0
+note=moving this test does not close F05, F10, Phase 1, Phase 9, or MINIMUM_COMPLETE
+/workspaces/WaveVM/tests/e2e/test_a4_official_typed.sh: 第 88 行： 39104 已杀死               stdbuf -o0 -e0 env WVM_TCG_QEMU_BIN="$qemu_bin" WVM_TCG_QEMU_DATADIR="$WVM_TCG_QEMU_DATADIR" WVM_PHYSICAL_HOST_ID="$host_a" WVM_FE_PHYSICAL_HOST_ID="$host_a" WVM_GUEST_IMAGE="$cirros_img" WVM_GUEST_SERIAL_LOG="$ART/vm-serial.log" WVM_GUEST_FE_LOG="$ART/vm.log" WVM_GUEST_SSH_PORT="$ssh_port" WVM_GUEST_FE_BOOT_NOW=1 WVM_UNIQUE_GUEST_FE=1 WVM_GUEST_SPLIT=2 WVM_GUEST_SMP="$vcpus" WVM_CREATE_VCPUS="$vcpus" "$repo_root/wavevm_node_runtime" agent --state-dir "$tmpdir/node-a" --runtime-dir "$tmpdir/runtime-a" --socket "$tmpdir/node-a.sock" --node-id 801 --instance-id 802 --inventory-revision 1 --physical-host-id "$host_a" --vcpu-slots 6 --memory-bytes "$((mem_bytes + 256*1024*1024))" --controller-node-id 701 --controller-instance-id 702 --controller-uid "$(id -u)" --slots 6 --max-vcpus 6 --max-memory-chunks 8 --max-storage 1 --max-members 8 --max-leases 2 --control-address "$my_ip" --control-port "$A_CTRL" --data-port "$A_DATA" --tls-ca "$tmpdir/certs/ca.crt" --tls-cert "$tmpdir/certs/nodea.crt" --tls-key "$tmpdir/certs/nodea.key" --register-controller-address 127.0.0.1 --register-controller-port "$CTL_PORT" --failure-domain-id 1 --pod-id 1 --vnode-first 0 --vnode-count 16 --sidecar-address "$my_ip" --sidecar-data-port "$A_SIDE_D" --sidecar-control-port "$A_SIDE_C" --role-bits 1 --capability-profile-generation 1 --capability-profile-digest "$digest_a" --storage-capabilities-digest 2222222222222222222222222222222222222222222222222222222222222222 --accelerator-fault-capabilities-digest 3333333333333333333333333333333333333333333333333333333333333333 --exclusive-resource-digest 4444444444444444444444444444444444444444444444444444444444444444 > "$tmpdir/agent-a.log" 2>&1
+[official f05 fractal 11:34:07/A] node A finished verdict=FAIL art=/tmp/wavevm-official-f05-fractal-fix-20261117-112120

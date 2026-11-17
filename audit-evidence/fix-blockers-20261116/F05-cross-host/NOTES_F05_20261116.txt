@@ -1,0 +1,105 @@
+F05 cross-host（Mode B TCG fence + remote VCPU RET）— 2026-11-16 Asia/Shanghai CST
+评分：fence-only PASS（回归跑次 run-191541，以及此前 scored run-173659）。
+不宣称 F05 CLOSED，不宣称 MINIMUM_COMPLETE。生产路径仍是 legacy CLI
+master+slave+stub planner；typed node_runtime / V1 未迁移，typed gate 未开。
+本轮证明：在 logic_core.c 增加 legacy MSG_MEM_WRITE 转发 / WVM-MEM-STATS 之后，
+跨机 push-fence 与 TCG 4400/ack_mode=1 的 VCPU_RUN RET 没有回归。
+
+当前最新跑次（run-191541-fence-ret-regression）
+----------------------------------------------
+目录: audit-evidence/fix-blockers-20261116/F05-cross-host/run-191541-fence-ret-regression/
+时间: 19:15:39–19:18:04 CST Asia/Shanghai
+master: 298899f082c23fe0d1fa5f40e3d9ef4ce325afa271b307247c8c641cabf481be
+        （与 F10 run-191003 相同，含 MSG_MEM_WRITE 转发）
+ci_dual_node.sh: 5f4986d6e3cf21ab2f3c195255b66dfc3f4ba8993bc074fe5c0e53597f57e272
+qemu: e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e（未改）
+harness: WVM_F05_FENCE_ONLY=1，WAVEVM_CI_ACCEL=tcg，accel_prop=wavevm,split=2
+         TCG 4400 与 F05 ack_mode=1 计分未改。无 Cirros/login 打磨。
+
+poll 1（19:17:20 CST）Q=yes：
+  fence_done=37 push_fail=0 remote=10 sent=37 ack=37
+  handoff=60 commit_ack=20 commit_to=0
+  脚本：F05 fence-only PASS (fence+remote VCPU evidence)，exit 0。
+A：RET ack_status=0 ack_mode=1 ×37（ack_mode=0=0，ack_status=-1=0）；
+  WVM-REMOTE cpu=2 日志封顶 10；[WVM-TCG-STATS] cpu=2 remote_done=36
+  local_done=1 force_local_used=1（有一次本地回退，不否定 fence-only 门）。
+  首次 RIP=0xffffffff83139281。无 terminal handoff failure。ErrorAck=0。
+B：guest_vcpu=2 ×20，TCG ack ×20，VCPU_RUN pending=37，报文 len=4436
+  （form 2，header+4400），len=14148=0，mode_tcg=1。reject-version=2，
+  N02 coherent REFUSED=1（旧观察，未挡住 fence）。
+两端已清理，无残留。TS 仍在。
+
+不把本次 PASS 写成 F05 CLOSED：仍是 fence-only；未做 TCG guest login
+（Extended Phase 10）；生产入口仍是 legacy CLI。
+
+-------- 此前 scored PASS：run-173659-fence-ret-pass --------
+
+F05 cross-host（Mode B TCG fence + remote VCPU RET）— 2026-11-16 Asia/Shanghai CST
+评分：fence-only PASS（本轮 scored run-173659）。不宣称 MINIMUM_COMPLETE。
+不把“F05 CLOSED”写成无保留结案：生产路径仍是 legacy CLI master+slave+stub planner，
+typed node_runtime / V1 未迁移，也没有打开 typed runtime gate。
+本轮证明的是：跨机 push-fence 能排空，且 FE 对 guest cpu=2 的 VCPU_RUN 能经
+UDP 送到 2604 helper，并收到 rpc_ret=0 / ack_status=0 / ack_mode=1 的 RET。
+
+主机（系统 Tailscale 复用，未替换 tailscaled）：
+  A wavevm-f05-a 100.116.196.65  machine 2e4d3ec5 / 2404  /workspaces/WaveVM
+    tip f9fbe187（与 origin/main 对齐）+ 本轮未提交的 main_wrapper.c / logic_core.c
+  B wavevm-f05-b 100.114.246.92  machine 30b14f91 / 2604  /home/joeking/WaveVM（无 .git）
+  重启后两边原先 Logged out；用已有 auth-key file: 方式 up --hostname=wavevm-f05-a/b 成功。
+  LAN 192.168.10.129 ↔ 192.168.10.131，TS ping ~1.5ms。
+  SharedFolder 经 ~/刷新共享文件夹.txt 重新挂上。密钥未写入证据。
+
+关键二进制（本轮 PASS 使用）：
+  qemu-system-x86_64 仍是 2026-11-11 20:09 回滚修复构建
+    sha256 e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e
+  wavevm_node_master 本轮从源码重建（legacy-master）
+    sha256 23e6e971c0f586607783021fceeb8efdd5bea38de9fe39993a9bfbddee47bd61
+  未启用 typed runtime gate。未复用不可复现的临时补丁二进制。
+
+代码改动（未 commit / 未 push）：
+  1) master_core/main_wrapper.c  handle_ipc_cpu_run
+     在 wvm_vcpu_service_global_submit 返回 -ENOTCONN 时，不打开 typed gate，
+     改为 wvm_rpc_call(MSG_VCPU_RUN) 走已有 logic_core UDP 路径。
+     载荷必须用 TCG prefix+ctx（4400 字节，报文 4436），不能发完整 union
+     （header+14112=14148）。helper recvmmsg 缓冲 MAX_PKT_SIZE=8192，
+     超长包到不了 “[WaveVM-Slave] vCPU got req”。
+  2) master_core/logic_core.c  wvm_rpc_call
+     识别 tcg_req_bytes，正确置 hdr->mode_tcg，供 helper 按 wire form 2 解析。
+
+本轮 live 轨迹（诚实记录，含失败）：
+  run-172335-fence-ok-vcpu-enotconn
+    首次用 20:09 qemu + 20:08 master（尚未改 VCPU 回退）：
+    fence_done=1 push_fail=0 commit_ack=20；B 侧 COMMIT_SYNC accept=131 reject-version=6
+    （相对 11-11 的 ~33089 reject-version / push-fence ret=-5 已过关）。
+    随后 VCPU_RUN 被拒：status=-107 reason=typed vCPU service is not installed，
+    QEMU terminal handoff failure，sent=0/ack=0。
+  run-172945-vcpu-sent-pkt-too-big
+    加上 ENOTCONN→UDP 回退后：sent=1，[IPC VCPU_RUN] vcpu=2 target=1，
+    但发的是完整 14148 字节报文；B 只见 “VCPU_RUN pending” 不见 guest_vcpu=2 / TCG ack。
+  run-173422-qemu-sock-timeout
+    快速重启后 QEMU 连 /tmp/wvm_user_0.sock 超时 errno=2，属卫生/竞态，未进入 fence。
+  run-173659-fence-ret-pass  ★ scored
+    poll 1：Q=yes fence_done=30 push_fail=0 remote=10 sent=30 ack=30
+            handoff=60 commit_ack=20 commit_to=0
+    脚本打印：F05 fence-only PASS (fence+remote VCPU evidence)
+    B：guest_vcpu=2 ×20，TCG ack ×20，报文 len=4436，Slave Return MSG_VCPU_EXIT。
+    预约：fract_2node.conf NODE 1=100.114.246.92:19220（不是 127.0.0.1）。
+
+保留的观察（不否定本轮 fence-only PASS，但也不夸大）：
+  - 客户机串口出现 CPU#2 soft lockup 以及更早的 migration/2 退出 / CR2=0x100000002。
+    本轮不做 Cirros 登录打磨（Extended）。fence/RET 证据在锁住前已满足评分。
+  - B helper 仍有 N02 coherent REFUSED（跨机缺 FE/executor host proof，旧现象）。
+  - reject-version 仍有少量（本轮 B 约 6 条），未再阻止 fence。
+  - 2604 SYNC_TIP.txt 仍写着 620cd762b；F05 相关源码/二进制已按 2404 对齐，
+    但整树并未用 git 完整同步。
+
+证据目录：
+  audit-evidence/fix-blockers-20261116/F05-cross-host/
+    NOTES_F05_20261116.txt
+    run-173659-fence-ret-pass/          （含 node-b/，无 tailscale_status.json）
+    run-172335-fence-ok-vcpu-enotconn/
+    run-172945-vcpu-sent-pkt-too-big/
+    run-173422-qemu-sock-timeout/
+
+F10：本轮未跑。F05 收分后应再跑 KVM remote attribution（不要打磨 Cirros 登录）。
+MINIMUM_COMPLETE：NOT_CLAIMED / NOT_CLAIMABLE

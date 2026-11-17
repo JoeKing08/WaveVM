@@ -125,4 +125,10 @@ void wvm_kvm_execution_release(struct wvm_kvm_memory_slice *slice);
 int wvm_kvm_memory_slice_global_begin(
     struct wvm_kvm_memory_slice **slice_out, char *error, size_t error_len);
 
+
+/* Expose or hide one page of executor HVA so KVM cannot silently read zeros
+ * for an absent remote page. aligned to WVM_MEMORY_PAGE_BYTES. */
+int wvm_kvm_hva_expose_page(uint8_t *hva);
+int wvm_kvm_hva_conceal_page(uint8_t *hva);
+
 #endif

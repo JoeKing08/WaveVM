@@ -1,0 +1,11 @@
+Official typed A4 run A9 (22:43:23-22:44:31 CST Asia/Shanghai).
+Retry after remounting /dev/shm to 6G on both VMs (A8 SIGBUS on 3GiB memcpy
+into default 2.9G tmpfs). scripts/wavevm a4 only. QEMU cc212798.
+Gateway REGISTER accepted, then "cluster enrollment ACK is outside its proof"
+when agent A registered in the same second (22:43:31). After 60s:
+member[0] GATEWAY 901:902 desired=PREPARED(3) health=1 has_enroll_act=0
+member[1] COMPUTE 801:802 desired=ACTIVE(4) health=1 enrollment COMMITTED
+membership_rev=10. Harness correctly refused to publish READY_FOR_B.
+No CREATE_VM, no QEMU, no login, no remotes. Operator stopped further
+retries (do not grind). Remaining harness gap: wait for gateway COMMITTED
+before starting agent A, not only after REGISTER accepted.

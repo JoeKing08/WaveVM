@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Helper: launch QEMU against an already-admitted wavevm_node_runtime.
+# Official production entry remains scripts/wavevm (wvm_ctl + node-runtime).
+# This script never starts wavevm_node_master / wavevm_node_slave.
 set -euo pipefail
 
 runtime="${WAVEVM_NODE_RUNTIME:-wavevm_node_runtime}"

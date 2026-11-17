@@ -1,0 +1,71 @@
+=== time ===
+2026年 11月 16日 星期一 19:49:50 CST
+=== runner ===
+[19:40:44] [kvm/A] A4 official: Mode B/B + /dev/kvm (do not load wavevm.ko)
+[19:40:54] [kvm/A] A4 official cell: Cirros login/SSH + official remote_vcpu + official remote_mem (Mode B user+kvm)
+[19:41:44] [kvm/A] ci heartbeat
+[19:41:54] [kvm/A] A4 login wait 2*30s Q=yes
+[19:42:44] [kvm/A] ci heartbeat
+[19:42:54] [kvm/A] A4 login wait 4*30s Q=yes
+[19:43:44] [kvm/A] ci heartbeat
+[19:43:54] [kvm/A] A4 login wait 6*30s Q=yes
+[19:44:44] [kvm/A] ci heartbeat
+[19:44:54] [kvm/A] A4 login wait 8*30s Q=yes
+[19:45:45] [kvm/A] ci heartbeat
+[19:45:54] [kvm/A] A4 login wait 10*30s Q=yes
+[19:46:45] [kvm/A] ci heartbeat
+[19:46:54] [kvm/A] A4 login wait 12*30s Q=yes
+[19:47:45] [kvm/A] ci heartbeat
+[19:47:54] [kvm/A] A4 login wait 14*30s Q=yes
+[19:48:45] [kvm/A] ci heartbeat
+[19:48:54] [kvm/A] A4 login wait 16*30s Q=yes
+[19:49:45] [kvm/A] ci heartbeat
+=== counts ===
+REMOTE=10
+MEM-STATS_master=12
+TCG-STATS=24
+RESET=29
+SHUTDOWN=20
+RET_ack0_mode0=24
+RET_ack0_mode1=0
+RET_ack-1=0
+handoff_fail=0
+LOGIN=0
+=== first REMOTE ===
+[WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffffa02a53ba cs=0x10 cr0=0x80050033 cr3=0x1011e2000 efer=0xd01 rsp=0xffffb5fb80e87b88
+[WVM-REMOTE] cpu=2 dispatch #1 rip=0xffffffffa09b603b cs=0x10 cr0=0x80050033 cr3=0x4146000 efer=0xd01 rsp=0xffffb5fb806d3e78
+[WVM-REMOTE] cpu=2 dispatch #2 rip=0x0 cs=0x1000 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0x0
+[WVM-REMOTE] cpu=2 dispatch #3 rip=0x0 cs=0x0 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0x1d3e
+[WVM-REMOTE] cpu=2 dispatch #4 rip=0x0 cs=0x1000 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0x0
+[WVM-REMOTE] cpu=2 dispatch #5 rip=0xb4 cs=0x2 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0xc5b6
+[WVM-REMOTE] cpu=2 dispatch #6 rip=0x1 cs=0x0 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0x7c6e
+[WVM-REMOTE] cpu=2 dispatch #7 rip=0x1 cs=0x0 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0x1550
+[WVM-REMOTE] cpu=2 dispatch #8 rip=0x84c9 cs=0x18f8 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0x3d46
+[WVM-REMOTE] cpu=2 dispatch #9 rip=0x84c3 cs=0x18f8 cr0=0x60000010 cr3=0x0 efer=0x0 rsp=0x406f
+=== last TCG-STATS ===
+[WVM-TCG-STATS] cpu=2 remote_done=22 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=2 remote_done=23 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=2 remote_done=24 local_done=0 force_local_used=0
+=== last MEM-STATS ===
+[WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=29611 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=119
+[WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=29611 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=119
+=== serial tail ===
+info: container: none
+Starting syslogd: OK
+currently loaded modules: 8021q 8139cp 8390 9pnet 9pnet_virtio ahci cec drm drm_kms_helper e1000 e1000e failover fb_sys_fops garp hid hid_generic ip6_udp_tunnel ip_tables isofs libahci libcrc32c llc mii mrp ne2k_pci net_failover nls_ascii nls_iso8859_1 nls_utf8 pcnet32 qemu_fw_cfg rc_core sctp stp syscopyarea sysfillrect sysimgblt udp_tunnel usbhid virtio_blk virtio_dma_buf virtio_gpu virtio_input virtio_net virtio_rng virtio_scsi x_tables 
+Saving random seed: [    4.441388] random: dd: uninitialized urandom read (32 bytes read)
+OK
+Starting acpid: OK
+[    4.456977] random: mktemp: uninitialized urandom read (6 bytes read)
+[    4.619764] random: blkid: uninitialized urandom read (6 bytes read)
+Starting network: dhcpcd-9.4.1 starting
+forked to background, child pid 285
+OK
+checking http://169.254.169.254/2009-04-04/instance-id
+failed 1/20: up 4.50. request failed
+failed 2/20: up 6.50. request failed
+failed 3/20: up 8.51. request failed
+=== file times ===
+2026-11-16 19:41:25.431028569 +0800 31061 /tmp/wavevm-test-results/dual-node-kvm-20261116-194044/vm-serial.log
+2026-11-16 19:41:28.776054372 +0800 110795 /tmp/wavevm-test-results/dual-node-kvm-20261116-194044/vm.log
+2026-11-16 19:49:32.114157973 +0800 16856 /tmp/wavevm-test-results/dual-node-kvm-20261116-194044/master0.log

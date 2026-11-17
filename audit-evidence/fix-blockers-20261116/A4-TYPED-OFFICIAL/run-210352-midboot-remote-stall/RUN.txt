@@ -1,0 +1,15 @@
+run=210352-midboot-remote-stall
+host_tz=Asia/Shanghai CST UTC+8
+start_A=2026-11-16 21:03:52 CST
+start_B=2026-11-16 21:03:50 CST
+CREATE_VM_SUCCESS=2026-11-16 21:04:03 CST vm_id=256 smp=3 split=2 mode=user kvm
+serial_frozen_at=2026-11-16 21:04:14 CST Asia/Shanghai (initramfs: up at 1.04)
+stopped_at=2026-11-16 21:08:43 CST Asia/Shanghai (no login after 4+ min; not the 1500s timeout)
+login_ok=0 ssh_ok=0
+verdict=FAIL (operator-stopped mid-boot remote stall; official scorer not reached)
+first_remote=[WVM-REMOTE] cpu=2 dispatch #0 rip=0xffffffff97aa62a7 cs=0x10 (kernel, after WVM-WAKE OS SIPI)
+remote=1 ap_shutdown=0 wvm_reset=0; vm.log and serial both stopped at 21:04:14; FE hung on first remote slice
+entry=scripts/wavevm a4
+legacy_cli=0
+runtime=10e56972767c0988e2f9f7b2f1efe300c1d506a9869f956246884fe74d64766e
+qemu=82a5ac679ffc3ceef86198c4080b534ec8bede10f43a0e868dd3d2e0cf6721a1

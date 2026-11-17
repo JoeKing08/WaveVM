@@ -1593,13 +1593,72 @@ static int service_remote_read(struct wvm_memory_service *service,
         !route_destination_equal(&service->config.dispatch->local_primary,
                                  &envelope->route) ||
         !(memory = wvm_runtime_dispatch_find_memory(
-              service->config.dispatch, read.gpa)) ||
-        memory->directory_physical_node_id !=
+              service->config.dispatch, read.gpa))) {
+        set_error(error, error_len, "V1 memory read is not admitted on this runtime");
+        return -EPERM;
+    }
+    if (memory->directory_physical_node_id !=
             service->config.local_physical_node_id ||
         memory->directory_node_instance_id !=
             service->config.local_node_instance_id) {
-        set_error(error, error_len, "V1 memory read targets a nonlocal directory");
-        return -EPERM;
+        /*
+         * Official spread may place the directory on a non-FE node. That
+         * directory may pull live unique-FE RAM for a first publish. The
+         * FE is not the directory and must not invent ownership; only the
+         * admitted directory may request this backing read.
+         */
+        if (!service->config.read_frontend_live_page ||
+            envelope->origin_physical_node_id !=
+                memory->directory_physical_node_id ||
+            read.reply_node_instance_id !=
+                memory->directory_node_instance_id) {
+            set_error(error, error_len,
+                      "V1 memory read targets a nonlocal directory");
+            return -EPERM;
+        }
+        read_result = service->config.read_frontend_live_page(
+            service->config.opaque, read.gpa, page, &version, error,
+            error_len);
+        memset(&ack, 0, sizeof(ack));
+        ack.gpa = read.gpa;
+        ack.directory_physical_node_id = memory->directory_physical_node_id;
+        ack.directory_node_instance_id = memory->directory_node_instance_id;
+        if (read_result == 0) {
+            /* SUCCESS ACKs may not use version 0 (page would be dropped). */
+            ack.version = version != 0 ? version : 1;
+            ack.status = WVM_MEM_ACK_SUCCESS;
+            ack.data = page;
+            ack.data_bytes = sizeof(page);
+            fprintf(stderr,
+                    "[WVM-DIR] served live FE backing GPA=0x%llx "
+                    "to directory=%u\n",
+                    (unsigned long long)read.gpa,
+                    memory->directory_physical_node_id);
+        } else {
+            ack.status = WVM_MEM_ACK_NOT_FOUND;
+        }
+        memset(&reply_destination, 0, sizeof(reply_destination));
+        reply_destination.destination_kind = read.reply_destination_kind;
+        reply_destination.destination_scope = read.reply_destination_scope;
+        reply_destination.destination_vnode = read.reply_destination_vnode;
+        if (resolve_route_with_hop(service, &reply_destination, &reply_route,
+                                   &reply_next_hop, error, error_len) != 0) {
+            return -ESTALE;
+        }
+        if (envelope->delivery_attempt_id == UINT64_MAX) {
+            set_error(error, error_len,
+                      "V1 memory read delivery attempt overflow");
+            return -ERANGE;
+        }
+        response_attempt = envelope->delivery_attempt_id + 1U;
+        if (wvm_mem_ack_envelope_build(
+                envelope, &reply_route, response_attempt, &ack, payload,
+                sizeof(payload), &payload_bytes, &response, error,
+                error_len) != 0) {
+            return -EINVAL;
+        }
+        return service->config.send_envelope(service->config.opaque, &response,
+                                             error, error_len);
     }
 
     memset(&reply_destination, 0, sizeof(reply_destination));
@@ -1822,6 +1881,25 @@ static int service_remote_ack(struct wvm_memory_service *service,
     }
     wvm_envelope_semantic_digest(envelope->payload, envelope->payload_bytes,
                                  payload_digest);
+    if (ack.status == WVM_MEM_ACK_SUCCESS && ack.data &&
+        ack.data_bytes == WVM_MEMORY_PAGE_BYTES &&
+        service->config.first_publish_live_page &&
+        ack.directory_physical_node_id ==
+            service->config.local_physical_node_id &&
+        ack.directory_node_instance_id ==
+            service->config.local_node_instance_id) {
+        uint64_t published = 0;
+
+        result = service->config.first_publish_live_page(
+            service->config.opaque, ack.gpa, ack.data, &published, error,
+            error_len);
+        if (result != 0) {
+            return result;
+        }
+        if (published != 0) {
+            ack.version = published;
+        }
+    }
     result = accept_read_result(service, envelope->operation_id, &ack,
                                  payload_digest, &completed, error, error_len);
     if (completed && ack.status == WVM_MEM_ACK_SUCCESS) {
@@ -2573,8 +2651,69 @@ static int service_request_fault(
         result = service->config.read_page(service->config.opaque, gpa, page,
                                            &version, error, error_len);
         if (result != 0) {
-            if (!already_waiting) pending_remove(service, operation_id);
-            return result;
+            int fe_local = service->config.frontend_physical_node_id ==
+                               service->config.local_physical_node_id &&
+                           service->config.frontend_node_instance_id ==
+                               service->config.local_node_instance_id &&
+                           service->config.read_frontend_live_page != (void *)0;
+            int fe_remote = service->config.frontend_physical_node_id != 0 &&
+                            !fe_local;
+
+            if (fe_local) {
+                result = service->config.read_frontend_live_page(
+                    service->config.opaque, gpa, page, &version, error,
+                    error_len);
+                if (result == 0 && service->config.first_publish_live_page) {
+                    uint64_t published = 0;
+                    int pub = service->config.first_publish_live_page(
+                        service->config.opaque, gpa, page, &published, error,
+                        error_len);
+                    if (pub == 0 && published != 0) {
+                        version = published;
+                    } else if (pub != 0) {
+                        result = pub;
+                    }
+                }
+            } else if (fe_remote) {
+                if (already_waiting) {
+                    return 0;
+                }
+                if (resolve_route(service, &service->config.frontend_route,
+                                  &route, error, error_len) != 0) {
+                    pending_remove(service, operation_id);
+                    return -ESTALE;
+                }
+                memset(&read, 0, sizeof(read));
+                read.gpa = gpa;
+                read.reply_destination_kind =
+                    service->config.dispatch->local_primary.destination_kind;
+                read.reply_destination_scope =
+                    service->config.dispatch->local_primary.destination_scope;
+                read.reply_destination_vnode =
+                    service->config.dispatch->local_primary.destination_vnode;
+                read.reply_node_instance_id =
+                    service->config.local_node_instance_id;
+                if (wvm_mem_read_encode(&read, payload, error, error_len) !=
+                    0) {
+                    pending_remove(service, operation_id);
+                    return -EINVAL;
+                }
+                envelope_from_projection(service, WVM_ENVELOPE_MSG_MEM_READ,
+                                         operation_id, delivery_attempt_id,
+                                         &route, payload, sizeof(payload),
+                                         &envelope);
+                result = service->config.send_envelope(service->config.opaque,
+                                                       &envelope, error,
+                                                       error_len);
+                if (result != 0) {
+                    pending_remove(service, operation_id);
+                }
+                return result;
+            }
+            if (result != 0) {
+                if (!already_waiting) pending_remove(service, operation_id);
+                return result;
+            }
         }
         {
             struct wvm_mem_ack ack = {

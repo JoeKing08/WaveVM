@@ -1,0 +1,18 @@
+F10_ATTR_ONLY=1
+accel=kvm
+login_touched=0
+poll=1
+q_alive=NO
+remote_vcpu_evidence=1
+remote_mem_evidence=0
+remote=1
+remote_done_cpu2=0
+sent=1
+ack=0
+remote_mem_peer=0
+fl_dominates=0
+fence_done=0
+push_fail=0
+commit_ack=0
+commit_to=0
+note=COMMIT_SYNC is supporting only; official remote_mem is WVM-MEM-STATS origin!=directory

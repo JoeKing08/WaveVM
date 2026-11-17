@@ -1,0 +1,39 @@
+F05 TCG fence-only regression — run-191541-fence-ret-regression
+Times: 19:15:39–19:18:04 CST Asia/Shanghai (2026-11-16)
+Harness: WVM_F05_FENCE_ONLY=1, WAVEVM_CI_ACCEL=tcg, Mode B wavevm,split=2
+Typed gate OFF. No Cirros/login grind. TCG 4400 / ack_mode=1 scoring unchanged.
+
+Binaries:
+  master 298899f082c23fe0d1fa5f40e3d9ef4ce325afa271b307247c8c641cabf481be
+         (same as F10 run-191003; includes logic_core.c MSG_MEM_WRITE forward + WVM-MEM-STATS)
+  ci_dual_node.sh 5f4986d6e3cf21ab2f3c195255b66dfc3f4ba8993bc074fe5c0e53597f57e272
+  qemu e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e (unchanged)
+
+Official scorer poll 1 (19:17:20 CST), Q=yes, early PASS:
+  fence_done=37 push_fail=0 remote=10 sent=37 ack=37
+  handoff=60 commit_ack=20 commit_to=0
+  Script: F05 fence-only PASS (fence+remote VCPU evidence)
+  exit 0. QEMU alive until cleanup.
+
+A counts:
+  [IPC FENCE] push-barrier done=37; push-fence failed=0
+  WVM-REMOTE cpu=2=10 (log cap)
+  IPC VCPU_RUN vcpu=2 sent=37
+  RET ack_status=0 ack_mode=1=37; ack_mode=0=0; ack_status=-1=0
+  WVM-TCG-HANDOFF cpu=2=60
+  [WVM-TCG-STATS] cpu=2 remote_done=36 local_done=1 force_local_used=1
+  first remote RIP=0xffffffff83139281
+  COMMIT_SYNC ack=20 timeout=0 ErrorAck=0
+  no terminal handoff failure
+
+B counts:
+  guest_vcpu=2 x20, TCG ack x20, VCPU_RUN pending=37
+  wire len=4436 (header+4400 TCG form 2); len=14148=0
+  [WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0 guest_vcpu=2
+  reject-version=2 (did not block fence)
+  N02 coherent REFUSED=1 (known cross-host missing FE/executor host proof)
+  ErrorAck=0
+
+Verdict: F05 fence-only PASS (regression after logic_core.c change).
+Not F05 CLOSED. Not TCG guest login. Not MINIMUM_COMPLETE.
+A cleaned 19:17:20; B cleaned 19:18:04. No leftovers. TS still up.

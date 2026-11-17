@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+# Official WaveVM production entry.
+# Starts and proves the typed control path:
+#   ctl_tool/wvm_ctl serve
+#   wavevm_node_runtime agent
+#   CREATE_VM on the control socket
+# It never launches wavevm_node_master or wavevm_node_slave.
+# Those independent CLIs are not a supported production entry
+# (roadmap Phase 1, architecture baseline, goal.txt).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CMD="${1:-help}"
+if (($# > 0)); then shift; fi
+
+STATE_DIR="${WAVEVM_OFFICIAL_STATE:-}"
+KEEP=0
+REAL_QEMU="${WAVEVM_OFFICIAL_REAL_QEMU:-auto}"
+CELL="$ROOT/tests/control-plane/test_create_vm_single_node.sh"
+
+usage() {
+    cat <<EOF
+WaveVM official production entry
+
+Usage:
+  scripts/wavevm smoke  [--state-dir DIR] [--real-qemu|--stub] [--keep]
+  scripts/wavevm start  [--state-dir DIR] [--real-qemu]
+  scripts/wavevm status [--state-dir DIR]
+  scripts/wavevm stop   [--state-dir DIR]
+  scripts/wavevm a4     [--role node-a|node-b] [--route-topology flat|fractal] [--placement compact|spread] [--dry-check]
+  scripts/wavevm f10    [--role node-a|node-b] [--route-topology flat|fractal] [--placement compact|spread] [--dry-check]
+  scripts/wavevm f05    [--role node-a|node-b] [--route-topology flat|fractal] [--placement compact|spread] [--dry-check]
+  scripts/wavevm help
+
+Official binaries:
+  $ROOT/ctl_tool/wvm_ctl
+  $ROOT/wavevm_node_runtime
+
+This wrapper drives the existing typed admission path used by
+tests/control-plane/test_create_vm_single_node.sh. It is not a second
+runtime, and it does not start wavevm_node_master / wavevm_node_slave.
+
+Historical harnesses such as scripts/ci_dual_node.sh are not official
+acceptance and now exit 78 if invoked. Official tests must not set
+WAVEVM_ALLOW_LEGACY_CLI and must not start wavevm_node_master/slave.
+
+Default smoke is same-host Mode B / require-tcg. It proves
+prepare->activate->commit->RUNNING through wvm_ctl and wavevm_node_runtime.
+It does not claim F05/F10/A4, guest login, or Phase 1/9 closed.
+This script does not flip the typed runtime gate.
+
+The a4 and f10 commands are the official cross-host KVM Minimum cell:
+Mode B user+KVM Cirros login/SSH + same-run honest KVM VCPU_RUN RET
+(ack_status=0 ack_mode=0) + official [WVM-MEM-STATS] with origin!=directory,
+entering only through wvm_ctl serve + wavevm_node_runtime agent + CREATE_VM.
+
+The f05 command is the official bounded TCG fence contract (fence drain +
+honest TCG RET ack_mode=1). It does not use TCG guest login as a gate
+(F01 / Phase 10 stay Extended).
+
+These commands never set WAVEVM_ALLOW_LEGACY_CLI and refuse if
+wavevm_node_master/slave are visible. scripts/ci_dual_node.sh is not
+official acceptance. Role is WAVEVM_OFFICIAL_ROLE=node-a|node-b (or --role).
+Topology defaults to fractal (the previous official A4 default); pass
+--route-topology flat for the flat cell. Node A publishes a join bundle on
+/mnt/hgfs/SharedFolder/wavevm-official-<cell>-<topology>; node B enrolls
+from it. --dry-check validates binaries and helpers and starts no guests.
+Invoking these tests does not close F05, F10, Phase 1, Phase 9, or
+MINIMUM_COMPLETE.
+EOF
+}
+
+log() { printf '[wavevm] %s\n' "$*"; }
+die() { printf '[wavevm] ERROR: %s\n' "$*" >&2; exit 1; }
+
+while (($# > 0)); do
+    case "$1" in
+        --state-dir)
+            [[ $# -ge 2 ]] || die "--state-dir needs a value"
+            STATE_DIR=$2
+            shift 2
+            ;;
+        --keep) KEEP=1; shift ;;
+        --real-qemu) REAL_QEMU=1; shift ;;
+        --stub) REAL_QEMU=0; shift ;;
+        --role)
+            [[ $# -ge 2 ]] || die "--role needs node-a or node-b"
+            case "$2" in
+                node-a|a|A) export WAVEVM_OFFICIAL_ROLE=node-a ;;
+                node-b|b|B) export WAVEVM_OFFICIAL_ROLE=node-b ;;
+                *) die "unknown --role $2 (want node-a or node-b)" ;;
+            esac
+            shift 2
+            ;;
+        --route-topology)
+            [[ $# -ge 2 ]] || die "--route-topology needs flat or fractal"
+            case "$2" in
+                flat|fractal) export WVM_OFFICIAL_TOPOLOGY=$2 ;;
+                *) die "unknown --route-topology $2 (want flat or fractal)" ;;
+            esac
+            shift 2
+            ;;
+        --placement)
+            [[ $# -ge 2 ]] || die "--placement needs compact or spread"
+            case "$2" in
+                compact|spread) export WVM_OFFICIAL_PLACEMENT=$2 ;;
+                *) die "unknown --placement $2 (want compact or spread)" ;;
+            esac
+            shift 2
+            ;;
+        --dry-check) export WVM_OFFICIAL_DRY_CHECK=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "unknown option: $1" ;;
+    esac
+done
+
+default_state() {
+    printf '%s' "${TMPDIR:-/tmp}/wavevm-official-${USER:-joeking}"
+}
+
+resolve_state() {
+    if [[ -z "$STATE_DIR" ]]; then
+        STATE_DIR="$(default_state)"
+    fi
+}
+
+require_official_binaries() {
+    [[ -x $ROOT/ctl_tool/wvm_ctl ]] || die "missing ctl_tool/wvm_ctl (make -C ctl_tool)"
+    [[ -x $ROOT/wavevm_node_runtime ]] || die "missing wavevm_node_runtime (make -C node_runtime)"
+    [[ -x $CELL ]] || die "missing typed cell $CELL"
+}
+
+prepare_env() {
+    require_official_binaries
+    resolve_state
+    mkdir -p "$STATE_DIR/evidence"
+    export WVM_S6_EVIDENCE_DIR="$STATE_DIR/evidence"
+    export WVM_S6_BACKEND="${WVM_S6_BACKEND:-require-tcg}"
+    export WVM_S6_ACCEL="${WVM_S6_ACCEL:-disabled}"
+    if [[ "$REAL_QEMU" == "auto" ]]; then
+        if [[ -x ${WVM_TCG_QEMU_BIN:-} ||
+              -x $ROOT/wavevm-qemu/build-native/qemu-system-x86_64 ||
+              -x $ROOT/wavevm-qemu/build/qemu-system-x86_64 ]]; then
+            REAL_QEMU=1
+        else
+            REAL_QEMU=0
+        fi
+    fi
+    if [[ "$REAL_QEMU" == "1" ]]; then
+        local qemu="${WVM_TCG_QEMU_BIN:-}"
+        if [[ -z "$qemu" ]]; then
+            for cand in \
+                "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" \
+                "$ROOT/wavevm-qemu/build/qemu-system-x86_64"; do
+                if [[ -x $cand ]]; then qemu=$cand; break; fi
+            done
+        fi
+        [[ -n "$qemu" && -x $qemu ]] || die "--real-qemu requested but qemu-system-x86_64 was not found"
+        export WVM_S6_REAL_QEMU=1
+        export WVM_S6_QEMU_BIN="$qemu"
+        log "using in-tree QEMU helper $qemu"
+    else
+        export WVM_S6_REAL_QEMU=0
+        log "using TCG helper stub (CREATE may stay IN_PROGRESS; official RUNNING proof uses in-tree QEMU)"
+    fi
+}
+
+record_processes() {
+    local out=$1
+    {
+        echo "time=$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        echo "state_dir=$STATE_DIR"
+        echo "official_entry=wvm_ctl+wavevm_node_runtime"
+        echo "legacy_entry=not-supported"
+        echo "--- processes ---"
+        pgrep -af 'wvm_ctl|wavevm_node_runtime|wavevm_node_master|wavevm_node_slave' || true
+    } >"$out"
+}
+
+legacy_running() {
+    pgrep -af 'wavevm_node_master|wavevm_node_slave' | grep -v 'pgrep -af' >/dev/null
+}
+
+run_cell() {
+    log "launching official typed cell: $CELL"
+    bash --noprofile --norc "$CELL"
+}
+
+cmd_smoke() {
+    prepare_env
+    if [[ "$KEEP" == "1" ]]; then
+        export WVM_S6_KEEP_RUNNING=1
+    else
+        export WVM_S6_KEEP_RUNNING=0
+    fi
+    record_processes "$STATE_DIR/process-snapshot-before.txt"
+    if legacy_running; then
+        die "legacy master/slave process is visible; refusing to call this a typed official entry"
+    fi
+    set +e
+    run_cell
+    local rc=$?
+    set -e
+    record_processes "$STATE_DIR/process-snapshot-after.txt"
+    if [[ -d ${WVM_S6_EVIDENCE_DIR:-} ]]; then
+        cp -f "$STATE_DIR/process-snapshot-before.txt" "$STATE_DIR/process-snapshot-after.txt" \
+            "$WVM_S6_EVIDENCE_DIR/" 2>/dev/null || true
+    fi
+    if [[ $rc -ne 0 ]]; then
+        die "typed official smoke failed (rc=$rc). See $STATE_DIR/evidence and cell logs."
+    fi
+    if legacy_running; then
+        die "legacy master/slave appeared during smoke; not a typed official entry"
+    fi
+    if [[ "$KEEP" == "1" ]]; then
+        if [[ -f /tmp/wavevm-s6-keep-tmpdir ]]; then
+            printf '%s\n' "$(cat /tmp/wavevm-s6-keep-tmpdir)" >"$STATE_DIR/cell-tmpdir"
+        fi
+        log "KEEP=1; cell left running (pids in /tmp/wavevm-s6-keep-*. see status)"
+    fi
+    log "SMOKE PASS: official entry is wvm_ctl + wavevm_node_runtime"
+}
+
+cmd_start() {
+    KEEP=1
+    cmd_smoke
+}
+
+cmd_status() {
+    resolve_state
+    echo "official_entry=wvm_ctl+wavevm_node_runtime"
+    echo "state_dir=$STATE_DIR"
+    if [[ -f /tmp/wavevm-s6-keep-tmpdir ]]; then
+        echo "cell_tmpdir=$(cat /tmp/wavevm-s6-keep-tmpdir)"
+    fi
+    if [[ -f /tmp/wavevm-s6-keep-ctl-pid ]]; then
+        local ctl_pid agent_pid
+        ctl_pid=$(cat /tmp/wavevm-s6-keep-ctl-pid)
+        agent_pid=$(cat /tmp/wavevm-s6-keep-agent-pid 2>/dev/null || true)
+        echo "ctl_pid=$ctl_pid alive=$(kill -0 "$ctl_pid" 2>/dev/null && echo yes || echo no)"
+        echo "agent_pid=$agent_pid alive=$(kill -0 "${agent_pid:-}" 2>/dev/null && echo yes || echo no)"
+    fi
+    record_processes "$STATE_DIR/process-snapshot.txt"
+    pgrep -af 'wvm_ctl|wavevm_node_runtime|wavevm_node_master|wavevm_node_slave' || true
+}
+
+cmd_official_crosshost() {
+    local cell_name=$1
+    unset WAVEVM_ALLOW_LEGACY_CLI || true
+    if [[ -z ${WAVEVM_OFFICIAL_ROLE:-} ]]; then
+        die "$cell_name requires --role node-a|node-b or WAVEVM_OFFICIAL_ROLE"
+    fi
+    export WVM_OFFICIAL_CELL="$cell_name"
+    export WVM_OFFICIAL_TOPOLOGY="${WVM_OFFICIAL_TOPOLOGY:-fractal}"
+    export WVM_OFFICIAL_PLACEMENT="${WVM_OFFICIAL_PLACEMENT:-spread}"
+    [[ -x $ROOT/wavevm_node_runtime ]] || die "missing wavevm_node_runtime"
+    if [[ ${WAVEVM_OFFICIAL_ROLE} == node-a ]]; then
+        [[ -x $ROOT/ctl_tool/wvm_ctl ]] || die "missing ctl_tool/wvm_ctl"
+        [[ -x $ROOT/gateway_service/wavevm_gateway ]] || die "missing wavevm_gateway"
+    fi
+    if legacy_running; then
+        die "legacy master/slave process is visible; refusing to call this a typed official entry"
+    fi
+    local cell
+    case "$cell_name" in
+        a4) cell="$ROOT/tests/e2e/test_a4_official_typed.sh" ;;
+        f10) cell="$ROOT/tests/e2e/test_f10_official_typed.sh" ;;
+        f05) cell="$ROOT/tests/e2e/test_f05_official_typed.sh" ;;
+        *) die "unknown official cell $cell_name" ;;
+    esac
+    [[ -f $cell ]] || die "missing $cell"
+    bash -n "$cell" || die "syntax error in $cell"
+    if [[ "${WVM_OFFICIAL_DRY_CHECK:-0}" == "1" ]]; then
+        log "official $cell_name dry-check role=$WAVEVM_OFFICIAL_ROLE topology=$WVM_OFFICIAL_TOPOLOGY placement=$WVM_OFFICIAL_PLACEMENT entry=wvm_ctl+wavevm_node_runtime"
+    else
+        log "official $cell_name typed cell role=$WAVEVM_OFFICIAL_ROLE topology=$WVM_OFFICIAL_TOPOLOGY placement=$WVM_OFFICIAL_PLACEMENT entry=wvm_ctl+wavevm_node_runtime"
+    fi
+    bash --noprofile --norc "$cell"
+}
+
+cmd_a4() { cmd_official_crosshost a4; }
+cmd_f10() { cmd_official_crosshost f10; }
+cmd_f05() { cmd_official_crosshost f05; }
+
+cmd_stop() {
+    resolve_state
+    local ctl_pid agent_pid tmpdir
+    ctl_pid=$(cat /tmp/wavevm-s6-keep-ctl-pid 2>/dev/null || true)
+    agent_pid=$(cat /tmp/wavevm-s6-keep-agent-pid 2>/dev/null || true)
+    tmpdir=$(cat /tmp/wavevm-s6-keep-tmpdir 2>/dev/null || true)
+    if [[ -n ${agent_pid:-} ]]; then
+        kill -TERM "$agent_pid" 2>/dev/null || true
+        wait "$agent_pid" 2>/dev/null || true
+    fi
+    if [[ -n ${ctl_pid:-} ]]; then
+        kill -TERM "$ctl_pid" 2>/dev/null || true
+        wait "$ctl_pid" 2>/dev/null || true
+    fi
+    if [[ -n ${tmpdir:-} && -d $tmpdir ]]; then
+        rm -rf -- "$tmpdir"
+    fi
+    rm -f /tmp/wavevm-s6-keep-tmpdir /tmp/wavevm-s6-keep-ctl-pid \
+        /tmp/wavevm-s6-keep-agent-pid /tmp/wavevm-s6-keep-ports.txt
+    log "official control path stopped"
+}
+
+case "$CMD" in
+    help|-h|--help) usage ;;
+    smoke) cmd_smoke ;;
+    start) cmd_start ;;
+    status) cmd_status ;;
+    stop) cmd_stop ;;
+    a4) cmd_a4 ;;
+    f10) cmd_f10 ;;
+    f05) cmd_f05 ;;
+    *) usage >&2; die "unknown command: $CMD" ;;
+esac

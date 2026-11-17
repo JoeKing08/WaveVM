@@ -1,0 +1,25 @@
+[LegacySlave] chunk dir: cannot create chunk dir
+[Hybrid] Using Physical Cores: 6
+[Init] WaveVM Hybrid Slave V28.0 (Legacy CLI / F05)
+[Init] Config: Port=19205, Cores=1, RAM=1024 MB, BaseID=1, VM=0
+[Hybrid] NUMA: node 0  /wvm_fract_node0  2048 MB  GPA [0x0, 0x80000000)
+[Hybrid] NUMA: node 1  /wvm_fract_node1  1024 MB  GPA [0x100000000, 0x140000000)
+[Hybrid] NUMA: 2 nodes mapped, VA range 0x140000000
+[Slave KVM] split LAPIC enabled; devices stay in frontend
+[Slave KVM] immediate_exit=1 numa_nodes=2 device_ram=0
+[Hybrid] NUMA memslot: node 0 GPA [0x0, 0x80000000)
+[Hybrid] NUMA memslot: node 1 GPA [0x100000000, 0x140000000)
+[Hybrid] BIOS ROM slot: GPA [0xffff0000, 0x100000000)
+[Hybrid] KVM Hardware Acceleration Active (RAM: 1024 MB).
+[Hybrid] Mode: KVM FAST PATH. Listening on 0.0.0.0:19205
+[SenderThread] KVM Dirty Page Sender is running.
+[SLAVE-BIND] port=19205 ok
+[SLAVE-RX] src=127.0.0.1:19200 len=14148 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=14148 type=5
+[VCPU-RUN] mode=0 vcpu=2 req=1 src=127.0.0.1:19200 target=16777216 slave=0
+[Slave VCPU Init] enter vm=4 kvm=3 req_vcpu=2
+[Slave VCPU Init] guest_vcpu=2 fd=7 run=0x7884c7337000
+[kvm-import] SET_VCPU_EVENTS failed errno=22 flags=0x1d exc inj=0 nr=255 has_err=0 pend=0 code=0 int inj=0 nr=251 soft=0 shadow=0 nmi inj=0 pend=0 mask=0 sipi=0x0 smm=0 smm_pend=0 inside_nmi=0 latched=0 tf=0 payload_valid=0 payload=0x0 mp=0
+[kvm-import] SET_VCPU_EVENTS retry failed errno=22 flags=0x1d->0x1d
+[Slave ErrorAck] vcpu init/state failed state=-22 reason=extended_state_import vcpu_fd=7 kvm_run=0x7884c7337000 req=1
+[Slave ErrorAck] vcpu init/state failed ret=14148 state=-22 reason=extended_state_import errno=0 req=1 dst=127.0.0.1:19200

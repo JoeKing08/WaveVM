@@ -1,0 +1,6 @@
+Official typed A4 run A6 (22:31:15 B / 22:31:18 A CST Asia/Shanghai).
+scripts/wavevm a4 only. QEMU cc212798 (defer-until-userspace) installed on both VMs.
+Enrollment failed before CREATE_VM: B registered first, then gateway
+"cluster enrollment ACK is outside its proof". check_multi_active:
+"member 0 missing enrollment activation id". Operator-stopped 22:34:30 CST.
+No Cirros login, no remote vCPU, no WVM-MEM-STATS. Not a remoting result.

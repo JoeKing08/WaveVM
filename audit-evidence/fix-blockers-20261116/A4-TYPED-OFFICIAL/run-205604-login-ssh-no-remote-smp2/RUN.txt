@@ -1,0 +1,21 @@
+run=205604-login-ssh-no-remote-smp2
+host_tz=Asia/Shanghai CST UTC+8
+start_A=2026-11-16 20:56:04 CST
+start_B=2026-11-16 20:56:00 CST
+multi_ACTIVE=2026-11-16 20:56:17 CST
+CREATE_VM_SUCCESS=2026-11-16 20:56:17 CST vm_id=256 recorded_state=11
+QEMU_FE=2026-11-16 20:56:17 CST -smp 2 split=2 mode=user backend=kvm
+login_ok=1 at=2026-11-16 20:57:29 CST
+ssh_ok=1 at=2026-11-16 20:57:29 CST
+verdict=FAIL reason=no remote vCPU/mem; FE used local assignment count smp=2 so no cpu=2
+entry=scripts/wavevm a4 -> wvm_ctl serve + wavevm_node_runtime agent + CREATE_VM
+legacy_cli=0
+typed_runtime_gate=OFF
+copied_at=2026-11-16 21:00:16 CST
+---- hashes ----
+bfa1114659fea62f4dcc19671c3927b619703714ee6fca8caf7b35e472ec7c66  /workspaces/WaveVM/wavevm_node_runtime
+bc74d51f4dcc7b563ef63629316b8e38551d1505205a0fd99e0f213894c13f85  /workspaces/WaveVM/ctl_tool/wvm_ctl
+7896b7692c7e692a91aca3e44625748aa320f4e05c222d3118b40fe75c5698a6  /workspaces/WaveVM/scripts/wavevm
+ebd8e15136ff94f5eafadb2a1906afdd674c7ff8295136de02b67739de08c419  /workspaces/WaveVM/tests/e2e/test_a4_official_typed.sh
+d9878a59aead02197305bb3f4b4d5df16fe696e3e351b5e2ba791347c12a14f1  /workspaces/WaveVM/gateway_service/wavevm_gateway
+82a5ac679ffc3ceef86198c4080b534ec8bede10f43a0e868dd3d2e0cf6721a1  /workspaces/WaveVM/wavevm-qemu/build-native/qemu-system-x86_64

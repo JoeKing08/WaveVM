@@ -1,0 +1,17 @@
+NOTES — official F05 flat after independent-CLI cut
+Time: 2026-11-17 10:37:16 – 10:50:01 CST (Asia/Shanghai, UTC+8)
+Hosts: 2404 wavevm-f05-a 100.116.196.65 (node-a); 2604 wavevm-f05-b 100.114.246.92 (node-b)
+Entry: scripts/wavevm f05 --role node-a|node-b --route-topology flat
+Same official binaries as f05-fractal-run-102314. Tip 1d729426a (not pushed).
+
+VERDICT=FAIL  (official scorer; not F05 CLOSED)
+Same gap as fractal: CREATE_VM SUCCESS, multi-ACTIVE, backend=require-tcg,
+accel=disabled, placement=spread, unique-FE split=2, legacy_cli=0.
+QEMU helpers only (-accel wavevm,backend=tcg -S -nodefaults -smp 1), no Cirros disk FE,
+no vm.log / vm-serial.log. All 24 polls: q_alive=1 fence_done=0 remote=0 sent=0 ack_mode1=0.
+agent-a: N04 'QEMU frontend already owned by another process' after TCG helper spawn;
+manifest-bound FE registration failed. 'QEMU FE observed' is a false positive on helpers.
+Not treated as a tiny break from the CLI cut; not fixed in this pass.
+
+ART_A=/tmp/wavevm-official-f05-flat-20261117-103715
+Evidence under this directory. Prior evidence left intact. No secrets.

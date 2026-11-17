@@ -1,0 +1,89 @@
+=== time ===
+2026年 11月 16日 星期一 20:00:20 CST
+=== runner ===
+[19:53:05] [kvm/A] A4 official: Mode B/B + /dev/kvm (do not load wavevm.ko)
+[19:53:14] [kvm/A] A4 official cell: Cirros login/SSH + official remote_vcpu + official remote_mem (Mode B user+kvm)
+[19:54:14] [kvm/A] A4 login wait 2*30s Q=yes
+[19:55:15] [kvm/A] A4 login wait 4*30s Q=yes
+[19:56:15] [kvm/A] A4 login wait 6*30s Q=yes
+[19:57:15] [kvm/A] A4 login wait 8*30s Q=yes
+[19:58:15] [kvm/A] A4 login wait 10*30s Q=yes
+[19:59:15] [kvm/A] A4 login wait 12*30s Q=yes
+[20:00:15] [kvm/A] A4 login wait 14*30s Q=yes
+=== counts ===
+REMOTE=10
+MEM-STATS_master=2488
+RESET=0
+SHUTDOWN=0
+RET_ack0_mode0=6170
+handoff_fail=0
+LOGIN=0
+=== last stats ===
+[WVM-TCG-STATS] cpu=2 remote_done=6144 local_done=0 force_local_used=0
+[WVM-TCG-STATS] cpu=2 remote_done=6160 local_done=0 force_local_used=0
+[WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=31078 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=18506
+=== HALT-WAKE then first REMOTE ===
+714:[OS-SIPI] cpu=2 entering kvm_cpu_exec for OS SIPI (mp=3)
+715:[OS-SIPI] cpu=2 kvm_cpu_exec ret=65536 halted=0 mp=3
+716:[OS-SIPI] cpu=2 OS trampoline done, AP parked (HALTED). Ready for remote dispatch.
+718:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+719:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+721:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+805:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+807:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+808:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+810:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1016:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1018:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1023:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1025:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1026:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1028:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1029:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1031:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1032:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1034:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1035:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1037:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1038:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1040:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1041:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1043:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1044:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1046:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1047:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1049:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1050:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1052:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1053:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1055:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1056:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1058:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1059:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1061:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+1062:[WVM-HALT-WAKE] cpu=2 ret=65536 mp=3 halted=1 irq=0x0 has_work=0
+1064:[WVM-HALT-WAKE] cpu=2 entering kvm_cpu_exec (1s timer) mp_in=3
+=== serial tail ===
+failed 13/20: up 28.01. request failed
+failed 14/20: up 30.02. request failed
+failed 15/20: up 32.03. request failed
+failed 16/20: up 34.04. request failed
+failed 17/20: up 36.06. request failed
+failed 18/20: up 38.07. request failed
+failed 19/20: up 40.08. request failed
+failed 20/20: up 42.09. request failed
+failed to read iid from metadata. tried 20
+failed to get instance-id of datasource
+Top of dropbear init script
+Starting dropbear sshd: failed to get instance-id of datasource
+[   46.015751] random: crng init done
+[   46.017072] random: 2 urandom warning(s) missed due to ratelimiting
+OK
+GROWROOT: NOCHANGE: partition 1 is size 210911. it cannot be grown
+/dev/root resized successfully [took 0.01s]
+=== system information ===
+Platform: QEMU Standard PC (Q35 + ICH9, 2009)
+Container: none
+=== ssh probe ===
+2226 listen but banner empty; ssh banner-exchange timeout (see /tmp/wvm-a4-ssh-login-probe.txt)
+Connection timed out during banner exchange

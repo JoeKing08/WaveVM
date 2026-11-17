@@ -14,6 +14,7 @@
  */
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -79,6 +80,23 @@ static volatile sig_atomic_t g_fe_replace_pending = 0;
 /* Closed from the SIGTERM handler to unblock accept() (AS-safe wake). */
 static volatile sig_atomic_t g_master_listen_fd = -1;
 
+int wvm_frontend_live_ram_page(uint64_t gpa, const uint8_t **out_page)
+{
+    if (out_page) {
+        *out_page = NULL;
+    }
+    if (!out_page ||
+        !g_runtime_requires_qemu_frontend ||
+        !g_shm_ptr || g_shm_ptr == MAP_FAILED ||
+        g_shm_size < 4096UL ||
+        (gpa & 4095UL) != 0 ||
+        gpa > g_shm_size - 4096UL) {
+        return 0;
+    }
+    *out_page = (const uint8_t *)g_shm_ptr + gpa;
+    return 1;
+}
+
 /* These objects are owned by node_runtime/main.c and outlive both roles. */
 #define g_runtime_storage (*g_runtime_storage_ptr)
 #define g_runtime_gate (*g_runtime_gate_ptr)
@@ -101,10 +119,11 @@ static int publish_runtime_ready(char *error, size_t error_len)
 }
 
 /*
- * Placement host owns the QEMU frontend. TCG helpers already connect and
- * register as QEMU_FRONTEND while executing; KVM FAST PATH never spawned a
- * helper, so CREATE stayed IN_PROGRESS waiting for readiness. Spawn a
- * manifest-bound FE after the runtime socket listens and before RUNNING.
+ * Placement host owns the QEMU frontend. Spawn a manifest-bound FE after
+ * the runtime socket listens and before RUNNING. Official unique Cirros FE
+ * is spawned for both KVM and TCG when WVM_GUEST_IMAGE / UNIQUE_GUEST_FE /
+ * GUEST_FE_BOOT_NOW is set. TCG helpers only register as QEMU_FRONTEND when
+ * no unique guest FE is requested (CREATE readiness without a disk FE).
  * Keep identity checks — registration still goes through the runtime gate.
  */
 static void stop_manifest_bound_qemu_frontend(void);
@@ -256,8 +275,21 @@ static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
         return -1;
     }
     if (backend != WVM_MANIFEST_BACKEND_KVM) {
-        /* TCG helpers register as the frontend; do not race a second FE. */
-        return 0;
+        const char *guest_image = getenv("WVM_GUEST_IMAGE");
+        const char *unique_fe = getenv("WVM_UNIQUE_GUEST_FE");
+        const char *boot_now = getenv("WVM_GUEST_FE_BOOT_NOW");
+        int want_unique =
+            (guest_image && guest_image[0] != '\0') ||
+            (unique_fe && unique_fe[0] != '\0' && strcmp(unique_fe, "0") != 0) ||
+            (boot_now && boot_now[0] != '\0' && strcmp(boot_now, "0") != 0);
+        if (!want_unique) {
+            /* No unique Cirros FE requested. TCG helpers may still register
+             * as the frontend so CREATE can reach RUNNING. */
+            return 0;
+        }
+        /* Official F05: spawn the unique Cirros FE with the admitted TCG
+         * backend (wavevm,backend=tcg,mode=user). Helpers must not claim
+         * QEMU_FRONTEND when this path is used. */
     }
     if (g_frontend_pid > 0) {
         return 0;
@@ -279,17 +311,63 @@ static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
     if (smp == 0) {
         smp = 1;
     }
+    /*
+     * The unique guest FE *is* the guest. It must advertise the full admitted
+     * SMP, not only this node's local vCPU assignments. A spread/fractal
+     * placement with 2 local + 1 remote otherwise boots `-smp 2` and never
+     * creates guest vCPU 2, so WVM_GUEST_SPLIT cannot remote it.
+     */
+    if (getenv("WVM_GUEST_IMAGE") && getenv("WVM_GUEST_IMAGE")[0]) {
+        uint32_t total = smp;
+        const char *env_smp;
+
+        if (g_runtime_dispatch_active) {
+            const struct wvm_runtime_cpu_dispatch_list *cpus =
+                &g_runtime_dispatch_storage.projection.cpu_dispatch;
+            size_t ci;
+
+            for (ci = 0; ci < cpus->count; ci++) {
+                uint32_t need = cpus->entries[ci].guest_vcpu_index + 1U;
+                if (need > total) {
+                    total = need;
+                }
+            }
+        }
+        env_smp = getenv("WVM_GUEST_SMP");
+        if (!env_smp || !env_smp[0]) {
+            env_smp = getenv("WVM_CREATE_VCPUS");
+        }
+        if (env_smp && env_smp[0]) {
+            char *end = NULL;
+            unsigned long parsed = strtoul(env_smp, &end, 10);
+
+            if (end && *end == '\0' && parsed >= (unsigned long)total &&
+                parsed < 1024UL) {
+                total = (uint32_t)parsed;
+            }
+        }
+        if (total > smp) {
+            fprintf(stderr,
+                    "[System] unique guest FE smp %u -> %u "
+                    "(full guest topology, not local assignments only)\n",
+                    smp, total);
+            smp = total;
+        }
+    }
     snprintf(smp_buf, sizeof(smp_buf), "%u", smp);
 
     {
         const char *fe_accel = getenv("WVM_FRONTEND_ACCEL");
         if (fe_accel && fe_accel[0] != '\0') {
-            /* Test/ops override only; default remains admitted-backend KVM FE. */
+            /* Test/ops override only; default follows the admitted backend. */
             snprintf(accel_buf, sizeof(accel_buf), "%s", fe_accel);
         } else if (g_runtime_storage.manifest.negotiated_profile
                        .kernel_accelerator_bits != 0) {
             snprintf(accel_buf, sizeof(accel_buf),
                      "wavevm,backend=kvm,mode=kernel");
+        } else if (backend == WVM_MANIFEST_BACKEND_TCG) {
+            snprintf(accel_buf, sizeof(accel_buf),
+                     "wavevm,backend=tcg,mode=user");
         } else {
             snprintf(accel_buf, sizeof(accel_buf),
                      "wavevm,backend=kvm,mode=user");
@@ -372,7 +450,11 @@ static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
                         split_n = (int)parsed;
                     }
                 }
-                /* Cirros guest FE: always Mode B user/SHM (Mode A bind races). */
+                /* Cirros guest FE stays Mode B user/SHM (Mode A bind races).
+                 * Honor the admitted execution backend (or WVM_FRONTEND_ACCEL
+                 * already placed in accel_buf). Do not force KVM onto a
+                 * require-tcg unique FE.
+                 */
                 if (split_n >= 0) {
                     /*
                      * Explicit split: override inherited all-local LOCAL_SPLIT
@@ -382,18 +464,24 @@ static int spawn_manifest_bound_qemu_frontend(char *error, size_t error_len)
                     char split_env[32];
                     snprintf(split_env, sizeof(split_env), "%d", split_n);
                     setenv("WVM_LOCAL_SPLIT", split_env, 1);
-                    if (snprintf(split_accel, sizeof(split_accel),
-                                 "wavevm,backend=kvm,mode=user,split=%d",
-                                 split_n) >= (int)sizeof(split_accel)) {
+                    if (strstr(accel_buf, "split=") != NULL) {
+                        if (snprintf(split_accel, sizeof(split_accel), "%s",
+                                     accel_buf) >= (int)sizeof(split_accel)) {
+                            fprintf(stderr, "[System] guest FE accel too long\n");
+                            _exit(127);
+                        }
+                    } else if (snprintf(split_accel, sizeof(split_accel),
+                                        "%s,split=%d", accel_buf,
+                                        split_n) >= (int)sizeof(split_accel)) {
                         fprintf(stderr, "[System] guest FE accel/split too long\n");
                         _exit(127);
                     }
-                } else if (snprintf(split_accel, sizeof(split_accel),
-                                    "wavevm,backend=kvm,mode=user") >=
-                           (int)sizeof(split_accel)) {
+                } else if (snprintf(split_accel, sizeof(split_accel), "%s",
+                                    accel_buf) >= (int)sizeof(split_accel)) {
                     fprintf(stderr, "[System] guest FE accel too long\n");
                     _exit(127);
                 }
+                fprintf(stderr, "[System] unique guest FE accel=%s\n", split_accel);
                 /* Replace prior -accel value. */
                 {
                     int ai_accel = -1;
@@ -1306,6 +1394,91 @@ static void handle_ipc_cpu_run(int qemu_fd,
     }
     if (result == 0) {
         return;
+    }
+    /*
+     * F05 legacy CLI dual-node: typed vCPU service is not installed
+     * (same ENOTCONN hole as handle_ipc_fault). Do not enable the typed
+     * runtime gate. Forward VCPU_RUN over logic_core UDP RPC so the
+     * remote slave can execute and return VCPU_EXIT.
+     */
+    if (result == -ENOTCONN) {
+        uint32_t target;
+        struct wvm_ipc_cpu_run_ack rpc_ack;
+        int rpc_ret;
+
+        if (WVM_IS_VALID_TARGET(req->slave_id)) {
+            target = req->slave_id;
+        } else {
+            target = wvm_get_compute_slave_id((int)req->vcpu_index);
+        }
+        memset(&rpc_ack, 0, sizeof(rpc_ack));
+        fprintf(stderr,
+                "[IPC VCPU_RUN] vcpu=%u mode=%u target=%u fd=%d\n",
+                req->vcpu_index, req->mode_tcg, WVM_GET_NODEID(target),
+                qemu_fd);
+        if (!WVM_IS_VALID_TARGET(target)) {
+            result = -ENXIO;
+            snprintf(error, sizeof(error),
+                     "no compute slave mapping for vcpu=%u", req->vcpu_index);
+        } else if (WVM_GET_NODEID(target) == (uint32_t)g_my_node_id) {
+            result = -ELOOP;
+            snprintf(error, sizeof(error),
+                     "legacy VCPU_RUN target is local node %u",
+                     WVM_GET_NODEID(target));
+        } else {
+            /*
+             * TCG (mode_tcg=1): keep the F05 truncated form
+             * (prefix+tcg ctx = 4400, packet 4436). The QEMU TCG
+             * helper recvmmsg buffer is MAX_PKT_SIZE=8192; a full
+             * union-sized req (14112 / packet 14148) is dropped there.
+             * Form 2 is documented in wavevm-all.c.
+             *
+             * KVM (mode_tcg=0): do NOT send that TCG-truncated packet
+             * into the KVM FAST PATH slave (slave_hybrid). A 4400-byte
+             * payload with mode_tcg=0 is parsed as compact form 3,
+             * leaving vcpu_index=0 and a zero kvm context, so
+             * wvm_kvm_extended_state_validate returns -EPROTO
+             * (run-175244). The slave/gateway/master UDP path uses
+             * WVM_MAX_PACKET_SIZE (65536), so the full KVM request
+             * fits and carries vcpu_index plus ctx.kvm.
+             */
+            {
+                const size_t tcg_req_bytes =
+                    offsetof(struct wvm_ipc_cpu_run_req, ctx) +
+                    sizeof(wvm_tcg_context_t);
+                const size_t tcg_ack_bytes =
+                    offsetof(struct wvm_ipc_cpu_run_ack, ctx) +
+                    sizeof(wvm_tcg_context_t);
+                const size_t req_bytes = req->mode_tcg
+                    ? tcg_req_bytes
+                    : sizeof(struct wvm_ipc_cpu_run_req);
+                const size_t ack_bytes = req->mode_tcg
+                    ? tcg_ack_bytes
+                    : sizeof(struct wvm_ipc_cpu_run_ack);
+                fprintf(stderr,
+                        "[IPC VCPU_RUN] sending vcpu=%u mode=%u target=%u req_bytes=%zu\n",
+                        req->vcpu_index, req->mode_tcg,
+                        WVM_GET_NODEID(target), req_bytes);
+                rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, (void *)req,
+                                       (int)req_bytes, target,
+                                       &rpc_ack, (int)ack_bytes);
+            }
+            fprintf(stderr,
+                    "[IPC VCPU_RUN RET] vcpu=%u target=%u rpc_ret=%d ack_status=%d ack_mode=%u\n",
+                    req->vcpu_index, WVM_GET_NODEID(target), rpc_ret,
+                    rpc_ack.status, rpc_ack.mode_tcg);
+            if (rpc_ret == 0) {
+                if (write_exact(qemu_fd, &rpc_ack, sizeof(rpc_ack)) < 0) {
+                    fprintf(stderr,
+                            "[IPC VCPU_RUN] ack write failed fd=%d vcpu=%u\n",
+                            qemu_fd, req->vcpu_index);
+                }
+                return;
+            }
+            result = rpc_ret;
+            snprintf(error, sizeof(error),
+                     "legacy VCPU_RUN rpc failed ret=%d", rpc_ret);
+        }
     }
     memset(&ack, 0, sizeof(ack));
     ack.status = result;
@@ -3083,543 +3256,8 @@ int wavevm_master_runtime_main(
     return 0;
 }
 
-#ifdef WAVEVM_MASTER_LEGACY_CLI
-/*
- * F05/legacy CLI entry: positional argv used by scripts/ci_dual_node.sh.
- * Built only into master_core/wavevm_node_master (see node_runtime
- * legacy-master target). This is not the admitted node_runtime path;
- * typed V1 memory service is not installed (ENOTCONN falls back to
- * logic_core / UDP as in handle_ipc_fault).
+/* Independent wavevm_node_master CLI entry removed.
+ * Official binary is wavevm_node_runtime (compiled from this file
+ * without WAVEVM_MASTER_LEGACY_CLI). Rollback kit:
+ * audit-evidence/legacy-cli-archive-20261117/
  */
-extern void *autonomous_monitor_thread(void *arg);
-extern int g_my_node_id;
-
-static struct wvm_resource_plan g_resource_plan;
-static int g_resource_plan_ready;
-
-static int parse_legacy_vm_id(const char *text, uint32_t *value)
-{
-    char *end = NULL;
-    unsigned long parsed;
-
-    if (!text || !value) {
-        return -1;
-    }
-    errno = 0;
-    parsed = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || parsed > UINT32_MAX) {
-        return -1;
-    }
-    *value = (uint32_t)parsed;
-    return 0;
-}
-
-static void inject_cpu_route_table(void)
-{
-    const uint32_t *table;
-    const uint32_t chunk_size = 1024;
-    size_t buf_size;
-    struct wvm_ioctl_route_update *payload;
-    uint32_t i;
-
-    if (g_dev_fd < 0) {
-        return;
-    }
-    table = wvm_get_cpu_route_table();
-    if (!table) {
-        return;
-    }
-    buf_size = sizeof(*payload) + chunk_size * sizeof(uint32_t);
-    payload = malloc(buf_size);
-    if (!payload) {
-        fprintf(stderr, "[CPU-ROUTE] malloc failed\n");
-        return;
-    }
-    for (i = 0; i < WVM_CPU_ROUTE_TABLE_SIZE; i += chunk_size) {
-        uint32_t count = chunk_size;
-
-        if (i + count > WVM_CPU_ROUTE_TABLE_SIZE) {
-            count = WVM_CPU_ROUTE_TABLE_SIZE - i;
-        }
-        payload->start_index = i;
-        payload->count = count;
-        memcpy(payload->entries, &table[i], count * sizeof(uint32_t));
-        if (ioctl(g_dev_fd, IOCTL_UPDATE_CPU_ROUTE, payload) < 0) {
-            fprintf(stderr, "[CPU-ROUTE] inject failed at %u (errno=%d)\n",
-                    i, errno);
-            free(payload);
-            return;
-        }
-    }
-    fprintf(stderr, "[CPU-ROUTE] injected %u entries\n",
-            (unsigned)WVM_CPU_ROUTE_TABLE_SIZE);
-    free(payload);
-}
-
-static void inject_memory_route_table(void)
-{
-    const uint32_t *table;
-    const uint32_t chunk_size = 1024;
-    size_t buf_size;
-    struct wvm_ioctl_route_update *payload;
-    uint32_t i;
-
-    if (g_dev_fd < 0) {
-        return;
-    }
-    table = wvm_get_memory_route_table();
-    if (!table) {
-        return;
-    }
-    buf_size = sizeof(*payload) + chunk_size * sizeof(uint32_t);
-    payload = malloc(buf_size);
-    if (!payload) {
-        fprintf(stderr, "[MEM-ROUTE] malloc failed\n");
-        return;
-    }
-    for (i = 0; i < WVM_MEMORY_ROUTE_TABLE_SIZE; i += chunk_size) {
-        uint32_t count = chunk_size;
-
-        if (i + count > WVM_MEMORY_ROUTE_TABLE_SIZE) {
-            count = WVM_MEMORY_ROUTE_TABLE_SIZE - i;
-        }
-        payload->start_index = i;
-        payload->count = count;
-        memcpy(payload->entries, &table[i], count * sizeof(uint32_t));
-        if (ioctl(g_dev_fd, IOCTL_UPDATE_MEMORY_PLACEMENT, payload) < 0) {
-            fprintf(stderr, "[MEM-ROUTE] inject failed at %u (errno=%d)\n",
-                    i, errno);
-            free(payload);
-            return;
-        }
-    }
-    fprintf(stderr, "[MEM-ROUTE] injected %u entries\n",
-            (unsigned)WVM_MEMORY_ROUTE_TABLE_SIZE);
-    free(payload);
-}
-
-static void inject_mem_global(uint32_t slot, uint32_t value)
-{
-    size_t buf_size = sizeof(struct wvm_ioctl_route_update) + sizeof(uint32_t);
-    struct wvm_ioctl_route_update *payload;
-
-    if (g_dev_fd < 0) {
-        return;
-    }
-    payload = malloc(buf_size);
-    if (!payload) {
-        fprintf(stderr, "[MEM-GLOBAL] malloc failed\n");
-        return;
-    }
-    payload->start_index = slot;
-    payload->count = 1;
-    payload->entries[0] = value;
-    if (ioctl(g_dev_fd, IOCTL_UPDATE_MEM_ROUTE, payload) < 0) {
-        fprintf(stderr, "[MEM-GLOBAL] inject slot %u failed (errno=%d)\n",
-                slot, errno);
-    }
-    free(payload);
-}
-
-static void inject_vm_id(uint32_t vm_id)
-{
-    if (g_dev_fd < 0) {
-        return;
-    }
-    if (ioctl(g_dev_fd, IOCTL_SET_VM_ID, &vm_id) < 0) {
-        fprintf(stderr, "[VM-ID] inject failed (errno=%d)\n", errno);
-    }
-}
-
-static void load_swarm_config(const char *filename)
-{
-    char error[256] = {0};
-    const struct wvm_resource_vm *vm;
-
-    if (!g_resource_plan_ready) {
-        if (wvm_resource_plan_load(filename, &g_resource_plan, error,
-                                   sizeof(error)) != 0) {
-            fprintf(stderr, "[Config] %s\n", error);
-            exit(1);
-        }
-        g_resource_plan_ready = 1;
-    }
-
-    printf("[Config] DHT Ring Size: %u Virtual Nodes (from %u Physical).\n",
-           g_resource_plan.total_vnodes, g_resource_plan.node_count);
-    for (uint32_t i = 0; i < g_resource_plan.node_count; i++) {
-        const struct wvm_resource_node *node = &g_resource_plan.nodes[i];
-
-        for (uint32_t slot = 0; slot < node->dht_slots; slot++) {
-            uint32_t vnode = node->vnode_start + slot;
-            u_ops.set_gateway_ip(WVM_ENCODE_ID(g_my_vm_id, vnode),
-                                 inet_addr(node->ip), htons(node->port));
-        }
-    }
-    wvm_set_mem_mapping(0, g_resource_plan.total_vnodes);
-
-    wvm_clear_cpu_mappings();
-    wvm_clear_memory_mappings();
-    vm = wvm_resource_plan_get_vm(&g_resource_plan, (uint8_t)g_my_vm_id);
-    if (g_resource_plan.vm_count > 0 && !vm) {
-        fprintf(stderr, "[Config] VM %u has no resource reservation\n",
-                (unsigned)g_my_vm_id);
-        exit(1);
-    }
-
-    if (vm) {
-        for (uint32_t vcpu = 0; vcpu < vm->vcpu_count; vcpu++) {
-            wvm_set_cpu_mapping((int)vcpu, vm->vcpu_nodes[vcpu]);
-        }
-        for (uint32_t chunk = 0; chunk < vm->memory_chunk_count; chunk++) {
-            wvm_set_memory_mapping((int)chunk, vm->memory_nodes[chunk]);
-        }
-        printf("[Config] VM %u placement: %u vCPUs, %u x 1GiB memory chunks (%s).\n",
-               (unsigned)g_my_vm_id, vm->vcpu_count,
-               vm->memory_chunk_count,
-               vm->policy == WVM_RESOURCE_POLICY_COMPACT ? "compact" : "spread");
-        return;
-    }
-
-    int current_vcpu = 0;
-    for (uint32_t i = 0; i < g_resource_plan.node_count; i++) {
-        const struct wvm_resource_node *node = &g_resource_plan.nodes[i];
-
-        for (uint32_t core = 0;
-             core < node->cpu_capacity &&
-             current_vcpu < (int)WVM_CPU_ROUTE_TABLE_SIZE;
-             core++) {
-            wvm_set_cpu_mapping(current_vcpu++, node->vnode_start);
-        }
-    }
-    for (uint32_t cursor = 0;
-         current_vcpu < (int)WVM_CPU_ROUTE_TABLE_SIZE;
-         cursor = (cursor + 1) % g_resource_plan.node_count) {
-        wvm_set_cpu_mapping(current_vcpu++,
-                            g_resource_plan.nodes[cursor].vnode_start);
-    }
-    printf("[Config] CPU Routing Table Initialized (legacy core-weighted mode).\n");
-}
-
-static void load_initial_seeds(const char *config_file)
-{
-    (void)config_file;
-
-    if (!g_resource_plan_ready) {
-        return;
-    }
-
-    for (uint32_t i = 0; i < g_resource_plan.node_count; i++) {
-        const struct wvm_resource_node *node = &g_resource_plan.nodes[i];
-        struct sockaddr_in seed = {0};
-
-        seed.sin_family = AF_INET;
-        seed.sin_addr.s_addr = inet_addr(node->ip);
-        seed.sin_port = htons(node->port);
-        for (uint32_t slot = 0; slot < node->dht_slots; slot++) {
-            uint32_t vnode = node->vnode_start + slot;
-
-            if (vnode == (uint32_t)g_my_node_id) {
-                continue;
-            }
-            update_local_topology_view(vnode, 0, NODE_STATE_SHADOW, &seed, 0);
-        }
-    }
-}
-
-int main(int argc, char **argv)
-{
-    int stop_result = 0;
-    size_t ram_mb;
-    int local_port;
-    const char *config_file;
-    int my_phys_id;
-    int my_virtual_id;
-    uint32_t my_local_cores;
-    uint64_t required_memory_bytes;
-    uint32_t total_vnodes;
-    const struct wvm_resource_node *my_node;
-    const char *shm_path;
-    const char *sock_path;
-    int listen_fd;
-    char error[256];
-
-    signal(SIGPIPE, SIG_IGN);
-    if (install_shutdown_handlers() != 0) {
-        perror("[Lifecycle] cannot install shutdown handlers");
-        return 1;
-    }
-
-    if (argc < 7) {
-        fprintf(stderr,
-                "Usage: %s <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> "
-                "<CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH] [VM_ID]\n",
-                argv[0]);
-        return 1;
-    }
-
-    g_dev_fd = open("/dev/wavevm", O_RDWR);
-    if (g_dev_fd < 0) {
-        perror("[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?)");
-    }
-
-    ram_mb = (size_t)atol(argv[1]);
-    g_shm_size = ram_mb * 1024 * 1024;
-    local_port = atoi(argv[2]);
-    config_file = argv[3];
-    my_phys_id = atoi(argv[4]);
-    g_ctrl_port = atoi(argv[5]);
-    {
-        extern int g_slave_forward_port;
-        g_slave_forward_port = atoi(argv[6]);
-    }
-    if (argc >= 8) {
-        extern int g_sync_batch_size;
-        g_sync_batch_size = atoi(argv[7]);
-    }
-    if (argc >= 9 && parse_legacy_vm_id(argv[8], &g_my_vm_id) != 0) {
-        fprintf(stderr, "[VM-ID] invalid legacy VM id '%s'\n", argv[8]);
-        return 1;
-    }
-
-    memset(error, 0, sizeof(error));
-    if (wvm_resource_plan_load(config_file, &g_resource_plan, error,
-                               sizeof(error)) != 0) {
-        fprintf(stderr, "[Config] %s\n", error);
-        return 1;
-    }
-    g_resource_plan_ready = 1;
-    my_node = wvm_resource_plan_find_node(&g_resource_plan, my_phys_id);
-    if (!my_node) {
-        fprintf(stderr, "[Fatal] My Physical ID %d not found in config file!\n",
-                my_phys_id);
-        return 1;
-    }
-    my_virtual_id = (int)my_node->vnode_start;
-    my_local_cores = my_node->cpu_capacity;
-    required_memory_bytes = (uint64_t)my_node->memory_mb * 1024U * 1024U;
-    total_vnodes = g_resource_plan.total_vnodes;
-
-    printf("[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (legacy CLI PhysID: %d, VM: %u)\n",
-           my_phys_id, (unsigned)g_my_vm_id);
-
-    if (user_backend_init(my_virtual_id, local_port, NULL) != 0) {
-        fprintf(stderr, "[-] Failed to init user backend.\n");
-        return 1;
-    }
-    if (wvm_core_init(&u_ops, 0) != 0) {
-        fprintf(stderr, "[-] Logic Core init failed.\n");
-        return 1;
-    }
-    load_swarm_config(config_file);
-
-    printf("[+] Starting %d Wavelet Broadcast Engines...\n", NUM_BCAST_WORKERS);
-    for (long i = 0; i < NUM_BCAST_WORKERS; i++) {
-        pthread_t bcast_tid;
-        if (pthread_create(&bcast_tid, NULL, broadcast_worker_thread,
-                           (void *)i) != 0) {
-            perror("[-] Failed to start broadcast worker thread");
-            exit(1);
-        }
-        pthread_detach(bcast_tid);
-    }
-    printf("[+] All Wavelet Broadcast Engines started.\n");
-
-    {
-        const struct wvm_resource_vm *my_vm =
-            wvm_resource_plan_get_vm(&g_resource_plan, (uint8_t)g_my_vm_id);
-
-        if (my_vm) {
-            my_local_cores = wvm_resource_plan_local_vcpus(&g_resource_plan,
-                                                           (uint8_t)g_my_vm_id,
-                                                           my_phys_id);
-            required_memory_bytes =
-                wvm_resource_plan_local_memory_mb(&g_resource_plan,
-                                                  (uint8_t)g_my_vm_id,
-                                                  my_phys_id) *
-                1024U * 1024U;
-        }
-    }
-    if ((uint64_t)g_shm_size < required_memory_bytes) {
-        fprintf(stderr, "\n[FATAL] Resource Mismatch!\n");
-        fprintf(stderr, "  Local reservation requires:          %llu bytes\n",
-                (unsigned long long)required_memory_bytes);
-        fprintf(stderr, "  Launch arg provided:                 %lu MB\n",
-                (unsigned long)ram_mb);
-        return 1;
-    }
-    printf("[Check] Resource verified: Alloc %lu MB >= Reservation %llu bytes.\n",
-           (unsigned long)ram_mb, (unsigned long long)required_memory_bytes);
-
-    wvm_set_my_node_id(my_virtual_id);
-    printf("[Init] Identity Mapped: PhysID %d -> VirtualID %d (Primary)\n",
-           my_phys_id, my_virtual_id);
-    inject_vm_id(g_my_vm_id);
-    inject_mem_global(0, total_vnodes);
-    inject_mem_global(1, (uint32_t)my_virtual_id);
-    inject_cpu_route_table();
-    inject_memory_route_table();
-    {
-        char split_buf[32];
-        snprintf(split_buf, sizeof(split_buf), "%u", my_local_cores);
-        setenv("WVM_LOCAL_SPLIT", split_buf, 1);
-    }
-
-    shm_path = getenv("WVM_SHM_FILE");
-    if (!shm_path || shm_path[0] == '\0') {
-        fprintf(stderr, "[System] SHM name is missing (WVM_SHM_FILE)\n");
-        return 1;
-    }
-    printf("[System] Initializing SHM: %s (Size: %lu MB)\n", shm_path,
-           (unsigned long)ram_mb);
-    shm_unlink(shm_path);
-    {
-        int shm_fd = shm_open(shm_path, O_CREAT | O_RDWR, 0666);
-        if (shm_fd < 0) {
-            fprintf(stderr, "[-] Failed to open shm file '%s': %s\n", shm_path,
-                    strerror(errno));
-            return 1;
-        }
-        if (ftruncate(shm_fd, g_shm_size) < 0) {
-            perror("ftruncate failed");
-            close(shm_fd);
-            return 1;
-        }
-        g_shm_ptr = mmap(NULL, g_shm_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                         shm_fd, 0);
-        close(shm_fd);
-        if (g_shm_ptr == MAP_FAILED) {
-            perror("mmap failed");
-            return 1;
-        }
-    }
-    printf("[+] Memory Ready at %p\n", g_shm_ptr);
-
-    listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (listen_fd < 0) {
-        perror("socket AF_UNIX failed");
-        return 1;
-    }
-    {
-        struct sockaddr_un addr = {0};
-
-        addr.sun_family = AF_UNIX;
-        sock_path = getenv("WVM_RUNTIME_SOCKET");
-        if (!sock_path || sock_path[0] == '\0') {
-            sock_path = getenv("WVM_ENV_SOCK_PATH");
-        }
-        if (!sock_path || sock_path[0] == '\0' ||
-            strlen(sock_path) >= sizeof(addr.sun_path)) {
-            fprintf(stderr, "[System] runtime socket path is missing\n");
-            close(listen_fd);
-            return 1;
-        }
-        strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
-        unlink(sock_path);
-        printf("[System] Control Socket: %s\n", sock_path);
-        setenv("WVM_ENV_SOCK_PATH", sock_path, 1);
-        if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-            perror("bind unix socket failed");
-            return 1;
-        }
-        if (listen(listen_fd, 100) < 0) {
-            perror("listen failed");
-            return 1;
-        }
-    }
-
-    printf("[+] WaveVM V29 Node Ready. Waiting for QEMU...\n");
-    fflush(stdout);
-
-    {
-        pthread_t monitor_tid;
-
-        load_initial_seeds(config_file);
-        pthread_create(&monitor_tid, NULL, autonomous_monitor_thread, NULL);
-        pthread_detach(monitor_tid);
-        printf("[Autonomous] Node started in SHADOW mode. Auto-scaling into cluster...\n");
-    }
-
-    g_master_listen_fd = listen_fd;
-    while (!g_shutdown_requested) {
-        int client_fd = accept(listen_fd, NULL, NULL);
-        int current_count;
-        pthread_t thread_id;
-        int *new_sock;
-
-        if (client_fd < 0) {
-            if (errno == EINTR) {
-                if (g_shutdown_requested) {
-                    break;
-                }
-                continue;
-            }
-            perror("accept error");
-            sleep(1);
-            continue;
-        }
-        pthread_mutex_lock(&g_client_lock);
-        current_count = g_client_count;
-        pthread_mutex_unlock(&g_client_lock);
-        if (current_count >= MAX_QEMU_CLIENTS) {
-            fprintf(stderr,
-                    "[IPC] WARN: MAX_QEMU_CLIENTS(%d) reached, rejecting fd=%d\n",
-                    MAX_QEMU_CLIENTS, client_fd);
-            close(client_fd);
-            continue;
-        }
-        if (track_client_fd(client_fd) != 0) {
-            fprintf(stderr,
-                    "[IPC] WARN: client handler registry full, rejecting fd=%d\n",
-                    client_fd);
-            close(client_fd);
-            continue;
-        }
-        new_sock = malloc(sizeof(int));
-        if (new_sock) {
-            *new_sock = client_fd;
-            if (pthread_create(&thread_id, NULL, client_handler,
-                               (void *)new_sock) != 0) {
-                perror("pthread_create failed");
-                release_client_fd(client_fd, 0);
-                close(client_fd);
-                free(new_sock);
-            } else {
-                pthread_detach(thread_id);
-            }
-        } else {
-            perror("malloc failed");
-            release_client_fd(client_fd, 0);
-            close(client_fd);
-        }
-    }
-
-    fprintf(stderr, "[System] control accept loop ended (shutdown=%d)\n",
-            (int)g_shutdown_requested);
-    if (stop_and_wait_clients() != 0) {
-        stop_result = 1;
-    }
-    g_master_listen_fd = -1;
-    close(listen_fd);
-    if (sock_path && sock_path[0] != '\0') {
-        unlink(sock_path);
-    }
-    if (g_shm_ptr && g_shm_ptr != MAP_FAILED) {
-        munmap(g_shm_ptr, g_shm_size);
-        g_shm_ptr = NULL;
-    }
-    if (shm_path && shm_path[0] != '\0') {
-        shm_unlink(shm_path);
-    }
-    if (g_dev_fd >= 0) {
-        close(g_dev_fd);
-        g_dev_fd = -1;
-    }
-    if (stop_result != 0) {
-        fprintf(stderr,
-                "[Lifecycle] normal STOP incomplete; returning non-success\n");
-        return 1;
-    }
-    return 0;
-}
-#endif /* WAVEVM_MASTER_LEGACY_CLI */

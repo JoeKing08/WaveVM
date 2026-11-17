@@ -1,0 +1,37 @@
+NOTES — official F05 fractal after independent-CLI cut
+Time: 2026-11-17 10:23:25 – 10:36:11 CST (Asia/Shanghai, UTC+8)
+Hosts: 2404 wavevm-f05-a 100.116.196.65 (node-a); 2604 wavevm-f05-b 100.114.246.92 (node-b)
+Entry: scripts/wavevm f05 --role node-a|node-b --route-topology fractal
+Binaries: wavevm_node_runtime sha256 c6945cde52d4ab0de3def29890aee8038b1c5df87aca85714453ff440cddf705 (mtime 2026-11-17 10:19)
+          wvm_ctl sha256 bc74d51f4dcc7b563ef63629316b8e38551d1505205a0fd99e0f213894c13f85
+          QEMU sha256 b03c7eca766b854f19cf8d2678ff7e11c3fa889ba2583556e076edb569502727 (2026-11-17 08:33 CST)
+Git tip (rollback point): 1d729426a3167a9be14a5f9519582ac7c3bcbb0a (not pushed; origin/main still f9fbe187)
+Step 3 leftover-path stubs were uncommitted during this run (scripts only; official binaries unchanged).
+
+VERDICT=FAIL  (official scorer; not F05 CLOSED, not MINIMUM_COMPLETE)
+CREATE_VM SUCCESS (status=0, recorded_state=11), multi-ACTIVE cluster (gw+A+B),
+backend=require-tcg accel=disabled placement=spread unique-FE split=2 topology=fractal.
+QEMU helper processes used -accel wavevm,backend=tcg (admitted TCG backend honored).
+legacy_cli=0; no wavevm_node_master/slave seen.
+
+Official F05 contract was not met. All 24 fence-only polls stayed:
+  q_alive=1 fence_done=0 push_fail=0 remote=0 sent=0 ack_mode1=0
+No [WVM-MEM-STATS], no honest TCG RET (ack_mode=1), no fence_done.
+
+Root observation (not claimed as a fix): unique Cirros FE never appeared.
+The only QEMU processes on A and B were TCG helper instances:
+  qemu-system-x86_64 -accel wavevm,backend=tcg -machine pc-i440fx-5.2 -m 3072 -nographic -S -nodefaults -smp 1
+No disk, no serial, no /tmp/wavevm-official-f05-fractal-20261117-102314/vm.log or vm-serial.log. The test 'QEMU FE observed'
+line is a false positive against those helpers.
+agent-a.log: 'Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)…'
+  then 'waiting for manifest-bound QEMU frontend registration'
+  then 'RuntimeGate] QEMU registration rejected: N04: QEMU frontend already owned by another process'
+  and 'IPC manifest-bound registration failed'.
+Node B shows the same helper spawn and manifest-bound registration failed.
+This does not look like a tiny break from removing the independent CLI mains.
+It is reported as the official F05 gap on this tree/QEMU; not fixed in this pass.
+
+ART_A=/tmp/wavevm-official-f05-fractal-20261117-102314
+ART_B=/tmp/wavevm-official-f05-fractal-20261117-102326
+Evidence copies under this directory (A/ and B-from-shared/).
+Prior evidence left intact. No secrets, no tailscale_status.json, no session-backup.

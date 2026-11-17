@@ -1,0 +1,6 @@
+Full 14112-byte KVM req, slave saw vcpu=2. GET_SREGS was made non-fatal;
+no "GET_SREGS failed" / "validate failed" log, so validate passed and
+GET_SREGS likely succeeded this time. Still ErrorAck state=-5 with no
+reason string (this slave build had no reason= yet). RET ack_status=-1.
+QEMU died after first remote dispatch (after poll 1 while Q was still yes).
+login appeared on serial; login_touched=0 (no SSH).

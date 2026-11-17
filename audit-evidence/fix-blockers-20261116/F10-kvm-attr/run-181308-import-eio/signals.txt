@@ -1,0 +1,29 @@
+=== master0 VCPU ===
+49:[IPC VCPU_RUN] vcpu=2 mode=0 target=1 fd=9
+50:[IPC VCPU_RUN] sending vcpu=2 mode=0 target=1 req_bytes=14112
+51:[RPC-CALL] msg=5 len=14112 target=1
+59:[IPC VCPU_RUN RET] vcpu=2 target=1 rpc_ret=0 ack_status=-1 ack_mode=0
+=== vm.log key ===
+2:[WaveVM] KVM bootstrap OK (backend=kvm mode=user), keep wavevm vCPU control (kvm_enabled=1)
+3:qemu-system-x86_64: -accel wavevm,split=2,mode=user,backend=kvm: WaveVM: defer user mem init until first RAM block is registered
+1162:[WVM-REMOTE] cpu=2 dispatch #0 rip=0x7fce73f7ad7b cs=0x33 cr0=0x80050033 cr3=0x101339000 efer=0xd01 rsp=0x7ffc6bb9eca8
+1167:qemu-system-x86_64: WaveVM vCPU 2 terminal handoff failure status=-1 gpa=0
+=== scores ===
+F10_ATTR_ONLY=1
+accel=kvm
+login_touched=0
+poll=2
+q_alive=NO
+remote_vcpu_evidence=1
+remote_mem_evidence=0
+remote=1
+remote_done_cpu2=0
+sent=1
+ack=0
+remote_mem_peer=0
+fl_dominates=0
+fence_done=0
+push_fail=0
+commit_ack=0
+commit_to=0
+note=COMMIT_SYNC is supporting only; official remote_mem is WVM-MEM-STATS origin!=directory

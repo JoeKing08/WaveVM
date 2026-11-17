@@ -54,6 +54,12 @@ struct memory_network_context {
     int sidecar_fd;
     uint32_t physical_node_id;
     struct sockaddr_in sidecar_address;
+    const struct wvm_route_runtime *route_runtime;
+};
+
+struct sidecar_send_job {
+    struct memory_network_context *context;
+    struct sockaddr_in dest;
 };
 
 static int reject_unassigned_vcpu_handoff(
@@ -286,9 +292,10 @@ static int read_authoritative_local_page(
         return -EINVAL;
     }
     /*
-     * This is a typed read-only adapter over the existing authoritative
-     * directory page table. Its committed bytes are independent of mutable
-     * guest mappings; only versioned commits can update that image.
+     * Typed read-only adapter over the authoritative directory page table.
+     * Versioned commits remain the directory write path. On the unique-FE
+     * directory node, a fault read also materializes live WVM_SHM_FILE
+     * bytes (local FE execution dirties SHM without a prior commit).
      */
     result = wvm_handle_local_fault_fastpath(gpa, data, version_out);
     if (result != 0 && error && error_len != 0) {
@@ -296,6 +303,96 @@ static int read_authoritative_local_page(
                  "local V1 directory cannot read GPA %#" PRIx64, gpa);
     }
     return result;
+}
+
+static int read_frontend_live_page(
+    void *opaque, uint64_t gpa, uint8_t data[WVM_MEMORY_PAGE_BYTES],
+    uint64_t *version_out, char *error, size_t error_len)
+{
+    const uint8_t *live = NULL;
+
+    (void)opaque;
+    if (!data || !version_out) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "unique-FE live read is invalid");
+        }
+        return -EINVAL;
+    }
+    if (!wvm_frontend_live_ram_page(gpa, &live) || !live) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len,
+                     "unique FE has no live RAM for GPA %#" PRIx64, gpa);
+        }
+        return -ENOENT;
+    }
+    memcpy(data, live, WVM_MEMORY_PAGE_BYTES);
+    /*
+     * Provisional nonzero wire version only: V1 MEM_ACK SUCCESS requires
+     * version!=0 to carry the 4KiB page. The admitted directory overwrites
+     * this with its first-publish result version. Not a directory commit.
+     */
+    *version_out = 1;
+    return 0;
+}
+
+static int first_publish_authoritative_live_page(
+    void *opaque, uint64_t gpa, const uint8_t data[WVM_MEMORY_PAGE_BYTES],
+    uint64_t *result_version, char *error, size_t error_len)
+{
+    int result;
+
+    (void)opaque;
+    if (!data || !result_version) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "directory first-publish is invalid");
+        }
+        return -EINVAL;
+    }
+    result = wvm_directory_first_publish_live_page(gpa, data, result_version);
+    if (result != 0 && error && error_len != 0) {
+        snprintf(error, error_len,
+                 "directory cannot first-publish GPA %#" PRIx64, gpa);
+    }
+    return result;
+}
+
+static int fill_frontend_from_dispatch(
+    const struct wvm_runtime_dispatch_projection *dispatch,
+    uint32_t local_physical_node_id, uint64_t local_node_instance_id,
+    uint64_t local_role_bits, struct wvm_memory_service_config *cfg)
+{
+    const struct wvm_runtime_cpu_dispatch *cpu0;
+    size_t i;
+
+    if (!dispatch || !cfg) {
+        return -EINVAL;
+    }
+    if (local_role_bits &
+        WVM_RUNTIME_ROLE_BIT(WVM_MANIFEST_ROLE_QEMU_FRONTEND)) {
+        cfg->frontend_physical_node_id = local_physical_node_id;
+        cfg->frontend_node_instance_id = local_node_instance_id;
+        cfg->frontend_route = dispatch->local_primary;
+        cfg->read_frontend_live_page = read_frontend_live_page;
+        return 0;
+    }
+    cpu0 = wvm_runtime_dispatch_find_cpu(dispatch, 0);
+    if (!cpu0) {
+        return -ENOENT;
+    }
+    cfg->frontend_route = cpu0->executor;
+    for (i = 0; i < dispatch->memory_dispatch.count; i++) {
+        const struct wvm_runtime_memory_dispatch *entry =
+            &dispatch->memory_dispatch.entries[i];
+
+        if (entry->directory.destination_vnode ==
+            cpu0->executor.destination_vnode) {
+            cfg->frontend_physical_node_id = entry->directory_physical_node_id;
+            cfg->frontend_node_instance_id = entry->directory_node_instance_id;
+            cfg->frontend_route = entry->directory;
+            return 0;
+        }
+    }
+    return 0;
 }
 
 static int commit_authoritative_local_page(
@@ -394,9 +491,11 @@ static int send_sidecar_frame(void *opaque, const uint8_t *frame,
                                  size_t frame_bytes, char *error,
                                  size_t error_len)
 {
-    struct memory_network_context *context = opaque;
+    struct sidecar_send_job *job = opaque;
+    struct memory_network_context *context;
     ssize_t sent;
 
+    context = job ? job->context : NULL;
     if (!context || context->sidecar_fd < 0 || !frame || frame_bytes == 0) {
         if (error && error_len != 0) {
             snprintf(error, error_len, "local V1 sidecar transport is inactive");
@@ -404,8 +503,7 @@ static int send_sidecar_frame(void *opaque, const uint8_t *frame,
         return -ENOTCONN;
     }
     sent = sendto(context->sidecar_fd, frame, frame_bytes, MSG_DONTWAIT,
-                  (const struct sockaddr *)&context->sidecar_address,
-                  sizeof(context->sidecar_address));
+                  (const struct sockaddr *)&job->dest, sizeof(job->dest));
     if (sent == (ssize_t)frame_bytes) {
         return 0;
     }
@@ -423,8 +521,54 @@ static int send_runtime_envelope(void *opaque,
                                  const struct wvm_envelope *envelope,
                                  char *error, size_t error_len)
 {
+    struct memory_network_context *context = opaque;
+    struct sidecar_send_job job;
+    struct wvm_route_runtime_next_hop hop;
+    char hop_error[192];
+    static int route_send_log;
+
+    if (!context) {
+        if (error && error_len != 0) {
+            snprintf(error, error_len, "local V1 sidecar transport is inactive");
+        }
+        return -ENOTCONN;
+    }
+    memset(&job, 0, sizeof(job));
+    job.context = context;
+    job.dest = context->sidecar_address;
+    hop_error[0] = '\0';
+    if (context->route_runtime && envelope &&
+        wvm_route_runtime_lookup(context->route_runtime, envelope, &hop,
+                                 hop_error, sizeof(hop_error)) == 0 &&
+        hop.next_hop_endpoint.data_transport == WVM_DATA_TRANSPORT_UDP &&
+        hop.next_hop_endpoint.data_address_bytes == 4 &&
+        hop.next_hop_endpoint.data_port != 0) {
+        memset(&job.dest, 0, sizeof(job.dest));
+        job.dest.sin_family = AF_INET;
+        memcpy(&job.dest.sin_addr.s_addr, hop.next_hop_endpoint.data_address,
+               sizeof(job.dest.sin_addr.s_addr));
+        job.dest.sin_port = htons(hop.next_hop_endpoint.data_port);
+    }
+    if (route_send_log < 32) {
+        char dest_ip[INET_ADDRSTRLEN] = "?";
+        char sc_ip[INET_ADDRSTRLEN] = "?";
+        const char *lookup = hop_error[0] ? hop_error : "ok-or-default";
+        inet_ntop(AF_INET, &job.dest.sin_addr, dest_ip, sizeof(dest_ip));
+        inet_ntop(AF_INET, &context->sidecar_address.sin_addr, sc_ip,
+                  sizeof(sc_ip));
+        fprintf(stderr,
+                "[WVM-ROUTE-SEND] msg=%u vnode=%llu dest=%s:%u sidecar=%s:%u "
+                "lookup=%s\n",
+                envelope ? (unsigned)envelope->message_type : 0U,
+                envelope ? (unsigned long long)envelope->route
+                               .destination_vnode_or_endpoint
+                         : 0ULL,
+                dest_ip, (unsigned)ntohs(job.dest.sin_port), sc_ip,
+                (unsigned)ntohs(context->sidecar_address.sin_port), lookup);
+        route_send_log++;
+    }
     return wvm_envelope_emit_network_frames(
-        envelope, send_sidecar_frame, opaque, error, error_len);
+        envelope, send_sidecar_frame, &job, error, error_len);
 }
 
 /*
@@ -1180,6 +1324,7 @@ static int run_runtime_main(int argc, char **argv)
             return 1;
         }
         memory_network.physical_node_id = (uint32_t)physical_node_id;
+        memory_network.route_runtime = &route_runtime;
         memset(&bridge_config, 0, sizeof(bridge_config));
         bridge_config.manifest = &storage.manifest;
         bridge_config.runtime_gate = &gate;
@@ -1221,11 +1366,25 @@ static int run_runtime_main(int argc, char **argv)
         memory_config.commit_page = commit_authoritative_local_page;
         memory_config.publish_commit = publish_authoritative_local_page;
         memory_config.apply_push = apply_authoritative_local_push;
+        memory_config.first_publish_live_page =
+            first_publish_authoritative_live_page;
         memory_config.enable_typed_subscriber_delivery = 1;
         memory_config.complete_commit = complete_memory_commit;
         memory_config.complete_fault = complete_memory_fault;
         memory_config.send_envelope = send_runtime_envelope;
         memory_config.opaque = &memory_network;
+        if (fill_frontend_from_dispatch(
+                &dispatch_storage.projection, (uint32_t)physical_node_id,
+                node_instance_id, storage.manifest.local_role_bits,
+                &memory_config) == 0 &&
+            memory_config.frontend_physical_node_id != 0) {
+            fprintf(stderr,
+                    "[WVM-DIR] unique FE backing node=%u instance=%llu "
+                    "local=%s\n",
+                    memory_config.frontend_physical_node_id,
+                    (unsigned long long)memory_config.frontend_node_instance_id,
+                    memory_config.read_frontend_live_page ? "yes" : "no");
+        }
         wvm_logic_set_typed_memory_path(1);
         if (wvm_memory_service_init(&memory_service, &memory_config, error,
                                        sizeof(error)) != 0 ||

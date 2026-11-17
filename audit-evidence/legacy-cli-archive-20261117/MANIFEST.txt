@@ -1,0 +1,10 @@
+archive_time=2026-11-17 10:17:20 CST
+tip=f9fbe187e8d6cb4d103b9ea5edb6aa0d3250479c
+tree=/workspaces/WaveVM
+
+# source locations before removal
+-rw-rw-r-- 1 joeking joeking    717 2026-11-16 20:12 Makefile
+-rw-rw-r-- 1 joeking joeking    534 2026-11-16 20:12 master_core/Makefile_User
+-rwxrwxr-x 1 joeking joeking 740688 2026-11-16 20:12 master_core/wavevm_node_master
+-rw-rw-r-- 1 joeking joeking   1959 2026-11-16 20:12 slave_daemon/Makefile_Legacy
+-rwxrwxr-x 1 joeking joeking 733800 2026-11-16 20:12 slave_daemon/wavevm_node_slave

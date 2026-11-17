@@ -1,0 +1,6 @@
+member_count=3 route_count=0 membership_rev=15 topology_rev=4 admission_rev=15
+member[0] kind=GATEWAY role=901 inst=902 desired=4 health=1 has_enroll_act=1 has_route_act=0 enroll_act=140722709897752 route_act=140722709897732
+  enrollment_state=2 (COMMITTED=2)
+member[1] kind=COMPUTE role=801 inst=802 desired=4 health=1 has_enroll_act=1 has_route_act=0 enroll_act=140722709899744 route_act=140722709899724
+  enrollment_state=2 (COMMITTED=2)
+member[2] kind=COMPUTE role=811 inst=812 desired=3 health=1 has_enroll_act=0 has_route_act=0 enroll_act=140722709901736 route_act=140722709901716

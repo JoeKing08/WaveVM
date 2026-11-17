@@ -1,0 +1,313 @@
+WaveVM Minimum 缺口自审（对照现行纲领，严格）
+======================================================================
+日期：2026-11-16 约 19:25 CST Asia/Shanghai
+作者：Grok Bot（executor；Joe t571u 👍 确认：本轮 F05/F10 做完后按新纲领严格自审）
+仓库：/workspaces/WaveVM
+机器：2404 2e4d3ec5-e1b1-4a36-9903-de6309119499
+     2604 30b14f91-ba5c-40d4-8af3-ac7f5b4169f1（本轮在线，已跑 F05 回归与 F10）
+Tip HEAD：f9fbe187e8d6cb4d103b9ea5edb6aa0d3250479c（与 origin/main 对齐）
+工作区：dirty（本轮未提交的 F05/F10 修复 + 既有 admission/lifecycle 改动 + 证据）。
+        脏树作数；未 commit / 未 push。未动 Joe 的 session-backup / last prompt png。
+纲领：docs/wavevm-refactor-roadmap.md（Phase 0–9 = Minimum，10–13 = Extended；§1.1）
+      docs/wavevm-architecture-baseline.md；docs/specs/* 按需对照。
+对照：audit-evidence/MINIMUM_FIX_LIST_20261109.txt
+      audit-evidence/MINIMUM_STATUS_20261109.txt / MINIMUM_STATUS_20261111.txt
+      audit-evidence/MINIMUM_GAP_CROSS_AUDIT_GROK_XIAOLANG_20261109-2030.txt
+      audit-evidence/fix-blockers-20261109/MINIMUM_GAP_SELF_AUDIT_DIRTY_CHARTER_20261109-1957.txt
+      以及 20261111 Phase 9 同机包、今日 F05/F10 笔记。
+
+总体结论：MINIMUM_COMPLETE = NOT_CLAIMED / NOT_CLAIMABLE
+Phase 9 总体仍为 FAIL to close。
+本轮 F05 fence-only 回归 PASS，F10 Mode B attr-only PASS（真实远端 vCPU + 官方
+远端内存）。这两项都不能写成 F05 CLOSED / F10 CLOSED，也不能把 Minimum 标成完成。
+
+Typed runtime gate：本轮保持关闭，且未在纲领单条上证明“必须且可安全打开”。
+本审计默认它仍关闭，并据此诚实记生产路径缺口。
+
+----------------------------------------------------------------------
+goal.txt 与纲领
+----------------------------------------------------------------------
+goal.txt（2026-11-09 16:20）是执行口令，不能替代纲领。它与现行 dirty 纲领
+**并不冲突**：都要求 Phase 0–9 = Minimum，TCG guest login 属 Extended，
+manifest/typed runtime 为唯一生产路径，不保留独立 master/slave 入口。
+它与**实现**冲突：今日仍能出证的跨机 F05/F10 生产跑法，是 legacy CLI
+（wavevm_node_master + wavevm_node_slave + stub planner wvm_ctl_plan），
+typed node_runtime / V1 未迁移。审计按纲领记这条缺口，不以 goal 另立标准。
+
+----------------------------------------------------------------------
+本轮已落地（不重开，除非新回归）
+----------------------------------------------------------------------
+F05 回归（因 logic_core.c 在 11-16 17:36 的 fence-only PASS 之后又改过）：
+  证据：audit-evidence/fix-blockers-20261116/F05-cross-host/run-191541-fence-ret-regression/
+        NOTES_F05_20261116.txt
+  时间：19:15:39–19:18:04 CST Asia/Shanghai
+  harness：WVM_F05_FENCE_ONLY=1，WAVEVM_CI_ACCEL=tcg，accel_prop=wavevm,split=2
+  二进制：master 298899f0…（与 F10 run-191003 相同，含 MSG_MEM_WRITE 转发）
+  计分 poll 1（19:17:20）：Q=yes fence_done=37 push_fail=0 remote=10 sent=37
+    ack=37（ack_status=0 ack_mode=1；ack_mode=0=0）handoff=60 commit_ack=20
+    commit_to=0。脚本：F05 fence-only PASS。exit 0。
+  B：guest_vcpu=2 ×20，TCG ack ×20，报文 len=4436（4400+头），len=14148=0，
+    mode_tcg=1。reject-version=2；N02 coherent REFUSED=1（旧观察）。
+  [WVM-TCG-STATS] cpu=2 remote_done=36 local_done=1 force_local_used=1
+    （有一次本地回退，不否定 fence-only 门）。无 terminal handoff failure。
+  此前 scored PASS：run-173659-fence-ret-pass。两端已清理。TS 仍在。
+
+F10 Mode B attr-only（不因本 PASS 写成 CLOSED）：
+  证据：audit-evidence/fix-blockers-20261116/F10-kvm-attr/run-191003-legacy-mem-fwd/
+        NOTES_F10_20261116.txt
+  时间：19:02:59–19:12:23 CST
+  计分：VERDICT=PASS，remote_vcpu_evidence=1，remote_mem_evidence=1，
+    官方 [WVM-MEM-STATS] origin=1 directory=0，remote_commits 真实递增到 2821
+    （directory owner 落盘转发来的 legacy MSG_MEM_WRITE，不是合成日志）。
+    最终 RET ack_status=0 ack_mode=0 ×729，remote_done=720。
+  本轮未把 guest login/SSH 当作收口门；Cirros 已到登录后，仅做一次 5s
+  vCPU2 affinity burn 以触发远端路径。COMMIT_SYNC ack=0（辅证，非本路径门）。
+  未开 typed gate。未跑 Mode A / root QEMU（unprivileged /dev/wavevm 仍 EPERM）。
+
+----------------------------------------------------------------------
+明确不宣称
+----------------------------------------------------------------------
+- MINIMUM_COMPLETE：不宣称，也尚不可宣称。
+- F05 CLOSED：不宣称。仅 fence-only 合同 PASS；不是 TCG guest OS 可用；
+  生产路径仍是 legacy CLI。
+- F10 CLOSED：不宣称。仅 Mode B attr-only PASS。纲领 §1.1 / Phase 9 要求
+  KVM guest login 或 SSH **并且**有远端 vCPU/内存证据，作为同一验收格。
+  11-09 同机矩阵有 login/SSH 无远端；今日跨机有远端无官方 login/SSH 收口格。
+- 不得把 Cirros / TCG guest login 当作 Minimum 门（属 Extended Phase 10 / F01）。
+- 不得把 typed gate 已打开、或 typed 路径已迁移，当作既成事实。
+- MATRIX_PASS、attr-only PASS、fence-only PASS 都不等于 MINIMUM_COMPLETE。
+- 11-11 同机 Phase 9 包仍按其当时证据计分，本轮未用当前 dirty 树重跑那些格子。
+
+----------------------------------------------------------------------
+A. 纲领 §1.1 Minimum 条款（逐条）
+----------------------------------------------------------------------
+
+A1. 清单绑定的创建/激活/启动/暂停/停止/部分启动清理，以及单一活跃协调器
+    的重启对账
+    裁决：PARTIAL
+    证据：typed admission/lifecycle；N01 工作区租约
+      audit-evidence/fix-blockers-20261109/N01-admission-workspace/
+      ACTIVATION_DECIDED 冷启动定向 PASS（journal DECIDED→新进程 recover RUNNING）
+      audit-evidence/fix-blockers-20261111/ACTIVATION_DECIDED-cold-start/
+    理由：冷启动对账是定向两进程 oracle，不是 live wvm_ctl SIGKILL mid-CREATE；
+      membership republish 未练（当时 membership_controller=NULL）。本轮未重跑。
+
+A2. 显式 VM 身份/世代、QEMU 宿主放置、远端 CPU/内存分配、独立租约、能力选择
+    裁决：PARTIAL
+    证据：N04 唯一 FE 门定向 PASS（fix-blockers-20261109/N04-unique-kvm-fe/）；
+      今日 F10 跨机真实远端 vCPU + 官方远端内存
+      （run-191003-legacy-mem-fwd/）；F05 跨机 TCG RET（run-191541）。
+    理由：跨机远端分配已有 live 证据，但走的是 legacy CLI / stub planner，
+      不是纲领要求的生产 typed 入口；也还没有「login/SSH + 远端」合一的
+      Phase 9 格。
+
+A3. 平面/分形路由，带确认的不可变快照；重路由后语义操作键不变
+    裁决：PARTIAL
+    证据：2026-11-11 同机 live join/cordon/drain/successor PASS
+      audit-evidence/fix-blockers-20261111/PHASE9-same-host/NOTES_PHASE9.txt
+      N06 >64 listener 明确拒绝（fix-blockers-20261109/N06-listener-budget/）
+    理由：同机成员/网关格在 11-11、tip 7945349fa 上 PASS，本轮未用当前
+      dirty 树重跑。跨机 F05/F10 用的是 fract_2node.conf + stub planner，
+      不是 typed 快照 ACK 验收格。
+
+A4. KVM guest login 或 SSH，且须有远端 vCPU 与远端内存使用证据
+    裁决：PARTIAL（两截证据尚未合成官方收口格）
+    证据：
+      - 2026-11-09 同机 live-matrix-20261109-183406：flat_kvm+fractal_kvm
+        guest_login=PASS guest_ssh=PASS，但 remote_vcpu=0 mem=0（全本地；
+        OVERALL=FAIL_g9_remote_attribution）
+        audit-evidence/fix-blockers-20261109/F10-kvm-narrowed/live-matrix-20261109-183406/
+      - 2026-11-16 跨机 Mode B attr-only：远端 vCPU + 官方 WVM-MEM-STATS PASS
+        run-191003-legacy-mem-fwd/（login 不是本轮收口门）
+    理由：§1.1 把 login/SSH 与远端证据绑在同一条。缺正式「当前树、跨机、
+      KVM login 或 SSH + 远端 vCPU/内存」计分格。故不得写 F10 CLOSED。
+
+A5. 有界真实 TCG 执行合同（可核对 CPU/内存结果、独立 vCPU 权属/进展、
+    handoff/设备/原子退出、错误与清理）。合同通过 ≠ TCG guest OS 可用
+    裁决：PASS（fence-only 合同；非 guest OS；非 F05 CLOSED）
+    证据：run-173659-fence-ret-pass 与回归 run-191541-fence-ret-regression
+      fence_done>0、push_fail=0、WVM-REMOTE cpu=2、VCPU_RUN RET
+      ack_status=0 ack_mode=1、B 侧 mode_tcg=1 / len=4436 / guest_vcpu=2 / TCG ack、
+      COMMIT_SYNC ack、cleanup 后无残留。
+    理由：纲领明确合同通过不是 TCG 访客系统可用（那是 Phase 10）。
+      保留：一次 force_local_used=1；走 legacy CLI；不是 Phase 9 全矩阵格。
+
+A6. 同一物理机上多个 Mode B VM 与多个计算实例；物理主机聚合记账；
+    端点/端口/套接字/SHM/日志/临时文件所有权明确
+    裁决：PASS（2026-11-11 同机 live；本轮未重跑）
+    证据：PHASE9-same-host/NOTES_PHASE9.txt
+      test_create_vm_dual_mode_b.sh 双 VM RUNNING（vm_id=256/257），
+      独立 shm/sock；停一个不影响另一个；单元隔离脚本 PASS。
+    理由：证据绑定 tip 7945349fa / 11-11。当前 tip f9fbe187 + F05/F10 脏改
+      未重跑此格；无新回归迹象，但不假装今天复验过。
+
+A7. 每 VM 内核上下文；在对外宣称多上下文 Mode A 之前，须有双 VM 隔离
+    与拆除证据
+    裁决：PASS（2026-11-11；本轮未重跑）
+    证据：PHASE9-same-host/mode_a_two_vm/NOTES_MODE_A_KERNEL.txt
+      test_two_vm_isolation / test_two_vm_context_bind PASS
+      （feature_bits=0x1，max=64 active=2，无 SINGLE_CONTEXT）；
+      另有 test_create_vm_dual_mode_a.sh 生产双 CREATE RUNNING。
+    理由：这是有特权 insmod 的内核隔离格，不是 unprivileged QEMU 绑
+      /dev/wavevm。后者在今日 F10 默认混用 Mode A 时仍 EPERM，记在剩余项，
+      但不据此把已通过的双上下文隔离降级。
+
+A8. 已校验的成员/网关加入、计算隔离（cordon）、安全排空、经确认的
+    后继路由快照替换网关
+    裁决：PASS（2026-11-11 同机 live；本轮未重跑）
+    证据：NOTES_PHASE9.txt — join 单元、gateway CORDON/DRAIN fail-closed、
+      DRAIN PREPARE+peer ACK+COMMIT→DRAINING（Q02）、successor 单元、
+      compute cordon/drain 均 PASS。
+      N05 真 oracle 跨进程 PASS：fix-blockers-20261111/N05-subscriber-crossproc/
+    理由：同 A6，证据日期/tip 须写明。跨机 F05/F10 harness 不是此格。
+
+A9. 所需并发、优先级、批处理与有界反压；进程存活或监听套接字不是成功预言
+    裁决：PASS directed（有界；无 soak；本轮未重跑）
+    证据：NOTES_PHASE9.txt — test_rm_p7_concurrent_create.sh（4 路容量+
+      独占租约 fail-closed）、test_r05_multi_vcpu_race.sh；N01 BACKPRESSURE、
+      N06/N07 定向。本轮 F05/F10 计分未把“进程还活着”当成通过。
+    理由：无无界 soak（按设计）。不把 directed 夸成全规模性能验收。
+
+「Minimum 可用系统」总闸：FAIL to claim / 最接近状态仍是 PARTIAL。
+  卡住收口的是 A4（KVM login/SSH 与远端证据未合成官方格）以及生产路径
+  仍为 legacy CLI（与 Phase 1 / goal.txt 冲突），外加 Phase 9 未在当前
+  dirty 树上完整重跑。
+
+----------------------------------------------------------------------
+B. Phase 0–9（及 Extended 边界）
+----------------------------------------------------------------------
+P0 身份 / 规范记录 / IPC 基础
+   裁决：PARTIAL
+   证据：node_runtime 与 docs/specs 中的身份/codec/IPC 接线；本轮未做新的
+     可执行往返/负面集审计。
+   理由：11-09 即记为 wired 但未 live 复审；无新证据可升级。
+
+P1 统一的每 VM node-runtime；删除独立 master/slave 生产入口
+   裁决：PARTIAL（生产入口缺口仍在，且是一级缺口）
+   证据：typed node_runtime 源码存在；但本轮真实跨机 F05/F10 仍由
+     wavevm_node_master + wavevm_node_slave + stub planner 跑出。
+     typed gate 关闭。
+   理由：纲领明确「不要求支持独立拉起的 master/slave 或混合遗留部署」，
+     且 Phase 1 要求删除这些生产入口。live 证据不能自动升级为 typed 生产验收。
+
+P2 已校验成员关系、能力探测、路由编译与 fabric
+   裁决：PARTIAL
+   证据：11-11 同机成员/网关格 PASS；N06 定向 PASS。
+   理由：跨机路径仍是 legacy fract 配置，不是 typed 快照 ACK 验收。
+
+P3 内存一致性与基线 fault 路径
+   裁决：PARTIAL
+   证据：F05 fence + COMMIT_SYNC ack；F10 官方 WVM-MEM-STATS 来自真实
+     目录 owner 落盘（run-191003）；N02 定向 PASS（路径字符串，非 inode）。
+   理由：typed memory_service / V1 在 CLI master 上仍未接管；typed MEM_FAULT
+     ENOTCONN→UDP 回落仍在；N02 仍非 st_dev/st_ino 同 backing 证明；
+     跨机仍可见 N02 coherent REFUSED。
+
+P4 QEMU / KVM/TCG 执行与设备协同
+   裁决：PARTIAL
+   证据：F05 fence-only TCG 合同 PASS（4400 / ack_mode=1）；F10 KVM 跨机
+     远端 vCPU RET ack_mode=0 与脏页转发。
+   理由：设备/块/完整 Phase 4 矩阵未在本轮重跑；执行证据在 legacy 路径上。
+
+P5 放置、准入、激活、就绪与生命周期
+   裁决：PARTIAL
+   证据：N01 定向；ACTIVATION_DECIDED 冷启动定向 PASS（11-11）。
+   理由：缺 live mid-CREATE 崩溃窗与 membership republish；生产 CLI
+     不是纲领中的生产入口。
+
+P6 多 VM 与同机计算实例隔离
+   裁决：PASS（11-11 同机 live；本轮未重跑）
+   证据：PHASE9-same-host/NOTES_PHASE9.txt Mode B 双 VM 格。
+
+P7 动态成员、cordon/drain、网关替换
+   裁决：PASS（11-11 同机 live；本轮未重跑）
+   证据：NOTES_PHASE9.txt 对应格子 + N05 跨进程 PASS（11-11）。
+
+P8 每 VM 内核加速与上下文隔离
+   裁决：PASS（11-11 内核双上下文；本轮未重跑）
+   证据：mode_a_two_vm/NOTES_MODE_A_KERNEL.txt
+   理由：unprivileged QEMU 绑 /dev/wavevm EPERM 是另一条（F10 默认混用
+     Mode A）观察，不降级已有隔离格。纲领：模块不可用时 Mode B 计划仍应可用。
+
+P9 Minimum 集成与验收矩阵
+   裁决：FAIL to close
+   证据：11-11 同机包本身已写「Phase 9 overall still FAIL to close」；
+     今日补上 F05 fence-only 与 F10 attr-only，仍缺 §1.1 A4 合成格，
+     且跨机格不在 typed 生产路径上。未宣称 MINIMUM_COMPLETE。
+
+P10–P13 Extended：DEFERRED-Extended
+   F01 / TCG guest boot/login/SSH 与持续多 vCPU 可用性 = Phase 10，本轮不磨。
+   更广故障引擎 / HA / 迁移 / hosted 移植 = 11–13，未开工，也不该开工冒充 Minimum。
+
+----------------------------------------------------------------------
+C. MUST-FIX 剩余（N01–N07、F05、F10、新发现）
+----------------------------------------------------------------------
+N01  PASS directed（2026-11-09；等价 fail-closed 串行化重叠 CREATE，
+     尚非多槽独立 workspace）。本轮未重跑。
+     证据：fix-blockers-20261109/N01-admission-workspace/
+
+N02  PASS directed（弱）：路径字符串一致，不是 inode st_dev/st_ino
+     同 backing。跨机 F05 仍见 N02 coherent REFUSED=1。本轮未改此项。
+     证据：fix-blockers-20261109/N02-coherent-backing/；F05 run-191541 B 日志。
+
+N03  PASS directed（2026-11-09；SIGUSR1 + 多 participant；偏薄，无 live soak）。
+     证据：fix-blockers-20261109/N03-quiesce-sigusr1/
+
+N04  PASS directed（异 PID 第二 FE 拒绝）。F10 今日走唯一 FE + 第二主机 helper。
+     证据：fix-blockers-20261109/N04-unique-kvm-fe/
+
+N05  PASS（2026-11-11 真 oracle，跨进程 0x0307→STALE；取代 11-09 被下调的
+     F07 同进程 oracle）。本轮未重跑。
+     证据：fix-blockers-20261111/N05-subscriber-crossproc/
+
+N06  PASS directed（>64 明确拒绝，禁止静默截断）。本轮未重跑。
+     证据：fix-blockers-20261109/N06-listener-budget/
+
+N07  PASS directed（READ 结果预算执行前预占）。本轮未重跑。
+     证据：fix-blockers-20261109/N07-block-read-budget/
+
+F05  fence-only PASS（run-173659 与 19:15 回归 run-191541）。不是 CLOSED。
+     残留：legacy CLI 路径；force_local_used=1 一次；N02 REFUSED 一次。
+
+F10  Mode B attr-only PASS（run-191003）。不是 CLOSED。
+     残留：缺「KVM flat/fractal login 或 SSH + 远端 vCPU/内存」官方合成格；
+     unprivileged Mode A /dev/wavevm EPERM（若还要 Mode A 访客加速）。
+
+F01  DEFERRED-Extended（Phase 10）。不磨。
+
+ACTIVATION_DECIDED 冷启动：定向 PASS（11-11）。残留：非 live mid-CREATE；
+     membership republish 未练。
+     证据：fix-blockers-20261111/ACTIVATION_DECIDED-cold-start/
+
+新发现 / 加重的一级缺口（不是新代码 bug，是纲领对照后必须留下的）：
+  * 生产路径仍是独立 master/slave + stub planner。与 Phase 1、roadmap 维护条款、
+    goal.txt 均冲突。今日 F05/F10 的 live 证据不能单独关闭 Phase 9。
+  * typed MEM_FAULT ENOTCONN→UDP 回落仍存在（F05 接线遗产）。
+  * 11-11 同机 Phase 6/7/8/部分 Phase 9 格未在 tip f9fbe187 + 本轮脏改上重跑。
+
+----------------------------------------------------------------------
+D. 剩余收口清单（短）
+----------------------------------------------------------------------
+1) 不要宣称 MINIMUM_COMPLETE、F05 CLOSED、F10 CLOSED。
+2) F10 收口格：在当前树（含未提交修复）上，跑官方 KVM flat 与/或 fractal
+   「guest login 或 SSH，并且同一跑次具备远端 vCPU + 官方远端内存证据」。
+   登录本身不是本轮打磨目标，但是 §1.1/Phase 9 的合成条件。Mode B 即可；
+   不要为取悦计分器改写 KVM ack_mode，也不要伪造 WVM-MEM-STATS。
+3) 生产路径：把跨机验收迁到 typed node-runtime（或明确在收口记录里写清
+   「仅 legacy 证据、不能关 Phase 9」）。默认保持 typed gate 关闭，直到
+   能安全证明必须打开。删除或停用独立 master/slave 生产入口是纲领 Phase 1
+   的要求，不是可选项。
+4) 可选：用当前 dirty 树抽测 11-11 已 PASS 的同机 Phase 6/7/8 格，避免
+   后续 F05/F10 改动静默回归。
+5) 残留（不阻塞本轮已得的 F05 fence-only / F10 attr-only 分数，但收口前
+   应交代）：N02 inode 同 backing；ACTIVATION_DECIDED live 窗；
+   unprivileged Mode A EPERM；typed MEM_FAULT UDP 回落。
+6) F01 / TCG guest login 保持 Extended，禁止开工冒充 Minimum。
+7) 未提交修复何时入库，等 Joe 明确要求 commit/push。
+
+Joe 阻塞：无。2604 在线，Tailscale wavevm-f05-a 100.116.196.65 ↔
+wavevm-f05-b 100.114.246.92 仍在。F05 回归未失败，无新代码改动。
+两端 live 跑次后已清理。
+
+本文件只做审计，不修改 MINIMUM_FIX_LIST_20261109.txt 的历史正文
+（该清单 11-11 只允许 append；F05/F10 状态应以本文件与 11-16 NOTES 为准）。

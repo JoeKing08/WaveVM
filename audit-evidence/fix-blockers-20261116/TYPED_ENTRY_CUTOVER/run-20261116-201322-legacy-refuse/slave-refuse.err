@@ -1,0 +1,4 @@
+[LegacyCLI] wavevm_node_slave is not a supported production entry.
+The official way to start WaveVM is scripts/wavevm, which launches ctl_tool/wvm_ctl and wavevm_node_runtime.
+Independent master/slave CLIs remain in-tree only for historical non-production harnesses (for example scripts/ci_dual_node.sh).
+Set WAVEVM_ALLOW_LEGACY_CLI=1 to run this binary anyway.

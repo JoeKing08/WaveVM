@@ -24,6 +24,7 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/uio.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <inttypes.h>
@@ -373,12 +374,14 @@ typedef struct {
 static wvm_kvm_slot_t g_kvm_slots[WVM_KVM_MAX_MEMSLOTS];
 static int g_kvm_slot_count = 0;
 /*
- * KVM does not expose a userspace read fault for ordinary guest RAM.  Keep a
- * process-local admission marker for the one complete input snapshot that is
- * required before the first KVM slice.  A typed push/invalidation that cannot
- * be applied clears it, so the next slice must resync before executing again.
+ * Full dirty-tracked RAM snapshots are optional warmup only. Official guests
+ * are multi-GB, and the admitted route completion horizon cannot pull every
+ * slot page on the first remote interval. Unfetched track-dirty pages stay
+ * PROT_NONE; KVM_EXIT_MEMORY_FAULT demand-fills them after ioctl returns.
+ * This marker still tracks a completed optional full snapshot, if one lands.
  */
 static volatile int g_kvm_ram_snapshot_state = 0;
+static int g_kvm_memory_fault_exits = 0;
 
 static void invalidate_kvm_ram_snapshot(void)
 {
@@ -955,6 +958,13 @@ static int prepare_kvm_execution_snapshot(
     uint64_t *error_gpa_out);
 static int prepare_kvm_ram_snapshot(
     const struct wvm_header *hdr, uint64_t *error_gpa_out);
+static int demand_fill_kvm_fault_pages(
+    const struct wvm_header *hdr, uint64_t gpa, uint64_t size,
+    uint64_t *error_gpa_out);
+static uint64_t t_bare_efault_rip = UINT64_MAX;
+
+static int demand_fill_kvm_bare_efault(
+    const struct wvm_header *hdr, int vcpu_fd, uint64_t *error_gpa_out);
 
 struct kvm_input_snapshot {
     const struct wvm_header *header;
@@ -986,6 +996,30 @@ static inline int wvm_gpa_page_valid(uint64_t gpa)
     if (!hva) return 0;
     /* Require the whole page to fit in a single slot. */
     return wvm_gpa_to_hva(gpa + (WVM_PAGE_SIZE - 1)) != NULL;
+}
+
+static int conceal_unfetched_kvm_ram(void)
+{
+    int concealed = 0;
+
+    for (int i = 0; i < g_kvm_slot_count; i++) {
+        const wvm_kvm_slot_t *slot = &g_kvm_slots[i];
+        if (!slot->track_dirty || !slot->hva || slot->size == 0) {
+            continue;
+        }
+        if (mprotect(slot->hva, (size_t)slot->size, PROT_NONE) != 0) {
+            fprintf(stderr,
+                    "[KVM cache] conceal unfetched RAM failed gpa=%#llx size=%#llx: %s\n",
+                    (unsigned long long)slot->guest_phys_addr,
+                    (unsigned long long)slot->size, strerror(errno));
+            return -errno;
+        }
+        concealed++;
+    }
+    fprintf(stderr,
+            "[KVM cache] unfetched dirty-tracked RAM is PROT_NONE slots=%d memory_fault_exits=%d\n",
+            concealed, g_kvm_memory_fault_exits);
+    return 0;
 }
 
 static int wvm_kvm_add_memslot(int vm_fd, int slot_id,
@@ -1288,12 +1322,39 @@ void init_kvm_global() {
             return;
         }
     }
+    /* QEMU enables this cap before GET_VCPU_EVENTS; without it, a slave
+     * SET_VCPU_EVENTS with KVM_VCPUEVENT_VALID_PAYLOAD returns EINVAL. */
+    {
+        struct kvm_enable_cap cap = {
+            .cap = KVM_CAP_EXCEPTION_PAYLOAD,
+        };
+
+        cap.args[0] = 1;
+        if (ioctl(g_vm_fd, KVM_ENABLE_CAP, &cap) < 0) {
+            fprintf(stderr, "[Slave KVM] EXCEPTION_PAYLOAD cap unavailable: %s\n",
+                    strerror(errno));
+        } else {
+            fprintf(stderr, "[Slave KVM] EXCEPTION_PAYLOAD enabled\n");
+        }
+    }
     ioctl(g_vm_fd, KVM_SET_TSS_ADDR, WVM_KVM_TSS_ADDR);
     {
         __u64 map_addr = WVM_KVM_IDMAP_ADDR;
         ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
     }
     fprintf(stderr, "[Slave KVM] split LAPIC enabled; devices stay in frontend\n");
+#ifdef KVM_CAP_MEMORY_FAULT_INFO
+    g_kvm_memory_fault_exits =
+        ioctl(g_kvm_fd, KVM_CHECK_EXTENSION, KVM_CAP_MEMORY_FAULT_INFO) > 0;
+    if (!g_kvm_memory_fault_exits && g_vm_fd >= 0) {
+        g_kvm_memory_fault_exits =
+            ioctl(g_vm_fd, KVM_CHECK_EXTENSION, KVM_CAP_MEMORY_FAULT_INFO) > 0;
+    }
+#else
+    g_kvm_memory_fault_exits = 0;
+#endif
+    fprintf(stderr, "[Slave KVM] memory_fault_exits=%d\n",
+            g_kvm_memory_fault_exits);
 
     for (int i = 0; i < WVM_KVM_MAX_VCPUS; i++) {
         g_kvm_vcpus[i].fd = -1;
@@ -1429,6 +1490,18 @@ void init_kvm_global() {
                         (void*)(g_phy_ram + 0xF0000));
             }
         }
+    }
+
+    if (g_kvm_memory_fault_exits) {
+        if (conceal_unfetched_kvm_ram() != 0) {
+            fprintf(stderr,
+                    "[KVM cache] continuing without PROT_NONE conceal; "
+                    "demand-fill may not see missing pages\n");
+        }
+    } else {
+        fprintf(stderr,
+                "[KVM cache] KVM_CAP_MEMORY_FAULT_INFO unavailable; "
+                "will prefetch the vCPU working set only\n");
     }
 
     g_kvm_available = 1;
@@ -2593,11 +2666,44 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     struct kvm_regs kregs;
     struct kvm_sregs ksregs;
     int state_import_result = 0;
+    const char *reject_reason = "pre-import";
+    memset(&kregs, 0, sizeof(kregs));
+    memset(&ksregs, 0, sizeof(ksregs));
     if (t_vcpu_fd >= 0 && t_kvm_run && t_kvm_run != MAP_FAILED) {
-        if (ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs) < 0) {
-            state_import_result = -errno;
-        } else if (!req->mode_tcg) {
+        /*
+         * KVM (and TCG-translated) sregs/regs are taken from the request
+         * below. KVM_GET_SREGS is only a liveness probe. On a freshly
+         * created vCPU it can fail with EIO (run-180407, guest vcpu=2
+         * after the full 14112-byte request landed). Do not ErrorAck
+         * solely on that probe; validate the incoming KVM context
+         * instead, then let SET_CPUID/SET_SREGS import the request.
+         */
+        if (!req->mode_tcg) {
             state_import_result = wvm_kvm_extended_state_validate(&req->ctx.kvm);
+            if (state_import_result != 0) {
+                fprintf(stderr,
+                        "[Slave] kvm ctx validate failed state=%d vcpu=%d "
+                        "cpuid_count=%u fpu=%u lapic=%u events=%u mp=%u "
+                        "xcrs=%u debug=%u sysmsrs=%u prof=%u\n",
+                        state_import_result, guest_vcpu_id,
+                        req->ctx.kvm.cpuid_count,
+                        req->ctx.kvm.fpu_valid,
+                        req->ctx.kvm.lapic_valid,
+                        req->ctx.kvm.vcpu_events_valid,
+                        req->ctx.kvm.mp_state_valid,
+                        req->ctx.kvm.xcrs_valid,
+                        req->ctx.kvm.debug_valid,
+                        req->ctx.kvm.system_msrs_valid,
+                        req->ctx.kvm.profile_msr_count);
+            }
+        }
+        if (state_import_result == 0 &&
+            ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs) < 0) {
+            fprintf(stderr,
+                    "[Slave] KVM_GET_SREGS failed errno=%d vcpu=%d fd=%d "
+                    "(non-fatal; sregs come from the request)\n",
+                    errno, guest_vcpu_id, t_vcpu_fd);
+            memset(&ksregs, 0, sizeof(ksregs));
         }
     }
     if (t_vcpu_fd < 0 || !t_kvm_run || t_kvm_run == MAP_FAILED ||
@@ -2632,8 +2738,9 @@ kvm_state_rejected:;
             if (__errack < 16) {
                 fprintf(stderr,
                         "[Slave ErrorAck] vcpu init/state failed state=%d "
-                        "vcpu_fd=%d kvm_run=%p req=%llu\n",
-                        state_import_result, t_vcpu_fd, (void *)t_kvm_run,
+                        "reason=%s vcpu_fd=%d kvm_run=%p req=%llu\n",
+                        state_import_result, reject_reason ? reject_reason : "?",
+                        t_vcpu_fd, (void *)t_kvm_run,
                         (unsigned long long)hdr->req_id);
                 __errack++;
             }
@@ -2646,8 +2753,8 @@ kvm_state_rejected:;
         tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
         vcpu_exit_cache_complete(run_req_id, requester, tx, sizeof(tx));
         ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
-        fprintf(stderr, "[Slave ErrorAck] vcpu init/state failed ret=%zd state=%d errno=%d req=%llu dst=%s:%u\n",
-                sret, state_import_result, (sret < 0) ? errno : 0,
+        fprintf(stderr, "[Slave ErrorAck] vcpu init/state failed ret=%zd state=%d reason=%s errno=%d req=%llu dst=%s:%u\n",
+                sret, state_import_result, reject_reason ? reject_reason : "?", (sret < 0) ? errno : 0,
                 (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
         return;
     }
@@ -2669,15 +2776,31 @@ kvm_state_rejected:;
 
     if (!req->mode_tcg) {
         state_import_result = wvm_kvm_cpuid_check_host(g_kvm_fd, &req->ctx.kvm);
-        if (state_import_result != 0) goto kvm_state_rejected;
+        if (state_import_result != 0) {
+            reject_reason = "cpuid_check_host";
+            goto kvm_state_rejected;
+        }
         state_import_result = wvm_kvm_cpuid_import(t_vcpu_fd, &req->ctx.kvm);
-        if (state_import_result != 0) goto kvm_state_rejected;
+        if (state_import_result != 0) {
+            reject_reason = "cpuid_import";
+            goto kvm_state_rejected;
+        }
     }
     /* Install the CPU model before control registers and pending events. */
     if (ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs) < 0 ||
         ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs) < 0) {
         state_import_result = -errno;
+        reject_reason = "set_sregs_or_regs";
         goto kvm_state_rejected;
+    }
+
+    if (!req->mode_tcg) {
+        state_import_result = wvm_kvm_extended_state_import(
+            t_vcpu_fd, &req->ctx.kvm);
+        if (state_import_result != 0) {
+            reject_reason = "extended_state_import";
+            goto kvm_state_rejected;
+        }
     }
 
     /* [V30 TSC 同步] 将 master 传来的 TSC 值注入 slave 本地 vCPU，
@@ -2723,23 +2846,19 @@ kvm_state_rejected:;
         msr_data.info.nmsrs = n;
         if (ioctl(t_vcpu_fd, KVM_SET_MSRS, &msr_data) != n) {
             state_import_result = -EIO;
+            reject_reason = "set_msrs_tsc";
             goto kvm_state_rejected;
         }
     }
 
-    if (!req->mode_tcg) {
-        state_import_result = wvm_kvm_extended_state_import(
-            t_vcpu_fd, &req->ctx.kvm);
-        if (state_import_result != 0) {
-            goto kvm_state_rejected;
-        }
-    }
 
     /*
-     * Establish the input side of the KVM handoff before KVM_RUN. KVM does
-     * not surface guest read faults to this userspace executor, so a missing
-     * instruction-fetch page must be resolved before the vCPU can execute.
-     * Keep this slice open through dirty-page capture and write-back below.
+     * Establish the input side of the KVM handoff before KVM_RUN. Prefetch
+     * the vCPU working set (page tables, instruction bytes, stack, GDT/IDT).
+     * Other missing pages are demand-filled when KVM_EXIT_MEMORY_FAULT
+     * returns from ioctl; do not pull the entire dirty-tracked RAM in the
+     * admitted completion horizon. Keep this slice open through dirty-page
+     * capture and write-back below.
      */
     struct wvm_kvm_memory_slice *memory_slice = NULL;
     int memory_fence_status = 0;
@@ -2786,13 +2905,24 @@ kvm_state_rejected:;
                 (unsigned)rctx->exit_reason);
             /* [DIAG] Dump 16 bytes from SHM at trampoline GPA */
             if (g_phy_ram && gpa + 16 <= 0x80000000ULL) {
+                uint8_t tmp[16];
                 uint8_t *p = g_phy_ram + gpa;
-                fprintf(stderr, "[SLAVE-MEM] GPA=0x%llx bytes:"
-                        " %02x %02x %02x %02x %02x %02x %02x %02x"
-                        " %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                        (unsigned long long)gpa,
-                        p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],
-                        p[8],p[9],p[10],p[11],p[12],p[13],p[14],p[15]);
+                struct iovec local = { .iov_base = tmp, .iov_len = sizeof(tmp) };
+                struct iovec remote = { .iov_base = p, .iov_len = sizeof(tmp) };
+                /* This address is linear, not necessarily a fetched GPA, and
+                 * unfetched RAM is PROT_NONE. Do not dereference it. */
+                if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == 16) {
+                    fprintf(stderr, "[SLAVE-MEM] GPA=0x%llx bytes:"
+                            " %02x %02x %02x %02x %02x %02x %02x %02x"
+                            " %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                            (unsigned long long)gpa,
+                            tmp[0],tmp[1],tmp[2],tmp[3],tmp[4],tmp[5],tmp[6],tmp[7],
+                            tmp[8],tmp[9],tmp[10],tmp[11],tmp[12],tmp[13],tmp[14],tmp[15]);
+                } else {
+                    fprintf(stderr,
+                            "[SLAVE-MEM] GPA=0x%llx unreadable (PROT_NONE or unmapped)\n",
+                            (unsigned long long)gpa);
+                }
             }
             dbg_raw++;
         }
@@ -2901,6 +3031,7 @@ kvm_state_rejected:;
         }
         local_exit_consumed = 0;
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
+        int run_err = (ret < 0) ? errno : 0;
         if (ret == 0 && t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
             /* The split irqchip owns LAPIC state. Any remaining LAPIC MMIO
              * exit belongs to frontend device emulation, never a read stub. */
@@ -2918,9 +3049,107 @@ kvm_state_rejected:;
                 continue;
             }
         }
+#ifdef KVM_EXIT_MEMORY_FAULT
+        if (ret == 0 && t_kvm_run->exit_reason == KVM_EXIT_MEMORY_FAULT) {
+            uint64_t fgpa = t_kvm_run->memory_fault.gpa;
+            uint64_t fsize = t_kvm_run->memory_fault.size;
+            int fill;
+            static unsigned demand_log = 0;
+            struct itimerspec stop = {0};
+
+            /* Network fill happens after ioctl returns; do not charge it
+             * against the host slice timer. */
+            timer_settime(ktimer, 0, &stop, NULL);
+            if (demand_log < 32) {
+                fprintf(stderr,
+                        "[KVM cache] demand-fill GPA=%#llx size=%#llx flags=%#llx\n",
+                        (unsigned long long)fgpa,
+                        (unsigned long long)fsize,
+                        (unsigned long long)t_kvm_run->memory_fault.flags);
+                demand_log++;
+            }
+            fill = demand_fill_kvm_fault_pages(hdr, fgpa, fsize,
+                                               &memory_error_gpa);
+            if (fill != 0) {
+                memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
+                fprintf(stderr,
+                        "[KVM cache] demand-fill failed GPA=%#llx rc=%d\n",
+                        (unsigned long long)memory_error_gpa, fill);
+                break;
+            }
+            if (g_shutdown_requested) {
+                ret = -EINTR;
+                break;
+            }
+            /* A timer that fired during fill must not skip the retry of the
+             * instruction that just received its page. Re-arm a fresh slice. */
+            t_kvm_alarm_fired = 0;
+            if (timer_settime(ktimer, 0, &its, NULL) < 0) {
+                memory_fence_status = -errno;
+                break;
+            }
+            continue;
+        }
+#endif
+        /*
+         * This host advertises KVM_CAP_MEMORY_FAULT_INFO but still returns a
+         * bare -EFAULT (exit_reason=0, memory_fault empty) for memslot hva
+         * permission faults such as PROT_NONE unfetched RAM. Recover the
+         * missing GPA from the still-current instruction and demand-fill
+         * live FE/directory pages before retrying KVM_RUN.
+         */
+        if (ret == -1 && run_err == EFAULT) {
+            int fill;
+            struct itimerspec stop = {0};
+
+            timer_settime(ktimer, 0, &stop, NULL);
+#ifdef KVM_EXIT_MEMORY_FAULT
+            if (t_kvm_run->exit_reason == KVM_EXIT_MEMORY_FAULT &&
+                t_kvm_run->memory_fault.size != 0) {
+                fill = demand_fill_kvm_fault_pages(
+                    hdr, t_kvm_run->memory_fault.gpa,
+                    t_kvm_run->memory_fault.size, &memory_error_gpa);
+            } else
+#endif
+            {
+                fill = demand_fill_kvm_bare_efault(
+                    hdr, t_vcpu_fd, &memory_error_gpa);
+            }
+            if (fill != 0) {
+                memory_fence_status = WVM_CPU_RUN_STATUS_MEMORY_FAILURE;
+                fprintf(stderr,
+                        "[KVM cache] bare EFAULT demand-fill failed "
+                        "GPA=%#llx rc=%d errno=%d exit=%u\n",
+                        (unsigned long long)memory_error_gpa, fill, run_err,
+                        (unsigned)t_kvm_run->exit_reason);
+                break;
+            }
+            if (g_shutdown_requested) {
+                ret = -EINTR;
+                break;
+            }
+            t_kvm_alarm_fired = 0;
+            if (timer_settime(ktimer, 0, &its, NULL) < 0) {
+                memory_fence_status = -errno;
+                break;
+            }
+            continue;
+        }
         if (ret == 0) break; /* normal exit (IO, HLT, etc.) */
-        if (ret == -1 && errno == EINTR && !t_kvm_alarm_fired)
+        if (ret == -1 && run_err == EINTR && !t_kvm_alarm_fired)
             continue; /* signal interrupted, retry */
+        if (ret < 0) {
+            static unsigned run_fail_log = 0;
+            if (run_fail_log < 32) {
+                fprintf(stderr,
+                        "[KVM cache] KVM_RUN failed ret=%d errno=%d (%s) "
+                        "exit=%u alarm=%d\n",
+                        ret, run_err, strerror(run_err),
+                        (unsigned)t_kvm_run->exit_reason,
+                        (int)t_kvm_alarm_fired);
+                run_fail_log++;
+            }
+        }
         break; /* error or alarm fired */
     }
 
@@ -2928,8 +3157,8 @@ kvm_state_rejected:;
     {
         static int dbg_out = 0;
         if (dbg_out < 20) {
-            fprintf(stderr, "[DBG-EXIT] ret=%d exit=%u rip_after=?  io_port=0x%x io_dir=%u io_sz=%u alarm=%d\n",
-                ret, (unsigned)t_kvm_run->exit_reason,
+            fprintf(stderr, "[DBG-EXIT] ret=%d errno=%d exit=%u rip_after=?  io_port=0x%x io_dir=%u io_sz=%u alarm=%d\n",
+                ret, (ret < 0) ? errno : 0, (unsigned)t_kvm_run->exit_reason,
                 (unsigned)t_kvm_run->io.port,
                 (unsigned)t_kvm_run->io.direction,
                 (unsigned)t_kvm_run->io.size,
@@ -3499,14 +3728,13 @@ static void *kvm_ram_prefetch_worker(void *opaque)
 }
 
 /*
- * KVM reads ordinary RAM directly from its memslots, so an absent page cannot
- * fault into the WaveVM memory service.  The entry/page-table prefetch alone
- * therefore leaves arbitrary guest data pages at whatever bytes happened to
- * be in the local mapping.  Establish one complete, versioned snapshot before
- * the first dependent KVM interval.  Subsequent intervals rely on typed page
- * pushes; a rejected/gapped push clears the marker and forces this pass again.
+ * Optional full dirty-tracked RAM snapshot. Not used as a blocking
+ * prerequisite for a remote KVM interval: a multi-GB official guest cannot
+ * be pulled within the admitted completion horizon, and materializing unused
+ * RAM on the remote executor is unsafe on memory-tight hosts. Kept for a
+ * possible best-effort warmup. Missing pages are PROT_NONE and demand-filled.
  */
-static int prepare_kvm_ram_snapshot(
+static int __attribute__((unused)) prepare_kvm_ram_snapshot(
     const struct wvm_header *hdr, uint64_t *error_gpa_out)
 {
     int expected = 0;
@@ -3716,44 +3944,14 @@ static int translate_kvm_linear_to_gpa(
     return 0;
 }
 
-static int prepare_kvm_execution_snapshot(
-    const struct wvm_header *hdr, const wvm_kvm_context_t *context,
-    uint64_t *error_gpa_out)
+static int ensure_kvm_linear_span(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    uint64_t linear, uint64_t extra, uint64_t *error_gpa_out)
 {
-    const struct kvm_sregs *sregs;
-    uint64_t linear;
     uint64_t gpa;
     int result;
 
-    if (error_gpa_out) {
-        *error_gpa_out = 0;
-    }
-    if (!context ||
-        sizeof(*sregs) > sizeof(context->sregs_data)) {
-        return -EINVAL;
-    }
-    sregs = (const struct kvm_sregs *)context->sregs_data;
-
-    /*
-     * Resolve every dirty-tracked RAM page before translating or executing the
-     * requested instruction.  KVM can read data pages without notifying this
-     * process, so a partial entry/page-table prefetch is not a valid input
-     * snapshot for a distributed interval.
-     */
-    result = prepare_kvm_ram_snapshot(hdr, error_gpa_out);
-    if (result != 0) {
-        return result;
-    }
-    if (context->rip > UINT64_MAX - sregs->cs.base) {
-        return -EOVERFLOW;
-    }
-    linear = sregs->cs.base + context->rip;
-
-    /*
-     * x86 instructions are at most 15 bytes. Resolve both possible fetch
-     * pages and all page-table levels used to derive them before KVM_RUN.
-     */
-    for (uint64_t offset = 0; offset <= 15; offset += 15) {
+    for (uint64_t offset = 0; offset <= extra; offset += (extra ? extra : 1)) {
         if (linear > UINT64_MAX - offset) {
             return -EOVERFLOW;
         }
@@ -3766,6 +3964,573 @@ static int prepare_kvm_execution_snapshot(
         if (result != 0) {
             return result;
         }
+        if (extra == 0) {
+            break;
+        }
+    }
+    return 0;
+}
+
+static int demand_fill_kvm_fault_pages(
+    const struct wvm_header *hdr, uint64_t gpa, uint64_t size,
+    uint64_t *error_gpa_out)
+{
+    uint64_t end;
+
+    if (size == 0) {
+        size = WVM_PAGE_SIZE;
+    }
+    gpa &= ~(WVM_PAGE_SIZE - 1U);
+    if (gpa > UINT64_MAX - size) {
+        return -EOVERFLOW;
+    }
+    end = gpa + size;
+    while (gpa < end) {
+        int result = ensure_kvm_execution_page(hdr, gpa, error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+        if (gpa > UINT64_MAX - WVM_PAGE_SIZE) {
+            break;
+        }
+        gpa += WVM_PAGE_SIZE;
+    }
+    return 0;
+}
+
+static int prepare_kvm_execution_snapshot(
+    const struct wvm_header *hdr, const wvm_kvm_context_t *context,
+    uint64_t *error_gpa_out)
+{
+    const struct kvm_sregs *sregs;
+    uint64_t linear;
+    int result;
+
+    if (error_gpa_out) {
+        *error_gpa_out = 0;
+    }
+    if (!context ||
+        sizeof(*sregs) > sizeof(context->sregs_data)) {
+        return -EINVAL;
+    }
+    sregs = (const struct kvm_sregs *)context->sregs_data;
+
+    /*
+     * Prefetch only the vCPU working set. A blocking full-RAM snapshot of a
+     * multi-GB official guest exceeds the admitted horizon (~15k pages/s was
+     * observed against a 1s timeout) and would materialize unused RAM on the
+     * remote executor. Unfetched pages stay PROT_NONE and are demand-filled
+     * on KVM_EXIT_MEMORY_FAULT after ioctl returns.
+     */
+    if (context->rip > UINT64_MAX - sregs->cs.base) {
+        return -EOVERFLOW;
+    }
+    linear = sregs->cs.base + context->rip;
+    /* x86 instructions are at most 15 bytes. */
+    result = ensure_kvm_linear_span(hdr, sregs, linear, 15, error_gpa_out);
+    if (result != 0) {
+        return result;
+    }
+    if (context->rsp <= UINT64_MAX - sregs->ss.base) {
+        result = ensure_kvm_linear_span(
+            hdr, sregs, sregs->ss.base + context->rsp, 15, error_gpa_out);
+        if (result != 0 && result != -ENOENT) {
+            return result;
+        }
+    }
+    if (sregs->gdt.base) {
+        result = ensure_kvm_linear_span(
+            hdr, sregs, sregs->gdt.base, sregs->gdt.limit, error_gpa_out);
+        if (result != 0 && result != -ENOENT) {
+            return result;
+        }
+    }
+    if (sregs->idt.base) {
+        result = ensure_kvm_linear_span(
+            hdr, sregs, sregs->idt.base, sregs->idt.limit, error_gpa_out);
+        if (result != 0 && result != -ENOENT) {
+            return result;
+        }
+    }
+    if (error_gpa_out) {
+        *error_gpa_out = 0;
+    }
+    return 0;
+}
+
+static uint64_t x86_gpr_value(const struct kvm_regs *regs, unsigned int id)
+{
+    switch (id & 0xFU) {
+    case 0: return regs->rax;
+    case 1: return regs->rcx;
+    case 2: return regs->rdx;
+    case 3: return regs->rbx;
+    case 4: return regs->rsp;
+    case 5: return regs->rbp;
+    case 6: return regs->rsi;
+    case 7: return regs->rdi;
+    case 8: return regs->r8;
+    case 9: return regs->r9;
+    case 10: return regs->r10;
+    case 11: return regs->r11;
+    case 12: return regs->r12;
+    case 13: return regs->r13;
+    case 14: return regs->r14;
+    default: return regs->r15;
+    }
+}
+
+static uint64_t x86_segment_base(const struct kvm_sregs *sregs, int seg)
+{
+    switch (seg) {
+    case 0: return sregs->es.base;
+    case 1: return sregs->cs.base;
+    case 2: return sregs->ss.base;
+    case 3: return sregs->ds.base;
+    case 4: return sregs->fs.base;
+    case 5: return sregs->gs.base;
+    default: return 0;
+    }
+}
+
+static int x86_opcode_has_modrm(int map, unsigned int opcode)
+{
+    if (map == 0) {
+        switch (opcode) {
+        case 0x00: case 0x01: case 0x02: case 0x03:
+        case 0x08: case 0x09: case 0x0A: case 0x0B:
+        case 0x10: case 0x11: case 0x12: case 0x13:
+        case 0x18: case 0x19: case 0x1A: case 0x1B:
+        case 0x20: case 0x21: case 0x22: case 0x23:
+        case 0x28: case 0x29: case 0x2A: case 0x2B:
+        case 0x30: case 0x31: case 0x32: case 0x33:
+        case 0x38: case 0x39: case 0x3A: case 0x3B:
+        case 0x62: case 0x63:
+        case 0x69: case 0x6B:
+        case 0x80: case 0x81: case 0x82: case 0x83:
+        case 0x84: case 0x85: case 0x86: case 0x87:
+        case 0x88: case 0x89: case 0x8A: case 0x8B:
+        case 0x8C: case 0x8D: case 0x8E: case 0x8F:
+        case 0xC0: case 0xC1: case 0xC4: case 0xC5:
+        case 0xC6: case 0xC7:
+        case 0xD0: case 0xD1: case 0xD2: case 0xD3:
+        case 0xD8: case 0xD9: case 0xDA: case 0xDB:
+        case 0xDC: case 0xDD: case 0xDE: case 0xDF:
+        case 0xF6: case 0xF7: case 0xFE: case 0xFF:
+            return 1;
+        default:
+            return 0;
+        }
+    }
+    if (map == 1) {
+        if (opcode == 0x05 || opcode == 0x07 || opcode == 0x31 ||
+            opcode == 0x34 || opcode == 0x35 || opcode == 0xA0 ||
+            opcode == 0xA1 || opcode == 0xA8 || opcode == 0xA9) {
+            return 0;
+        }
+        if (opcode >= 0x80 && opcode <= 0x8F) {
+            return 0;
+        }
+        return 1;
+    }
+    /* 0F 38 / 0F 3A and VEX-mapped opcodes use ModRM. */
+    return 1;
+}
+
+static int x86_collect_instruction_linears(
+    const struct kvm_regs *regs, const struct kvm_sregs *sregs,
+    const uint8_t *insn, size_t insn_len, uint64_t *linears, int *count_out)
+{
+    size_t i = 0;
+    int long_mode = (sregs->efer & (UINT64_C(1) << 10)) != 0 &&
+                    (sregs->cs.l != 0);
+    int addr64 = long_mode;
+    int rex_w = 0, rex_r = 0, rex_x = 0, rex_b = 0;
+    (void)rex_w;
+    (void)rex_r;
+    int seg = 3; /* DS default; SS is applied for RSP/RBP bases below */
+    int map = 0;
+    unsigned int opcode;
+    int count = 0;
+    int implicit_stack = 0;
+    int implicit_rsi = 0;
+    int implicit_rdi = 0;
+    int have_modrm = 0;
+    uint8_t modrm = 0;
+    uint64_t addr_mask;
+
+    if (!regs || !sregs || !insn || !linears || !count_out || insn_len == 0) {
+        return -EINVAL;
+    }
+
+    while (i < insn_len) {
+        uint8_t b = insn[i];
+        if (b == 0x66 || b == 0xF0 || b == 0xF2 || b == 0xF3) {
+            i++;
+            continue;
+        }
+        if (b == 0x67) {
+            addr64 = long_mode ? 0 : addr64;
+            if (!long_mode) {
+                addr64 = 0;
+            }
+            i++;
+            continue;
+        }
+        if (b == 0x26) { seg = 0; i++; continue; }
+        if (b == 0x2E) { seg = 1; i++; continue; }
+        if (b == 0x36) { seg = 2; i++; continue; }
+        if (b == 0x3E) { seg = 3; i++; continue; }
+        if (b == 0x64) { seg = 4; i++; continue; }
+        if (b == 0x65) { seg = 5; i++; continue; }
+        if (long_mode && b >= 0x40 && b <= 0x4F) {
+            rex_w = (b >> 3) & 1;
+            rex_r = (b >> 2) & 1;
+            rex_x = (b >> 1) & 1;
+            rex_b = b & 1;
+            i++;
+            continue;
+        }
+        break;
+    }
+    if (i >= insn_len) {
+        return -EINVAL;
+    }
+
+    /* VEX / EVEX in 64-bit mode. */
+    if (long_mode && insn[i] == 0xC5 && i + 2 < insn_len) {
+        uint8_t v1 = insn[i + 1];
+        rex_r = (~v1 >> 7) & 1;
+        map = 1;
+        i += 2;
+    } else if (long_mode && insn[i] == 0xC4 && i + 3 < insn_len) {
+        uint8_t v1 = insn[i + 1];
+        rex_r = (~v1 >> 7) & 1;
+        rex_x = (~v1 >> 6) & 1;
+        rex_b = (~v1 >> 5) & 1;
+        map = v1 & 0x1F;
+        if (map == 0) {
+            map = 1;
+        }
+        i += 3;
+    } else if (long_mode && insn[i] == 0x62 && i + 5 < insn_len) {
+        uint8_t p1 = insn[i + 1];
+        rex_r = (~p1 >> 7) & 1;
+        rex_x = (~p1 >> 6) & 1;
+        rex_b = (~p1 >> 5) & 1;
+        map = p1 & 0x07;
+        if (map == 0) {
+            map = 1;
+        }
+        i += 4;
+    } else if (insn[i] == 0x0F) {
+        i++;
+        if (i >= insn_len) {
+            return -EINVAL;
+        }
+        if (insn[i] == 0x38) {
+            map = 2;
+            i++;
+        } else if (insn[i] == 0x3A) {
+            map = 3;
+            i++;
+        } else {
+            map = 1;
+        }
+    }
+
+    if (i >= insn_len) {
+        return -EINVAL;
+    }
+    opcode = insn[i++];
+
+    if (map == 0) {
+        if ((opcode >= 0x50 && opcode <= 0x5F) || opcode == 0x68 ||
+            opcode == 0x6A || opcode == 0x9C || opcode == 0x9D ||
+            opcode == 0xC2 || opcode == 0xC3 || opcode == 0xCA ||
+            opcode == 0xCB || opcode == 0xC8 || opcode == 0xC9 ||
+            opcode == 0xE8 || opcode == 0xCF) {
+            implicit_stack = 1;
+        }
+        if (opcode == 0xA4 || opcode == 0xA5 || opcode == 0xA6 ||
+            opcode == 0xA7 || opcode == 0xAC || opcode == 0xAD) {
+            implicit_rsi = 1;
+        }
+        if (opcode == 0xA4 || opcode == 0xA5 || opcode == 0xA6 ||
+            opcode == 0xA7 || opcode == 0xAA || opcode == 0xAB ||
+            opcode == 0xAE || opcode == 0xAF) {
+            implicit_rdi = 1;
+        }
+    }
+
+    have_modrm = x86_opcode_has_modrm(map, opcode);
+    if (have_modrm) {
+        if (i >= insn_len) {
+            return -EINVAL;
+        }
+        modrm = insn[i++];
+        if (map == 0 && opcode == 0xFF) {
+            unsigned int reg = (modrm >> 3) & 7;
+            if (reg == 2 || reg == 6) {
+                implicit_stack = 1; /* CALL / PUSH Ev */
+            }
+        }
+        if (map == 0 && opcode == 0x8F) {
+            implicit_stack = 1;
+        }
+    }
+
+    addr_mask = addr64 ? UINT64_MAX : 0xFFFFFFFFULL;
+    if (have_modrm && ((modrm >> 6) & 3) != 3) {
+        unsigned int mod = (modrm >> 6) & 3;
+        unsigned int rm = (modrm & 7) | (rex_b << 3);
+        uint64_t ea = 0;
+        int ea_seg = seg;
+        int disp_size = 0;
+
+        int rip_rel = 0;
+        if ((modrm & 7) == 4) {
+            uint8_t sib;
+            unsigned int scale, index, base;
+            if (i >= insn_len) {
+                return -EINVAL;
+            }
+            sib = insn[i++];
+            scale = (sib >> 6) & 3;
+            index = (sib >> 3) & 7;
+            base = sib & 7;
+            index |= (rex_x << 3);
+            base |= (rex_b << 3);
+            if ((index & 7) != 4) {
+                ea += x86_gpr_value(regs, index) << scale;
+            }
+            if ((base & 7) == 5 && mod == 0) {
+                disp_size = 4;
+            } else {
+                ea += x86_gpr_value(regs, base);
+                if ((base & 7) == 4) {
+                    ea_seg = (seg == 3) ? 2 : seg; /* SS for RSP */
+                }
+                if ((base & 7) == 5) {
+                    ea_seg = (seg == 3) ? 2 : seg; /* SS for RBP */
+                }
+            }
+        } else if ((modrm & 7) == 5 && mod == 0) {
+            /* RIP-relative in 64-bit addressing; disp32-only in 32-bit. */
+            disp_size = 4;
+            rip_rel = addr64 ? 1 : 0;
+        } else {
+            ea += x86_gpr_value(regs, rm);
+            if ((modrm & 7) == 5) {
+                ea_seg = (seg == 3) ? 2 : seg;
+            }
+        }
+        if (disp_size == 0) {
+            if (mod == 1) {
+                disp_size = 1;
+            } else if (mod == 2) {
+                disp_size = 4;
+            }
+        }
+        if (disp_size) {
+            uint32_t disp = 0;
+            if (i + (size_t)disp_size > insn_len) {
+                return -EINVAL;
+            }
+            memcpy(&disp, insn + i, (size_t)disp_size);
+            if (disp_size == 1) {
+                ea += (int8_t)insn[i];
+            } else {
+                ea += (int32_t)disp;
+            }
+            i += (size_t)disp_size;
+        }
+        if (rip_rel) {
+            /* RIP+len+disp. Immediate after disp can be up to 4 bytes, so
+             * also keep a second candidate 4 bytes later for page edges. */
+            uint64_t rel_base = regs->rip + (uint64_t)i;
+            ea += rel_base;
+            if (count < 8) {
+                linears[count++] = (ea & addr_mask) +
+                                   x86_segment_base(sregs, ea_seg);
+            }
+            if (count < 8) {
+                linears[count++] = ((ea + 4ULL) & addr_mask) +
+                                   x86_segment_base(sregs, ea_seg);
+            }
+        } else {
+            ea &= addr_mask;
+            ea += x86_segment_base(sregs, ea_seg);
+            if (count < 8) {
+                linears[count++] = ea;
+            }
+        }
+    }
+
+    if (implicit_stack) {
+        uint64_t sp = (regs->rsp - 8ULL) & addr_mask;
+        if (count < 8) {
+            linears[count++] = sregs->ss.base + sp;
+        }
+        if (count < 8) {
+            linears[count++] = sregs->ss.base + (regs->rsp & addr_mask);
+        }
+    }
+    if (implicit_rsi && count < 8) {
+        linears[count++] = x86_segment_base(sregs, seg) +
+                           (regs->rsi & addr_mask);
+    }
+    if (implicit_rdi && count < 8) {
+        linears[count++] = sregs->es.base + (regs->rdi & addr_mask);
+    }
+
+    *count_out = count;
+    return 0;
+}
+
+static int ensure_linear_and_count_new(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    uint64_t linear, uint64_t extra, int *new_pages, uint64_t *error_gpa_out)
+{
+    uint64_t gpa = 0;
+    uint8_t state = WVM_KVM_PAGE_ABSENT;
+    uint64_t version = 0;
+    int result;
+
+    uint64_t end = linear;
+    int was_new = 0;
+
+    if (linear > UINT64_MAX - extra) {
+        return -EOVERFLOW;
+    }
+    end = linear + extra;
+    for (uint64_t addr = linear; addr <= end; ) {
+        state = WVM_KVM_PAGE_ABSENT;
+        version = 0;
+        result = translate_kvm_linear_to_gpa(hdr, sregs, addr, &gpa,
+                                             error_gpa_out);
+        if (result == -ENOENT) {
+            break;
+        }
+        if (result != 0) {
+            return result;
+        }
+        gpa &= ~(WVM_PAGE_SIZE - 1U);
+        if (wvm_kvm_page_cache_global_lookup(
+                gpa, &state, &version, NULL, 0) != 0) {
+            state = WVM_KVM_PAGE_ABSENT;
+        }
+        if (state != WVM_KVM_PAGE_CLEAN || version == 0) {
+            was_new = 1;
+        }
+        if (addr > UINT64_MAX - WVM_PAGE_SIZE) {
+            break;
+        }
+        addr = (addr & ~(WVM_PAGE_SIZE - 1U)) + WVM_PAGE_SIZE;
+        if (addr == 0) {
+            break;
+        }
+    }
+    result = ensure_kvm_linear_span(hdr, sregs, linear, extra, error_gpa_out);
+    if (result != 0 && result != -ENOENT) {
+        return result;
+    }
+    if (result == 0 && was_new && new_pages) {
+        (*new_pages)++;
+    }
+    return 0;
+}
+
+static int demand_fill_kvm_bare_efault(
+    const struct wvm_header *hdr, int vcpu_fd, uint64_t *error_gpa_out)
+{
+    struct kvm_regs regs;
+    struct kvm_sregs sregs;
+    uint8_t insn[15];
+    uint64_t linears[8];
+    int nlinears = 0;
+    int new_pages = 0;
+    int result;
+    int i;
+    static unsigned bare_log = 0;
+
+    if (ioctl(vcpu_fd, KVM_GET_REGS, &regs) < 0 ||
+        ioctl(vcpu_fd, KVM_GET_SREGS, &sregs) < 0) {
+        return errno ? -errno : -EIO;
+    }
+
+    /* Always re-establish the instruction bytes first. */
+    result = ensure_linear_and_count_new(hdr, &sregs, sregs.cs.base + regs.rip,
+                                         15, &new_pages, error_gpa_out);
+    if (result != 0) {
+        return result;
+    }
+
+    memset(insn, 0, sizeof(insn));
+    for (i = 0; i < 15; i++) {
+        uint64_t gpa = 0;
+        uint8_t *hva;
+        result = translate_kvm_linear_to_gpa(
+            hdr, &sregs, sregs.cs.base + regs.rip + (uint64_t)i, &gpa,
+            error_gpa_out);
+        if (result != 0) {
+            break;
+        }
+        hva = wvm_gpa_to_hva(gpa);
+        if (!hva) {
+            break;
+        }
+        /* wvm_gpa_to_hva already returns the exact byte address. */
+        insn[i] = *hva;
+    }
+
+    result = x86_collect_instruction_linears(&regs, &sregs, insn, sizeof(insn),
+                                             linears, &nlinears);
+    if (result != 0) {
+        nlinears = 0;
+    }
+    for (i = 0; i < nlinears; i++) {
+        result = ensure_linear_and_count_new(hdr, &sregs, linears[i], 8,
+                                             &new_pages, error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+    }
+
+    if (bare_log < 32) {
+        fprintf(stderr,
+                "[KVM cache] bare EFAULT demand-fill rip=%#llx "
+                "insn=%02x %02x %02x %02x %02x %02x memops=%d new_pages=%d",
+                (unsigned long long)regs.rip,
+                insn[0], insn[1], insn[2], insn[3], insn[4], insn[5],
+                nlinears, new_pages);
+        for (i = 0; i < nlinears; i++) {
+            fprintf(stderr, " lin[%d]=%#llx", i,
+                    (unsigned long long)linears[i]);
+        }
+        fprintf(stderr, "\n");
+        bare_log++;
+    }
+    /*
+     * A CLEAN cache record may still be PROT_NONE in HVA, or KVM may still
+     * hold a stale EPT entry from the initial conceal. ensure_* above
+     * re-exposes those pages; retry KVM_RUN once even if no new cache
+     * record was created. A second bare EFAULT at the same RIP with no
+     * new page is a real miss we could not identify.
+     */
+    if (new_pages == 0) {
+        if (t_bare_efault_rip == regs.rip) {
+            if (error_gpa_out) {
+                *error_gpa_out = 0;
+            }
+            return -EFAULT;
+        }
+        t_bare_efault_rip = regs.rip;
+    } else {
+        t_bare_efault_rip = UINT64_MAX;
+    }
+    if (error_gpa_out) {
+        *error_gpa_out = 0;
     }
     return 0;
 }
@@ -3896,6 +4661,9 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
                 }
             }
             invalidate_kvm_ram_snapshot();
+            if (wvm_kvm_hva_expose_page(hva) != 0) {
+                return;
+            }
             memcpy(hva, (uint8_t*)payload+8, 4096);
         }
     }
@@ -3909,7 +4677,10 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         }
         invalidate_kvm_ram_snapshot();
         if (g_kvm_available) {
-            memset(hva, 0, 4096); /* KVM: 不能 MADV_DONTNEED，会破坏 memslot 物理页 */
+            if (wvm_kvm_hva_expose_page(hva) == 0) {
+                memset(hva, 0, 4096); /* KVM: 不能 MADV_DONTNEED，会破坏 memslot 物理页 */
+            }
+            (void)wvm_kvm_hva_conceal_page(hva);
         } else {
             madvise(hva, 4096, MADV_DONTNEED);
         }
@@ -4808,6 +5579,27 @@ static int spawn_tcg_processes(int base_id) {
             snprintf(id_str, sizeof(id_str), "%u", wvm_wire_target(g_slave_vm_id, base_id + i));
             setenv("WVM_SLAVE_ID", id_str, 1);
 
+            /*
+             * Official unique Cirros FE (F05/F10) registers as the one
+             * QEMU_FRONTEND. Helpers that inherit WVM_RUNTIME_GATE_ACTIVE
+             * would connect first and trip N04, so the unique FE never
+             * starts. Clear the gate only in this helper child; do not
+             * change the parent's gate.
+             */
+            {
+                const char *guest_image = getenv("WVM_GUEST_IMAGE");
+                const char *unique_fe = getenv("WVM_UNIQUE_GUEST_FE");
+                const char *boot_now = getenv("WVM_GUEST_FE_BOOT_NOW");
+                int want_unique =
+                    (guest_image && guest_image[0] != '\0') ||
+                    (unique_fe && unique_fe[0] != '\0' &&
+                     strcmp(unique_fe, "0") != 0) ||
+                    (boot_now && boot_now[0] != '\0' &&
+                     strcmp(boot_now, "0") != 0);
+                if (want_unique) {
+                    unsetenv("WVM_RUNTIME_GATE_ACTIVE");
+                }
+            }
             fprintf(stderr,
                     "[Hybrid] TCG helper runtime gate=%s socket=%s namespace=%s\n",
                     getenv("WVM_RUNTIME_GATE_ACTIVE") ?: "<unset>",
@@ -5849,122 +6641,8 @@ int wavevm_executor_runtime_main(
     return 0;
 }
 
-/*
- * F05 / ci_dual_node legacy CLI entry.
- * Production admitted path remains wavevm_executor_runtime_main().
- * Build standalone slave with -DWAVEVM_SLAVE_LEGACY_CLI.
+/* Independent wavevm_node_slave CLI entry removed.
+ * Official binary is wavevm_node_runtime (compiled from this file
+ * without WAVEVM_SLAVE_LEGACY_CLI). Rollback kit:
+ * audit-evidence/legacy-cli-archive-20261117/
  */
-#ifdef WAVEVM_SLAVE_LEGACY_CLI
-#include <sys/wait.h>
-
-int main(int argc, char **argv)
-{
-    char cerr[128];
-
-    g_nonblock_recv = (getenv("WVM_NONBLOCK_RECV") != NULL);
-    g_executor_local_only = 0; /* accept local master UDP on dual-node */
-
-    {
-        struct stat st = {0};
-        if (stat("/var/lib/wavevm", &st) == -1)
-            mkdir("/var/lib/wavevm", 0755);
-        if (stat("/var/lib/wavevm/chunks", &st) == -1)
-            mkdir("/var/lib/wavevm/chunks", 0755);
-        if (wvm_block_chunk_store_set_dir("/var/lib/wavevm/chunks", cerr,
-                                          sizeof(cerr)) != 0) {
-            fprintf(stderr, "[LegacySlave] chunk dir: %s\n", cerr);
-        }
-    }
-
-    g_num_cores = get_allowed_cores();
-    if (argc >= 2)
-        g_service_port = atoi(argv[1]);
-    if (argc >= 3) {
-        g_num_cores = atoi(argv[2]);
-        if (g_num_cores <= 0)
-            g_num_cores = 1;
-    }
-    if (argc >= 4) {
-        g_ram_mb = atoi(argv[3]);
-        if (g_ram_mb <= 0)
-            g_ram_mb = 1024;
-        g_slave_ram_size = (uint64_t)g_ram_mb * 1024 * 1024;
-    }
-    if (argc >= 5)
-        g_base_id = atoi(argv[4]);
-    if (argc >= 6)
-        g_executor_ctrl_port = atoi(argv[5]);
-    /* argv[6] VM id optional; default 0 for dual-node fract plan */
-
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-vfio") == 0 && i + 1 < argc)
-            g_vfio_config_path = argv[i + 1];
-    }
-
-    printf("[Init] WaveVM Hybrid Slave V28.0 (Legacy CLI / F05)\n");
-    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d, VM=%u\n",
-           g_service_port, g_num_cores, g_ram_mb, g_base_id,
-           (unsigned)g_slave_vm_id);
-
-    init_kvm_global();
-    if (g_kernel_context_bind_failed) {
-        fprintf(stderr,
-                "[KernelContext] refusing legacy executor after context mismatch\n");
-        return 1;
-    }
-
-    /* F05 dual-node hides /dev/kvm → TCG PROXY. */
-    if (g_kvm_available && getenv("WVM_FORCE_TCG") == NULL) {
-        printf("[Hybrid] Mode: KVM FAST PATH. Listening on 0.0.0.0:%d\n",
-               g_service_port);
-        if (pthread_create(&g_dirty_sender_thread, NULL, dirty_sync_sender_thread,
-                           NULL) != 0) {
-            perror("dirty sender");
-            return 1;
-        }
-        g_dirty_sender_started = 1;
-        pthread_t *threads = malloc(sizeof(pthread_t));
-        if (!threads)
-            return 1;
-        if (pthread_create(&threads[0], NULL, kvm_worker_thread, (void *)0) != 0)
-            return 1;
-        pthread_join(threads[0], NULL);
-        free(threads);
-    } else {
-        printf("[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 0.0.0.0:%d\n",
-               g_service_port);
-        if (spawn_tcg_processes(g_base_id) != 0) {
-            fprintf(stderr, "[Hybrid] TCG helpers failed\n");
-            return 1;
-        }
-        sleep(1);
-        int proxy_threads = (int)(g_num_cores / 2);
-        if (proxy_threads < 1)
-            proxy_threads = 1;
-        free(g_tcg_proxy_socks);
-        g_tcg_proxy_socks =
-            calloc((size_t)proxy_threads, sizeof(*g_tcg_proxy_socks));
-        g_tcg_proxy_sock_capacity = proxy_threads;
-        g_tcg_proxy_sock_count = 0;
-        if (!g_tcg_proxy_socks)
-            return 1;
-        pthread_t *threads = malloc(sizeof(pthread_t) * (size_t)proxy_threads);
-        if (!threads)
-            return 1;
-        for (long i = 0; i < proxy_threads; i++) {
-            g_tcg_proxy_socks[i] = -1;
-            if (pthread_create(&threads[i], NULL, tcg_proxy_thread, NULL) != 0) {
-                fprintf(stderr, "[Hybrid] proxy thread create failed\n");
-                return 1;
-            }
-        }
-        /* Keep process alive while helpers run. */
-        while (wait(NULL) > 0) {
-        }
-        for (long i = 0; i < proxy_threads; i++)
-            pthread_join(threads[i], NULL);
-        free(threads);
-    }
-    return 0;
-}
-#endif /* WAVEVM_SLAVE_LEGACY_CLI */

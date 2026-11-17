@@ -1,0 +1,2 @@
+status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=17988487159009711712
+note=COMMITTED without live ready; ctl remained 'admitted runtime is starting'

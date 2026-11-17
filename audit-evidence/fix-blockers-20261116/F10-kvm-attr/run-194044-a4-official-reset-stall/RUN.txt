@@ -1,0 +1,26 @@
+A4 official cell — run-194044-a4-official-reset-stall
+Times: 19:40:31 (B) / 19:40:44 (A) – 19:50:07 CST Asia/Shanghai (2026-11-16)
+Path: WVM_A4_OFFICIAL=1, mode=user,backend=kvm, fractal NUMA, typed gate OFF
+Machines: 2404 node-a ART=/tmp/wavevm-test-results/dual-node-kvm-20261116-194044
+          2604 node-b ART=/tmp/wavevm-test-results/dual-node-kvm-20261116-194031
+
+VERDICT=FAIL (official cell stopped; Cirros never reached login/SSH)
+Cause (honest): during early boot, remote vCPU 2 was dispatched in real-mode
+(cs=0x18f8 etc.), issued I/O to implausible ports, then KVM-SHUTDOWN
+(triple-fault). WaveVM promoted that AP shutdown to a full guest reset
+(WVM-RESET reason=guest-reset(7)). After reset, cpu0/1 sat at 16-bit
+reset vector rip=0xfff0; serial froze at cirros metadata "failed 3/20"
+(guest up 8.51s); vm.log last write 19:41:28; QEMU thread ~94% CPU until
+stopped at 19:49:50. No cirros login. Prior attr-only PASS run-191003 had
+zero WVM-RESET/KVM-SHUTDOWN and kept cpu=2 in 1s HALT-WAKE until a
+post-login 5s affinity burn.
+
+Official markers before the stall (not a closeout PASS without login):
+  WVM-REMOTE cpu=2 dispatch lines=10 (cap)
+  RET ack_status=0 ack_mode=0: 24; ack_mode=1: 0; ack_status=-1: 0
+  [WVM-TCG-STATS] cpu=2 remote_done=24 local_done=0 force_local_used=0
+  [WVM-MEM-STATS] origin=1 directory=0 remote_commits last seen 119
+  terminal handoff failure=0
+  login=0 ssh=0
+
+No commit / no push. Typed gate stayed OFF. No Mode A / root QEMU.

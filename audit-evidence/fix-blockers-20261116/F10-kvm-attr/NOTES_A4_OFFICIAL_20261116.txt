@@ -1,0 +1,121 @@
+A4 official cell (KVM Mode B login/SSH + remote vCPU + official remote mem)
+==========================================================================
+Date: 2026-11-16 CST Asia/Shanghai
+Machines: 2404 (2e4d3ec5-e1b1-4a36-9903-de6309119499, /workspaces/WaveVM)
+          2604 (30b14f91-ba5c-40d4-8af3-ac7f5b4169f1, /home/joeking/WaveVM)
+tip: f9fbe187e8d6 (aligned with origin/main). No commit / no push.
+Did not touch Joe's session-backup / grok_bot_last_prompt.png.
+Typed runtime gate stayed OFF. No Mode A / root QEMU.
+Did not start typed production-entry migration.
+Did not claim MINIMUM_COMPLETE, F05 CLOSED, or F10 CLOSED.
+
+TS: wavevm-f05-a 100.116.196.65 ↔ wavevm-f05-b 100.114.246.92 (left up).
+Path: new official harness flag WVM_A4_OFFICIAL=1 (NOT WVM_F10_ATTR_ONLY).
+Mode B user+KVM, fractal NUMA (ram0 2048M cpus 0-1 on A, ram1 1024M cpu 2 on B).
+QEMU: -accel wavevm,split=2,mode=user,backend=kvm
+
+Verdict: FAIL (official A4 cell not closed this turn)
+--------------------------------------------------
+The official scorer path was added and two live cross-host runs were kept as
+evidence. Neither run reached Cirros serial login or a working SSH session
+in the same official cell, so the charter synthesis (login/SSH AND remote
+vCPU AND official remote mem, same run, official scorer) is not met.
+F10 is therefore still not honestly CLOSED. Phase 9 remains FAIL to close.
+Typed production entry is still the other hard gap (not started).
+
+What changed (uncommitted; script only — no master/slave/QEMU rebuild)
+- scripts/ci_dual_node.sh (sha256 46c0369918dde340cd7a805e6c8c768a1c2191ef933747b9a0b9bbb8ff3ee553)
+  backup: scripts/ci_dual_node.sh.bak-a4-20261116
+  * New flag WVM_A4_OFFICIAL=1, distinct from WVM_F10_ATTR_ONLY and
+    WVM_F05_FENCE_ONLY.
+  * prepare_mode / QEMU accel: Mode B mode=user,backend=kvm (do not
+    insmod wavevm.ko), same live path as attr-only, not Mode A.
+  * Official cell waits for Cirros login, SSH banner + SSH login, may
+    push a 5s static vCPU2 affinity burn (/tmp/wvm-aff2) if remote
+    markers are not already present, then scores with f10_score_logs
+    (ack_status=0 ack_mode=[01], official WVM-MEM-STATS origin!=directory).
+    Result file: a4_official_result.txt (not f10_attr_only_result.txt).
+  * F05 fence-only ack_mode=1 greps were not changed (line text identical
+    to pre-patch backup; only line numbers shifted).
+  * Attr-only path remains a no-login scorer and was not used to score A4.
+
+Binaries used (unchanged from F10 run-191003 / F05 run-191541):
+  master 298899f082c23fe0d1fa5f40e3d9ef4ce325afa271b307247c8c641cabf481be
+  slave  151192866eb9f39ca8521f5bd92bb69329706f0c492cdc67905aeb1e61fe732e
+  qemu   e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e
+
+Run 1 — FAIL: run-194044-a4-official-reset-stall/
+  Times: 19:40:31 (B) / 19:40:44 (A QEMU 19:40:54) – 19:50:07 CST Asia/Shanghai
+  ART: A /tmp/wavevm-test-results/dual-node-kvm-20261116-194044
+       B /tmp/wavevm-test-results/dual-node-kvm-20261116-194031
+  Local OS-SIPI completed and parked the AP. Shortly after, cpu=2 was
+  remoted in Linux kernel (dispatch #0 rip=0xffffffffa02a53ba cs=0x10).
+  B slave: first VCPU_RUN "triple fault!", ErrorAck=0, guest_vcpu=2.
+  Frontend: WVM-ACK exit=8, then KVM-SHUTDOWN / WVM-RESET guest-reset(7)
+  (full VM reset, including from AP shutdown). After reset, cpu0/1 sat at
+  rip=0xfff0; serial froze at metadata "failed 3/20" (guest up 8.51s);
+  vm.log last write 19:41:28; one QEMU thread ~94% CPU until stopped
+  19:49:50. login=0 ssh=0.
+  Markers before the stall (not a closeout, no login):
+    WVM-REMOTE cap=10, RET ack_status=0 ack_mode=0: 24, ack_mode=1: 0,
+    ack_status=-1: 0, remote_done=24, WVM-MEM-STATS remote_commits last 119,
+    handoff_fail=0.
+  Prior attr-only PASS run-191003 had zero KVM-SHUTDOWN/WVM-RESET and kept
+  cpu=2 in local 1s HALT-WAKE until a post-login 5s burn (rip=0x40181c cs=0x33).
+
+Run 2 — FAIL: run-195305-a4-official-sysinfo-stall/
+  Times: 19:52:55 (B) / 19:53:05 (A QEMU 19:53:14) – 20:00:38 CST Asia/Shanghai
+  ART: A /tmp/wavevm-test-results/dual-node-kvm-20261116-195305
+       B /tmp/wavevm-test-results/dual-node-kvm-20261116-195255
+  No KVM-SHUTDOWN / WVM-RESET this time. SIPI again completed locally,
+  then cpu=2 was remoted in kernel (dispatch #0 rip=0xffffffffa01b0585
+  cs=0x10; later same-RIP bursts at 0xffffffffa0db603b). Cirros serial
+  got through metadata failures, dropbear "Starting dropbear sshd",
+  GROWROOT, and mid "system information" (Platform / Container: none).
+  Serial then froze at 19:54:19; the 191003 PASS continued immediately
+  with Arch/CPU(s)/sshd keys/network/login banner.
+  Official remote markers were real and climbing while the console was
+  stuck (not invented):
+    at stop ~19:58–20:00: remote_done >= 4272, local_done=0,
+    force_local_used=0, WVM-MEM-STATS origin=1 directory=0
+    remote_commits >= 12818, RET ack_status=0 ack_mode=0,
+    handoff_fail=0, QEMU still alive.
+  Official scorer never left the login-wait loop (correct: no
+  'cirros login:'). A manual SSH probe to :2226 (QEMU hostfwd was
+  listening) timed out during banner exchange; dropbear was not
+  actually serving. So SSH was not a valid substitute on this run.
+  Stopped rather than burning the remaining ~20 minutes of login wait
+  on a frozen console.
+
+Cleanup: both VMs left with no leftover qemu/master/slave/gateway.
+/dev/kvm still 660+ACL. Tailscale still up. No tailscale_status.json
+in evidence.
+
+Why the official cell failed (honest diagnosis, not a closeout)
+- The missing A4 synthesis needs Cirros login or SSH in the SAME official
+  run as remote vCPU + official WVM-MEM-STATS. Attr-only 191003 had login
+  because cpu=2 stayed in local HALT-WAKE during boot; remote evidence was
+  triggered later by a 5s vCPU2 affinity burn. These two official runs
+  remoted the AP during boot (kernel cs=0x10) instead. One AP triple-fault
+  was promoted to a full guest reset; the other remoted the AP heavily
+  and the guest console stuck mid system-info with SSH dead.
+- wavevm-cpu.c HALT-WAKE already comments "woken by IPI and is doing real
+  work" before falling through to remote dispatch, but it keys only on
+  mp_state==RUNNABLE. Run 194044 logged a fall-through of
+  "mp=0 halted=1 irq=0x0 has_work=0" immediately before remoting — that
+  is not real work. A later userspace burn (cpl=3, has_work) should still
+  be remoted; that is the proven 191003 path.
+
+Recommended next step (do not start typed production-entry yet)
+1) Wiring fix in wavevm-cpu.c HALT-WAKE: do not remote a halted AP with
+   no work (require RUNNABLE and !halted and cpu_has_work before
+   remote fall-through). Also consider not turning an AP remote
+   SHUTDOWN/triple-fault into a full VM reset. Rebuild QEMU from source,
+   sync to 2604 via SharedFolder, record the new hash, rerun
+   WVM_A4_OFFICIAL=1 (keep F05 greps and attr-only distinct).
+2) Only after that official cell honestly PASSes, consider calling the
+   F10 charter cell CLOSED. Still do not claim MINIMUM_COMPLETE or
+   Phase 9 closed: the other hard gap is typed node-runtime production
+   entry (do not start it in the same breath as a QEMU wiring rerun
+   unless Joe asks).
+3) F01 / TCG guest OS login remains skipped (Joe confirmed).

@@ -38,15 +38,55 @@
 
 extern void wavevm_apply_split_hint(int split);
 
+/*
+ * An AP KVM_EXIT_SHUTDOWN / FAIL_ENTRY (including a remote triple-fault
+ * imported back onto the frontend) must not reset the whole VM. Official
+ * A4 run-194044 remoted cpu=2 mid-boot; the slave reported a triple-fault
+ * and FE promoted KVM-SHUTDOWN to WVM-RESET guest-reset(7), leaving
+ * cpu0/1 at rip=0xfff0. BSP shutdown/reset is unchanged.
+ */
+bool wavevm_should_park_ap_shutdown(CPUState *cpu)
+{
+    AccelState *accel;
+
+    if (!cpu || cpu->cpu_index <= 0) {
+        return false;
+    }
+    accel = current_accel();
+    if (!accel || !object_dynamic_cast(OBJECT(accel), TYPE_WAVEVM_ACCEL)) {
+        return false;
+    }
+    return true;
+}
+
 // Per-vCPU Socket Pool to eliminate lock contention
 static int *g_vcpu_socks = NULL;
 static int g_configured_vcpus = 0;
 static int g_wvm_debug_once = 0;
 
-/* No-op signal handler for SIGRTMIN (HALT-WAKE safety timer).
- * Must be a real handler (not SIG_IGN) so the signal sets
- * signal_pending and can interrupt KVM_RUN. */
-static void wvm_halt_wake_nop_handler(int sig) { (void)sig; }
+/* Bound-slice kick for deferred local kvm_cpu_exec. Official A10/A11:
+ * a SIGRTMIN 1s timer (even with sigaction and no SA_RESTART, plus
+ * cpu_exit in the handler) never returned from KVM_RUN — WaveVM vCPU
+ * threads can have those signals blocked. Kick from a SIGEV_THREAD
+ * callback instead: set kvm_run->immediate_exit, then cpu_exit and
+ * qemu_cpu_kick. That is the KVM_CAP_IMMEDIATE_EXIT path, not another
+ * signal to the vCPU thread. */
+static void wvm_bound_slice_kick(union sigval sv)
+{
+    CPUState *cpu = sv.sival_ptr;
+
+    if (!cpu) {
+        return;
+    }
+    if (cpu->kvm_run) {
+        qatomic_set(&cpu->kvm_run->immediate_exit, 1);
+    }
+    cpu_exit(cpu);
+    qemu_cpu_kick(cpu);
+    fprintf(stderr,
+            "[WVM-REMOTE-DEFER] cpu=%d bound-slice kick (immediate_exit)\n",
+            cpu->cpu_index);
+}
 
 /* [FIX] Track per-AP SIPI trampoline completion.
  * After SIPI, APs must run the BIOS trampoline LOCALLY first (to increment
@@ -78,7 +118,114 @@ static int ap_kvm_preempt_drain[MAX_VCPUS] = {0};
  * (kernel IOCTL or user-mode socket path). HALT-WAKE / SIPI / probe
  * early-returns must NOT inflate remote_done (s23g6 soft delta root). */
 static bool g_wavevm_remote_rpc_ok[MAX_VCPUS];
+/* Sticky: AP has been observed in userspace (CPL/RPL == 3). Until then,
+ * keep kernel mid-boot slices on the local KVM vCPU. Official typed A4
+ * run-210352 remoted cpu=2 at rip=0xffffffff97aa62a7 cs=0x10 on the
+ * first OS-SIPI wake and the frontend hung on that first remote slice. */
+static int ap_userspace_seen[MAX_VCPUS] = {0};
 
+static bool wavevm_ap_userspace_allows_remote(CPUState *cpu)
+{
+    int ci;
+    uint16_t cs = 0;
+    uint8_t dpl = 0;
+    uint64_t rip = 0;
+    int in_user;
+    static int defer_dbg[MAX_VCPUS] = {0};
+
+    if (!cpu || cpu->cpu_index <= 0) {
+        return true;
+    }
+    ci = cpu->cpu_index;
+    if (ci >= MAX_VCPUS) {
+        return false;
+    }
+    if (ap_userspace_seen[ci]) {
+        return true;
+    }
+
+    if (kvm_enabled() && cpu->kvm_fd >= 0) {
+        struct kvm_regs kr;
+        struct kvm_sregs sr;
+
+        memset(&kr, 0, sizeof(kr));
+        memset(&sr, 0, sizeof(sr));
+        if (ioctl(cpu->kvm_fd, KVM_GET_REGS, &kr) == 0) {
+            rip = (uint64_t)kr.rip;
+        }
+        if (ioctl(cpu->kvm_fd, KVM_GET_SREGS, &sr) == 0) {
+            cs = sr.cs.selector;
+            dpl = sr.cs.dpl;
+        }
+    } else {
+        X86CPU *x86cpu = X86_CPU(cpu);
+        CPUX86State *env = &x86cpu->env;
+
+        rip = (uint64_t)env->eip;
+        cs = (uint16_t)env->segs[R_CS].selector;
+        dpl = (uint8_t)(cs & 3U);
+    }
+
+    /* Linux x86_64 user CS is 0x33 (RPL=3). Kernel boot/SIPI is 0x10/0x08. */
+    in_user = (dpl == 3) || ((cs & 3U) == 3U);
+    if (in_user) {
+        ap_userspace_seen[ci] = 1;
+        fprintf(stderr,
+                "[WVM-REMOTE-DEFER] cpu=%d userspace observed cs=0x%x "
+                "dpl=%u rip=0x%llx; remoting now allowed\n",
+                ci, cs, (unsigned)dpl, (unsigned long long)rip);
+        return true;
+    }
+    if (defer_dbg[ci] < 40) {
+        fprintf(stderr,
+                "[WVM-REMOTE-DEFER] cpu=%d stay-local "
+                "(kernel/boot, not remoting yet) cs=0x%x dpl=%u rip=0x%llx\n",
+                ci, cs, (unsigned)dpl, (unsigned long long)rip);
+        defer_dbg[ci]++;
+    }
+    return false;
+}
+
+/* Bounded local KVM slice used while remoting is still deferred. */
+static void wavevm_ap_run_local_boot_slice(CPUState *cpu)
+{
+    timer_t hw_timer = 0;
+    int timer_ok = 0;
+    struct sigevent sev;
+    struct itimerspec its;
+    int wr;
+
+    if (!cpu || !kvm_enabled() || cpu->kvm_fd < 0) {
+        return;
+    }
+
+    memset(&sev, 0, sizeof(sev));
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_notify_function = wvm_bound_slice_kick;
+    sev.sigev_value.sival_ptr = cpu;
+    if (timer_create(CLOCK_MONOTONIC, &sev, &hw_timer) == 0) {
+        timer_ok = 1;
+        memset(&its, 0, sizeof(its));
+        its.it_value.tv_sec = 1;
+        timer_settime(hw_timer, 0, &its, NULL);
+    } else {
+        fprintf(stderr,
+                "[WVM-REMOTE-DEFER] cpu=%d timer_create failed errno=%d\n",
+                cpu->cpu_index, errno);
+    }
+
+    qemu_mutex_lock_iothread();
+    wr = kvm_cpu_exec(cpu);
+    qemu_mutex_unlock_iothread();
+
+    if (timer_ok) {
+        memset(&its, 0, sizeof(its));
+        timer_settime(hw_timer, 0, &its, NULL);
+        timer_delete(hw_timer);
+    }
+    fprintf(stderr, "[WVM-REMOTE-DEFER] cpu=%d local slice done wr=%d halted=%d\n",
+            cpu->cpu_index, wr, cpu->halted);
+}
 
 static void wavevm_try_import_split_from_peer(int sock)
 {
@@ -1988,9 +2135,30 @@ static void wavevm_remote_exec(CPUState *cpu) {
                         halt_wake_dbg[ci]++;
                     }
 
-                    if (mp.mp_state == KVM_MP_STATE_RUNNABLE) {
-                        /* AP was woken by IPI and is doing real work.
-                         * Sync state and dispatch to slave. */
+                    /*
+                     * Official A4 run-194044 remoted a halted AP with no
+                     * work: HALT-WAKE logged mp=0 halted=1 irq=0x0
+                     * has_work=0 and then fell through because it keyed
+                     * only on mp_state==RUNNABLE. That remoted cpu=2
+                     * mid-boot in the Linux kernel (cs=0x10). Require the
+                     * AP to actually be running before remote dispatch.
+                     * Do not also require cpu_has_work here: after a
+                     * 1s slice of real guest work (post-login vCPU2
+                     * affinity burn, cpl=3) the IPI is already consumed
+                     * and has_work may be 0 while !halted is the honest
+                     * "this AP is executing" signal (attr-only 191003).
+                     */
+                    if (mp.mp_state == KVM_MP_STATE_RUNNABLE &&
+                        !cpu->halted) {
+                        /* Already ran a 1s local slice. Remote only after
+                         * this AP has been seen in userspace (CPL=3). */
+                        if (!wavevm_ap_userspace_allows_remote(cpu)) {
+                            if (ci < MAX_VCPUS) {
+                                ap_hlt_pending_irq[ci] = 0;
+                            }
+                            return;
+                        }
+                        /* AP is executing userspace. Sync and dispatch. */
                         if (ci < MAX_VCPUS) {
                             ap_hlt_pending_irq[ci] = 0;
                         }
@@ -2004,8 +2172,17 @@ static void wavevm_remote_exec(CPUState *cpu) {
                         qemu_mutex_unlock_iothread();
                         /* Fall through to remote dispatch */
                     } else {
-                        /* AP is still idle (processed timer ticks but no
-                         * real work). Return and retry next iteration. */
+                        /* Still idle, including RUNNABLE-but-halted with
+                         * no work. Stay in local HALT-WAKE and retry. */
+                        if (halt_wake_dbg[ci] < 20) {
+                            fprintf(stderr,
+                                    "[WVM-HALT-WAKE] cpu=%d stay-local "
+                                    "(not remoting halted/idle AP) mp=%d "
+                                    "halted=%d irq=0x%x has_work=%d\n",
+                                    ci, mp.mp_state, cpu->halted,
+                                    cpu->interrupt_request,
+                                    cpu_has_work(cpu));
+                        }
                         if (ci < MAX_VCPUS) {
                             ap_hlt_pending_irq[ci] = 0;
                         }
@@ -2474,6 +2651,19 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 }
             }
         }
+    }
+
+    /*
+     * Last line of defense: even if an OS-SIPI / WVM-WAKE path marked
+     * the AP RUNNABLE and fell through, do not start a remote RPC while
+     * the guest is still in kernel/boot (cs=0x10). Run locally until
+     * userspace is observed, then allow remoting.
+     */
+    if (cpu->cpu_index > 0 && !wavevm_ap_userspace_allows_remote(cpu)) {
+        if (kvm_enabled()) {
+            wavevm_ap_run_local_boot_slice(cpu);
+        }
+        return;
     }
 
     /* Log first remote dispatches after SIPI wake */
@@ -3001,6 +3191,23 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 fprintf(stderr, "\n");
                 ack_dbg[ci]++;
             }
+        }
+        if ((kctx->exit_reason == KVM_EXIT_SHUTDOWN ||
+             kctx->exit_reason == KVM_EXIT_FAIL_ENTRY) &&
+            wavevm_should_park_ap_shutdown(cpu)) {
+            int sci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+
+            fprintf(stderr,
+                    "[WVM-AP-SHUTDOWN] cpu=%d remote exit=%d status=%d "
+                    "rip=0x%llx - parking AP, not importing poisoned "
+                    "state, not promoting to VM reset\n",
+                    cpu->cpu_index, kctx->exit_reason, ack.status,
+                    (unsigned long long)kctx->rip);
+            cpu->halted = 1;
+            cpu->exception_index = EXCP_HLT;
+            ap_kvm_preempt_drain[sci] = 0;
+            ap_hlt_pending_irq[sci] = 0;
+            return;
         }
         if (kctx->exit_reason == KVM_EXIT_HLT) {
             static int hlt_ack_dbg[MAX_VCPUS] = {0};

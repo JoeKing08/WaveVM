@@ -1,0 +1,8 @@
+wavevm_node_master 23e6e971c0f586607783021fceeb8efdd5bea38de9fe39993a9bfbddee47bd61  /workspaces/WaveVM/master_core/wavevm_node_master
+qemu-system-x86_64 e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e  /workspaces/WaveVM/wavevm-qemu/build-native/qemu-system-x86_64
+wavevm_node_slave 91d390b8f265d96efd07e0ddd90f58888a3266b33d828f1162a0a316c31258c5  /workspaces/WaveVM/slave_daemon/wavevm_node_slave
+wavevm_gateway d9878a59aead02197305bb3f4b4d5df16fe696e3e351b5e2ba791347c12a14f1  /workspaces/WaveVM/gateway_service/wavevm_gateway
+ci_dual_node.sh 9379a609859272d87af111c4a0b17a0bf01610012e6c7d03a80ea62f80225fbe  /workspaces/WaveVM/scripts/ci_dual_node.sh
+tip f9fbe187e8d6cb4d103b9ea5edb6aa0d3250479c
+master source dirty: main_wrapper.c + logic_core.c (uncommitted F05 fallback)
+harness dirty: scripts/ci_dual_node.sh (uncommitted F10 attr-only / Mode B+kvm / TS hygiene / FE host id)

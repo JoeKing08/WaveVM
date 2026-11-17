@@ -105,6 +105,20 @@ struct wvm_memory_service_config {
     wvm_memory_complete_fault_fn complete_fault;
     wvm_memory_send_envelope_fn send_envelope;
     wvm_memory_apply_push_fn apply_push;
+    /*
+     * Optional unique-FE live backing. read_frontend_live_page is set only
+     * on the QEMU_FRONTEND node. Directory misses may first-publish bytes
+     * pulled from that FE; first_publish_live_page installs them locally
+     * without inventing zeros or counting remote_commits.
+     */
+    wvm_memory_read_page_fn read_frontend_live_page;
+    int (*first_publish_live_page)(void *opaque, uint64_t gpa,
+                                   const uint8_t data[WVM_MEMORY_PAGE_BYTES],
+                                   uint64_t *result_version, char *error,
+                                   size_t error_len);
+    uint32_t frontend_physical_node_id;
+    uint64_t frontend_node_instance_id;
+    struct wvm_runtime_route_destination frontend_route;
     int enable_typed_subscriber_delivery;
     void *opaque;
 };

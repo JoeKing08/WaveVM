@@ -56,6 +56,9 @@
     #include <string.h>
     #include <sys/mman.h>
     #include <stdio.h>
+#include <stddef.h>
+    #include <unistd.h>
+    #include <time.h>
     extern void *g_shm_ptr;
     extern size_t g_shm_size;
 #endif
@@ -1452,12 +1455,72 @@ uint32_t wvm_get_directory_node_id(uint64_t gpa) {
 // 本地缺页快速路径
 int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *version_out) {
     uint32_t lock_idx = get_lock_idx(gpa);
-    
+    page_meta_t *page;
+#ifndef __KERNEL__
+    const uint8_t *live_page = NULL;
+    int existed;
+    static unsigned live_materialize_logs;
+#endif
+
+    if (!page_buffer || (gpa & (WVM_PAGE_BYTES - 1UL)) != 0) {
+        return -1;
+    }
+
     // 必须加锁，因为可能有远程写操作正在更新这个页面
     pthread_mutex_lock(&active_dir_locks()[lock_idx]);
-    
-    page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
+
+    /*
+     * Official unique FE attaches guest RAM to WVM_SHM_FILE (MAP_SHARED).
+     * Directory entries are created/updated by versioned commits, but local
+     * KVM/TCG execution on the FE dirties that SHM without publishing a
+     * commit. FIND_OR_CREATE alone would invent a versioned zero page; a
+     * remote executor then walks a fake PML4 (present=0), join fails, and
+     * KVM_RUN never starts (official F10 run-124722: one CR3/PML4 read of
+     * GPA 0x60cb000, remote_reads=1, no second MEM_READ, exit=7).
+     * On the unique-FE directory node, materialize unread/stale directory
+     * images from live SHM. Non-FE nodes must not use their local backing
+     * store as if it were guest RAM.
+     */
+#ifndef __KERNEL__
+    page = find_page_meta_locked(gpa);
+    existed = (page != NULL);
+    if (wvm_frontend_live_ram_page(gpa, &live_page) && live_page) {
+        if (!page) {
+            page = DIR_FIND_OR_CREATE(gpa, lock_idx);
+        }
+        if (page && page->base_page_data &&
+            memcmp(page->base_page_data, live_page, 4096) != 0) {
+            memcpy(page->base_page_data, live_page, 4096);
+            if (existed) {
+                uint32_t epoch = GET_EPOCH(page->version);
+                uint32_t counter = GET_COUNTER(page->version);
+                if (epoch != g_curr_epoch) {
+                    page->version = MAKE_VERSION(g_curr_epoch, 1);
+                } else if (counter < UINT32_MAX) {
+                    page->version = MAKE_VERSION(epoch, counter + 1U);
+                }
+            }
+            if (live_materialize_logs < 16U) {
+                live_materialize_logs++;
+                fprintf(stderr,
+                        "[WVM-DIR] materialized live FE RAM GPA=0x%llx "
+                        "version=0x%llx %s\n",
+                        (unsigned long long)gpa,
+                        (unsigned long long)page->version,
+                        existed ? "refresh" : "create");
+            }
+        }
+    }
+#else
+    page = DIR_FIND_OR_CREATE(gpa, lock_idx);
+#endif
     if (page) {
+#ifndef __KERNEL__
+        if (!page->base_page_data) {
+            pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
+            return -1;
+        }
+#endif
         memcpy(page_buffer, page->base_page_data, 4096);
         if (version_out) {
             *version_out = page->version;
@@ -1465,10 +1528,55 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
         pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
         return 0; // 成功
     }
-    
+
     pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
     return -1; // 失败
 }
+
+#ifndef __KERNEL__
+int wvm_directory_first_publish_live_page(uint64_t gpa, const uint8_t *data,
+                                          uint64_t *result_version)
+{
+    uint32_t lock_idx;
+    page_meta_t *page;
+    int created = 0;
+
+    if (!data || !result_version ||
+        (gpa & (WVM_PAGE_BYTES - 1UL)) != 0) {
+        return -EINVAL;
+    }
+    lock_idx = get_lock_idx(gpa);
+    pthread_mutex_lock(&active_dir_locks()[lock_idx]);
+    page = find_page_meta_locked(gpa);
+    if (!page) {
+        page = DIR_FIND_OR_CREATE(gpa, lock_idx);
+        created = 1;
+    }
+    if (!page || !page->base_page_data) {
+        pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
+        return -1;
+    }
+    if (created) {
+        memcpy(page->base_page_data, data, 4096);
+        /* New entry already has MAKE_VERSION(epoch, 1); never served zeros. */
+    } else if (memcmp(page->base_page_data, data, 4096) != 0) {
+        /*
+         * A committed directory image already exists. Do not clobber it
+         * with a later FE snapshot; the directory remains authoritative.
+         */
+    }
+    *result_version = page->version;
+    pthread_mutex_unlock(&active_dir_locks()[lock_idx]);
+    if (created) {
+        fprintf(stderr,
+                "[WVM-DIR] first-published live FE page GPA=0x%llx "
+                "version=0x%llx\n",
+                (unsigned long long)gpa,
+                (unsigned long long)*result_version);
+    }
+    return 0;
+}
+#endif
 
 int wvm_handle_local_commit(uint64_t gpa, uint64_t base_version,
                                uint16_t offset, const uint8_t *data,
@@ -2329,9 +2437,13 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     hdr->req_id = WVM_HTONLL(rid);
     hdr->qos_level = 1; // Control messages are fast lane
     if (msg_type == MSG_VCPU_RUN) {
+        const size_t tcg_req_bytes =
+            offsetof(struct wvm_ipc_cpu_run_req, ctx) +
+            sizeof(wvm_tcg_context_t);
         if (len == (int)sizeof(wvm_tcg_context_t)) {
             hdr->mode_tcg = 1;
-        } else if (len >= (int)sizeof(struct wvm_ipc_cpu_run_req)) {
+        } else if (len >= (int)sizeof(struct wvm_ipc_cpu_run_req) ||
+                   len == (int)tcg_req_bytes) {
             const struct wvm_ipc_cpu_run_req *run_req =
                 (const struct wvm_ipc_cpu_run_req *)payload;
             hdr->mode_tcg = run_req->mode_tcg ? 1 : 0;
@@ -2614,6 +2726,55 @@ static void log_commit_sync_decision(const char *reason, struct wvm_header *hdr,
  * [关键逻辑] 拦截所有入站消息，根据 MESI 状态机执行：READ(拉取)、DECLARE(订阅)、COMMIT(增量写) 及 Prophet(指令透传)。
  * [后果] 这是系统的"物理法则"执行点，任何逻辑错误都会直接破坏内存强一致性。
  */
+/*
+ * Official remote-mem evidence for the legacy KVM dirty path.
+ * Incremented only after a directory-owner apply of a MSG_MEM_WRITE
+ * whose origin node is not this directory. These are real completions,
+ * not synthetic log lines. Print is rate-limited (~250ms) like the
+ * typed memory_service; the counter always advances.
+ */
+#ifndef __KERNEL__
+static uint64_t wvm_legacy_mem_now_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
+}
+#endif
+
+static void wvm_legacy_mem_stats_on_remote_commit(uint32_t origin, uint32_t directory)
+{
+    static uint64_t remote_commits;
+    static uint64_t last_print_ms;
+    uint64_t now_ms = 0;
+    uint32_t pid = 0;
+
+    remote_commits++;
+#ifndef __KERNEL__
+    now_ms = wvm_legacy_mem_now_ms();
+    pid = (uint32_t)getpid();
+    if (now_ms != 0 && last_print_ms != 0 && (now_ms - last_print_ms) < 250ull) {
+        return;
+    }
+    last_print_ms = now_ms;
+#endif
+    if (g_ops && g_ops->log) {
+        g_ops->log("[WVM-MEM-STATS] origin=%u instance=%u runtime=%u pid=%u vm=%u incarnation=%u directory=%u directory_instance=%u manifest=%u remote_reads=%llu remote_commits=%llu",
+                   origin, 1u, 1u, pid, (unsigned)WVM_CURRENT_VM_ID(), 0u,
+                   directory, 0u, 0u, 0ull,
+                   (unsigned long long)remote_commits);
+    }
+#ifndef __KERNEL__
+    fprintf(stderr,
+            "[WVM-MEM-STATS] origin=%u instance=%u runtime=%u pid=%u vm=%u incarnation=%u directory=%u directory_instance=%u manifest=%u remote_reads=%llu remote_commits=%llu\n",
+            origin, 1u, 1u, pid, (unsigned)WVM_CURRENT_VM_ID(), 0u,
+            directory, 0u, 0u, 0ull,
+            (unsigned long long)remote_commits);
+#endif
+}
+
 void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t source_node_id) {
     uint16_t type = ntohs(hdr->msg_type);
     uint32_t src_vm_id = 0;
@@ -2992,13 +3153,53 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             
             uint64_t gpa = WVM_NTOHLL(*(uint64_t*)payload);
             void *data_ptr = (uint8_t*)payload + sizeof(uint64_t);
+            uint32_t dir_node = wvm_get_directory_node_id(gpa);
+            uint32_t dir_id = WVM_GET_NODEID(dir_node);
+            uint32_t pkt_target = ntohl(hdr->target_id);
             
             // 1. [Security] 权限检查：只有 Owner 才能接受 Write 并返回 ACK
-            if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) {
-                // 如果我不是 Owner，这是一个错误路由的包，静默丢弃或记录日志
-                // 绝对不能发 ACK，否则客户端会误以为写入成功
-                if (g_ops->log) g_ops->log("[Logic] Write on non-owner GPA %llx ignored", gpa);
-                return;
+            if (dir_id != (uint32_t)g_my_node_id) {
+                /*
+                 * Legacy KVM dirty sender delivers MSG_MEM_WRITE to the local
+                 * master with AUTO_ROUTE. If this node is not the directory
+                 * owner, forward the original packet to dir_node (same idea as
+                 * COMMIT_DIFF). Do not ACK locally. Only forward AUTO_ROUTE
+                 * first hops so a concrete-target packet cannot loop.
+                 */
+                static int mem_write_route_logs;
+                if (!WVM_IS_VALID_TARGET(pkt_target) &&
+                    WVM_IS_VALID_TARGET(dir_node) &&
+                    dir_id != (uint32_t)g_my_node_id &&
+                    g_ops && g_ops->send_packet) {
+                    uint8_t fwd[sizeof(struct wvm_header) + 8 + 4096];
+                    size_t plen = sizeof(uint64_t) + 4096;
+                    size_t flen = sizeof(struct wvm_header) + plen;
+                    struct wvm_header *fh;
+                    int fret;
+
+                    memcpy(fwd, hdr, sizeof(*hdr));
+                    memcpy(fwd + sizeof(*hdr), payload, plen);
+                    fh = (struct wvm_header *)fwd;
+                    fh->target_id = htonl(dir_node);
+                    fh->crc32 = 0;
+                    fh->crc32 = htonl(calculate_crc32(fwd, flen));
+                    fret = g_ops->send_packet(fwd, (int)flen, dir_node);
+                    if (mem_write_route_logs < 20 || fret < 0) {
+                        if (g_ops->log) {
+                            g_ops->log("[Logic] MEM_WRITE forward gpa=%llx dir=%u src=%u ret=%d",
+                                       (unsigned long long)gpa, dir_node, src_id, fret);
+                        }
+                        if (fret >= 0 || mem_write_route_logs < 20)
+                            mem_write_route_logs++;
+                    }
+                } else if (mem_write_route_logs < 20) {
+                    if (g_ops && g_ops->log) {
+                        g_ops->log("[Logic] Write on non-owner GPA %llx ignored (dir=%u target=%u src=%u)",
+                                   (unsigned long long)gpa, dir_node, pkt_target, src_id);
+                    }
+                    mem_write_route_logs++;
+                }
+                break;
             }
             
             uint32_t lock_idx = get_lock_idx(gpa);
@@ -3043,6 +3244,10 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             // 5. [ACK] 只有在"解锁"且"提交成功"后，才发送 ACK
             // 这保证了当客户端收到 ACK 时，数据一定已经在 Directory 的内存里了
             if (write_success) {
+                /* Official evidence: count only remote origin applies. */
+                if (src_id != (uint32_t)g_my_node_id) {
+                    wvm_legacy_mem_stats_on_remote_commit(src_id, (uint32_t)g_my_node_id);
+                }
                 size_t ack_len = sizeof(struct wvm_header); // ACK 包仅含头部
                 uint8_t *ack_buf = g_ops->alloc_packet(ack_len, 1); // Atomic allocation
                 

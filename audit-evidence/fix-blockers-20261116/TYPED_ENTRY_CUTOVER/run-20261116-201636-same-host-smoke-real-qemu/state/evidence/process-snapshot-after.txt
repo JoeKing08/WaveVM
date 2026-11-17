@@ -1,0 +1,5 @@
+time=2026-11-16 20:16:53 CST
+state_dir=audit-evidence/fix-blockers-20261116/TYPED_ENTRY_CUTOVER/run-20261116-201636-same-host-smoke-real-qemu/state
+official_entry=wvm_ctl+wavevm_node_runtime
+legacy_entry=not-supported
+--- processes ---

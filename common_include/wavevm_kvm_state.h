@@ -2,6 +2,7 @@
 #define WAVEVM_KVM_STATE_H
 
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 
@@ -50,14 +51,70 @@ static inline int wvm_kvm_profile_msrs_transfer(
     }
     result = table.header.nmsrs ?
         ioctl(fd, captured ? KVM_GET_MSRS : KVM_SET_MSRS, &table) : 0;
-    if (result != (int)table.header.nmsrs) return result < 0 ? -errno : -EIO;
+    if (result < 0)
+        return -errno;
     if (captured) {
-        captured->profile_msr_count = table.header.nmsrs;
+        captured->profile_msr_count = source->profile_msr_count;
         memset(captured->profile_msrs, 0, sizeof(captured->profile_msrs));
-        for (uint32_t i = 0; i < table.header.nmsrs; ++i) {
-            captured->profile_msrs[i].index = table.entries[i].index;
-            captured->profile_msrs[i].value = table.entries[i].data;
+        for (uint32_t i = 0; i < source->profile_msr_count; ++i) {
+            captured->profile_msrs[i].index = source->profile_msrs[i].index;
+            captured->profile_msrs[i].value = source->profile_msrs[i].value;
         }
+    }
+    if (result == (int)table.header.nmsrs) {
+        if (captured) {
+            for (uint32_t i = 0; i < table.header.nmsrs; ++i)
+                captured->profile_msrs[i].value = table.entries[i].data;
+        }
+        return 0;
+    }
+    /*
+     * KVM_SET/GET_MSRS returns a short count when an MSR is unsupported
+     * or not writable on this vCPU (run-183152: IA32_MCG_CTL 0x17b).
+     * Apply or capture the rest one-by-one; skip only those MSRs, and
+     * keep protocol/hard ioctl errors fatal. The ACK still lists every
+     * requested index so the frontend profile set continues to match.
+     */
+    fprintf(stderr,
+            "[kvm-import] profile %s_MSRS partial nmsrs=%u ret=%d\n",
+            captured ? "GET" : "SET", table.header.nmsrs, result);
+    for (uint32_t i = 0; i < source->profile_msr_count; ++i) {
+        struct {
+            struct kvm_msrs header;
+            struct kvm_msr_entry entries[1];
+        } one = {0};
+        int r;
+        int err;
+
+        one.header.nmsrs = 1;
+        one.entries[0].index = source->profile_msrs[i].index;
+        if (!captured)
+            one.entries[0].data = source->profile_msrs[i].value;
+        r = ioctl(fd, captured ? KVM_GET_MSRS : KVM_SET_MSRS, &one);
+        err = errno;
+        if (r == 1) {
+            if (captured)
+                captured->profile_msrs[i].value = one.entries[0].data;
+            continue;
+        }
+        if (r < 0 && err != EINVAL && err != EAGAIN && err != ENXIO &&
+            err != EOPNOTSUPP && err != ENOTTY) {
+            fprintf(stderr,
+                    "[kvm-import] profile %s hard-fail i=%u index=0x%x "
+                    "value=0x%llx ret=%d errno=%d\n",
+                    captured ? "GET" : "SET", i,
+                    source->profile_msrs[i].index,
+                    (unsigned long long)source->profile_msrs[i].value,
+                    r, err);
+            return -err;
+        }
+        fprintf(stderr,
+                "[kvm-import] profile %s skipped i=%u index=0x%x "
+                "value=0x%llx ret=%d errno=%d\n",
+                captured ? "GET" : "SET", i,
+                source->profile_msrs[i].index,
+                (unsigned long long)source->profile_msrs[i].value,
+                r, err);
     }
     return 0;
 }
@@ -237,27 +294,135 @@ static inline int wvm_kvm_extended_state_import(
     msrs.entries[2].data = context->sysenter_eip;
     msrs.entries[3].index = 0x277; /* IA32_PAT */
     msrs.entries[3].data = context->pat;
-    if (ioctl(fd, KVM_SET_DEBUGREGS, &debug) < 0) return -errno;
+    if (ioctl(fd, KVM_SET_DEBUGREGS, &debug) < 0) {
+        int e = -errno;
+        fprintf(stderr, "[kvm-import] SET_DEBUGREGS failed errno=%d\n", -e);
+        return e;
+    }
     result = ioctl(fd, KVM_SET_MSRS, &msrs);
-    if (result != 4) return result < 0 ? -errno : -EIO;
-    result = wvm_kvm_profile_msrs_transfer(fd, context, NULL);
-    if (result) return result;
+    if (result != 4) {
+        int e = result < 0 ? -errno : -EIO;
+        fprintf(stderr,
+                "[kvm-import] SET_MSRS sysenter/pat ret=%d errno=%d -> %d\n",
+                result, errno, e);
+        return e;
+    }
     if (context->xcrs_valid) {
         struct kvm_xcrs xcrs;
 
         memcpy(&xcrs, context->xcrs_data, sizeof(xcrs));
         if (ioctl(fd, KVM_SET_XCRS, &xcrs) < 0) {
-            return -errno;
+            int e = -errno;
+            fprintf(stderr, "[kvm-import] SET_XCRS failed errno=%d\n", -e);
+            return e;
         }
     }
-    if (ioctl(fd, KVM_SET_FPU, context->fpu_data) < 0 ||
-        ioctl(fd, KVM_SET_LAPIC, context->lapic_data) < 0 ||
-        ioctl(fd, KVM_SET_VCPU_EVENTS, context->vcpu_events_data) < 0) {
-        return -errno;
+    if (ioctl(fd, KVM_SET_FPU, context->fpu_data) < 0) {
+        int e = -errno;
+        fprintf(stderr, "[kvm-import] SET_FPU failed errno=%d\n", -e);
+        return e;
+    }
+    if (ioctl(fd, KVM_SET_LAPIC, context->lapic_data) < 0) {
+        int e = -errno;
+        fprintf(stderr, "[kvm-import] SET_LAPIC failed errno=%d\n", -e);
+        return e;
+    }
+    {
+        struct kvm_vcpu_events ev;
+        /*
+         * QEMU's bundled linux-headers are older than the system
+         * asm/kvm.h used by master/slave: they lack
+         * KVM_VCPUEVENT_VALID_TRIPLE_FAULT and ev.triple_fault.
+         * Keep the F10 retry path; treat missing bits as 0 so a
+         * WaveVM QEMU rebuild still compiles.
+         */
+#ifndef KVM_VCPUEVENT_VALID_TRIPLE_FAULT
+#define KVM_VCPUEVENT_VALID_TRIPLE_FAULT 0
+#define WVM_KVM_EVENTS_HAS_TRIPLE_FAULT 0
+#else
+#define WVM_KVM_EVENTS_HAS_TRIPLE_FAULT 1
+#endif
+        const uint32_t ev_flags_mask =
+            KVM_VCPUEVENT_VALID_NMI_PENDING |
+            KVM_VCPUEVENT_VALID_SIPI_VECTOR |
+            KVM_VCPUEVENT_VALID_SHADOW |
+            KVM_VCPUEVENT_VALID_SMM |
+            KVM_VCPUEVENT_VALID_PAYLOAD |
+            KVM_VCPUEVENT_VALID_TRIPLE_FAULT;
+
+        memcpy(&ev, context->vcpu_events_data, sizeof(ev));
+        if (ioctl(fd, KVM_SET_VCPU_EVENTS, &ev) < 0) {
+            int e = -errno;
+            uint32_t orig_flags = ev.flags;
+            fprintf(stderr,
+                    "[kvm-import] SET_VCPU_EVENTS failed errno=%d flags=0x%x "
+                    "exc inj=%u nr=%u has_err=%u pend=%u code=%u "
+                    "int inj=%u nr=%u soft=%u shadow=%u "
+                    "nmi inj=%u pend=%u mask=%u sipi=0x%x "
+                    "smm=%u smm_pend=%u inside_nmi=%u latched=%u "
+                    "tf=%u payload_valid=%u payload=0x%llx mp=%u\n",
+                    -e, ev.flags,
+                    ev.exception.injected, ev.exception.nr,
+                    ev.exception.has_error_code, ev.exception.pending,
+                    ev.exception.error_code,
+                    ev.interrupt.injected, ev.interrupt.nr,
+                    ev.interrupt.soft, ev.interrupt.shadow,
+                    ev.nmi.injected, ev.nmi.pending, ev.nmi.masked,
+                    ev.sipi_vector,
+                    ev.smi.smm, ev.smi.pending, ev.smi.smm_inside_nmi,
+                    ev.smi.latched_init,
+#if WVM_KVM_EVENTS_HAS_TRIPLE_FAULT
+                    ev.triple_fault.pending,
+#else
+                    0u,
+#endif
+                    ev.exception_has_payload,
+                    (unsigned long long)ev.exception_payload,
+                    context->mp_state);
+            ev.flags &= ev_flags_mask;
+            if (ev.exception.injected && ev.exception.pending)
+                ev.exception.injected = 0;
+            /* SIPI vector is only legal in INIT_RECEIVED; a freshly created
+             * slave vCPU is RUNNABLE until SET_MP_STATE runs later. */
+            if (context->mp_state != KVM_MP_STATE_INIT_RECEIVED)
+                ev.flags &= ~KVM_VCPUEVENT_VALID_SIPI_VECTOR;
+            if (ioctl(fd, KVM_SET_VCPU_EVENTS, &ev) < 0) {
+                uint32_t mid_flags = ev.flags;
+                ev.flags &= ~KVM_VCPUEVENT_VALID_PAYLOAD;
+                ev.exception_has_payload = 0;
+                ev.exception_payload = 0;
+                if (ioctl(fd, KVM_SET_VCPU_EVENTS, &ev) < 0) {
+                    e = -errno;
+                    fprintf(stderr,
+                            "[kvm-import] SET_VCPU_EVENTS retry failed errno=%d "
+                            "flags=0x%x->0x%x->0x%x\n",
+                            -e, orig_flags, mid_flags, ev.flags);
+                    return e;
+                }
+                fprintf(stderr,
+                        "[kvm-import] SET_VCPU_EVENTS retry ok after dropping PAYLOAD "
+                        "flags=0x%x->0x%x\n",
+                        orig_flags, ev.flags);
+            } else {
+                fprintf(stderr,
+                        "[kvm-import] SET_VCPU_EVENTS retry ok flags=0x%x->0x%x\n",
+                        orig_flags, ev.flags);
+            }
+        }
+    }
+    /* Profile MSRs after LAPIC/FPU/XCR/events so APIC-adjacent model MSRs
+     * are not applied to a vCPU that has not imported local APIC state. */
+    result = wvm_kvm_profile_msrs_transfer(fd, context, NULL);
+    if (result) {
+        fprintf(stderr, "[kvm-import] profile_msrs_transfer failed %d\n", result);
+        return result;
     }
     mp.mp_state = context->mp_state;
     if (ioctl(fd, KVM_SET_MP_STATE, &mp) < 0) {
-        return -errno;
+        int e = -errno;
+        fprintf(stderr, "[kvm-import] SET_MP_STATE failed errno=%d mp=%u\n",
+                -e, (unsigned)mp.mp_state);
+        return e;
     }
     return 0;
 }

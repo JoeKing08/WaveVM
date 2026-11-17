@@ -1,0 +1,25 @@
+remote=10
+sent=3408
+ack=3407
+remote_done_cpu2=3408
+remote_done_sum=3408
+local_done_sum=0
+force_local_sum=0
+force_local_cpu2=0
+mem_stats_raw=196
+remote_mem_peer=13525
+remote_vcpu_evidence=1
+remote_mem_evidence=1
+fl_dominates=0
+login_touched=0
+stats_cpu=c2:rd=3408:ld=0:fl=0
+mem_samples_begin
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=1
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=1
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=129
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=129
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=264
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=264
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=397
+master0.log: [WVM-MEM-STATS] origin=1 instance=1 runtime=1 pid=38279 vm=0 incarnation=0 directory=0 directory_instance=0 manifest=0 remote_reads=0 remote_commits=397
+mem_samples_end

@@ -6,13 +6,8 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      run_modeb_smoke:
-        description: "Run Mode B multi-instance smoke test"
-        type: boolean
-        required: true
-        default: true
-      run_modea_smoke:
-        description: "Run Mode A smoke test (requires /dev/kvm + module load capability)"
+      run_typed_smoke:
+        description: "Run official typed entry smoke (wvm_ctl + wavevm_node_runtime)"
         type: boolean
         required: true
         default: true
@@ -27,30 +22,26 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential make gcc
+          sudo apt-get install -y build-essential make gcc libssl-dev openssl
 
-      - name: Build all core binaries
+      - name: Build official production binaries
         run: |
-          make -C gateway_service
-          make -C slave_daemon
+          make -C node_runtime
           make -C ctl_tool
-          make -C master_core -f Makefile_User
 
-      - name: Upload build artifacts
+      - name: Upload official artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wavevm-binaries
+          name: wavevm-official-binaries
           path: |
-            gateway_service/wavevm_gateway
-            slave_daemon/wavevm_node_slave
+            wavevm_node_runtime
             ctl_tool/wvm_ctl
-            master_core/wavevm_node_master
           if-no-files-found: error
 
-  modeb-smoke:
+  typed-entry-smoke:
     runs-on: ubuntu-22.04
     needs: build
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_modeb_smoke }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_typed_smoke }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,52 +49,26 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential make gcc
+          sudo apt-get install -y build-essential make gcc libssl-dev openssl
 
-      - name: Build binaries
+      - name: Build official production binaries
         run: |
-          make -C gateway_service
-          make -C slave_daemon
+          make -C node_runtime
           make -C ctl_tool
-          make -C master_core -f Makefile_User
 
-      - name: Run Mode B multi-instance smoke
-        run: bash deploy/ci_modeb_multi_smoke.sh
+      - name: Official cross-host acceptance dry-check
+        run: |
+          bash scripts/wavevm f05 --role node-a --route-topology fractal --dry-check
+          bash scripts/wavevm f10 --role node-a --route-topology flat --dry-check
+          bash scripts/wavevm a4 --role node-a --route-topology fractal --dry-check
 
-      - name: Upload Mode B smoke logs
+      - name: Run official typed entry smoke
+        run: bash scripts/wavevm smoke --state-dir /tmp/wavevm-official-smoke
+
+      - name: Upload official smoke logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: modeb-smoke-logs
-          path: artifacts/
-          if-no-files-found: warn
-
-  modea-smoke:
-    runs-on: ubuntu-22.04
-    needs: build
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_modea_smoke }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Mode A deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential make gcc kmod
-          sudo apt-get install -y "linux-headers-$(uname -r)" || true
-
-      - name: Build binaries
-        run: |
-          make -C slave_daemon
-          make -C master_core -f Makefile_User
-
-      - name: Run Mode A smoke
-        run: bash deploy/ci_modea_smoke.sh
-
-      - name: Upload Mode A smoke logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: modea-smoke-logs
-          path: artifacts/
+          name: typed-entry-smoke-logs
+          path: /tmp/wavevm-official-smoke/
           if-no-files-found: warn

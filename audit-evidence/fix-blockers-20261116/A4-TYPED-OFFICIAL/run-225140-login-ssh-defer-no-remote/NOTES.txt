@@ -1,0 +1,13 @@
+Official typed A4 run A10 (22:51:40 B / 22:51:42 A through 22:53:13 CST Asia/Shanghai).
+scripts/wavevm a4 only. QEMU cc212798, /dev/shm 6G, gateway COMMITTED before agent A.
+Enrollment serialized: gw COMMITTED 22:51:51, READY after gw+A, multi-ACTIVE 22:51:53.
+CREATE_VM SUCCESS 22:51:54 status=0 recorded_state=11 vm_id=256, FE -smp 3 split=2 Mode B.
+SHM attach succeeded. Cirros login_ok=1 and ssh_ok=1 at 22:53:01. vCPU2 affinity burn
+rc=0 (burn-cpu2-sec=5 iters=18260000000). q_alive=1 at score. Scorer VERDICT=FAIL.
+Remote=0 sent=0 mem_stats=0. Mid-boot remoting was correctly deferred:
+[WVM-REMOTE-DEFER] cpu=2 stay-local cs=0x10 dpl=0 rip=0xffffffffa0111982
+(the run-210352 hang class). After that one defer, zero further DEFER/REMOTE/MEM-STATS
+lines: wavevm_ap_run_local_boot_slice used signal(SIGRTMIN) (glibc SA_RESTART) so
+KVM_RUN never returned from the 1s slice; login and the cpu-2 burn ran inside that
+stuck local exec. Follow-up QEMU fix: sigaction without SA_RESTART + cpu_exit in
+the timer handler. Not an official PASS.

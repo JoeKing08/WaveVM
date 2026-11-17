@@ -44,6 +44,10 @@ int wvm_kvm_fetch_execution_page(
         return result;
     }
     if (state == WVM_KVM_PAGE_CLEAN && version != 0) {
+        result = wvm_kvm_hva_expose_page(hva);
+        if (result != 0) {
+            return result;
+        }
         *version_out = version;
         return 0;
     }

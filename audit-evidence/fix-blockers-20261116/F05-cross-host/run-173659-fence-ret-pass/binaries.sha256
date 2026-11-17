@@ -1,0 +1,6 @@
+wavevm_node_master 23e6e971c0f586607783021fceeb8efdd5bea38de9fe39993a9bfbddee47bd61  /workspaces/WaveVM/master_core/wavevm_node_master
+qemu-system-x86_64 e9fa9c14a2ef4c21a74ae932ba0c3e2e5a2547258172c77f6a39ee6517fc5e5e  /workspaces/WaveVM/wavevm-qemu/build-native/qemu-system-x86_64
+wavevm_node_slave 91d390b8f265d96efd07e0ddd90f58888a3266b33d828f1162a0a316c31258c5  /workspaces/WaveVM/slave_daemon/wavevm_node_slave
+wavevm_gateway d9878a59aead02197305bb3f4b4d5df16fe696e3e351b5e2ba791347c12a14f1  /workspaces/WaveVM/gateway_service/wavevm_gateway
+tip f9fbe187e8d6cb4d103b9ea5edb6aa0d3250479c
+master source dirty: main_wrapper.c + logic_core.c (uncommitted)

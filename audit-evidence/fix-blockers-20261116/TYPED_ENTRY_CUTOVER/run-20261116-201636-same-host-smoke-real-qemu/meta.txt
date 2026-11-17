@@ -1,0 +1,4 @@
+evid=audit-evidence/fix-blockers-20261116/TYPED_ENTRY_CUTOVER/run-20261116-201636-same-host-smoke-real-qemu
+time_start=2026-11-16 20:16:36 CST
+smoke_rc=0
+time_end=2026-11-16 20:16:53 CST

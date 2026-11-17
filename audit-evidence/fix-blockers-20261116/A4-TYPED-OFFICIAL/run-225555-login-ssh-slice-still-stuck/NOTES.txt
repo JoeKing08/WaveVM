@@ -1,0 +1,13 @@
+Official typed A4 run A11 (22:55:56 B / ~22:55:55 A through 22:57:12 CST Asia/Shanghai).
+scripts/wavevm a4 only. One retry after A10: QEMU 897b8126 (sigaction without
+SA_RESTART + cpu_exit in the bound-slice timer handler). /dev/shm 6G.
+Gateway COMMITTED before agent A; multi-ACTIVE 22:56:06; CREATE_VM SUCCESS
+22:56:07 status=0 recorded_state=11 vm_id=256; FE -smp 3 split=2 Mode B.
+Cirros login_ok=1 and ssh_ok=1 at 22:57:01. vCPU2 affinity burn rc=0.
+q_alive=1 at score. Scorer VERDICT=FAIL. remote=0 sent=0 mem_stats=0.
+New binary was used (qemu string "local slice done" present). Still only
+one [WVM-REMOTE-DEFER] stay-local cs=0x10 and zero "local slice done"
+lines: kvm_cpu_exec still never returned from the deferred local slice.
+Likely the vCPU thread has SIGRTMIN blocked, so a signal cannot interrupt
+KVM_RUN; a later fix should kick via kvm_run->immediate_exit / qemu_cpu_kick
+from a SIGEV_THREAD callback. Stopped; no further official rerun tonight.

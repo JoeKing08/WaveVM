@@ -1,0 +1,131 @@
+--- agent.log ---
+[node-runtime] host probe published 4 records to /tmp/wavevm-create-vm-single.pOJSbL/node-state/host_capabilities.report (tcg=3 kvm=3 kern=4 tcg_bits=1)
+[node-runtime] A10: registration accel digest replaced with probed_accel_digest
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+[node-runtime] admitted vm=256 incarnation=1 generation=1 physical_node=801
+[Runtime] chunk identity=vm256_inc1_vol0 dir=/var/lib/wavevm/chunks
+[RuntimeGate] executor registered connection=2
+[Slave KVM] EXCEPTION_PAYLOAD enabled
+[Slave KVM] split LAPIC enabled; devices stay in frontend
+[Slave KVM] immediate_exit=1 numa_nodes=0 device_ram=0
+[Hybrid] BIOS ROM slot 3: GPA [0xffff0000, 0x100000000) -> HVA 0x77bab4a3b000
+[SLAVE-BIND] port=30914 ok
+[Hybrid] TCG helper runtime gate=1 socket=/tmp/wvm_user_wvm-v256-i1-g1-n801-96962c428283b063.sock namespace=wvm-v256-i1-g1-n801-96962c428283b063
+[Hybrid] TCG helper runtime gate=1 socket=/tmp/wvm_user_wvm-v256-i1-g1-n801-96962c428283b063.sock namespace=wvm-v256-i1-g1-n801-96962c428283b063
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+[Hybrid] TCG install notify fd=9 -> push port 32418
+[Hybrid] local executor READY with live TCG helpers (no guest E2E claim)
+[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory
+[GW-FINAL] id=1 ip=127.0.0.1 port=9000
+[V30-Init] rx_threads=4 poll_timeout=100ms (shared socket)
+[V30-RX] Thread 0: bound port=30911, shared socket fd=10
+[V30-RX] Thread 2: sharing socket fd=10
+[V30-RX] Thread 3: sharing socket fd=10
+[V30-RX] Thread 1: sharing socket fd=10
+[GW-SET] id=1 ip=127.0.0.1 port=30911
+[GW-SET] id=1 ip=127.0.0.1 port=30911
+[GW-SET] id=1 ip=127.0.0.1 port=30911
+[System] runtime socket listening; waiting for manifest-bound QEMU frontend registration
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=30914, Cores=2, RAM=16 MB, BaseID=1, VM=256
+[Hybrid] KVM: Using SHM File: /wavevm_ram_wvm-v256-i1-g1-n801-96962c428283b063
+[Hybrid] KVM Hardware Acceleration Active (RAM: 16 MB).
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 127.0.0.1:30914
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 801, VM: 256)
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 16 MB >= Reservation 16777216 bytes.
+[Init] Identity Mapped: PhysID 801 -> VirtualID 1 (Primary)
+[System] Initializing SHM: /wavevm_ram_wvm-v256-i1-g1-n801-96962c428283b063 (Size: 16 MB)
+[+] Memory Ready at 0x77ba6f000000 (attached executor backing store)
+[System] Control Socket: /tmp/wvm_user_wvm-v256-i1-g1-n801-96962c428283b063.sock
+[+] WaveVM V29 Node endpoint ready. Waiting for QEMU...
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1
+wvm_control_owner: client thread start tls=1

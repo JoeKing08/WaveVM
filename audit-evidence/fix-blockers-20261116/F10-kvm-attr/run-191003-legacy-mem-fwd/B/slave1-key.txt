@@ -1,0 +1,4 @@
+[Slave KVM] EXCEPTION_PAYLOAD enabled
+[Slave VCPU Init] guest_vcpu=2 fd=7 run=0x74c284a8f000
+[kvm-import] profile SET_MSRS partial nmsrs=96 ret=13
+[kvm-import] profile SET skipped i=13 index=0x17b value=0xffffffffffffffff ret=0 errno=11

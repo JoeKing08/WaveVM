@@ -71,6 +71,24 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
 // [V29] 本地缺页快速路径 (内核态专用)
 int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *version_out);
 
+#ifndef __KERNEL__
+/*
+ * Unique-FE live guest RAM, if this process holds the QEMU_FRONTEND role
+ * and WVM_SHM_FILE is mapped. Returns 1 and sets *out_page to the 4096-byte
+ * page; returns 0 when this node is not the live frontend for that GPA.
+ */
+int wvm_frontend_live_ram_page(uint64_t gpa, const uint8_t **out_page);
+
+/*
+ * Directory-side first publish of live unique-FE bytes for a GPA this
+ * node already owns. Does not invent a zero page, does not send network
+ * traffic, and does not bump remote_commits. If the page is already
+ * present, leaves existing committed bytes alone and returns that version.
+ */
+int wvm_directory_first_publish_live_page(uint64_t gpa, const uint8_t *data,
+                                          uint64_t *result_version);
+#endif
+
 /*
  * Apply one V1 version-checked diff to the local directory page. This is a
  * local semantic adapter only: it does not emit network traffic or push

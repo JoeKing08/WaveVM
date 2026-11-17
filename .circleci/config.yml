@@ -74,10 +74,12 @@ jobs:
             ls -la artifacts/images/
 
       - run:
-          name: Run Dual-Node << parameters.accel >> Test
+          name: Official typed entry dry-check and smoke
           command: |
-            export WAVEVM_CI_ACCEL="<< parameters.accel >>"
-            bash scripts/ci_dual_node.sh
+            bash scripts/wavevm f05 --role node-a --route-topology fractal --dry-check
+            bash scripts/wavevm f10 --role node-a --route-topology flat --dry-check
+            bash scripts/wavevm a4 --role node-a --route-topology fractal --dry-check
+            bash scripts/wavevm smoke --state-dir /tmp/wavevm-official-smoke
           no_output_timeout: 20m
 
       - store_artifacts:

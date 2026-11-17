@@ -1,0 +1,8 @@
+Wiring fix landed: req_bytes=14112, RPC-CALL len=14112, slave RX len=14148,
+VCPU-RUN mode=0 vcpu=2 (not 0). Slave created guest_vcpu=2 fd=7, then
+ErrorAck state=-5 (-EIO) from KVM_GET_SREGS on a freshly created vCPU.
+RET ack_status=-1. QEMU terminal handoff failure. remote_mem=0.
+This run used the rebuilt master (fe5e0fcc...) and the OLD slave
+(91d390b8... / Nov 11). Subsequent run rebuilds the slave so GET_SREGS
+EIO is non-fatal and validate runs first.
+login_touched=0 (login appeared on serial; no SSH this run)

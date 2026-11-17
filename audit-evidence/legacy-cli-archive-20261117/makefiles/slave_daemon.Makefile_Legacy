@@ -1,0 +1,42 @@
+# WARNING: Non-production historical CLI (wavevm_node_slave).
+# Official production binary is ../wavevm_node_runtime.
+# Official start: ../scripts/wavevm
+# The binary refuses to start unless WAVEVM_ALLOW_LEGACY_CLI=1.
+CC ?= gcc
+CFLAGS ?= -Wall -O2 -msse4.2 -std=gnu11 -D_DEFAULT_SOURCE -DWAVEVM_SLAVE_LEGACY_CLI
+CPPFLAGS ?= -I../common_include -pthread
+LDFLAGS ?= -pthread -lssl -lcrypto
+ROOT=..
+NR=$(ROOT)/node_runtime
+TARGET=wavevm_node_slave
+
+# Reuse node_runtime objects except mains/masters; rebuild slave_hybrid with LEGACY_CLI
+NR_OBJS=$(NR)/slave_vfio.o \
+	$(NR)/resources.o $(NR)/sha256.o $(NR)/canonical.o $(NR)/identity.o \
+	$(NR)/runtime_names.o $(NR)/manifest.o $(NR)/lifecycle.o $(NR)/runtime_gate.o \
+	$(NR)/runtime_dispatch.o $(NR)/executor_abi.o $(NR)/executor_session.o \
+	$(NR)/envelope.o $(NR)/memory.o $(NR)/vcpu_handoff.o $(NR)/vcpu_handoff_cache.o \
+	$(NR)/x86_context.o $(NR)/local_memory.o $(NR)/route_runtime.o \
+	$(NR)/executor_bridge.o $(NR)/vcpu_coordinator.o $(NR)/vcpu_service.o \
+	$(NR)/memory_service.o $(NR)/ingress.o $(NR)/directory_store.o \
+	$(NR)/kvm_page_cache.o $(NR)/kvm_execution_fetch.o $(NR)/control.o \
+	$(NR)/route_delivery.o $(NR)/runtime_delivery.o $(NR)/membership_control.o \
+	$(NR)/membership_controller.o $(NR)/reservation_runtime.o \
+	$(NR)/admission_stage.o $(NR)/admission_receiver.o $(NR)/route_control.o \
+	$(NR)/control_transport.o $(NR)/control_owner.o $(NR)/tls_control_connector.o \
+	$(NR)/admission_node_service.o $(NR)/admission_slot_registry.o \
+	$(NR)/admission_runtime_agent.o $(NR)/host_probe.o $(NR)/capability.o \
+	$(NR)/block_chunk_store.o $(NR)/block_wire.o $(NR)/block_service.o \
+	$(NR)/block_client.o
+
+all: $(TARGET)
+
+slave_hybrid_legacy.o: slave_hybrid.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c slave_hybrid.c -o $@
+
+$(TARGET): slave_hybrid_legacy.o $(NR_OBJS)
+	$(CC) $(CFLAGS) -o $@ slave_hybrid_legacy.o $(NR_OBJS) $(LDFLAGS)
+
+clean:
+	rm -f slave_hybrid_legacy.o $(TARGET)
+.PHONY: all clean

@@ -1,0 +1,12 @@
+Official typed A4 run A8 (22:39:55-22:40:22 CST Asia/Shanghai).
+scripts/wavevm a4 only. Enrollment serialization worked: READY_FOR_B after
+gw+A COMMITTED, multi-ACTIVE 22:40:04, CREATE_VM SUCCESS 22:40:05 vm_id=256
+recorded_state=11 status=0, FE -smp 3 split=2 Mode B user+KVM, QEMU cc212798.
+QEMU frontend pid=8127 stopped status=135 (SIGBUS) at 22:40:19, 14s after
+spawn. vm.log ends at "[WaveVM] region_add gpa=0 size=0xc0000000 count=1"
+with no [WaveVM-SHM] attach line and empty serial. login=0 ssh=0 remote=0
+mem_stats=0 q_alive=0. Cause: wavevm_attach_shared_ram_ptr memcpy()s the
+full 3GiB guest RAM into POSIX SHM; after the host reboot /dev/shm was the
+default tmpfs 2.9G (half of 5.7Gi). Last night the same attach succeeded
+(run-210126). /dev/shm later remounted size=6G on both VMs for a retry.
+Do not treat this as a remoting-deferral result.

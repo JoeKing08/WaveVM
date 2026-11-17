@@ -1,0 +1,60 @@
+[wavevm] official f10 typed cell role=node-a topology=fractal placement=spread entry=wvm_ctl+wavevm_node_runtime
+[official f10 fractal 12:43:22/A] node A starting art=/tmp/wavevm-official-f10-fractal-fix-20261117-124321
+[official f10 fractal 12:43:30/A] seed+certs ready; publishing join bundle A_IP=100.116.196.65
+[official f10 fractal 12:43:30/A] join.env published to /mnt/hgfs/SharedFolder/wavevm-official-f10-fractal (A_IP=100.116.196.65 digest_b=05f0f57455c6677a...); READY_FOR_B after gateway enrolls
+[official f10 fractal 12:43:30/A] wvm_ctl serve up pid=8309 port=17101
+[official f10 fractal 12:43:30/A] gateway REGISTER accepted pid=8315 advertised control/data=100.116.196.65; waiting for gateway COMMITTED
+[official f10 fractal 12:43:31/A] gateway 901:902 COMMITTED+ACTIVE
+[official f10 fractal 12:43:31/A] gateway up pid=8315; holding READY_FOR_B until A is COMMITTED
+[official f10 fractal 12:43:31/A] agent A up pid=8343; waiting for local gw+A enrollment
+[official f10 fractal 12:43:31/A] local gw+A COMMITTED+ACTIVE; publishing READY_FOR_B
+[official f10 fractal 12:43:31/A] READY_FOR_B published after serialized gw+A enrollment
+[official f10 fractal 12:43:32/A] multi-ACTIVE cluster (gw+A+B) ready
+[official f10 fractal 12:43:32/A] CREATE_VM spread vcpus=3 mem=3221225472 disabled require-kvm unique-FE split=2 topology=fractal
+[official f10 fractal 12:43:33/A] CREATE_VM attempt=0 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=9278174920069237095
+[official f10 fractal 12:43:33/A] CREATE_VM attempt=1 status=14 recorded_state=9 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=9278174920069237095
+[official f10 fractal 12:43:33/A] CREATE_VM attempt=2 status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=9278174920069237095
+[official f10 fractal 12:43:33/A] CREATE_VM SUCCESS status=0 recorded_state=11 vm_id=256 vm_incarnation=1 manifest_generation=1 route_scope_id=9278174920069237095
+[official f10 fractal 12:43:33/A] QEMU FE observed
+[official f10 fractal 12:44:40/A] login_ok=1 at=2026-11-17 12:44:40 CST
+[official f10 fractal 12:44:40/A] ssh_ok=1 at=2026-11-17 12:44:40 CST
+[official f10 fractal 12:44:40/A] starting 5s vCPU2 affinity burn (sched_setaffinity cpu 2)
+[official f10 fractal 12:45:05/A] vCPU2 burn rc=0 out=
+VERDICT=PARTIAL
+cell=f10
+topology=fractal
+placement=spread
+backend=require-kvm
+accel=disabled
+entry=typed_wvm_ctl_node_runtime
+legacy_cli=0
+login_ok=1
+ssh_ok=1
+login_at=2026-11-17 12:44:40 CST
+ssh_at=2026-11-17 12:44:40 CST
+q_alive=1
+remote=1
+remote_defer=129
+sent=0
+ack_mode0=0
+ack_mode1=0
+fence_done=0
+push_fail=0
+remote_done_cpu2=0
+remote_mem_peer=1
+mem_stats_raw=1
+remote_vcpu_evidence=0
+remote_vcpu_evidence_kvm=0
+remote_vcpu_evidence_tcg=0
+remote_mem_evidence=1
+ap_shutdown=0
+0
+wvm_reset=0
+0
+kvm_shutdown=0
+0
+handoff_fail=0
+0
+note=moving this test does not close F05, F10, Phase 1, Phase 9, or MINIMUM_COMPLETE
+/workspaces/WaveVM/tests/e2e/test_a4_official_typed.sh: 第 88 行：  8343 已杀死               stdbuf -o0 -e0 env WVM_TCG_QEMU_BIN="$qemu_bin" WVM_TCG_QEMU_DATADIR="$WVM_TCG_QEMU_DATADIR" WVM_PHYSICAL_HOST_ID="$host_a" WVM_FE_PHYSICAL_HOST_ID="$host_a" WVM_GUEST_IMAGE="$cirros_img" WVM_GUEST_SERIAL_LOG="$ART/vm-serial.log" WVM_GUEST_FE_LOG="$ART/vm.log" WVM_GUEST_SSH_PORT="$ssh_port" WVM_GUEST_FE_BOOT_NOW=1 WVM_UNIQUE_GUEST_FE=1 WVM_GUEST_SPLIT=2 WVM_GUEST_SMP="$vcpus" WVM_CREATE_VCPUS="$vcpus" "$repo_root/wavevm_node_runtime" agent --state-dir "$tmpdir/node-a" --runtime-dir "$tmpdir/runtime-a" --socket "$tmpdir/node-a.sock" --node-id 801 --instance-id 802 --inventory-revision 1 --physical-host-id "$host_a" --vcpu-slots 6 --memory-bytes "$((mem_bytes + 256*1024*1024))" --controller-node-id 701 --controller-instance-id 702 --controller-uid "$(id -u)" --slots 6 --max-vcpus 6 --max-memory-chunks 8 --max-storage 1 --max-members 8 --max-leases 2 --control-address "$my_ip" --control-port "$A_CTRL" --data-port "$A_DATA" --tls-ca "$tmpdir/certs/ca.crt" --tls-cert "$tmpdir/certs/nodea.crt" --tls-key "$tmpdir/certs/nodea.key" --register-controller-address 127.0.0.1 --register-controller-port "$CTL_PORT" --failure-domain-id 1 --pod-id 1 --vnode-first 0 --vnode-count 16 --sidecar-address "$my_ip" --sidecar-data-port "$A_SIDE_D" --sidecar-control-port "$A_SIDE_C" --role-bits 1 --capability-profile-generation 1 --capability-profile-digest "$digest_a" --storage-capabilities-digest 2222222222222222222222222222222222222222222222222222222222222222 --accelerator-fault-capabilities-digest 3333333333333333333333333333333333333333333333333333333333333333 --exclusive-resource-digest 4444444444444444444444444444444444444444444444444444444444444444 > "$tmpdir/agent-a.log" 2>&1
+[official f10 fractal 12:45:11/A] node A finished verdict=PARTIAL art=/tmp/wavevm-official-f10-fractal-fix-20261117-124321

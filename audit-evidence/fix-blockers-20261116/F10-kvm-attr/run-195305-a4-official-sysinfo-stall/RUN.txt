@@ -1,0 +1,22 @@
+A4 official cell — run-195305-a4-official-sysinfo-stall
+Times: 19:52:55 (B) / 19:53:05 (A) – stopped ~19:59:50 CST Asia/Shanghai (2026-11-16)
+Path: WVM_A4_OFFICIAL=1, mode=user,backend=kvm, fractal NUMA, typed gate OFF
+ART: A /tmp/wavevm-test-results/dual-node-kvm-20261116-195305
+     B /tmp/wavevm-test-results/dual-node-kvm-20261116-195255
+
+VERDICT=FAIL (official login/SSH bar not met). Kept as evidence.
+Unlike run-194044, there was no KVM-SHUTDOWN / WVM-RESET. SIPI completed
+locally, then cpu=2 was remoted in Linux kernel (cs=0x10). remote_done
+climbed past 4272 and official WVM-MEM-STATS remote_commits past 12818,
+ack_status=0 ack_mode=0, no terminal handoff failure. Cirros serial reached
+dropbear start and then froze mid "system information" after "Container: none"
+(next lines in the 191003 PASS were Arch/CPU/sshd keys/login). Serial mtime
+stayed 19:54:19. Hostfwd :2226 was listening but a manual SSH probe timed
+out during banner exchange; dropbear was not actually serving. Official
+scorer never reached the SSH/burn stage because it correctly waited for
+serial login first.
+
+This is the same official cell as 194044; 194044 died on AP triple-fault
+reset, this one livelocked/stalled after remoting the AP during boot.
+Prior attr-only PASS 191003 kept cpu=2 in local 1s HALT-WAKE until a
+post-login 5s affinity burn (first remote rip=0x40181c cs=0x33).

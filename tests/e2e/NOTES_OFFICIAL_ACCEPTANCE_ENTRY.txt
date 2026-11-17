@@ -1,0 +1,60 @@
+Official Minimum acceptance entry — 2026-11-17
+==============================================
+Timezone: Asia/Shanghai (CST, UTC+8)
+
+Official production and official scoring entry is only:
+
+  scripts/wavevm smoke|start|status|stop
+  scripts/wavevm a4  --role node-a|node-b --route-topology flat|fractal
+  scripts/wavevm f10 --role node-a|node-b --route-topology flat|fractal
+  scripts/wavevm f05 --role node-a|node-b --route-topology flat|fractal
+
+Path: scripts/wavevm -> wvm_ctl serve + wavevm_node_runtime agent +
+CREATE_VM (tests/control-plane/submit_create_vm). a4 and f10 share
+tests/e2e/test_a4_official_typed.sh (f10 is a thin wrapper). f05 uses the
+same bring-up with require-tcg and a fence-only scorer.
+
+These tests never set WAVEVM_ALLOW_LEGACY_CLI and refuse if
+wavevm_node_master or wavevm_node_slave is visible.
+scripts/ci_dual_node.sh is no longer official acceptance (exits 78).
+
+This migration does not close F05, F10, Phase 1, Phase 9, or
+MINIMUM_COMPLETE. A live official dual-host run was not started in this
+pass; use --dry-check first, then start both roles when Joe says to run.
+
+Leftover references that are NOT official acceptance
+----------------------------------------------------
+- Production leftover path still exists on purpose: WAVEVM_ALLOW_LEGACY_CLI
+  in master_core/main_wrapper.c and slave_daemon/slave_hybrid.c, plus the
+  leftover wavevm_node_master / wavevm_node_slave sources and binaries.
+  `make legacy-cli` still builds them. Joe asked not to delete this path
+  in this pass.
+- scripts/ci_dual_node.sh: historical body retained after an immediate
+  exit 78. The unreachable body still mentions WAVEVM_ALLOW_LEGACY_CLI
+  and launches master/slave; that is documentation of the old harness,
+  not an official test entry.
+- README.md, scripts/wavevm, Makefile, node_runtime/Makefile,
+  master_core/Makefile_User, slave_daemon/Makefile_Legacy,
+  deploy/github_actions_tailscale.md: comments describing the leftover
+  path or saying official tests must not use it.
+- tests/e2e/test_a4_official_typed.sh: refuses leftover processes and
+  unsets an inherited WAVEVM_ALLOW_LEGACY_CLI rather than using it.
+- Same-host Minimum / control-plane / unit tests already used wvm_ctl
+  and wavevm_node_runtime and were left in place (they never launched
+  the independent master/slave CLIs).
+- F10 attr-only on the old harness is not an official closeout cell;
+  official F10 is the A4-class login/SSH + same-run remote RET + official
+  remote mem cell.
+- F01 / TCG guest login remains Extended and is not an official Minimum
+  gate.
+
+Live run, when requested
+------------------------
+Both VMs must have SharedFolder mounted, /dev/shm at 6G, and Tailscale
+up (wavevm-f05-a / wavevm-f05-b). Start the same command on both sides,
+node-b can wait for the join bundle. Example:
+
+  ./scripts/wavevm f05 --role node-a --route-topology fractal
+  ./scripts/wavevm f05 --role node-b --route-topology fractal
+  ./scripts/wavevm f10 --role node-a --route-topology flat
+  ./scripts/wavevm f10 --role node-b --route-topology flat

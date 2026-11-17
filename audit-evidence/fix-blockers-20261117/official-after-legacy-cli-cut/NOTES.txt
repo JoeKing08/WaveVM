@@ -1,0 +1,18 @@
+NOTES — official cells after Step 1 CLI cut + Step 3 leftover-path stubs
+Date: 2026-11-17, times in Asia/Shanghai (UTC+8)
+Rollback commit: 1d729426a3167a9be14a5f9519582ac7c3bcbb0a
+  message: Minimum WIP + official typed entry + remove independent master/slave CLI
+  not pushed; origin/main remains f9fbe187e8d6cb4d103b9ea5edb6aa0d3250479c
+Archive: audit-evidence/legacy-cli-archive-20261117/
+Official binaries copied 2404 -> 2604 via /mnt/hgfs/SharedFolder/wavevm-sync-20261117 (cp -f).
+QEMU on both hosts already matched b03c7eca… (2026-11-17 08:33 CST).
+
+Official matrix (honest; no CLOSED / MINIMUM_COMPLETE claims):
+  f05 fractal  FAIL   f05-fractal-run-102314/
+  f05 flat     FAIL   f05-flat-run-103715/
+  f10 fractal  FAIL   f10-fractal-run-105132/   (login+SSH yes; no RET / no MEM-STATS)
+  f10/a4 flat  not-run (known remoting stall already seen on official KVM fractal)
+
+No host/display-class crash. No leftover master/slave. Typed runtime gate was not flipped
+by this pass (F05 TCG helper logs mentioned "TCG helper runtime gate=1"; that is a helper
+path already in the tree, not a change made here).

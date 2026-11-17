@@ -1,0 +1,19 @@
+Official typed A4 run A13 (08:39:12 B / ~08:39:14 A through 08:41:07 CST Asia/Shanghai).
+scripts/wavevm a4 only. QEMU b03c7eca (SIGEV_THREAD callback sets
+kvm_run->immediate_exit, then cpu_exit + qemu_cpu_kick). /dev/shm 6G.
+Enrollment serialized; multi-ACTIVE 08:39:25; CREATE_VM SUCCESS 08:39:26
+status=0 recorded_state=11 vm_id=256; FE -smp 3 split=2 Mode B user+KVM.
+Cirros login_ok=1 at 08:40:34, ssh_ok=1 at 08:40:35. q_alive=1 at score.
+The 1s bound-slice kick worked: 43 kicks, 43 local slice done, mid-boot
+stay-local at cs=0x10. Then userspace was observed and remoted:
+  [WVM-REMOTE-DEFER] cpu=2 userspace observed cs=0x33 dpl=3 rip=0x401810
+  [WVM-REMOTE] cpu=2 dispatch #0 rip=0x401810 cs=0x33
+  [WVM-SEND] cpu=2 rip=0x401810 ... mp=0 lapic=1
+vm.log ends there (1166 lines). No IPC VCPU_RUN RET, no [WVM-MEM-STATS].
+Scorer: remote=1 remote_vcpu_evidence=1 sent=0 ack_mode0=0 mem_stats_raw=0
+remote_mem_evidence=0. The remote=1 count is a real [WVM-REMOTE] dispatch,
+not a DEFER false positive. vCPU2 burn rc=0 but empty stdout and ~25s
+elapsed (likely stalled once the first userspace remote SEND went out).
+Scorer VERDICT=FAIL. Honest: login+SSH and a real userspace remote dispatch
+plus SEND are in this same run; official remote mem and ack_status=0
+ack_mode=0 are not. Stopped after this remoting retry.

@@ -1,0 +1,123 @@
+[LegacySlave] chunk dir: cannot create chunk dir
+[Hybrid] Using Physical Cores: 6
+[Init] WaveVM Hybrid Slave V28.0 (Legacy CLI / F05)
+[Init] Config: Port=19205, Cores=1, RAM=1024 MB, BaseID=1, VM=0
+[Hybrid] NUMA: node 0  /wvm_fract_node0  2048 MB  GPA [0x0, 0x80000000)
+[Hybrid] NUMA: node 1  /wvm_fract_node1  1024 MB  GPA [0x100000000, 0x140000000)
+[Hybrid] NUMA: 2 nodes mapped, VA range 0x140000000
+[Slave KVM] EXCEPTION_PAYLOAD enabled
+[Slave KVM] split LAPIC enabled; devices stay in frontend
+[Slave KVM] immediate_exit=1 numa_nodes=2 device_ram=0
+[Hybrid] NUMA memslot: node 0 GPA [0x0, 0x80000000)
+[Hybrid] NUMA memslot: node 1 GPA [0x100000000, 0x140000000)
+[Hybrid] BIOS ROM slot: GPA [0xffff0000, 0x100000000)
+[Hybrid] KVM Hardware Acceleration Active (RAM: 1024 MB).
+[Hybrid] Mode: KVM FAST PATH. Listening on 0.0.0.0:19205
+[SLAVE-BIND] port=19205 ok
+[SenderThread] KVM Dirty Page Sender is running.
+[SLAVE-RX] src=127.0.0.1:19200 len=14148 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=14148 type=5
+[VCPU-RUN] mode=0 vcpu=2 req=1 src=127.0.0.1:19200 target=16777216 slave=0
+[Slave VCPU Init] enter vm=4 kvm=3 req_vcpu=2
+[Slave VCPU Init] guest_vcpu=2 fd=7 run=0x7f2d2506a000
+[kvm-import] profile SET_MSRS nmsrs=96 ret=13 errno=11 -> -5
+[kvm-import] profile[0] index=0xc0010117 value=0x0
+[kvm-import] profile[1] index=0x3b value=0x0
+[kvm-import] profile[2] index=0x1a0 value=0x1
+[kvm-import] profile[3] index=0x9e value=0x30000
+[kvm-import] profile[4] index=0x34 value=0x0
+[kvm-import] profile[5] index=0xda0 value=0x0
+[kvm-import] profile[6] index=0x48 value=0x0
+[kvm-import] profile[7] index=0x12 value=0x13b201081
+[kvm-import] profile[8] index=0x11 value=0x13b200000
+[kvm-import] profile[9] index=0x4b564d02 value=0x0
+[kvm-import] profile[10] index=0x4b564d04 value=0x13ec32041
+[kvm-import] profile[11] index=0x4b564d03 value=0x13ec32081
+[kvm-import] profile[12] index=0x17a value=0x0
+[kvm-import] profile[13] index=0x17b value=0xffffffffffffffff
+[kvm-import] profile SET failed i=13 index=0x17b value=0xffffffffffffffff ret=0 errno=11
+[kvm-import] profile[14] index=0x400 value=0xffffffffffffffff
+[kvm-import] profile[15] index=0x401 value=0x0
+[kvm-import] profile[16] index=0x402 value=0x0
+[kvm-import] profile[17] index=0x403 value=0x0
+[kvm-import] profile[18] index=0x404 value=0xffffffffffffffff
+[kvm-import] profile[19] index=0x405 value=0x0
+[kvm-import] profile[20] index=0x406 value=0x0
+[kvm-import] profile[21] index=0x407 value=0x0
+[kvm-import] profile[22] index=0x408 value=0xffffffffffffffff
+[kvm-import] profile[23] index=0x409 value=0x0
+[kvm-import] profile[24] index=0x40a value=0x0
+[kvm-import] profile[25] index=0x40b value=0x0
+[kvm-import] profile[26] index=0x40c value=0xffffffffffffffff
+[kvm-import] profile[27] index=0x40d value=0x0
+[kvm-import] profile[28] index=0x40e value=0x0
+[kvm-import] profile[29] index=0x40f value=0x0
+[kvm-import] profile[30] index=0x410 value=0xffffffffffffffff
+[kvm-import] profile[31] index=0x411 value=0x0
+[kvm-import] profile[32] index=0x412 value=0x0
+[kvm-import] profile[33] index=0x413 value=0x0
+[kvm-import] profile[34] index=0x414 value=0xffffffffffffffff
+[kvm-import] profile[35] index=0x415 value=0x0
+[kvm-import] profile[36] index=0x416 value=0x0
+[kvm-import] profile[37] index=0x417 value=0x0
+[kvm-import] profile[38] index=0x418 value=0xffffffffffffffff
+[kvm-import] profile[39] index=0x419 value=0x0
+[kvm-import] profile[40] index=0x41a value=0x0
+[kvm-import] profile[41] index=0x41b value=0x0
+[kvm-import] profile[42] index=0x41c value=0xffffffffffffffff
+[kvm-import] profile[43] index=0x41d value=0x0
+[kvm-import] profile[44] index=0x41e value=0x0
+[kvm-import] profile[45] index=0x41f value=0x0
+[kvm-import] profile[46] index=0x420 value=0xffffffffffffffff
+[kvm-import] profile[47] index=0x421 value=0x0
+[kvm-import] profile[48] index=0x422 value=0x0
+[kvm-import] profile[49] index=0x423 value=0x0
+[kvm-import] profile[50] index=0x424 value=0xffffffffffffffff
+[kvm-import] profile[51] index=0x425 value=0x0
+[kvm-import] profile[52] index=0x426 value=0x0
+[kvm-import] profile[53] index=0x427 value=0x0
+[kvm-import] profile[54] index=0x40000100 value=0x0
+[kvm-import] profile[55] index=0x40000101 value=0x0
+[kvm-import] profile[56] index=0x40000102 value=0x0
+[kvm-import] profile[57] index=0x40000103 value=0x0
+[kvm-import] profile[58] index=0x40000104 value=0x0
+[kvm-import] profile[59] index=0x40000010 value=0x3d5f5c
+[kvm-import] profile[60] index=0x400000b0 value=0x0
+[kvm-import] profile[61] index=0x400000b1 value=0x0
+[kvm-import] profile[62] index=0x400000b2 value=0x0
+[kvm-import] profile[63] index=0x400000b3 value=0x0
+[kvm-import] profile[64] index=0x400000b4 value=0x0
+[kvm-import] profile[65] index=0x400000b5 value=0x0
+[kvm-import] profile[66] index=0x400000b6 value=0x0
+[kvm-import] profile[67] index=0x400000b7 value=0x0
+[kvm-import] profile[68] index=0x2ff value=0xc06
+[kvm-import] profile[69] index=0x250 value=0x606060606060606
+[kvm-import] profile[70] index=0x258 value=0x606060606060606
+[kvm-import] profile[71] index=0x259 value=0x0
+[kvm-import] profile[72] index=0x268 value=0x505050505050505
+[kvm-import] profile[73] index=0x269 value=0x505050505050505
+[kvm-import] profile[74] index=0x26a value=0x505050505050505
+[kvm-import] profile[75] index=0x26b value=0x505050505050505
+[kvm-import] profile[76] index=0x26c value=0x505050505050505
+[kvm-import] profile[77] index=0x26d value=0x505050505050505
+[kvm-import] profile[78] index=0x26e value=0x505050505050505
+[kvm-import] profile[79] index=0x26f value=0x505050505050505
+[kvm-import] profile[80] index=0x200 value=0xc0000000
+[kvm-import] profile[81] index=0x201 value=0xffc0000800
+[kvm-import] profile[82] index=0x202 value=0x0
+[kvm-import] profile[83] index=0x203 value=0x0
+[kvm-import] profile[84] index=0x204 value=0x0
+[kvm-import] profile[85] index=0x205 value=0x0
+[kvm-import] profile[86] index=0x206 value=0x0
+[kvm-import] profile[87] index=0x207 value=0x0
+[kvm-import] profile[88] index=0x208 value=0x0
+[kvm-import] profile[89] index=0x209 value=0x0
+[kvm-import] profile[90] index=0x20a value=0x0
+[kvm-import] profile[91] index=0x20b value=0x0
+[kvm-import] profile[92] index=0x20c value=0x0
+[kvm-import] profile[93] index=0x20d value=0x0
+[kvm-import] profile[94] index=0x20e value=0x0
+[kvm-import] profile[95] index=0x20f value=0x0
+[kvm-import] profile_msrs_transfer failed -5
+[Slave ErrorAck] vcpu init/state failed state=-5 reason=extended_state_import vcpu_fd=7 kvm_run=0x7f2d2506a000 req=1
+[Slave ErrorAck] vcpu init/state failed ret=14148 state=-5 reason=extended_state_import errno=0 req=1 dst=127.0.0.1:19200

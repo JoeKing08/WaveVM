@@ -1,0 +1,12 @@
+A4 official cell — run-202925-a4-official-login-shutdown-remotes
+Times: 20:29:12 (B) / 20:29:25 (A QEMU 20:29:34) – 20:31:38 CST Asia/Shanghai (2026-11-16)
+Path: historical harness ci_dual_node.sh WVM_A4_OFFICIAL=1 (NOT typed official entry)
+Mode B user+kvm, fractal NUMA, typed gate OFF
+ART: A /tmp/wavevm-test-results/dual-node-kvm-20261116-202925
+     B /tmp/wavevm-test-results/dual-node-kvm-20261116-202912
+
+Official scorer: VERDICT=PASS (login/SSH + remote_vcpu + remote_mem markers).
+Honest caveat: every remote slice of the post-login vCPU2 burn
+(rip=0x40181c cs=0x33) triple-faulted on B (exit=8). New AP-shutdown
+parking prevented a full VM reset (0 WVM-RESET, 0 KVM-SHUTDOWN).
+Do not treat this run as F10 CLOSED until remotes execute without SHUTDOWN.

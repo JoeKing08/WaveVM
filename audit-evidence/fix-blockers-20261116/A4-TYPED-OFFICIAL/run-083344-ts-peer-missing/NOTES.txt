@@ -1,0 +1,8 @@
+Official typed A4 run A12 (08:33:42 B / 08:33:44 A through 08:38:22 CST Asia/Shanghai).
+scripts/wavevm a4 only. QEMU b03c7eca (SIGEV_THREAD + kvm_run immediate_exit kick).
+After overnight reboot, 2404 Tailscale had been re-upped but 2604 was still
+Running with an empty peer map. Agent B started at 08:33:56 and exited at
+08:34:06: TLS control connect timed out to 100.116.196.65:17101.
+tailscale ping from A reported no matching peer. No CREATE_VM, no remoting.
+Operator-stopped 08:38:22. 2604 was then force-reauthed; bidirectional ping
+returned in 1-4ms. One official retry follows. Not a remoting result.

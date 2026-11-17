@@ -1,0 +1,5 @@
+evid=audit-evidence/fix-blockers-20261116/TYPED_ENTRY_CUTOVER/run-20261116-201337-same-host-smoke
+time_start=2026-11-16 20:13:37 CST
+host=joeking user=joeking
+smoke_rc=1
+time_end=2026-11-16 20:14:16 CST
