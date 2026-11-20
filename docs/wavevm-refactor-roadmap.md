@@ -1,562 +1,275 @@
-# WaveVM Refactor Roadmap
-
-Status: normative implementation and maintenance roadmap.
-Scope: dependency-ordered runtime capabilities, architectural constraints, and
-objective acceptance boundaries. This document records requirements, not code
-inventories, implementation progress, audit verdicts, or test results.
-
-Phases 0 through 9 form Minimum. Phases 10 through 13 form Extended. Every
-phase delivers executable behavior; writing specifications or producing an
-empty skeleton is not a feature phase. Targeted verification accompanies the
-capability it checks; the final matrix closes a delivery profile.
-
-## Document Maintenance
-
-These rules govern the architecture baseline, this roadmap, and all subsystem
-specifications under docs/specs/:
-
-- State required architecture, authority, interfaces, state transitions,
-  concurrency, resource costs, failure behavior, dependencies, and acceptance
-  conditions. Keep completion checkboxes, dated approvals, observed code gaps,
-  measurements, and audit findings in separate plan or verification records.
-- A source mapping identifies a required responsibility, not proof that a file
-  implements it. Observed dependency/state matrices remain outside the charter;
-  allowed dependencies and required ownership must be justified by the target.
-- Existing implementation does not define architectural validity. Follow
-  baseline Section 0.1 when resolving conflicts or revising a core decision.
-  Missing functionality or a historical compromise alone cannot weaken a rule.
-- Revise an owning definition and affected producers, consumers, and acceptance
-  conditions together. Reference cross-domain rules rather than copying them.
-  Boundary summaries index the full contracts; they do not redefine them.
-- State/capability names and conditional admission gates describe required
-  behavior, not present completion. Express each gate through the evidence it
-  requires, without an audit ID or dated pass/fail declaration.
-- Minimum/Extended are temporary scope and dependency boundaries for this
-  delivery roadmap, not permanent feature tiers or progress labels. The project
-  owner may revise feature scope explicitly; preserve the affected correctness
-  and isolation contracts. A completed capability does not change its normative
-  meaning. After the owner closes this roadmap and its phases are accepted,
-  remove the Minimum/Extended labels and boundary while retaining their
-  requirements as system contracts. Track completion separately; future
-  capabilities belong in a new roadmap, not in the retired delivery split.
-- Normative contract history is tracked in Git. Do not add version suffixes to
-  subsystem filenames, symbols, or APIs solely to preserve contract history;
-  wire-format version fields follow the wire ABI contract. No parallel protocol
-  implementation or compatibility path is required. There is no standing
-  requirement to support old configurations, independently launched
-  master/slave services, or mixed legacy deployments.
-
-## 1. Architecture and Delivery Goal
-
-Implement one distributed QEMU platform with canonical user-space semantics:
-
-- The cluster control plane owns membership, identities, capacity, placement,
-  admission, and overall VM lifecycle.
-- One node-runtime binary provides per-VM semantic coordination and local
-  executor management. Backend workers and helper QEMU processes obey its
-  explicit local executor contract; they are not cross-node endpoints.
-- Mode B implements the semantic baseline. Mode A adds optional per-VM kernel
-  acceleration without taking over control-plane or runtime authority.
-- KVM/TCG and flat/fractal paths satisfy the same operation-level meaning.
-- Resource pooling includes explicit accounting, multi-VM isolation, necessary
-  parallel execution, and bounded runtime resources.
-
-### 1.1 Delivery Profiles
-
-**Minimum** requires:
-
-- Manifest-bound creation, activation, startup, pause/stop, partial-start
-  cleanup, and restart reconciliation by one active coordinator.
-- Explicit VM identity/incarnation, QEMU host placement, remote CPU/memory
-  allocation, independent resource/name leases, and capability selection.
-- Flat and fractal routing with acknowledged immutable snapshots, consistent
-  identity rules, and unchanged semantic-operation keys across rerouting.
-- KVM guest login or SSH with evidence of remote vCPU and remote memory use.
-- Bounded real TCG execution with checked CPU/memory results, independent
-  vCPU ownership/progress, handoff/device/atomic ordering, errors, and cleanup.
-  See baseline Section 16 and vcpu-handoff Section 8.1. A contract pass is not
-  evidence of usable TCG guest OS execution.
-- Multiple Mode B VMs and multiple compute-node instances on one physical
-  host, including aggregate physical_host_id accounting and explicit endpoint,
-  port, socket, shared-memory, log, and temporary-file ownership.
-- Per-VM kernel contexts, with two-VM isolation and teardown evidence before
-  advertising multi-context Mode A.
-- Validated member/gateway join, compute cordon, safe drain, and gateway
-  replacement through an acknowledged successor route snapshot.
-- Required concurrency, priority, batching, and bounded backpressure for these
-  workloads; process survival and listening sockets are not success oracles.
-
-Minimum assumes one active coordinator and bounded single-scope operations.
-It requires durable activation decisions, restart replay or compensating
-cleanup, and fail-closed required-member loss. It does not require coordinator
-HA, transparent recovery of lost compute state, live migration/resharding, or
-aggregate multi-scope host transactions. Those exclusions cannot excuse stale
-activation, identity bypass, leaks, unsafe removal, or false RUNNING.
-
-**Extended** adds TCG guest boot/login/SSH and sustained distributed multi-vCPU
-usability; broader fault engines and failure matrices; recovery, HA, migration,
-and live reconfiguration; and hosted host-OS portability. These extend the same
-contracts. Full TCG guest usability must be distinguished from Minimum TCG
-contract support, including when AUTO chooses TCG before admission.
-
-Host portability first targets the same Linux host appliance under a declared
-hypervisor adapter on a non-Linux host or where native deployment is
-impractical. It is a host adapter, not a WaveVM guest. Native non-Linux
-user-space and kernel ports require separate contracts. Actual appliance
-probes determine KVM and Mode A availability independently; neither capability
-is inherited from the outer host. Phase 13 owns acceptance.
-
-## 2. Architectural Constraints
-
-- No second semantic authority in an executor, gateway, kernel cache, launch
-  script, environment variable, or user-authored route file.
-- No VM-specific global singleton or implicit one-node-instance-per-host rule.
-- No process layout, file boundary, or inherited data structure is itself a
-  target requirement. Independent master/slave production entry points and
-  legacy configuration readers must be removed rather than preserved solely
-  for compatibility.
-- No direct executor-to-executor or frontend-to-remote-executor production
-  path. Cross-node work uses both node runtimes and the sidecar/gateway fabric.
-- No membership admission from a heartbeat, learned route, or source endpoint.
-- No resource removal before allocation drain and acknowledged route retirement
-  or replacement. A sole required path cannot be removed successfully.
-- No global serialization, disabled queue, extra RPC, bulk copy, or blocking
-  forwarding solely to simplify implementation or create module boundaries.
-  Necessary synchronization has an explicit scope and cost.
-- No silent omission of asynchronous diffs, batching, multiqueue processing,
-  or required parallel execution. Meet baseline Section 0.6 through a correct
-  implementation or a justified replacement; naming an optimization is not
-  evidence that it exists or performs well.
-- No test-only production switch, fixed delay as a synchronization proof, or
-  success inferred from an alive process.
-
-## 3. Contract and Change Gate
-
-Before changing a public boundary, its owning specification must define the
-applicable responsibility, authority and scope, authorized writers/replicas,
-allowed implementation dependencies, public inputs/results, ordering and
-visibility, resource lifetime, concurrency, and failure semantics. It must
-identify producers/consumers and objective verification. Review adjacent
-contracts for cross-domain changes; local summaries alone are insufficient.
-
-Use the subsystem boundary summaries as an index, not another duplicated
-specification. Keep record encoding in canonical-record-schema, operation
-semantics in the owning subsystem, and cross-domain rules at the baseline's
-referenced owner. No universal adapter layer, capability wrapper, lifecycle
-hook API, or runtime contract-version registry is required.
-
-Verification is proportionate to the change. Use executable contract checks,
-public-header/include/symbol rules where enforceable, and targeted concurrency
-or failure checks where needed. Static tooling cannot prove all pointer
-ownership or temporal behavior. Historical co-change frequency is diagnostic,
-not a mandatory score. A full benchmark/fault matrix is not required for every
-patch. Hot-path changes require comparable workload/profile conditions and
-relevant throughput, latency, resource-cost, or scaling evidence; record results
-outside the charter. Keep diagnostics, runtime, and artifacts bounded.
-
-## 4. Phase 0: Implement Identity, Canonical Records, and IPC Foundations
-
-Implement:
-
-- VM/incarnation, node/member-instance, physical-host, local-runtime, vnode,
-  Pod/scope, route-generation, and semantic-operation identities with explicit
-  allocation, validation, retirement, and non-overlapping version domains.
-- Canonical record codecs, digest/self-digest handling, wire framing, typed
-  status/completion records, size limits, and bounded reassembly.
-- Authenticated control/local registration and operation-origin binding.
-  Reject unknown/incompatible formats, raw-ID substitution, invalid lengths,
-  and unauthorized roles before state mutation.
-- Local executor request/completion primitives with explicit buffer ownership,
-  callback context, cancellation, queue limits, and identity retention.
-
-Acceptance: executable round trips and negative cases verify canonical bytes,
-identity isolation, bounded decoding, and late/duplicate completion behavior.
-No old producer or reader is retained solely for coexistence. A fixture may
-supply canonical records but cannot bypass validation.
-
-Owning contracts: identity-routing, wire-ipc-abi, canonical-record-schema.
-
-## 5. Phase 1: Implement the Unified Per-VM Node Runtime
-
-Implement:
-
-- One node-runtime binary with per-VM coordination and local executor roles,
-  explicit instance identity, request correlation, worker queues, and lifecycle
-  ownership. Delete independent master/slave production launch paths.
-- Candidate/activation validation and local prepare/abort/query records.
-  Unadmitted or merely PREPARED instances cannot serve guest traffic.
-- The typed local executor ABI for workers and helper QEMU processes, including
-  manifest/route references, operation identity, status, and lifetime checks.
-- Bounded ingress/dispatch/completion queues, priority, backpressure, and
-  independent progress. A locally targeted response must reach the requesting
-  local channel rather than be mistaken for another runtime's RPC reply.
-
-Acceptance: real registered local requests complete through the runtime and
-executor contract; stale identity, role, manifest, and activation failures are
-typed rejections. Worker progress and stop do not depend on a global data-plane
-lock. Helper processes cannot acquire an independent network authority.
-
-Owning contracts: runtime-manifest-lifecycle, wire-ipc-abi, and operation specs.
-
-## 6. Phase 2: Implement Validated Membership and Route Services
-
-Implement:
-
-- Trusted compute/gateway registration, instance identity, physical_host_id,
-  role/capacity declarations, actual capability probes, and health evidence.
-  Probe KVM, TCG, memory/fault mechanics, and optional kernel capabilities
-  independently; resolve required versus preferred policy explicitly.
-- Validation and PENDING/VALIDATING/PREPARED/ACTIVE transitions with bounded
-  authenticated control transport. Reachability alone cannot activate a member.
-- Flat/fractal topology compilation, immutable route-snapshot
-  prepare/ack/publish/retire, exact snapshot digests and persisted survivor
-  RequiredAckSet, and VM route-scope create/retire services.
-- Independently budgeted member, vnode-domain, gateway-adjacency/route, and
-  per-VM admission storage. Size bounded storage for actual records, not the
-  maximum ID or a shared fixed global array. A 4096-slot domain budget is not
-  a global cluster limit and crossing 4096 alone does not require fractal.
-- Sidecar/gateway lookup against complete snapshots, preserving VM identity
-  through every hop; the fabric routes to the remote node runtime.
-
-Acceptance: invalid registrations never become schedulable/routable. Missing
-routes fail explicitly. Sparse high IDs, actual route lookup above 4096 under
-adequate budgets, and multi-Pod totals above a leaf budget are verified
-separately from identifier validity. Unsupported capacity is rejected, never
-truncated or advertised solely from a wider integer field. Rerouting preserves
-semantic-operation identity and never exposes a partial route table.
-
-Owning contracts: cluster-membership-topology-lifecycle, identity-routing,
-wire-ipc-abi, canonical-record-schema, capability-fault-engines.
-
-## 7. Phase 3: Implement Memory Consistency and Baseline Fault Paths
-
-Implement:
-
-- Manifest-selected directory authority and per-page bytes, version,
-  subscriber/copyset state, valid/stale predicates, and authorized writes.
-- Read/fault resolution, versioned dirty/diff commits, push/invalidation,
-  duplicate/reordered update handling, full resync, and exact ACK semantics.
-- The handoff fence, including all required dirty/subscriber visibility.
-  dirty-batch-size=1 is immediate submission, not automatic global coherence.
-- A correct restricted-host TCG fault/capture path and KVM dirty/resync path
-  when KVM is available. Signal handlers remain async-signal-safe. Neither
-  UFFD nor a kernel module is mandatory.
-- Per-page/shard concurrency, asynchronous capture/delivery, batching, QoS,
-  bounded pressure recovery, and safe buffer/mapping/subscriber lifetimes.
-
-Acceptance: real bytes/versions and successful fence results match the
-contract under representative independent-page concurrency, loss/retry, and
-version-gap cases. Queued submission is not a commit ACK. No dependent vCPU
-executes against unconfirmed memory, and same-host SHM requires actual shared
-backing rather than a local-map or hostname inference.
-
-Owning contracts: memory-consistency, capability-fault-engines, wire-ipc-abi.
-
-## 8. Phase 4: Implement QEMU, vCPU Backends, and Device Coordination
-
-Implement:
-
-- Shared QEMU machine/device/address-space integration with backend-specific
-  execution mechanics behind the typed local executor interface.
-- KVM context/interrupt/timer export/import, dirty/resync integration, and
-  guest-visible exits. Avoid host protection behavior that invalidates KVM RAM.
-- Real bounded TCG instructions, checked CPU-state transfer and memory access,
-  independent vCPU ownership/progress, and device/atomic exit handling.
-- Per-vCPU at-most-once handoff with memory fences, interrupt merging, typed
-  error/completion, result queries, and bounded uncertain-result handling.
-- QEMU-host device authority for MMIO/PIO/interrupts and block completion.
-  Remote block primitives, when selected, retain write ordering, flush/FUA,
-  idempotency, data-budget limits, and guest-visible errors. This does not
-  require distributed ownership of arbitrary devices or remote disks for
-  every VM.
-
-Acceptance: actual instructions and remote memory operations produce checked
-results; duplicate handoff cannot execute the interval twice. Device exits
-return to the authority, and writes/errors/flushes are not fabricated. KVM/TCG
-share semantic results while retaining backend-specific mechanics. Independent
-work must meet the selected profile's concurrency contract without global
-execution exclusion. Sustained TCG guest usability remains Phase 10.
-
-Owning contracts: vcpu-handoff, memory-consistency, storage-device-authority,
-wire-ipc-abi, capability-fault-engines.
-
-## 9. Phase 5: Implement Placement, Admission, and VM Lifecycle
-
-Implement:
-
-- A production CLI/API request entry that uses actual eligible membership,
-  inventory, capabilities, routes, and constraints. Implement deterministic
-  compact/spread scoring and stable tie-breakers.
-- Explicit QEMU host selection and overhead, resource quantities independent
-  of node/NUMA selection, physical-host aggregate accounting, exclusive
-  port/socket/name leases, and structured rejection without overcommit.
-- Backend-aware planning: AUTO tries a complete KVM placement, then a new
-  complete TCG placement with explicit fallback; REQUIRE_KVM never degrades.
-  A VM's vCPUs use one backend. Memory participants need their memory-service
-  capability and route, not necessarily KVM.
-- VM identity allocation before candidate digests/reservations, prepared route
-  scope, atomic prepared reservations, participant prepare, eligibility-fence
-  revalidation, one durable activation decision, commit, start, and readiness.
-- Idempotent production prepare/activate/abort/query wiring and persisted
-  participant ACKs. Prevent stale activation after cordon, health/capability,
-  gateway drain, or selected member-instance changes.
-- Pause/stop, partial-start compensation, route/subscriber/completion/context
-  retirement, named cleanup owners, safe reuse, and coordinator restart
-  reconciliation against the durable decision. Activated allocations cannot
-  expire as if they were uncommitted prepare leases.
-
-Acceptance: a multi-node SPREAD request traverses the production entry through
-actual participant ACKs to RUNNING with remote CPU/memory evidence. Submission
-node and QEMU host may differ. Four concurrent creates cannot double-allocate
-CPU, memory, names/ports, or overhead. Normal startup failures release exactly
-their own resources. Restart replays/cleans up one recorded decision; no
-listener, process, or test-owned planner substitutes for readiness.
-
-Quiesce/drain/finalize follows lifecycle Section 6.3. Timeouts do not establish
-cancellation or authorize reuse of a still-referenced resource. Comprehensive
-crash matrices and coordinator HA belong to Phase 12, not basic reconciliation.
-
-Owning contracts: resource-placement-admission, runtime-manifest-lifecycle,
-cluster-membership-topology-lifecycle, and canonical record/wire contracts.
-
-## 10. Phase 6: Complete Multi-VM and Same-Host Instance Isolation
-
-Implement:
-
-- First-class per-VM runtime state, manifest-derived endpoints, SHM and
-  mappings, route/request namespaces, logs, temporary paths, process ownership,
-  and reservation/lifecycle records across every participating component.
-- Multiple registered compute instances on one physical host with explicit
-  instance namespaces and aggregate CPU/memory/context/overhead limits.
-- VM-scoped drain and cleanup, process-failure attribution, worker/completion
-  references, and independent queue progress under shared infrastructure.
-
-Acceptance: two Mode B VMs and two same-host compute instances coexist with
-identical raw vnodes/guest ports where permitted. Stopping or failing one does
-not clear, truncate, unlink, quiesce, or consume another's state. Concurrent
-admission honors physical-host budgets and exclusive leases. No host-global
-port, process-kill pattern, or singleton identity stands in for ownership.
-
-Owning contracts: runtime-manifest-lifecycle, resource-placement-admission,
-identity-routing, memory-consistency, vcpu-handoff, wire-ipc-abi.
-
-## 11. Phase 7: Complete Dynamic Member and Gateway Lifecycle
-
-Implement:
-
-- Production join/rejoin, cordon, compute drain/removal, gateway replacement,
-  and planned versus unplanned failure outcomes through the control plane.
-- Eligibility-fence invalidation for unfinished admissions. Joining adds
-  capacity for future placement, never silently rewrites an admitted VM.
-- Refusal to remove active vCPU, memory/directory, storage, or required control
-  dependencies without an accepted transfer protocol.
-- Successor routes prepared and acknowledged by the persisted exact survivor
-  RequiredAckSet before gateway switch. The departing/failed gateway is
-  optional drain evidence, not a required ACK. Retain predecessor generations
-  for active operations and bounded result/query horizons.
-- Correlated physical-host health exclusion across hosted roles, and role-local
-  handling for independent process faults. Aggregate multi-scope host-removal
-  transactions remain Extended.
-
-Acceptance: busy compute drain and sole-gateway removal fail safely; a verified
-alternate gateway succeeds without black holes, partial snapshots, duplicate
-side effects, or changed VM identity. Required-member loss yields documented
-paused/degraded/failed behavior, never false health or implicit rebind. Removing
-one VM's dependency cannot erase another VM's live route scope or allocation.
-
-Owning contracts: cluster-membership-topology-lifecycle, identity-routing,
-runtime-manifest-lifecycle, resource-placement-admission, wire-ipc-abi.
-
-## 12. Phase 8: Implement Per-VM Kernel Acceleration
-
-Implement:
-
-- Explicit context create/attach, permission validation, per-VM identity,
-  mappings, route/config caches, page/dirty metadata, operation namespaces,
-  queues, and lifetime-safe TX/VMA/work references.
-- Only context-tagged shared infrastructure as module-wide state; user-space
-  authorities retain placement, routing, lifecycle, and consistency decisions.
-- Typed manifest-derived atomic configuration and completions. Remove legacy
-  field-by-field truth injection and module-global VM fallbacks.
-- Context-specific quiesce/drain/teardown and bounded shared-worker fairness.
-  Another context's execution must not wait on unrelated network/VM teardown.
-
-Acceptance: real /dev/wavevm contexts for two VMs preserve independent bytes,
-requests, routes, mappings, and completion/failure lifetimes. Stopping a VM or
-closing one FD does not clear another context. Query capabilities honestly;
-reject a second context until this evidence exists. Mode A has the same
-operation-level results as Mode B and a declared acceleration cost model.
-Unavailable module capability leaves valid Mode B plans usable.
-
-Owning contracts: kernel-accelerator and its referenced memory/vCPU/IPC,
-capability, manifest, and lifecycle definitions.
-
-## 13. Phase 9: Close Minimum Integration and Acceptance
-
-Complete production wiring across the preceding capabilities and generate
-bounded, manifest-driven acceptance runs for:
-
-- Flat/fractal KVM guest login or SSH with remote vCPU and memory evidence.
-- Flat/fractal bounded real TCG execution with checked CPU/memory results,
-  independent vCPU ownership/progress, device/atomic ordering, and cleanup.
-- Mode B multi-VM and same-host compute-instance isolation, admission races,
-  membership operations, lifecycle/restart reconciliation, and two-VM Mode A
-  contexts. Bounded contract workloads may establish isolation but cannot
-  replace the KVM guest cells.
-- Representative independent-work concurrency and bounded queue/resource use
-  for the selected profile. Record declared workloads and hardware conditions;
-  comprehensive tuning and scale characterization do not block Minimum.
-
-Every cell records manifest identity/digest, route snapshot, capability profile,
-actual resource arguments, remote CPU/memory activity, failure classification,
-bounded diagnostics, and cleanup. Success requires the contract's result,
-not a stub, open socket, live process, local-only execution, or hidden workaround.
-Every run has a fixed timeout and bounded artifacts; cleanup cannot delete an
-unrelated VM's processes, files, SHM, routes, or reservations.
-
-Failures are classified as capability, launch, routing, memory, CPU state,
-device, lifecycle, or guest acceptance and fixed in the owning production
-path. They are not converted into false RUNNING or relaxed success criteria.
-
-**Minimum boundary: after Phase 9.** TCG guest OS login/SSH, sustained TCG
-guest usability, complete fault-engine coverage, and operational hardening
-continue below. The boundary does not remove shared correctness obligations.
+# WaveVM 重构路线图
+
+状态：规范性实现与维护路线图。
+范围：按依赖顺序排列的运行时能力、架构约束与客观验收边界。本文档仅记录规范要求，不包含代码盘点、实现进度、审计结论或测试结果。
+
+Phase 0 至 Phase 9 构成 Minimum；Phase 10 至 Phase 13 构成 Extended。每个阶段均须交付可执行行为，撰写规范或搭建空骨架不构成特性阶段。针对性验证随对应能力同步交付，最终验证矩阵用于收口对应交付配置档（profile）。
+
+## 文档维护规则
+
+以下规则适用于架构基线、本路线图以及 `docs/specs/` 下的全部子系统规范：
+
+- 文档仅陈述必需的架构、权威、接口、状态转换、并发模型、资源开销、故障行为、依赖关系与验收条件；完成勾选、带日期审批、代码缺口、实测数据与审计结论归入独立的计划或验证记录。
+- 源码映射用于标明必需职责，而非证明某文件已实现该职责。已观测的依赖/状态矩阵保留在宪章之外；允许依赖与必需所有权须由目标架构论证。
+- 现有实现不决定架构合法性；解决冲突或修订核心决策时遵循基线第 0.1 节，功能缺失或历史妥协不得削弱规范规则。
+- 修改归属定义时须同步更新受影响的生产方、消费方与验收条件。跨领域规则通过引用复用而非复制；边界摘要仅索引完整契约，不重复定义契约。
+- 状态/能力名称与条件准入门禁描述的是必需行为而非当前完成度；各门禁须通过所需证据表达，不附带审计编号或带日期的通过/失败声明。
+- Minimum/Extended 是本交付路线图的临时范围与依赖边界，而非永久特性分层或进度标签。项目负责人可显式调整特性范围，但须保持受影响的正确性与隔离契约不变；能力完成后其规范语义不发生改变。待项目负责人关闭本路线图且各阶段验收通过后，移除 Minimum/Extended 标签及分界线，并将其要求保留为系统常态契约；完成状态另行追踪，后续新能力归入新路线图。
+- 规范契约历史由 Git 追踪。不得仅为保留历史版本而给子系统文件名、符号或 API 添加版本后缀；线协议版本字段遵循线协议 ABI 契约。无需维护并行协议实现或兼容路径，亦无长期兼容旧配置、独立启动 master/slave 服务或混合旧版部署的义务。
+
+## 1. 架构与交付目标
+
+构建一套具备规范用户态语义的分布式 QEMU 平台：
+
+- 集群控制面拥有成员管理、标识、容量、放置、准入与全局 VM 生命周期权威。
+- 单一节点运行时二进制提供单 VM 语义协调与本地执行器管理；后端 worker 与辅助 QEMU 进程遵守其显式本地执行器契约，不作为跨节点端点。
+- Mode B 实现语义基线；Mode A 叠加可选的单 VM 内核加速，不接管控制面或运行时权威。
+- KVM/TCG 与 Flat/Fractal 路径满足相同的操作级语义。
+- 资源池化具备显式容量核算、多 VM 隔离、必需并行执行以及有界运行时资源。
+
+### 1.1 交付配置档
+
+**Minimum** 要求：
+
+- 由单一活跃协调器完成受清单绑定的创建、激活、启动、暂停/停止、部分启动清理以及重启对账。
+- 显式 VM 标识/实例代次、QEMU 宿主机放置、远端 CPU/内存分配、独立资源/名称租约以及能力选择。
+- 支持 Flat 与 Fractal 路由，具备已确认的不可变快照、一致的标识规则，且重路由过程中语义操作键保持不变。
+- KVM 客户机可达登录或 SSH，并具备远端 vCPU 与远端内存实际使用的证据。
+- 有界真实 TCG 执行，验证 CPU/内存结果、独立 vCPU 所有权/推进、交接/设备/原子序、错误处理与清理（见基线第 16 节与 `vcpu-handoff.md` 第 8.1 节）；契约测试通过不等同于 TCG 客户机 OS 可用。
+- 单台物理宿主机支持多台 Mode B VM 与多个计算节点实例共存，包含聚合 `physical_host_id` 核算以及显式端点、端口、套接字、共享内存、日志与临时文件所有权。
+- 单 VM 内核上下文，须在具备双 VM 隔离与销毁证据后方可对外宣告多上下文 Mode A。
+- 经校验的成员/Gateway 加入、计算节点隔离（cordon）、安全排空以及通过已确认后继路由快照完成 Gateway 替换。
+- 满足上述负载所需的并发度、优先级、批处理与有界背压；进程存活或监听套接字不构成成功判据。
+
+Minimum 假设单一活跃协调器与有界单作用域操作，要求持久化激活决策、重启重放或补偿清理，以及必需成员丢失时闭环失败（fail-closed）；不要求协调器高可用、丢失计算状态的透明恢复、在线迁移/重分片或聚合多作用域宿主机事务。上述范围排除不放宽对过期激活、标识绕过、资源泄漏、不安全移除或虚假 `RUNNING` 的禁止。
+
+**Extended** 扩展：TCG 客户机启动/登录/SSH 与持续分布式多 vCPU 可用性；更完备的缺页引擎与故障矩阵覆盖；恢复、高可用、迁移与在线重配置；以及托管宿主机 OS 移植性。所有扩展均延续既有契约。须明确区分完整 TCG 客户机可用性与 Minimum TCG 契约支持（包括 `AUTO` 在准入前选择 TCG 的情况）。
+
+宿主机移植性优先面向非 Linux 宿主机或不便原生部署的环境，通过声明的 hypervisor 适配器运行同一 Linux 宿主机设备镜像（appliance）。该镜像是宿主机适配器，而非 WaveVM 客户机；原生非 Linux 用户态与内核移植须由独立契约定义。KVM 与 Mode A 可用性由设备镜像内的实际探测独立决定，绝不假设继承外层宿主机能力。验收归属 Phase 13。
+
+## 2. 架构约束
+
+- 执行器、Gateway、内核缓存、启动脚本、环境变量或用户手写路由文件均不得成为第二语义权威。
+- 禁止 VM 专属全局单例或隐式“单宿主机单节点实例”假设。
+- 历史进程布局、文件边界或遗留数据结构不构成目标要求；独立 master/slave 生产入口与旧版配置读取器应予移除，不仅为兼容而保留。
+- 禁止执行器直连执行器或前端直连远端执行器的生产路径；跨节点操作须经过两端节点运行时及 Sidecar/Gateway 路由织网。
+- 禁止基于心跳、学习路由或源端点进行成员准入。
+- 分配排空及路由确认回收/替换完成前禁止移除资源；唯一必需路径不得成功移除。
+- 禁止仅为简化实现或构造模块边界而引入全局串行化、禁用队列、额外 RPC、大块拷贝或阻塞转发；必要同步须具备明确作用域与开销模型。
+- 禁止静默省去异步 diff、批处理、多队列处理或必需的并行执行；须通过正确实现或有据替换满足基线第 0.6 节要求。
+- 禁止引入仅服务测试的生产开关、以固定延时替代同步证明，或以进程存活推断成功。
+
+## 3. 契约与变更门禁
+
+变更公开边界前，归属规范须明确适用的职责、权威与作用域、授权写入者/副本、允许的实现依赖、公开输入/输出、排序与可见性、资源生命周期、并发模型与故障语义，同时指明生产方/消费方及客观验证方式。跨领域变更须同步评审相邻契约，不得仅依赖局部摘要。
+
+子系统边界摘要作为索引使用，不重复定义契约。记录编码归属 `canonical-record-schema`，操作语义归属对应子系统，跨领域规则归属基线指定的单一权威。不强制引入通用适配层、capability 包装层、统一生命周期钩子 API 或运行时契约版本注册表。
+
+验证规模与变更风险相匹配：采用可执行契约测试、可落地的公开头文件/包含/符号检查，以及必要的并发或故障测试。静态工具无法证明全部指针所有权与时序行为，历史共变频率仅作诊断参考。无需每次提交都运行全量基准/故障矩阵；热路径变更须在可比负载与配置条件下提供吞吐量、延迟、资源开销或扩展性证据，并将结果记录于宪章之外。诊断输出、运行时间与产物须保持有界。
+
+## 4. Phase 0：实现标识、规范记录与 IPC 基础
+
+实现内容：
+
+- VM/实例代次、节点/成员实例、物理宿主机、本地运行时、vnode、Pod/作用域、路由代次与语义操作标识，具备显式分配、校验、回收及互不重叠的版本域。
+- 规范记录编解码器、摘要/自摘要处理、线协议成帧、强类型状态/完成记录、尺寸上限与有界重组。
+- 经认证的控制面/本地注册与操作来源绑定；在状态变更前拒绝未知/不兼容格式、裸 ID 替换、非法长度及未授权角色。
+- 本地执行器请求/完成原语，明确缓冲区所有权、回调上下文、取消、队列上限与标识保持。
+
+验收标准：可执行往返测试与负向用例验证规范字节序、标识隔离、有界解码以及延迟/重复完成行为。不仅为共存而保留旧生产方或读取器；测试夹具可提供规范记录，但不得绕过校验。
+
+归属契约：`identity-routing`、`wire-ipc-abi`、`canonical-record-schema`。
+
+## 5. Phase 1：实现统一单 VM 节点运行时
+
+实现内容：
+
+- 单一节点运行时二进制，承载单 VM 协调与本地执行器角色，具备显式实例标识、请求关联、worker 队列与生命周期所有权；删除独立的 master/slave 生产启动路径。
+- 候选/激活校验以及本地 prepare/abort/query 记录；未准入或仅处于 `PREPARED` 状态的实例不得服务客户机流量。
+- 面向 worker 与辅助 QEMU 进程的强类型本地执行器 ABI，包含清单/路由引用、操作标识、状态与生命周期校验。
+- 有界的入站/分发/完成队列、优先级、背压与独立推进；本地定向响应须投递至发起请求的本地通道，避免与其他运行时的 RPC 应答混淆。
+
+验收标准：真实注册的本地请求经节点运行时与执行器契约完整闭环；过期标识、角色、清单与激活失败均返回强类型拒绝。worker 推进与停止不依赖全局数据面锁；辅助进程无法获得独立网络权威。
+
+归属契约：`runtime-manifest-lifecycle`、`wire-ipc-abi` 及相关操作规范。
+
+## 6. Phase 2：实现经校验的成员与路由服务
+
+实现内容：
+
+- 可信计算节点/Gateway 注册、实例标识、`physical_host_id`、角色/容量声明、实际能力探测与健康证据；独立探测 KVM、TCG、内存/缺页机制与可选内核能力，并显式解析必需与偏好策略。
+- 基于有界认证控制传输的校验及 `PENDING`/`VALIDATING`/`PREPARED`/`ACTIVE` 状态转换；仅凭可达性不得激活成员。
+- Flat/Fractal 拓扑编译、不可变路由快照 prepare/ack/publish/retire、精确快照摘要与持久化存活者 `RequiredAckSet`，以及 VM 路由作用域创建/回收服务。
+- 独立预算的成员、vnode 域、Gateway 邻接/路由及单 VM 准入存储；有界存储按实际记录数分配，不按最大 ID 或共享固定全局数组分配。4096 槽位域预算不构成全集群上限，跨越 4096 本身不强制 Fractal。
+- Sidecar/Gateway 基于完整快照查表，每一跳均保持完整 VM 标识，路由织网将报文投递至远端节点运行时。
+
+验收标准：非法注册绝不进入可调度/可路由状态；缺失路由显式失败。稀疏高 ID、充足预算下超过 4096 的真实路由查找以及跨多 Pod 总量超过单叶子预算的场景须与标识符有效性分别验证。超出容量的请求显式拒绝，绝不截断或仅因整型位宽扩大就对外宣告支持。重路由保持语义操作标识不变，且绝不暴露部分更新的路由表。
+
+归属契约：`cluster-membership-topology-lifecycle`、`identity-routing`、`wire-ipc-abi`、`canonical-record-schema`、`capability-fault-engines`。
+
+## 7. Phase 3：实现内存一致性与基线缺页路径
+
+实现内容：
+
+- 清单选定的目录权威以及单页字节数据、版本号、订阅者/副本集状态、valid/stale 谓词与授权写入。
+- 读/缺页解析、带版本脏页/diff 提交、推送/失效、重复/乱序更新处理、全量重同步以及精确 ACK 语义。
+- 交接栅栏（handoff fence），覆盖全部必需的脏页与订阅者可见性；`dirty-batch-size=1` 仅表示立即提交，不自动提供全局一致性。
+- 正确的受限宿主机 TCG 缺页/捕获路径以及 KVM 可用时的 KVM 脏页/重同步路径；信号处理函数保持异步信号安全（async-signal-safe）；UFFD 与内核模块均非强制依赖。
+- 单页/分片级并发、异步捕获/投递、批处理、QoS、有界背压恢复以及安全的缓冲区/映射/订阅者生命周期。
+
+验收标准：在代表性独立页并发、丢包/重试与版本缺口场景下，真实字节/版本及栅栏结果均符合契约。入队提交不等同于提交 ACK；任何依赖方 vCPU 不得基于未确认内存继续执行；同宿主机 SHM 须具备真实共享后备证明，不得凭本地映射或主机名推断。
+
+归属契约：`memory-consistency`、`capability-fault-engines`、`wire-ipc-abi`。
+
+## 8. Phase 4：实现 QEMU、vCPU 后端与设备协调
+
+实现内容：
+
+- 共享 QEMU machine/device/address-space 集成，将后端专属执行机制封装在强类型本地执行器接口之后。
+- KVM 上下文/中断/定时器导出与导入、脏页/重同步集成及客户机可见退出；避免导致 KVM RAM 失效的宿主机页保护行为。
+- 真实有界 TCG 指令执行、经校验的 CPU 状态传输与内存访问、独立 vCPU 所有权/推进以及设备/原子退出处理。
+- 带内存栅栏的单 vCPU 至多一次（at-most-once）交接、中断合并、强类型错误/完成、结果查询与有界不确定结果处理。
+- QEMU 宿主机设备权威负责 MMIO/PIO/中断及块设备完成；选用远端块原语时，须保证写序、flush/FUA、幂等性、数据预算上限与客户机可见错误，不要求任意设备的分布式所有权或所有 VM 使用远端磁盘。
+
+验收标准：真实指令与远端内存操作产出经校验的结果；重复交接不得导致同一区间执行两次。设备退出回到设备权威，写入、错误与 flush 均真实执行不伪造。KVM 与 TCG 产出一致语义结果，同时保留各自底层机制。独立工作须在不引入全局执行互斥的前提下满足所选配置的并发契约；持续 TCG 客户机可用性保留在 Phase 10。
+
+归属契约：`vcpu-handoff`、`memory-consistency`、`storage-device-authority`、`wire-ipc-abi`、`capability-fault-engines`。
+
+## 9. Phase 5：实现放置、准入与 VM 生命周期
+
+实现内容：
+
+- 生产 CLI/API 请求入口，基于实际合格成员、资源清单、能力、路由与约束执行规划；实现确定性的 compact/spread 评分及稳定决胜规则（tie-breaker）。
+- 显式 QEMU 宿主机选择与开销、独立于节点/NUMA 选择的资源数量声明、物理宿主机聚合核算、独占端口/套接字/名称租约，以及无超卖的结构化拒绝。
+- 后端感知规划：`AUTO` 先尝试完整 KVM 放置，失败后新建完整 TCG 放置并显式记录回退；`REQUIRE_KVM` 绝不降级。单台 VM 的 vCPU 使用单一后端；内存参与节点仅需有效内存服务能力与路由，不强制具备 KVM。
+- 在候选摘要/预留前完成 VM 标识分配，依次执行准备路由作用域、原子准备预留、参与方 prepare、资格栅栏复验、单次持久化激活决策、提交、启动与就绪确认。
+- 幂等的生产 prepare/activate/abort/query 联调与持久化参与方 ACK；在隔离（cordon）、健康/能力、Gateway 排空或选中成员实例变化后阻止过期激活。
+- 暂停/停止、部分启动补偿、路由/订阅者/完成记录/上下文回收、显式清理责任方、安全复用，以及协调器重启后基于持久化决策的对账；已激活分配不会像未提交 prepare 租约那样过期。
+
+验收标准：多节点 SPREAD 请求经生产入口与真实参与方 ACK 进入 `RUNNING`，并给出远端 CPU/内存使用证据；提交节点与 QEMU 宿主机可分离。4 路并发创建不会导致 CPU、内存、名称/端口或开销双重分配；常规启动失败精确释放自身资源；重启按单一持久化决策重放或清理，不以监听套接字、进程存活或测试规划器替代就绪确认。
+
+静默/排空/终结遵循 `runtime-manifest-lifecycle.md` 第 6.3 节。超时既不证明取消完成，也不授权复用仍有引用的资源。完备崩溃矩阵与协调器高可用归属 Phase 12，基础重启对账归属本阶段。
+
+归属契约：`resource-placement-admission`、`runtime-manifest-lifecycle`、`cluster-membership-topology-lifecycle` 及规范记录/线协议契约。
+
+## 10. Phase 6：完成多 VM 与同宿主机实例隔离
+
+实现内容：
+
+- 在所有参与组件中落位一等单 VM 运行时状态、清单派生端点、SHM 与映射、路由/请求命名空间、日志、临时路径、进程所有权以及预留/生命周期记录。
+- 单台物理宿主机支持多个已注册计算节点实例，具备显式实例命名空间以及聚合 CPU/内存/上下文/开销上限。
+- VM 作用域排空与清理、进程故障归因、worker/完成引用计数，以及共享基础设施下的独立队列推进。
+
+验收标准：两台 Mode B VM 与两个同宿主机计算节点实例共存，在允许范围内可使用相同裸 vnode/客户机端口；停止或故障其中之一不会清除、截断、unlink、静默或消费另一实例的状态。并发准入遵守物理宿主机预算与独占租约，不使用宿主机全局端口、模糊进程查杀或单例标识替代所有权。
+
+归属契约：`runtime-manifest-lifecycle`、`resource-placement-admission`、`identity-routing`、`memory-consistency`、`vcpu-handoff`、`wire-ipc-abi`。
+
+## 11. Phase 7：完成动态成员与 Gateway 生命周期
+
+实现内容：
+
+- 通过控制面完成生产级加入/重新加入、隔离（cordon）、计算节点排空/移除、Gateway 替换，以及计划内与计划外故障处置。
+- 资格栅栏对未完成准入即时生效；新加入成员为后续放置提供容量，绝不静默改写已准入 VM。
+- 在无已接受转移协议的情况下，拒绝移除仍承载活跃 vCPU、内存/目录、存储或必需控制依赖的成员。
+- Gateway 切换前由持久化的精确存活者 `RequiredAckSet` 完成准备与确认；离开或故障的 Gateway 仅作可选排空证据，不作为必需 ACK。为活跃操作及有界结果/查询窗口保留前代路由代次。
+- 跨承载角色的关联物理宿主机健康剔除，以及独立进程故障的角色级隔离处置；聚合多作用域宿主机移除事务留待 Extended。
+
+验收标准：繁忙计算节点排空与唯一 Gateway 移除安全失败；经验证的替代 Gateway 切换无路由黑洞、无部分快照、无重复副作用且不改变 VM 标识。必需成员丢失产生文档规定的暂停/降级/失败行为，绝不虚报健康或隐式重绑定。移除某台 VM 的依赖不会抹除另一台 VM 的活跃路由作用域或分配。
+
+归属契约：`cluster-membership-topology-lifecycle`、`identity-routing`、`runtime-manifest-lifecycle`、`resource-placement-admission`、`wire-ipc-abi`。
+
+## 12. Phase 8：实现单 VM 内核加速
+
+实现内容：
+
+- 显式上下文 create/attach、权限校验、单 VM 标识、映射、路由/配置缓存、页/脏页元数据、操作命名空间、队列以及生命周期安全的 TX/VMA/work 引用。
+- 模块全局状态仅限携带上下文标签的共享基础设施；放置、路由、生命周期与一致性决策仍归属用户态权威。
+- 基于清单的强类型原子配置与完成机制；移除旧版逐字段注入真值及模块全局 VM 回退逻辑。
+- 上下文级静默/排空/销毁以及有界的共享 worker 公平性；一个上下文的执行不得被无关网络/VM 销毁阻塞。
+
+验收标准：两台 VM 的真实 `/dev/wavevm` 上下文保持独立的字节、请求、路由、映射及完成/失败生命周期；停止一台 VM 或关闭单个 FD 不会影响另一上下文。能力查询如实上报，在取得上述证据前拒绝第二个上下文。Mode A 与 Mode B 保持一致的操作级语义并具备声明的加速开销模型；模块能力不可用时有效 Mode B 方案仍可正常运行。
+
+归属契约：`kernel-accelerator` 及其引用的内存/vCPU/IPC、能力、清单与生命周期定义。
+
+## 13. Phase 9：收口 Minimum 集成与验收
+
+完成前述能力的生产级全链路集成，并产出有界、清单驱动的验收测试矩阵，覆盖：
+
+- Flat/Fractal KVM 客户机登录或 SSH，附带远端 vCPU 与远端内存使用证据。
+- Flat/Fractal 有界真实 TCG 执行，验证 CPU/内存结果、独立 vCPU 所有权/推进、设备/原子序与清理。
+- Mode B 多 VM 与同宿主机计算节点实例隔离、并发准入竞态、成员生命周期操作、生命周期/重启对账，以及双 VM Mode A 上下文（有界契约负载可验证隔离，但不能替代 KVM 客户机验收项）。
+- 所选配置下代表性的独立工作并发度与有界队列/资源使用；记录声明的负载与硬件条件（全面调优与规模画像不阻塞 Minimum）。
+
+每项验收均须记录清单标识/摘要、路由快照、能力配置、实际资源参数、远端 CPU/内存活动、故障分类、有界诊断信息与清理结果。成功以契约结果为唯一依据，禁止桩实现、监听套接字、进程存活、纯本地执行或隐藏变通方案冒充。每次运行须具备固定超时与有界产物，清理不得波及无关 VM 的进程、文件、SHM、路由或预留。
+
+所有失败须归类为能力、启动、路由、内存、CPU 状态、设备、生命周期或客户机验收问题，并在归属生产路径中修复，不得转为虚假 `RUNNING` 或放宽验收标准。
+
+**Minimum 边界：Phase 9 之后。** TCG 客户机 OS 登录/SSH、持续 TCG 客户机可用性、完整缺页引擎覆盖与运维韧性强化在以下阶段继续推进，且不削弱任何共享正确性义务。
 
 ---
 
-## 14. Phase 10: Extended TCG Guest Usability
+## 14. Phase 10：Extended TCG 客户机可用性
 
-Implement flat/fractal TCG guest boot/login/SSH and sustained distributed
-multi-vCPU execution under the shared memory, device, identity, and lifecycle
-contracts. Concurrent remote progress must be the normal path rather than a
-token trickle under force_local. Verify per-vCPU fallback bounds, ordering,
-cooldown, device bounce, and STOP according to vcpu-handoff Section 8.1.
+在共享内存、设备、标识与生命周期契约下，实现 Flat/Fractal TCG 客户机启动/登录/SSH 与持续分布式多 vCPU 执行。并发远端推进须成为正常执行路径，而非在 `force_local` 下的象征性推进。按 `vcpu-handoff.md` 第 8.1 节验证单 vCPU 回退上限、顺序、冷却、设备回弹与 STOP。
 
-Acceptance: guest-visible results, remote CPU/memory evidence, concurrency,
-bounded fallback, and cleanup satisfy the separate Extended guest gate. A
-Minimum instruction contract pass is insufficient. Full native/helper MTTCG
-performance work may improve this path, but cannot weaken its semantic or
-sustained-progress requirements.
+验收标准：客户机可见结果、远端 CPU/内存证据、并发度、有界回退与清理均满足独立的 Extended 客户机门禁（Minimum 指令级契约通过不足以替代）。完整的原生/辅助 MTTCG 性能优化可进一步加速该路径，但不得削弱语义或持续推进要求。
 
-## 15. Phase 11: Extended Fault Engines and Performance Coverage
+## 15. Phase 11：Extended 缺页引擎与性能覆盖
 
-Implement broader fault_engine_ops coverage for SIGSEGV/mprotect, UFFD, KVM
-logging, and kernel dirty capture on supported hosts. Preserve page versions,
-engine state, async-signal-safety, and explicit selection. Live engine switching
-requires a state-transfer contract, not a timeout-triggered fallback.
+在受支持宿主机上实现更广泛的 `fault_engine_ops` 覆盖，包括 SIGSEGV/`mprotect`、UFFD、KVM 脏页日志与内核脏页捕获，保持页版本、引擎状态、异步信号安全与显式选择语义。在线切换缺页引擎须遵循状态转移契约，不得以超时触发隐式回退。
 
-Extend verification to mixed accelerator/no-accelerator clusters, cross-engine
-equivalence, deterministic loss/duplication/reordering/delay, route replacement,
-and QEMU/runtime/executor/gateway faults. Include duplicate handoff, dirty gaps,
-block errors, VM-ID reuse, and broader same-host isolation. Baseline ordering
-and error correctness remain Minimum; this phase expands the coverage matrix.
+将验证扩展至混部加速/无加速集群、跨引擎等价性、确定性丢包/重复/乱序/延迟、路由替换，以及 QEMU/运行时/执行器/Gateway 故障，涵盖重复交接、脏页缺口、块错误、VM-ID 复用与更广同宿主机隔离场景（基础排序与错误正确性仍为 Minimum 义务，本阶段扩展覆盖矩阵）。
 
-Characterize throughput, tail latency, copies/round trips, CPU/memory cost,
-fairness, and scaling under declared topology and hardware conditions. Optimize
-queues, diffs, batching, placement locality, and backend execution based on
-those results, including broader MTTCG work where appropriate. Acceptance must
-not depend on a topology-independent performance promise or a mandatory
-transport chosen solely by name. Evidence remains in separate records.
+在声明的拓扑与硬件条件下刻画吞吐量、尾延迟、拷贝/往返次数、CPU/内存开销、公平性与扩展性，并据此优化队列、diff、批处理、放置局部性与后端执行（包括适用的 MTTCG 工作）。验收不依赖脱离拓扑的绝对性能承诺或仅凭名称选定的传输机制；实测证据归入独立记录。
 
-## 16. Phase 12: Extended Recovery and Live Reconfiguration
+## 16. Phase 12：Extended 恢复与在线重配置
 
-Implement coordinator HA/failover, complete crash-boundary matrices,
-transparent recovery, verified replacement and RECOVERY_REBIND, live migration,
-automatic replanning/resharding, and active-VM topology/resource changes only
-under explicit identity, old-instance fencing, state-transfer, and rollback
-contracts. Cross-backend execution handoff and live fault-engine changes also
-require their own transfer contracts; implicit conversions are prohibited.
+仅在具备显式标识、旧实例栅栏、状态转移与回滚契约的前提下，实现协调器高可用/故障切换、完备崩溃边界矩阵、透明恢复、经校验替换与 `RECOVERY_REBIND`、在线迁移、自动重规划/重分片以及活跃 VM 的拓扑/资源变更。跨后端执行交接与在线缺页引擎切换同样须具备独立转移契约，禁止隐式转换。
 
-Add aggregate multi-scope host-role transactions and broader failure-domain
-handling. Persisted decisions, resource release, route replacement/retirement,
-page versions, vCPU sequences, and device ordering remain consistent across
-recovery. Acceptance converges to one committed VM or confirmed cleanup with no
-orphaned resources or false RUNNING. Basic restart reconciliation and rejection
-of stale admission candidates remain Minimum obligations.
+补充聚合多作用域宿主机角色事务与更广泛的故障域处理。持久化决策、资源释放、路由替换/回收、页版本、vCPU 序列与设备序在恢复全过程中保持一致。验收须收敛至单一已提交 VM 或已确认清理，无孤立资源或虚假 `RUNNING`（基础重启对账与拒绝过期准入候选仍为 Minimum 义务）。
 
-## 17. Phase 13: Extended Hosted Host-OS Portability
+## 17. Phase 13：Extended 托管宿主机 OS 移植性
 
-Implement a declared hypervisor adapter that runs the same Linux host appliance
-on a non-Linux host or where native deployment is impractical. Before changing
-this boundary, its adapter contract must define trusted physical_host_id and
-correlated-failure mapping, networking, capabilities, overhead, and lifecycle.
-An endpoint, hostname, or appliance-local observation cannot establish that
-mapping. Without trusted mapping, do not claim cross-appliance aggregate
-capacity or correlated-host coverage.
+实现声明的 hypervisor 适配器，在非 Linux 宿主机或不便原生部署的环境上运行同一 Linux 宿主机设备镜像（appliance）。变更该边界前，适配器契约须定义可信 `physical_host_id` 与关联故障映射、网络、能力、开销与生命周期。端点、主机名或镜像本地观测无法建立该映射；缺少可信映射时，不得宣告跨镜像聚合容量或关联宿主机覆盖。
 
-Acceptance criteria:
+验收标准：
 
-1. On at least one non-Linux host, the adapter starts a Linux host appliance
-   carrying control plane, node runtime, gateway/sidecar, and executor; it is
-   not a substitute WaveVM guest.
-2. Without nested KVM, only TCG execution plans are admitted. Without usable
-   wavevm.ko, Mode A is disabled and Mode B selected, while KVM Mode B remains
-   valid when its independent probe passes. The appliance completes the same
-   manifest-bound control path and guest smoke; unsupported capabilities fail
-   or record explicit policy-allowed pre-admission fallback. TCG guest smoke
-   here requires Phase 10 acceptance, not just the Minimum instruction gate.
-3. KVM and Mode A are advertised only after their respective in-appliance
-   probes and context/teardown checks pass. Mode A context requirements do not
-   apply to KVM Mode B, and outer-host capabilities are never assumed inherited.
-4. Flat/fractal routing, membership, generations, accounting, stop/cleanup,
-   identity/incarnation, and lifecycle match native Linux semantics. NAT and
-   bridging must preserve reachable manifest endpoints, leases, and mTLS
-   identity bindings.
-5. Evidence records hypervisor, appliance image/profile, probes, actual
-   resource parameters, and typed failures without hidden workarounds. Account
-   for outer CPU/memory/hypervisor overhead. Trusted physical_host_id mapping
-   prevents appliances on one machine from double-counting capacity or being
-   mistaken for independent failure domains.
-6. Adapter/capability failure cannot produce false RUNNING. Diagnostics and
-   cleanup remain bounded and identity-scoped.
+1. 在至少一种非 Linux 宿主机上，适配器启动承载控制面、节点运行时、Gateway/Sidecar 与执行器的 Linux 宿主机设备镜像（该镜像非替代 WaveVM 客户机）。
+2. 无嵌套 KVM 时仅准入 TCG 执行方案；无可用 `wavevm.ko` 时禁用 Mode A 并选用 Mode B，而 KVM Mode B 在自身独立探测通过时仍保持有效。镜像完成相同的清单绑定控制路径与客户机冒烟测试；不支持的能力显式失败或记录策略允许的准入前显式回退（此处 TCG 客户机冒烟须满足 Phase 10 验收，而不仅是 Minimum 指令门禁）。
+3. KVM 与 Mode A 仅在对应镜像内探测及上下文/销毁检查通过后对外宣告；Mode A 上下文约束不适用于 KVM Mode B，且绝不假设继承外层宿主机能力。
+4. Flat/Fractal 路由、成员管理、代次、核算、停止/清理、标识/实例代次与生命周期与原生 Linux 语义完全一致；NAT 与桥接须保持可达的清单端点、租约与 mTLS 标识绑定。
+5. 证据记录 hypervisor、镜像/配置档、探测结果、实际资源参数及强类型失败，无隐藏变通方案；计入外层 CPU/内存/hypervisor 开销；可信 `physical_host_id` 映射防止同机多镜像重复计容或被误判为独立故障域。
+6. 适配器或能力失败不得产生虚假 `RUNNING`；诊断与清理保持有界且按标识隔离。
 
-Native non-Linux user-space and native Mode A/kernel ports are separate
-Extended capabilities, not implied by hosted portability. Their contracts must
-map the same semantic authorities, local execution/IPC lifetimes, capability
-reporting, identity, and acceptance behavior to the target OS; unsupported
-mechanics fail explicitly rather than changing the VM contract.
+原生非 Linux 用户态与原生 Mode A/内核移植属于独立的 Extended 能力，不由托管移植性隐含提供。其契约须将相同的语义权威、本地执行/IPC 生命周期、能力上报、标识与验收行为映射至目标 OS，不支持的机制须显式失败而非改变 VM 契约。
 
-**Extended boundary: after Phase 13 and the explicitly selected native-port
-contracts.** These labels organize delivery scope, not implementation status.
+**Extended 边界：Phase 13 及显式选定的原生移植契约之后。** 上述标签仅用于组织交付范围，不代表实现状态。
 
 ---
 
-## Implementation Order
+## 实现顺序
 
-Use the following dependency order when implementing from zero or restructuring
-an affected path. Each phase requires its relevant public contracts and working
-prerequisite capabilities; inventories and empty placeholders cannot satisfy it.
+从零实现或重构受影响路径时遵循以下依赖顺序。每一阶段均须具备对应公开契约与可运行的前置能力，代码盘点与空占位不构成阶段完成。
 
-| Phase | Executable capability |
+| 阶段 | 可执行能力 |
 | --- | --- |
-| 0 | Identity, canonical records, wire/local IPC foundations. |
-| 1 | Unified per-VM node runtime and typed local executor management. |
-| 2 | Validated membership, capability probes, route compilation and fabric. |
-| 3 | Memory consistency and baseline restricted-host/KVM fault paths. |
-| 4 | QEMU integration, KVM/TCG execution, vCPU and device coordination. |
-| 5 | Production placement, admission, activation, readiness and lifecycle. |
-| 6 | Integrated multi-VM and same-host compute-instance isolation. |
-| 7 | Dynamic members, cordon/drain and gateway replacement. |
-| 8 | Real per-VM kernel acceleration and context isolation. |
-| 9 | Complete Minimum production integration and acceptance matrix. |
-| 10 | Extended TCG guest usability. |
-| 11 | Extended fault engines, coverage and performance/scaling work. |
-| 12 | Extended recovery, HA, migration and live reconfiguration. |
-| 13 | Extended hosted portability and separately specified native ports. |
+| 0 | 标识、规范记录、线协议与本地 IPC 基础。 |
+| 1 | 统一单 VM 节点运行时与强类型本地执行器管理。 |
+| 2 | 经校验的成员管理、能力探测、路由编译与路由织网。 |
+| 3 | 内存一致性与基线受限宿主机/KVM 缺页路径。 |
+| 4 | QEMU 集成、KVM/TCG 执行、vCPU 与设备协调。 |
+| 5 | 生产级放置、准入、激活、就绪与生命周期管理。 |
+| 6 | 集成化多 VM 与同宿主机计算节点实例隔离。 |
+| 7 | 动态成员管理、隔离（cordon）/排空与 Gateway 替换。 |
+| 8 | 真实单 VM 内核加速与上下文隔离。 |
+| 9 | 完整 Minimum 生产集成与验收矩阵。 |
+| 10 | Extended TCG 客户机可用性。 |
+| 11 | Extended 缺页引擎、故障覆盖与性能/扩展性优化。 |
+| 12 | Extended 恢复、高可用、迁移与在线重配置。 |
+| 13 | Extended 托管宿主机移植性与独立规范的原生移植。 |
 
-Isolation and concurrency apply from the first affected state/queue, not only
-when Phase 6 or Phase 9 is reached. Later phases integrate and verify them at
-broader scope. Extended items may proceed independently when their actual
-prerequisites are met; numbering does not impose unrelated dependencies, and
-hosted TCG guest acceptance still depends on Phase 10.
+隔离与并发要求自首个受影响的状态/队列起即刻生效，并非等到 Phase 6 或 Phase 9 才引入，后续阶段负责在更大范围内集成与验证。Extended 各项在前置依赖满足后可独立推进，编号不强加无关依赖，但托管 TCG 客户机验收仍依赖 Phase 10。
 
-## Maintenance Review
+## 维护评审
 
-For an affected production path, identify its owning contract and consumers;
-verify identity/authorization, state authority, lifetimes, ordering, failure
-semantics, and selected profile. Preserve the node-runtime/fabric boundary and
-explicit physical-host resource accounting. Explain any change to queues,
-blocking, copies, network hops, batching, fairness, or synchronization scope.
-Use bounded verification proportional to those changes. Fix implementation
-conflicts or justify a target change under baseline Section 0.1; do not derive
-architecture from whichever code happens to exist.
+针对任一受影响生产路径，须识别其归属契约与消费方，核查标识/授权、状态权威、生命周期、排序、故障语义以及所选配置档。保持节点运行时/路由织网边界与显式物理宿主机资源核算不变；对队列、阻塞、拷贝、网络跳数、批处理、公平性或同步作用域的任何改动均须给出明确说明，并辅以成比例的有界验证。实现与规范冲突时，按基线第 0.1 节修复实现或论证目标变更，不得以既有代码反推架构。

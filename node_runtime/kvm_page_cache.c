@@ -18,6 +18,7 @@ struct cache_page {
     struct wvm_kvm_memory_slice *slice;
     uint64_t gpa;
     uint64_t version;
+    uint64_t lease_ms;
     uint8_t state;
 };
 
@@ -140,6 +141,20 @@ static struct cache_page *allocate_page_locked(
     cache->buckets[bucket] = page;
     cache->page_count++;
     return page;
+}
+
+static uint64_t monotonic_milliseconds(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return 0;
+    }
+    if ((uint64_t)now.tv_sec > UINT64_MAX / 1000U) {
+        return UINT64_MAX;
+    }
+    return (uint64_t)now.tv_sec * 1000U +
+           (uint64_t)now.tv_nsec / 1000000U;
 }
 
 static int deadline_from_now(uint64_t timeout_ms, struct timespec *deadline)
@@ -286,13 +301,36 @@ int wvm_kvm_page_cache_install_full(
         pthread_mutex_unlock(&cache->lock);
         return -EALREADY;
     }
-    if (cache->execution_active) {
-        mark_slice_failed_locked(cache->execution_slice, gpa);
-        if (page) {
-            mark_slice_failed_locked(page->slice, gpa);
-            page->state = WVM_KVM_PAGE_RESYNC;
-            page->version = 0;
+    if (cache->execution_active && page &&
+        page->state != WVM_KVM_PAGE_ABSENT) {
+        /*
+         * A newer authoritative snapshot of a still-CLEAN page must be
+         * applied mid-slice. Dropping it leaves the running vCPU on a
+         * stale copy (timer lists / stacks) until the slice ends.
+         * Demand-fill may still install a still-ABSENT PROT_NONE page
+         * without failing the slice. A snapshot that races a dirty or
+         * in-flight page still requires RESYNC; do not overwrite it.
+         */
+        if (page->state == WVM_KVM_PAGE_CLEAN && version > page->version) {
+            static unsigned apply_log;
+
+            page->version = version;
+            pthread_mutex_unlock(&cache->lock);
+            if (apply_log < 32) {
+                fprintf(stderr,
+                        "[KVM cache] applied newer snapshot during execution "
+                        "GPA=%#llx version=%#llx\n",
+                        (unsigned long long)gpa,
+                        (unsigned long long)version);
+                apply_log++;
+            }
+            return 0;
         }
+        mark_slice_failed_locked(cache->execution_slice, gpa);
+        mark_slice_failed_locked(page->slice, gpa);
+        page->state = WVM_KVM_PAGE_RESYNC;
+        page->version = 0;
+        page->lease_ms = 0;
         pthread_cond_broadcast(&cache->completed);
         pthread_mutex_unlock(&cache->lock);
         set_error(error, error_len,
@@ -312,12 +350,16 @@ int wvm_kvm_page_cache_install_full(
         (page->state == WVM_KVM_PAGE_RESYNC && page->slice != NULL)) {
         mark_slice_failed_locked(page->slice, gpa);
         page->state = WVM_KVM_PAGE_RESYNC;
+        page->lease_ms = 0;
         pthread_cond_broadcast(&cache->completed);
         result = -EBUSY;
     } else if (page->state == WVM_KVM_PAGE_CLEAN &&
                version <= page->version) {
         result = -EALREADY;
     } else {
+        if (page->state != WVM_KVM_PAGE_CLEAN) {
+            page->lease_ms = monotonic_milliseconds();
+        }
         page->version = version;
         page->state = WVM_KVM_PAGE_CLEAN;
     }
@@ -350,11 +392,28 @@ int wvm_kvm_page_cache_apply_diff(
         return -EALREADY;
     }
     if (cache->execution_active) {
+        if (page && page->state == WVM_KVM_PAGE_CLEAN &&
+            version > page->version && next_version(page->version, version)) {
+            static unsigned apply_diff_log;
+
+            page->version = version;
+            pthread_mutex_unlock(&cache->lock);
+            if (apply_diff_log < 32) {
+                fprintf(stderr,
+                        "[KVM cache] applied newer diff during execution "
+                        "GPA=%#llx version=%#llx\n",
+                        (unsigned long long)gpa,
+                        (unsigned long long)version);
+                apply_diff_log++;
+            }
+            return 0;
+        }
         mark_slice_failed_locked(cache->execution_slice, gpa);
         if (page) {
             mark_slice_failed_locked(page->slice, gpa);
             page->state = WVM_KVM_PAGE_RESYNC;
             page->version = 0;
+            page->lease_ms = 0;
         }
         pthread_cond_broadcast(&cache->completed);
         pthread_mutex_unlock(&cache->lock);
@@ -366,6 +425,7 @@ int wvm_kvm_page_cache_apply_diff(
         if (page && page->slice) {
             mark_slice_failed_locked(page->slice, gpa);
             page->state = WVM_KVM_PAGE_RESYNC;
+            page->lease_ms = 0;
         }
         pthread_mutex_unlock(&cache->lock);
         set_error(error, error_len, "KVM page diff has no clean base");
@@ -377,6 +437,7 @@ int wvm_kvm_page_cache_apply_diff(
     }
     if (!next_version(page->version, version)) {
         page->state = WVM_KVM_PAGE_RESYNC;
+        page->lease_ms = 0;
         pthread_mutex_unlock(&cache->lock);
         set_error(error, error_len, "KVM page diff has a version gap");
         return -ESTALE;
@@ -407,6 +468,7 @@ int wvm_kvm_page_cache_invalidate(
             mark_slice_failed_locked(page->slice, gpa);
             page->state = WVM_KVM_PAGE_RESYNC;
             page->version = 0;
+            page->lease_ms = 0;
         }
         pthread_cond_broadcast(&cache->completed);
         pthread_mutex_unlock(&cache->lock);
@@ -419,9 +481,11 @@ int wvm_kvm_page_cache_invalidate(
             mark_slice_failed_locked(page->slice, gpa);
             page->state = WVM_KVM_PAGE_RESYNC;
             page->version = 0;
+            page->lease_ms = 0;
         } else {
             page->state = WVM_KVM_PAGE_ABSENT;
             page->version = 0;
+            page->lease_ms = 0;
         }
     }
     pthread_mutex_unlock(&cache->lock);
@@ -563,8 +627,10 @@ int wvm_kvm_memory_slice_complete_dirty(
     if (success && !slice->failed && page->state != WVM_KVM_PAGE_RESYNC) {
         page->version = result_version;
         page->state = WVM_KVM_PAGE_CLEAN;
+        page->lease_ms = monotonic_milliseconds();
     } else {
         page->state = WVM_KVM_PAGE_RESYNC;
+        page->lease_ms = 0;
         mark_slice_failed_locked(slice, dirty_page->gpa);
     }
     page->slice = NULL;
@@ -956,4 +1022,66 @@ int wvm_kvm_memory_slice_global_begin(
                  : -ENOTCONN;
     pthread_mutex_unlock(&g_global_cache.lock);
     return result;
+}
+
+size_t wvm_kvm_page_cache_expire_leases(
+    struct wvm_kvm_page_cache *cache, uint64_t now_ms,
+    wvm_kvm_conceal_page_fn conceal, void *opaque)
+{
+    uint64_t timeout;
+    uint64_t lease_limit;
+    size_t expired = 0;
+    size_t i;
+
+    if (!cache) {
+        return 0;
+    }
+    pthread_mutex_lock(&cache->lock);
+    if (!cache->initialized || cache->execution_active ||
+        cache->execution_slice != NULL) {
+        pthread_mutex_unlock(&cache->lock);
+        return 0;
+    }
+    timeout = cache->config.completion_timeout_ms;
+    lease_limit = timeout >= 2000U ? (timeout - 1500U) : (timeout / 2U);
+    if (lease_limit == 0) {
+        lease_limit = 1;
+    }
+    for (i = 0; i < cache->bucket_count; i++) {
+        struct cache_page *page;
+
+        for (page = cache->buckets[i]; page; page = page->next) {
+            if (page->slice != NULL) {
+                continue;
+            }
+            if (page->state == WVM_KVM_PAGE_RESYNC ||
+                (page->state == WVM_KVM_PAGE_CLEAN && page->lease_ms != 0 &&
+                 now_ms >= page->lease_ms &&
+                 (now_ms - page->lease_ms) >= lease_limit)) {
+                if (conceal) {
+                    conceal(page->gpa, opaque);
+                }
+                page->state = WVM_KVM_PAGE_ABSENT;
+                page->version = 0;
+                page->lease_ms = 0;
+                expired++;
+            }
+        }
+    }
+    pthread_mutex_unlock(&cache->lock);
+    return expired;
+}
+
+size_t wvm_kvm_page_cache_global_expire_leases(
+    wvm_kvm_conceal_page_fn conceal, void *opaque)
+{
+    size_t expired = 0;
+
+    pthread_mutex_lock(&g_global_cache.lock);
+    if (g_global_cache.active) {
+        expired = wvm_kvm_page_cache_expire_leases(
+            &g_global_cache.cache, monotonic_milliseconds(), conceal, opaque);
+    }
+    pthread_mutex_unlock(&g_global_cache.lock);
+    return expired;
 }

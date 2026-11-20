@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <time.h>
 
 #include "kvm_page_cache.h"
@@ -26,6 +27,27 @@ static int prepare_input(void *opaque, uint64_t *error_gpa)
     (void)error_gpa;
     ++*calls;
     return 0;
+}
+
+struct conceal_record {
+    unsigned calls;
+    uint64_t mask;
+};
+
+static void record_conceal(uint64_t gpa, void *opaque)
+{
+    struct conceal_record *rec = opaque;
+    rec->calls++;
+    if ((gpa / WVM_MEMORY_PAGE_BYTES) < 64) {
+        rec->mask |= UINT64_C(1) << (gpa / WVM_MEMORY_PAGE_BYTES);
+    }
+}
+
+static uint64_t test_mono_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000U + (uint64_t)ts.tv_nsec / 1000000U;
 }
 
 static void *complete_after_timeout(void *opaque)
@@ -256,9 +278,18 @@ int main(void)
             .completion_timeout_ms = 1000,
         };
         struct wvm_kvm_memory_slice *first = NULL, *second = NULL;
-        uint8_t bytes[WVM_MEMORY_PAGE_BYTES] = {0};
-        uint8_t update[WVM_MEMORY_PAGE_BYTES] = {1};
+        uint8_t *bytes;
+        uint8_t update[WVM_MEMORY_PAGE_BYTES];
         unsigned prepares = 0;
+
+        bytes = mmap(NULL, WVM_MEMORY_PAGE_BYTES, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (bytes == MAP_FAILED) {
+            fprintf(stderr, "KVM page-cache test: mmap aligned install buffer\n");
+            return 1;
+        }
+        memset(bytes, 0, WVM_MEMORY_PAGE_BYTES);
+        memset(update, 1, WVM_MEMORY_PAGE_BYTES);
 
         if (expect(wvm_kvm_page_cache_global_install(
                        &window_config, error, sizeof(error)) == 0,
@@ -280,15 +311,15 @@ int main(void)
                    "replayed input cannot overwrite RAM during execution") ||
             expect(wvm_kvm_page_cache_global_install_data(
                        0, 2, 0, update, sizeof(update), 1, bytes, NULL,
-                       error, sizeof(error)) == -EBUSY && bytes[0] == 0,
-                   "reject a full snapshot during execution") ||
+                       error, sizeof(error)) == 0 && bytes[0] == 1,
+                   "apply a newer full snapshot during execution") ||
             expect(wvm_kvm_page_cache_global_lookup(
                        0, &state, &version, error, sizeof(error)) == 0 &&
-                   state == WVM_KVM_PAGE_RESYNC && version == 0,
-                   "retain resync after a blocked full snapshot") ||
+                   state == WVM_KVM_PAGE_CLEAN && version == 2,
+                   "keep the page clean after a mid-slice snapshot") ||
             expect(wvm_kvm_page_cache_global_apply_diff(
-                       0, 2, 0, 1, 0, error, sizeof(error)) == -EBUSY,
-                   "reject a diff during execution")) {
+                       0, 3, 0, 1, 0, error, sizeof(error)) == 0,
+                   "apply a newer in-order diff during execution")) {
             return 1;
         }
         if (expect(wvm_kvm_execution_leave(first, 0, 0) == 0 &&
@@ -297,16 +328,16 @@ int main(void)
             return 1;
         }
         wvm_kvm_execution_complete(second, 0, 0);
-        if (expect(wvm_kvm_execution_wait(first, &error_gpa) == -EUCLEAN &&
-                   wvm_kvm_execution_wait(second, &error_gpa) == -EUCLEAN,
-                   "input conflict fails every vCPU even without dirty pages")) {
+        if (expect(wvm_kvm_execution_wait(first, &error_gpa) == 0 &&
+                   wvm_kvm_execution_wait(second, &error_gpa) == 0,
+                   "applying a newer clean snapshot does not fail the cohort")) {
             return 1;
         }
         wvm_kvm_execution_release(first);
         wvm_kvm_execution_release(second);
         if (expect(wvm_kvm_page_cache_global_install_full(
-                       0, 2, error, sizeof(error)) == 0,
-                   "repair a blocked page after execution") ||
+                       0, 3, error, sizeof(error)) == -EALREADY,
+                   "the mid-slice version remains authoritative") ||
             expect(wvm_kvm_execution_global_join(
                        prepare_input, &prepares, &first, &error_gpa,
                        error, sizeof(error)) == 0,
@@ -321,9 +352,78 @@ int main(void)
         if (expect(wvm_kvm_execution_wait(first, &error_gpa) == -EUCLEAN,
                    "a clean-page invalidation fails the whole cohort")) return 1;
         wvm_kvm_execution_release(first);
+        munmap(bytes, WVM_MEMORY_PAGE_BYTES);
         wvm_kvm_page_cache_global_uninstall();
         puts("EVID kvm_cohort: members=2 preparations=1 single_harvester=1 "
-             "input_conflict_fails_all=1 byte_install_guarded=1");
+             "mid_slice_clean_apply=1 byte_install_guarded=1");
+    }
+
+    {
+        struct wvm_kvm_page_cache_config lease_config = {
+            .vm_id = 45,
+            .vm_incarnation = 12,
+            .max_page_records = 4,
+            .completion_timeout_ms = 1000,
+        };
+        struct wvm_kvm_page_cache *lease_cache =
+            wvm_kvm_page_cache_create(&lease_config, error, sizeof(error));
+        struct conceal_record rec = {0};
+        struct timespec pause_ts = { .tv_sec = 0, .tv_nsec = 30000000L };
+        uint64_t t_after_p0;
+
+        if (expect(lease_cache != NULL, "create lease-expiry test cache") ||
+            expect(wvm_kvm_page_cache_install_full(
+                       lease_cache, 0, 1, error, sizeof(error)) == 0,
+                   "install first clean page") ||
+            expect(wvm_kvm_page_cache_install_full(
+                       lease_cache, WVM_MEMORY_PAGE_BYTES, 1, error,
+                       sizeof(error)) == 0,
+                   "install resync subject page") ||
+            expect(wvm_kvm_page_cache_apply_diff(
+                       lease_cache, WVM_MEMORY_PAGE_BYTES, 5, 0, 1, 0, error,
+                       sizeof(error)) == -ESTALE,
+                   "gap diff puts page into RESYNC")) {
+            return 1;
+        }
+        t_after_p0 = test_mono_ms();
+        if (expect(wvm_kvm_page_cache_expire_leases(
+                       lease_cache, t_after_p0, record_conceal, &rec) == 1 &&
+                   rec.calls == 1 && rec.mask == (UINT64_C(1) << 1),
+                   "RESYNC page expires immediately while fresh CLEAN stays") ||
+            expect(wvm_kvm_page_cache_lookup(
+                       lease_cache, WVM_MEMORY_PAGE_BYTES, &state, &version,
+                       error, sizeof(error)) == 0 &&
+                   state == WVM_KVM_PAGE_ABSENT && version == 0,
+                   "expired RESYNC page resets to ABSENT")) {
+            return 1;
+        }
+        nanosleep(&pause_ts, NULL);
+        if (expect(wvm_kvm_page_cache_install_full(
+                       lease_cache, 2 * WVM_MEMORY_PAGE_BYTES, 1, error,
+                       sizeof(error)) == 0,
+                   "install second newer clean page")) {
+            return 1;
+        }
+        memset(&rec, 0, sizeof(rec));
+        if (expect(wvm_kvm_page_cache_expire_leases(
+                       lease_cache, t_after_p0 + 500, record_conceal,
+                       &rec) == 1 &&
+                   rec.calls == 1 && rec.mask == UINT64_C(1),
+                   "expired CLEAN page conceals while newer CLEAN page stays") ||
+            expect(wvm_kvm_page_cache_lookup(
+                       lease_cache, 0, &state, &version, error,
+                       sizeof(error)) == 0 &&
+                   state == WVM_KVM_PAGE_ABSENT && version == 0,
+                   "expired CLEAN page transitions to ABSENT") ||
+            expect(wvm_kvm_page_cache_lookup(
+                       lease_cache, 2 * WVM_MEMORY_PAGE_BYTES, &state, &version,
+                       error, sizeof(error)) == 0 &&
+                   state == WVM_KVM_PAGE_CLEAN && version == 1,
+                   "fresh CLEAN page remains CLEAN")) {
+            return 1;
+        }
+        wvm_kvm_page_cache_free(lease_cache);
+        puts("EVID kvm_lease_expiry: resync_expired=1 clean_expired=1 fresh_preserved=1");
     }
 
     puts("KVM page-cache tests: PASS");

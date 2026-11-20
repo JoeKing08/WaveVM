@@ -1310,6 +1310,10 @@ static int publish_typed_commit(
     size_t subscriber_count = 0;
     size_t i;
     int full = data_bytes >= 1024U;
+    int has_remote_fe;
+    int need_fe_push;
+    int fe_in_snapshot = 0;
+    int need_fe_fallback = 0;
     int result = 0;
 
     if (!service || !service->config.enable_typed_subscriber_delivery) {
@@ -1319,6 +1323,16 @@ static int publish_typed_commit(
         set_error(error, error_len, "V1 typed publish input is invalid");
         return -EINVAL;
     }
+    has_remote_fe =
+        service->config.frontend_physical_node_id != 0 &&
+        !(service->config.frontend_physical_node_id ==
+              service->config.local_physical_node_id &&
+          service->config.frontend_node_instance_id ==
+              service->config.local_node_instance_id);
+    need_fe_push =
+        has_remote_fe &&
+        writer_physical_node != service->config.frontend_physical_node_id;
+
     pthread_mutex_lock(&service->subscriber_lock);
     size_t bucket = subscriber_bucket(gpa, service->subscriber_bucket_count);
     /*
@@ -1330,7 +1344,10 @@ static int publish_typed_commit(
     for (struct wvm_memory_subscriber *s = service->subscriber_buckets[bucket];
          s; s = s->next) {
         if ((s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||
-             s->state == WVM_MEMORY_SUBSCRIBER_READING) && s->gpa == gpa) {
+             s->state == WVM_MEMORY_SUBSCRIBER_READING) &&
+            s->gpa == gpa &&
+            !subscriber_matches_writer(s, writer_physical_node,
+                                       writer_runtime_instance)) {
             subscriber_count++;
         }
     }
@@ -1345,26 +1362,41 @@ static int publish_typed_commit(
         for (struct wvm_memory_subscriber *s = service->subscriber_buckets[bucket];
              s; s = s->next) {
             if ((s->state == WVM_MEMORY_SUBSCRIBER_ACTIVE ||
-                 s->state == WVM_MEMORY_SUBSCRIBER_READING) && s->gpa == gpa) {
+                 s->state == WVM_MEMORY_SUBSCRIBER_READING) &&
+                s->gpa == gpa &&
+                !subscriber_matches_writer(s, writer_physical_node,
+                                           writer_runtime_instance)) {
+                if (s->subscriber_physical_node_id ==
+                    service->config.frontend_physical_node_id) {
+                    fe_in_snapshot = 1;
+                }
                 snapshot[subscriber_count++] = *s;
             }
         }
     }
     pthread_mutex_unlock(&service->subscriber_lock);
 
-    if (subscriber_count == 0) {
+    if (subscriber_count == 0 && !need_fe_push) {
         free(snapshot);
         return 0;
     }
-    if (full && (!service->config.read_page ||
-                 service->config.read_page(service->config.opaque, gpa,
-                                           full_page, &result_version, error,
-                                           error_len) != 0)) {
-        /* The mutation remains authoritative; HINT subscribers must resync. */
-        for (i = 0; i < subscriber_count; i++)
-            subscriber_mark_stale(service, &snapshot[i]);
-        free(snapshot);
-        return 0;
+    need_fe_fallback = need_fe_push && !fe_in_snapshot;
+    if (need_fe_fallback) {
+        full = 1;
+    }
+    if (full) {
+        if (offset == 0 && data_bytes == WVM_MEMORY_PAGE_BYTES) {
+            memcpy(full_page, data, WVM_MEMORY_PAGE_BYTES);
+        } else if (!service->config.read_page ||
+                   service->config.read_page(service->config.opaque, gpa,
+                                             full_page, &result_version, error,
+                                             error_len) != 0) {
+            /* The mutation remains authoritative; HINT subscribers must resync. */
+            for (i = 0; i < subscriber_count; i++)
+                subscriber_mark_stale(service, &snapshot[i]);
+            free(snapshot);
+            return 0;
+        }
     }
 
     for (i = 0; i < subscriber_count; i++) {
@@ -1452,6 +1484,57 @@ static int publish_typed_commit(
             }
         }
         pthread_mutex_unlock(&service->subscriber_lock);
+    }
+    if (need_fe_fallback) {
+        struct wvm_route_snapshot_key current_key;
+        struct wvm_route_runtime_next_hop next_hop;
+        struct wvm_envelope_route route;
+        struct wvm_envelope envelope;
+        struct wvm_mem_push push;
+        size_t payload_bytes = 0;
+        struct wvm_vm_route_scope_key scope_key =
+            service->config.dispatch->required_route_snapshot_key.scope_key;
+
+        if (wvm_route_runtime_current_key(
+                service->config.route_runtime, &scope_key,
+                &current_key) == 0 &&
+            wvm_route_runtime_lookup_destination(
+                service->config.route_runtime, &current_key,
+                service->config.frontend_route.destination_kind,
+                service->config.frontend_route.destination_scope,
+                service->config.frontend_route.destination_vnode, &next_hop,
+                error, error_len) == 0) {
+            memset(&route, 0, sizeof(route));
+            route.destination_kind =
+                service->config.frontend_route.destination_kind;
+            route.destination_scope =
+                service->config.frontend_route.destination_scope;
+            route.destination_vnode_or_endpoint =
+                service->config.frontend_route.destination_vnode;
+            route.hop_limit = next_hop.hop_limit;
+            memset(&push, 0, sizeof(push));
+            push.gpa = gpa;
+            push.base_version = 0;
+            push.version = result_version;
+            push.offset = 0;
+            push.size = WVM_MEMORY_PAGE_BYTES;
+            push.flags = WVM_MEM_PUSH_FLAG_FULL;
+            push.directory_physical_node_id =
+                service->config.local_physical_node_id;
+            push.directory_node_instance_id =
+                service->config.local_node_instance_id;
+            push.data = full_page;
+            push.data_bytes = WVM_MEMORY_PAGE_BYTES;
+            if (wvm_mem_push_encode(&push, payload, sizeof(payload),
+                                    &payload_bytes, error, error_len) == 0) {
+                envelope_from_route_key(
+                    service, WVM_ENVELOPE_MSG_PAGE_PUSH_FULL, operation_id,
+                    next_delivery_attempt(service), &route, &current_key,
+                    payload, payload_bytes, &envelope);
+                (void)service->config.send_envelope(
+                    service->config.opaque, &envelope, error, error_len);
+            }
+        }
     }
     free(snapshot);
     return result;
@@ -1898,6 +1981,26 @@ static int service_remote_ack(struct wvm_memory_service *service,
         }
         if (published != 0) {
             ack.version = published;
+        }
+        if (service->config.enable_typed_subscriber_delivery &&
+            service->config.frontend_physical_node_id != 0 &&
+            envelope->origin_physical_node_id ==
+                service->config.frontend_physical_node_id &&
+            !(service->config.frontend_physical_node_id ==
+                  service->config.local_physical_node_id &&
+              service->config.frontend_node_instance_id ==
+                  service->config.local_node_instance_id)) {
+            struct wvm_vm_route_scope_key scope_key =
+                service->config.dispatch->required_route_snapshot_key.scope_key;
+
+            (void)subscriber_upsert(
+                service, ack.gpa, envelope->operation_id,
+                service->config.frontend_physical_node_id,
+                service->config.frontend_node_instance_id,
+                envelope->origin_runtime_instance_id, &scope_key,
+                &service->config.frontend_route,
+                &service->config.dispatch->required_route_snapshot_key,
+                ack.version, NULL, error, error_len);
         }
     }
     result = accept_read_result(service, envelope->operation_id, &ack,

@@ -45,8 +45,10 @@ void wvm_kvm_page_cache_free(struct wvm_kvm_page_cache *cache);
 
 /*
  * Install only authoritative snapshots. A stale duplicate returns -EALREADY
- * and must not overwrite the local page. A snapshot racing a dirty slice
- * returns -EBUSY and leaves that slice in RESYNC.
+ * and must not overwrite the local page. A snapshot racing a page already
+ * in an active slice returns -EBUSY and leaves that slice in RESYNC. A
+ * full snapshot of a still-ABSENT page may install during execution so
+ * demand-fill can expose PROT_NONE RAM after KVM_RUN returns.
  */
 int wvm_kvm_page_cache_install_full(
     struct wvm_kvm_page_cache *cache, uint64_t gpa, uint64_t version,
@@ -130,5 +132,12 @@ int wvm_kvm_memory_slice_global_begin(
  * for an absent remote page. aligned to WVM_MEMORY_PAGE_BYTES. */
 int wvm_kvm_hva_expose_page(uint8_t *hva);
 int wvm_kvm_hva_conceal_page(uint8_t *hva);
+
+typedef void (*wvm_kvm_conceal_page_fn)(uint64_t gpa, void *opaque);
+size_t wvm_kvm_page_cache_expire_leases(
+    struct wvm_kvm_page_cache *cache, uint64_t now_ms,
+    wvm_kvm_conceal_page_fn conceal, void *opaque);
+size_t wvm_kvm_page_cache_global_expire_leases(
+    wvm_kvm_conceal_page_fn conceal, void *opaque);
 
 #endif

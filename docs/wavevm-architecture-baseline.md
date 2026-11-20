@@ -1,25 +1,17 @@
-# WaveVM Architecture Baseline
+# WaveVM 架构基线
 
-Status: normative architecture baseline for long-term maintenance.
-Scope: this document defines architectural authority, boundaries, invariants,
-and delivery-profile decisions. Subsystem specifications define their detailed
-contracts and acceptance conditions.
+状态：面向长期维护的规范性架构基线。
+范围：本文档定义架构权威、边界、系统不变量与交付配置档（profile）决策；各子系统的详细契约与验收条件由对应子系统规范定义。
 
-The [Document Maintenance](wavevm-refactor-roadmap.md#document-maintenance)
-rules govern this baseline and all subsystem specifications. Implementation
-progress and verification results belong in separate plan and audit records.
+[文档维护规则](wavevm-refactor-roadmap.md#文档维护规则)适用于本基线及全部子系统规范。实现进度与验证结果归入独立的计划与审计记录。
 
-The WaveVM design documentation has three levels:
+WaveVM 架构宪章分为三个规范性设计层级：
 
-1. This baseline defines what the system is and which component owns each class
-   of decision.
-2. `wavevm-refactor-roadmap.md` defines implementation dependency order and
-   acceptance boundaries, including requirements for architectural changes.
-3. Subsystem specifications define exact structures, state machines, APIs,
-   message semantics, lock ordering, failure behavior, and executable tests.
+1. 本基线定义系统定位以及各类决策的归属组件。
+2. `wavevm-refactor-roadmap.md` 定义实现依赖顺序、验收边界以及架构变更要求。
+3. 子系统规范定义精确的数据结构、状态机、API、消息语义、锁序、故障行为与可执行测试。
 
-The following subsystem specifications must exist before the corresponding
-runtime is substantially rewritten:
+对对应运行时进行实质性重写前，以下子系统规范必须就绪：
 
 - `docs/specs/memory-consistency.md`
 - `docs/specs/vcpu-handoff.md`
@@ -33,1071 +25,734 @@ runtime is substantially rewritten:
 - `docs/specs/kernel-accelerator.md`
 - `docs/specs/storage-device-authority.md`
 
-Existing code is evidence of observed behavior, not a normative definition of
-the target. Missing detail requires a decision in the owning specification
-before changing that boundary; it is not permission to copy an accidental
-implementation constraint or invent a second semantic path.
+现有代码仅反映已观测行为，不构成目标架构的规范定义。规范中缺失的细节须先在归属规范中明确决策再变更边界，不得照搬历史实现的偶发约束或引入第二套语义路径。
 
-## 0. Architecture Authority and Maintenance Contracts
+## 0. 架构权威与维护契约
 
-### 0.1 Target Authority and Design Changes
+### 0.1 目标权威与设计变更
 
-Project requirements, correctness and isolation invariants, verified technical
-constraints, and reproducible evidence determine the architecture. Existing
-file layouts, call graphs, state structures, and historical decisions do not
-define or override it. External projects provide evidence and design lessons,
-not templates that supersede WaveVM's requirements.
+架构由项目需求、正确性与隔离不变量、经验证的技术约束以及可复现证据共同决定。现有文件布局、调用图、状态结构与历史决策不构成架构依据；外部项目仅提供证据与设计参考，不凌驾于 WaveVM 的自身需求之上。
 
-When code and a normative contract disagree:
+当代码与规范契约不一致时，按以下规则处理：
 
-| Condition | Required response |
+| 情形 | 要求响应 |
 | --- | --- |
-| Required behavior is missing or incorrect. | Bring the implementation into compliance. |
-| Historical compatibility introduced a compromise. | Remove the unnecessary compatibility path; retain one only for an explicitly required deployment obligation. |
-| A case has no specified behavior. | Resolve it in the owning specification before choosing implementation semantics. |
-| A requirement is contradicted by verified constraints or evidence. | Reconsider the architectural decision and update affected contracts together. |
-| The code implements a different design. | Assess that design against the requirements; its existence does not authorize it. |
+| 必需行为缺失或错误 | 将实现修正至符合规范。 |
+| 历史兼容性引入妥协 | 移除不必要的兼容路径；仅在存在明确部署义务时保留。 |
+| 某场景无明确规范 | 在确定实现语义前，先于归属规范中补充决策。 |
+| 某项要求与经验证的约束或证据冲突 | 重新审视架构决策，并同步更新受影响的契约。 |
+| 代码采用了不同设计 | 按需求评估该设计，而非直接默认其合法性。 |
 
-A core design change must state the triggering requirement or constraint,
-supporting evidence, alternatives and trade-offs, affected authorities and
-consumers, and how its correctness and performance consequences will be
-verified. Implementation convenience and sunk migration cost alone do not
-justify weakening correctness, isolation, or required capabilities. The project
-owner may explicitly revise optional feature scope and delivery priorities for
-budget or maintenance reasons; update the profile boundary and dependent
-contracts rather than claiming that an unimplemented requirement was met.
+核心设计变更须说明触发需求或约束、支撑证据、备选方案与权衡、受影响的权威与消费方，以及正确性与性能后果的验证方式。实现便利性或已投入的迁移成本不足以作为削弱正确性、隔离性或必需能力的理由。项目负责人可因预算或维护考量明确调整可选功能范围与交付优先级，但应同步更新配置档边界及关联契约，不得将未实现要求声明为已达成。
 
-The baseline, roadmap, and subsystem specifications state required behavior
-and acceptance conditions only. Observed dependency graphs, code inventories,
-implementation gaps, test results, and progress belong in separate records.
-An observed dependency matrix must not be copied into an allowed-dependency
-contract without architectural justification.
+基线、路线图与子系统规范仅陈述必需行为与验收条件。已观测依赖图、代码盘点、实现缺口、测试结果与进度均归入独立记录；不得未经架构论证就将已观测依赖矩阵照搬为允许依赖契约。
 
-### 0.2 Logical Module Boundaries
+### 0.2 逻辑模块边界
 
-Each subsystem must declare its responsibility, non-responsibility, public
-interfaces, allowed implementation dependencies, and private state. Consumers
-must use public contracts, not private structures, hidden globals, incidental
-include order, or accidental link dependencies. Implementation dependency
-cycles are prohibited; explicitly contracted request/reply or callback
-interaction can be bidirectional without creating such a cycle.
+每个子系统须声明其职责、非职责、公开接口、允许的实现依赖以及私有状态。消费方只能通过公开契约交互，不得依赖私有结构、隐式全局状态、偶发头文件包含顺序或隐式链接依赖。禁止实现层依赖环；经明确契约约定的双向请求/应答或回调交互不构成依赖环。
 
-Organize modules around domain responsibilities and state ownership. A file
-length, existing directory name, or preferred AI context size does not decide
-the boundary. Do not introduce another process, RPC, service, or generic
-adapter solely to create modularity. The node-runtime roles remain within
-one production node-runtime binary; local worker/helper isolation follows its
-execution and fault-containment contract, not historical master/slave launch
-paths. QEMU facilities outside distributed coordination should use shared
-machine, device, address-space, and backend facilities rather than duplicate
-them for each execution mode.
+模块划分依据领域职责与状态所有权，而非文件长度、历史目录名或特定上下文窗口大小。不得仅为追求模块化而引入额外的进程、RPC、服务或通用适配器。节点运行时各角色保持在单一生产节点运行时二进制内；本地 worker 或辅助进程的隔离遵循执行与故障隔离契约，而非历史 master/slave 分离启动路径。QEMU 中除分布式协调外的能力应复用共享的 machine、device、address-space 与后端设施，避免按执行模式重复实现。
 
-### 0.3 State Authority, Writers, and Replicas
+### 0.3 状态权威、写入者与副本
 
-For each important state or resource, identify its key and lifetime scope,
-semantic authority, authorized mutation entry points and execution contexts,
-readers, replicas, invalidation rules, and reclamation owner. Scope must be
-precise: a VM incarnation, page, vCPU, route snapshot, admission transaction,
-or kernel context, not merely a component name such as "node runtime."
+对每项关键状态或资源，须明确其键与生命周期作用域、语义权威、授权写入入口与执行上下文、读取者、副本、失效规则以及回收责任方。作用域须精确到 VM 实例代次（`vm_incarnation`）、页、vCPU、路由快照、准入事务或内核上下文等具体实体，而不能笼统称为“节点运行时”。
 
-Semantic authority decides validity and transitions. An authorized writer may
-apply those transitions under the authority's contract; a replica or cache
-does not acquire authority by storing bytes. Multiple writers, shards, workers,
-and queues are permitted when their ordering and conflict rules are explicit.
-Single authority does not imply one global thread, lock, or serialization
-domain. Delegation must define its scope and how stale writers are fenced.
+语义权威决定状态合法性与转换规则。授权写入者在权威契约下执行变更；副本或缓存不会因持有数据而获得权威。在排序与冲突规则明确的前提下，允许存在多写入者、分片、worker 与队列；单一权威不等于单一全局线程、全局锁或串行域。任何委托均须界定作用域及过期写入者的栅栏机制。
 
-Non-owners may not mutate authoritative state through exposed pointers or
-reconstruct another authority's policy. Snapshots and caches must define their
-publication, version validation, expiry/invalidation, and safe reconstruction.
-Local cache ownership never authorizes choosing a new page version, placement,
-VM identity, or lifecycle outcome.
+非所有者不得通过裸指针修改权威状态或重演另一权威的策略。快照与缓存须定义发布机制、版本校验、过期/失效以及安全重建规则。本地缓存所有权不授权其决定新的页版本、放置结果、VM 标识或生命周期结果。
 
-### 0.4 Cross-Subsystem Interaction Contracts
+### 0.4 跨子系统交互契约
 
-Cross-boundary contracts must specify applicable identity and authorization,
-preconditions, successful completion and visibility, required ordering,
-ownership transfer or borrowing, resource lifetimes, execution context,
-blocking/reentrancy constraints, and failure/timeout/cancellation semantics.
-Asynchronous operations must define late completion, retry identity, reference
-retention, and partial or uncertain results. In-process calls, shared memory,
-local IPC, network transport, and device memory do not provide interchangeable
-visibility guarantees; identify which layer supplies each synchronization
-obligation. C atomics alone do not establish cross-node coherence.
+跨边界契约须规定适用的标识与授权、前置条件、成功完成与可见性语义、必需顺序、所有权转移或借用、资源生命周期、执行上下文、阻塞/重入约束，以及失败/超时/取消语义。异步操作须明确延迟完成、重试标识、引用保持以及部分或不确定结果的处理方式。进程内调用、共享内存、本地 IPC、网络传输与设备内存的可见性保证各不相同，须指明每一同步义务由哪一层提供；C 原子操作本身无法建立跨节点一致性。
 
-Each cross-domain rule has one owning specification and a stable section
-reference. Other specifications reference that definition and add their local
-obligations without copying or redefining it. The following ownership applies:
+每条跨领域规则仅有一个归属规范及稳定章节引用，其他规范直接引用并补充本地义务，不复制或重定义原规则。归属关系如下：
 
-| Interaction contract | Owning definition | Required consumers |
+| 交互契约 | 归属定义 | 必需消费方 |
 | --- | --- | --- |
-| Candidate preparation and durable activation | [Runtime lifecycle Section 5.2](specs/runtime-manifest-lifecycle.md#52-create-and-activate-sequence) | Placement/reservations, membership, node runtime, QEMU, executors, gateways, kernel contexts. |
-| Quiescence, drain, and final reclamation | [Runtime lifecycle Section 6.3](specs/runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) | IPC, memory, vCPU, storage, routes, kernel contexts, reservation/name owners. |
-| Memory visibility at vCPU ownership transfer | [Memory Section 4.6](specs/memory-consistency.md#46-handoff-fence) | vCPU coordinator, frontend, executor, fault engines, kernel acceleration. |
-| Route replacement and semantic-operation lifetime | [Identity/routing Section 6.1](specs/identity-routing.md#61-route-replacement-and-operation-lifetime) | Wire/IPC, gateways, membership, lifecycle, memory/vCPU/block operations. |
-| Remote execution exits and device authority | [vCPU Section 7](specs/vcpu-handoff.md#7-exit-device-interrupt-and-time-semantics) | Frontend devices, executors, memory, storage, lifecycle. |
+| 候选准备与持久化激活 | [运行时生命周期 第 5.2 节](specs/runtime-manifest-lifecycle.md#52-创建与激活时序) | 放置/资源预留、成员管理、节点运行时、QEMU、执行器、Gateway、内核上下文。 |
+| 静默、排空与最终回收 | [运行时生命周期 第 6.3 节](specs/runtime-manifest-lifecycle.md#63-跨子系统资源回收) | IPC、内存、vCPU、存储、路由、内核上下文、预留/名称所有者。 |
+| vCPU 所有权转移时的内存可见性 | [内存一致性 第 4.6 节](specs/memory-consistency.md#46-交接栅栏) | vCPU 协调器、前端、执行器、缺页引擎、内核加速。 |
+| 路由替换与语义操作生命周期 | [标识与路由 第 6.1 节](specs/identity-routing.md#61-路由替换与操作生命周期) | 线协议/IPC、Gateway、成员管理、生命周期、内存/vCPU/块操作。 |
+| 远端执行退出与设备权威 | [vCPU 交接 第 7 节](specs/vcpu-handoff.md#7-退出与设备中断时间语义) | 前端设备、执行器、内存、存储、生命周期。 |
 
-Subsystem boundary summaries must index the owning sections for authority,
-allowed dependencies, state, cross-domain interactions, concurrency/cost,
-failure, and verification. They are navigation aids, not duplicate schemas or
-parallel sources of truth. Concrete encodings belong to the wire/schema or
-operation specification that owns them. Document history is tracked in Git;
-stable references do not require numbered API names, a new runtime registry,
-or support for obsolete contracts. A boundary change must identify and update
-affected producers, consumers, and verification mappings together.
+子系统边界摘要用于索引权威、允许依赖、状态、跨领域交互、并发/开销、故障与验证等归属章节，仅作导航辅助，不作为重复 Schema 或并行真值源。具体编码归属对应线协议/Schema 或操作规范。文档历史由 Git 追踪，稳定引用不要求编号 API 名称、额外运行时注册表或对废弃契约的兼容。边界变更须同步识别并更新受影响的生产方、消费方与验证映射。
 
-### 0.5 Lifecycle Coordination and Authorization
+### 0.5 生命周期协调与授权
 
-The lifecycle coordinator owns overall phase transitions; each subsystem owns
-its internal quiescence, in-flight work, references, and resource reclamation.
-Quiesce, drain, and finalize are logical obligations, not a mandatory universal
-hook API or another VM state machine. Required ACKs, fences, cancellation,
-result queries, and cleanup traffic must remain possible during draining.
-Reclamation requires the subsystem's completion or fencing proof; a timeout
-or a local zero counter is not proof that remote work can no longer act.
-Independent cleanup may proceed concurrently within the declared ordering.
+生命周期协调器负责整体阶段转换；各子系统负责自身的内部静默、在途工作处理、引用管理与资源回收。静默（quiesce）、排空（drain）与终结（finalize）是逻辑义务，不要求统一的钩子 API 或额外的 VM 状态机。排空期间，必需的 ACK、栅栏、取消、结果查询与清理流量仍须可通行。资源回收须以子系统的完成或栅栏证明为前提，超时或本地计数归零不足以证明远端工作已无法继续生效。在声明的顺序约束内，互不依赖的清理可并发执行。
 
-Security boundaries must state the authorization source, permitted resource
-scope, and revocation or expiry rules. Use capabilities or handles where their
-resource delegation and lifetime semantics are needed; do not require a
-capability wrapper for every internal call. A transport endpoint, resource ID,
-or cached record alone is not proof of authorization.
+安全边界须明确授权来源、允许的资源范围以及吊销或过期规则。在需要资源委托与生命周期约束时使用 capability 或句柄，但不必为每次内部调用套壳。传输端点、资源 ID 或缓存记录本身不构成授权证明。
 
-### 0.6 Performance and Scalability Requirements
+### 0.6 性能与可扩展性要求
 
-The system must implement and maintain the parallel execution, locality,
-batching, and bounded resource use required by its resource-pooling goals and
-selected delivery profile. Correctness work must supply the necessary
-concurrent design, not merely preserve whatever concurrency already exists.
-The Minimum/Extended TCG boundary in Section 16 remains applicable; this rule
-does not move sustained TCG guest usability into Minimum.
+系统须实现并保持资源池化目标及所选交付配置所需的并行执行、局部性、批处理与有界资源使用。正确性改造须同时提供必需的并发设计，而非退化为串行实现。第 16 节规定的 Minimum/Extended TCG 边界依然有效，本条不将持续 TCG 客户机可用性提前至 Minimum。
 
-Independent VMs, vCPUs, pages, and operation keys must be able to progress
-concurrently where their contracts and available resources permit. Scope
-ordering and synchronization to the related resource or transaction; a shared
-worker or registry is not permission for a global data-plane critical section.
-Any centralized coordination, additional IPC/network hop, bulk copy, blocking
-wait, or serialization on a normal hot path requires a reason and a bounded
-cost/concurrency model. Necessary topology, isolation, and durability costs
-must remain explicit; eliminating a hop never authorizes bypassing an authority.
+在契约与可用资源允许的范围内，相互独立的 VM、vCPU、页与操作键须能够并发推进。排序与同步作用域应限定在相关资源或事务内，共享 worker 或注册表不得演变为全局数据面临界区。正常热路径上的集中协调、额外 IPC/网络跳数、大块拷贝、阻塞等待或串行化均须具备明确理由与有界开销/并发模型。必要的拓扑、隔离与持久化开销须保持显式，不得为减少跳数而绕过权威组件。
 
-Performance-sensitive contracts must describe queue ownership and limits,
-in-flight concurrency, blocking and callback context, batching/coalescing,
-priority/fairness, data copying and locality, and overload behavior. Implement
-asynchronous and parallel paths where required; do not merely declare them
-possible. Backpressure must be bounded and must neither lose required work nor
-starve the control/completion traffic needed to recover.
+性能敏感契约须描述队列所有权与上限、在途并发度、阻塞与回调上下文、批处理/合并策略、优先级/公平性、数据拷贝与局部性以及过载行为。所需异步与并行路径须实际落地。背压须有界，且既不能丢失必需工作，也不能饿死恢复所需的控制/完成流量。
 
-Concrete mechanisms such as MPSC queues, UDP, asynchronous diffs, or batched
-I/O may be corrected or replaced when evidence supports the alternative.
-Neither their historical presence nor implementation convenience decides the
-choice. Changes that remove an optimization, broaden synchronization, or
-alter hot-path queues must explain how the required capabilities are met and
-use proportionate before/after evidence under comparable conditions. A guest
-boot alone cannot establish parallelism or absence of a performance regression.
+MPSC 队列、UDP、异步 diff、批量 I/O 等具体机制可在有证据支撑时修正或替换。凡移除优化、扩大同步范围或修改热路径队列的变更，均须说明如何满足所需能力，并在可比条件下提供成比例的变更前后对比证据。仅凭单次客户机启动无法证明并发度或无性能回退。
 
-Acceptance specifications define relevant throughput, tail-latency, CPU/memory
-cost, and scaling checks with workload, topology, capability profile, and
-hardware conditions. Measurements and accepted trade-offs belong in separate
-verification/design records, not as implementation status here. Do not impose
-hardware-independent latency promises, a full benchmark matrix on every edit,
-or a requirement to complete all performance tuning before Minimum acceptance.
-Essential parallelism and bounded operation remain required within each profile.
+验收规范须在声明的工作负载、拓扑、能力配置与硬件条件下定义吞吐量、尾延迟、CPU/内存开销与扩展性检查。实测数据与已接受的权衡归入独立验证/设计记录。不强制跨硬件的绝对延迟承诺、每次改动都跑全量基准矩阵，或在 Minimum 验收前完成全部性能调优，但各配置所需的基本并行度与有界运行必须达标。
 
-Architecture checks should enforce a small set of explicit dependency and
-interface rules, supplemented by targeted contract tests and review. Automated
-include/symbol checks cannot prove all state ownership or temporal correctness
-in C/C++. Historical co-change frequency is diagnostic evidence, not a hard
-coupling metric. Local work may use the relevant boundary summaries; changes
-that affect shared semantics must also review the neighboring contracts.
+架构检查应强制少量明确的依赖与接口规则，并辅以针对性契约测试与评审。自动化头文件/符号检查无法覆盖 C/C++ 中全部状态所有权与时序正确性；历史共变频率仅作诊断参考，不作为硬性耦合指标。局部改动可参考边界摘要，涉及共享语义的变更则须一并评审相邻契约。
 
-## 1. Project Goal
+## 1. 项目目标
 
-WaveVM is a distributed QEMU platform that presents a single guest VM backed by CPU and memory resources from multiple physical nodes.
+WaveVM 是一个分布式 QEMU 平台，将多个物理节点的 CPU 与内存资源池化，对外呈现为一台标准客户机 VM。
 
-The long-term goal is not only to boot a demo guest. The goal is a maintainable distributed virtualization substrate with these properties:
+其长期目标不仅是启动演示客户机，而是构建可长期维护的分布式虚拟化底座，具备以下特性：
 
-- The guest keeps using a normal virtual machine interface.
-- Physical CPU and memory can be pooled across nodes.
-- The same high-level semantics apply to KVM and TCG.
-- The same high-level semantics apply to flat and fractal topologies.
-- The same cluster can host multiple independent VMs.
-- A physical host can expose multiple explicitly isolated compute-node
-  instances when its aggregate CPU, memory, accelerator, port, and socket
-  budgets are sufficient.
-- Compute nodes and routing gateways can join, drain, fail, and leave through
-  explicit control-plane lifecycle operations.
-- Restricted environments can run without a kernel module.
-- Kernel help, when available, accelerates the same semantics rather than defining another product.
+- 客户机继续使用标准虚拟机接口。
+- 物理 CPU 与内存可跨节点池化。
+- KVM 与 TCG 遵循同一套高层语义。
+- Flat 与 Fractal 拓扑遵循同一套高层语义。
+- 同一集群可承载多台相互独立的 VM。
+- 当宿主机聚合 CPU、内存、加速器、端口与套接字预算充足时，单台物理宿主机可暴露多个显式隔离的计算节点实例。
+- 计算节点与路由 Gateway 可通过显式控制面生命周期操作完成加入、排空、故障处置与离开。
+- 受限环境可在无内核模块的情况下运行。
+- 内核模块（若可用）仅加速同一套语义，而非定义另一套产品。
 
-WaveVM should be treated as a distributed QEMU, not as a collection of test-specific forwarding hacks.
+WaveVM 应作为分布式 QEMU 进行工程设计，而非面向特定测试的转发补丁集合。
 
-The project has two acceptance horizons:
+项目划分为两个验收地平线：
 
-**Minimum usable system:** a manifest-bound KVM VM can reach guest login or
-SSH, use flat or fractal routing, and share a physical host with other Mode B
-VMs with isolated resources and identity. TCG remains an execution backend in
-Minimum: bounded execution, remote memory, CPU-state handoff, device-authority
-exits, and cleanup must satisfy the same semantic contracts. Full TCG guest
-boot/login and sustained multi-vCPU guest usability belong to Extended, as
-defined in Section 16 and `vcpu-handoff.md` Section 8.1. A TCG contract-test
-pass does not establish that a TCG guest OS is usable. Mode A is usable for
-multiple VMs only after explicit per-VM kernel contexts and teardown isolation
-pass. The minimum system also includes basic node/gateway join, compute
-cordon, safe drain, and gateway replacement through acknowledged route snapshots.
+**Minimum（最小可用系统）：** 受清单（manifest）绑定的 KVM VM 可达客户机登录或 SSH，支持 Flat 或 Fractal 路由，并能在单台物理宿主机上与其他 Mode B VM 共享资源且保持资源与标识隔离。TCG 在 Minimum 中仍是必需的执行后端：有界执行、远端内存、CPU 状态交接、设备权威退出与清理均须满足同一语义契约；完整的 TCG 客户机启动/登录与持续多 vCPU 客户机可用性归属 Extended（见第 16 节与 `vcpu-handoff.md` 第 8.1 节），TCG 契约测试通过不等同于 TCG 客户机操作系统可用。Mode A 须在显式单 VM 内核上下文与销毁隔离验收通过后，方可用于多 VM 场景。最小系统同时包含基础节点/Gateway 加入、计算节点隔离（cordon）、安全排空以及基于已确认路由快照的 Gateway 替换。
 
-**Extended:** full TCG guest boot/login/SSH and sustained distributed
-multi-vCPU guest usability, coordinator high availability, automatic migration or
-resharding, transparent recovery after loss of required compute state, full
-fault-engine plugin coverage, exhaustive network/lifecycle fault injection, and
-hosted host-OS portability (a hypervisor adapter running the same Linux host
-appliance on a non-Linux physical host; not a WaveVM guest and not a native
-non-Linux port). These extend backend coverage or operational resilience; they
-are not prerequisites for the Minimum KVM guest and TCG contract-test gates.
-See roadmap Section 1.1 and Phases 10 through 13.
+**Extended（扩展能力）：** 完整的 TCG 客户机启动/登录/SSH 与持续分布式多 vCPU 客户机可用性、协调器高可用、自动迁移或重分片、必需计算状态丢失后的透明恢复、全量缺页引擎插件覆盖、完备网络/生命周期故障注入，以及托管宿主机 OS 移植性（在非 Linux 物理宿主机上通过 hypervisor 适配器运行同一 Linux 宿主机设备镜像，该镜像既非 WaveVM 客户机，也非原生非 Linux 移植）。这些特性扩展后端覆盖或运维韧性，不构成 Minimum KVM 客户机与 TCG 契约测试门禁的前置条件。详见路线图第 1.1 节及 Phase 10 至 Phase 13。
 
-The two horizons do not define two products or two semantic paths. Extended
-features must preserve the same manifest, identity, routing, memory, and vCPU
-contracts established by the minimum system.
+两个地平线并不划分两套产品或两条语义路径。Extended 特性须延续最小系统建立的清单、标识、路由、内存与 vCPU 契约。
 
-## 2. Non-Goals
+## 2. 非目标
 
-The following are not acceptable long-term directions:
+以下方向不符合长期架构要求：
 
-- Hardcoding node IDs, ports, vm IDs, CPU counts, memory sizes, or route entries to pass one test.
-- Adding production-path command-line switches whose only purpose is to hide an implementation bug.
-- Making KVM and TCG two unrelated products.
-- Making Mode A and Mode B two independent control planes.
-- Letting the kernel module own global VM lifecycle semantics.
-- Requiring a custom host kernel as a baseline feature.
-- Requiring KVM as the only supported execution backend.
-- Replacing WaveVM's sidecar/gateway and per-node-runtime model with direct
-  QEMU-to-QEMU routing merely because another project does that.
-- Treating a heartbeat, route-learning observation, or one gateway control
-  datagram as authoritative membership admission or removal.
-- Removing a compute node or gateway from an active VM by deleting its route
-  before the dependent allocation or traffic has been drained.
+- 硬编码节点 ID、端口、VM ID、CPU 数量、内存大小或路由项以通过单个测试。
+- 为掩盖实现缺陷而在生产路径引入命令行开关。
+- 将 KVM 与 TCG 演化为两套互不相关的产品。
+- 将 Mode A 与 Mode B 演化为两套独立控制面。
+- 让内核模块拥有全局 VM 生命周期语义。
+- 将定制宿主机内核作为基线依赖。
+- 将 KVM 设为唯一支持的执行后端。
+- 仅因其他项目采用 QEMU 直连 QEMU 路由就放弃 WaveVM 的 Sidecar/Gateway 与单节点运行时模型。
+- 将心跳、路由学习观察或单个 Gateway 控制报文当作权威的成员准入或移除依据。
+- 在依赖分配或流量尚未排空前，通过直接删除路由将计算节点或 Gateway 移出活跃 VM。
 
-## 3. Canonical Architecture
+## 3. 规范架构
 
-The canonical WaveVM architecture separates control plane from per-VM data
-plane:
+WaveVM 规范架构将控制面与单 VM 数据面分离：
 
 ```text
-User CLI / API
+用户 CLI / API
     |
     v
-User-space cluster control plane
-    |  manifest, placement, reservation, lifecycle
+用户态集群控制面
+    |  清单、放置、资源预留、生命周期
     v
-For each participating `{vm_incarnation, physical_node_id}`:
+针对每个参与的 {vm_incarnation, physical_node_id}：
 
-QEMU frontend (host node only)
+QEMU 前端（仅宿主机节点）
     |
-    | local ABI / shared memory / accelerator hooks
+    | 本地 ABI / 共享内存 / 加速器钩子
     v
-User-space node runtime
+用户态节点运行时
     |                         |
-    | local executor ABI      | sidecar/gateway fabric
+    | 本地执行器 ABI           | Sidecar/Gateway 路由织网
     v                         v
-KVM workers or TCG helpers    Remote sidecar -> remote node runtime -> executor
+KVM worker 或 TCG 辅助进程    远端 Sidecar -> 远端节点运行时 -> 执行器
 ```
 
-The user-space control plane owns cluster resource inventory, VM identity and
-incarnation allocation, resource planning, host placement, admission, and VM
-lifecycle. A node runtime owns the per-VM runtime semantics delegated by the
-admitted manifest: VM-scoped routing, page consistency, request correlation,
-and CPU/memory dispatch. Both are user-space semantic authorities in
-non-overlapping domains.
+用户态控制面负责集群资源清单、VM 标识与实例代次分配、资源规划、宿主机放置、准入与 VM 生命周期。节点运行时负责已准入清单委托的单 VM 运行时语义：VM 作用域路由、页一致性、请求关联以及 CPU/内存分发。两者均为用户态语义权威，职责域互不重叠。
 
-The names `master` and `slave` describe logical roles inside a node
-runtime, not a permanent requirement for two separately deployed services. The
-master role is the semantic coordinator and local fabric endpoint. The slave
-role is the local executor manager. One node-runtime binary provides both
-roles, with explicit worker queues, local ABI, lifecycle, and fault containment;
-independent master/slave production launch paths are not supported. A TCG
-helper QEMU may remain a separate process because its
-QEMU lifecycle and address space require that isolation.
+`master` 与 `slave` 指代节点运行时内部的逻辑角色，而非两个独立部署的服务：`master` 角色为语义协调器与本地路由织网端点，`slave` 角色为本地执行器管理器。单一节点运行时二进制同时承载这两种角色，并通过显式 worker 队列、本地 ABI、生命周期与故障隔离划清边界；不支持独立的 master/slave 生产启动路径。TCG 辅助 QEMU 因自身 QEMU 生命周期与地址空间隔离需要，可保持为独立本地进程。
 
-Every remote operation terminates at the remote node runtime before reaching a
-local executor. Neither an executor nor a QEMU frontend is a production
-cross-node endpoint.
+所有远端操作须先终结于远端节点运行时，再进入本地执行器。执行器与 QEMU 前端均不得作为生产环境的跨节点端点。
 
-The kernel module, if present, is an accelerator. It must not become a second semantic authority.
+内核模块（若存在）仅作为加速器，不得成为第二语义权威。
 
-## 4. Core Components
+## 4. 核心组件
 
-### 4.1 User-Space Cluster Control Plane
+### 4.1 用户态集群控制面
 
-This is a logical role. Its production entry point may be a control tool and
-node launcher; its authority does not require an additional distributed service.
+该组件属于逻辑角色，其生产入口可由控制工具与节点启动器实现，无需强行引入额外分布式服务。
 
-Responsibilities:
+职责：
 
-- Maintain registered physical capacities and capabilities.
-- Own desired and observed membership for compute nodes, sidecars, and
-  gateways, including their identity, endpoint, capability, health, and
-  lifecycle state.
-- Own the cluster topology graph, Pod membership, and flat/fractal topology
-  selection. The topology is a cluster decision, not a per-test script flag or
-  a guest-visible requirement.
-- Generate, prepare, atomically publish, and retire versioned route snapshots
-  from that membership and topology state.
-- Allocate `vm_id` and VM incarnation.
-- Validate a versioned VM request or launch manifest.
-- Plan vCPU, memory, host, device, and control-plane overhead placement.
-- Reserve resources and coordinate the candidate/activation/commit/retire
-  transaction defined by the lifecycle specification.
-- Generate the admitted per-node runtime manifests.
-- Report structured lifecycle and admission failures.
+- 维护已注册的物理容量与能力。
+- 管理计算节点、Sidecar 与 Gateway 的期望及观测成员状态，包括标识、端点、能力、健康度与生命周期状态。
+- 维护集群拓扑图、Pod 成员关系以及 Flat/Fractal 拓扑选择；拓扑属于集群决策，而非单测试脚本开关或客户机可见要求。
+- 基于成员与拓扑状态生成、准备、原子发布与回收带版本的路由快照。
+- 分配 `vm_id` 与 VM 实例代次（`vm_incarnation`）。
+- 校验带版本的 VM 请求或启动清单。
+- 规划 vCPU、内存、宿主机、设备及控制面开销放置。
+- 预留资源并协调生命周期规范定义的候选/激活/提交/回收事务。
+- 生成已准入的单节点运行时清单。
+- 上报结构化的生命周期与准入失败信息。
 
-Non-responsibilities:
+非职责：
 
-- It must not participate in every page fault or vCPU RPC.
-- It must not make gateway or kernel caches semantic authorities.
-- It must not infer successful VM startup from process survival alone.
-- It must not make a node schedulable or a gateway active solely because one
-  UDP packet or heartbeat was received.
+- 不参与每次缺页或 vCPU RPC。
+- 不将 Gateway 或内核缓存视作语义权威。
+- 不仅凭进程存活推断 VM 启动成功。
+- 不因收到单个 UDP 报文或心跳就使节点可调度或使 Gateway 生效。
 
-### 4.2 QEMU Frontend
+### 4.2 QEMU 前端
 
-The frontend integration baseline is QEMU 5.2.0; upgrades must preserve the
-guest-visible and distributed-operation contracts.
+前端集成基线为 QEMU 5.2.0；版本升级须保持客户机可见语义与分布式操作契约不变。
 
-Responsibilities:
+职责：
 
-- Present the guest-visible machine, devices, RAM, vCPUs, NUMA layout, disk, and network.
-- Implement the WaveVM accelerator glue.
-- Export and import vCPU state for remote execution.
-- Route remote memory and CPU operations through the local node runtime.
-- Keep KVM and TCG differences behind accelerator-specific code.
+- 呈现客户机可见的 machine、设备、RAM、vCPU、NUMA 布局、磁盘与网络。
+- 实现 WaveVM 加速器胶水层。
+- 导出与导入远端执行所需的 vCPU 状态。
+- 通过本地节点运行时路由远端内存与 CPU 操作。
+- 将 KVM 与 TCG 的差异封装在加速器特定代码之后。
 
-Non-responsibilities:
+非职责：
 
-- QEMU must not hardcode physical cluster topology.
-- QEMU must not become the global control plane.
-- QEMU must not directly route around the local node runtime and sidecar/gateway
-  fabric for production traffic.
+- 不硬编码物理集群拓扑。
+- 不充当全局控制面。
+- 不在生产流量中绕过本地节点运行时与 Sidecar/Gateway 路由织网直接跨节点通信。
 
-### 4.3 Node Runtime Coordination Role
+### 4.3 节点运行时协调角色
 
-The user-space node runtime is the canonical authority for one logical VM
-instance on one participating physical node. Semantic coordination and local
-execution are logical roles within the unified node-runtime boundary, not
-independently deployed services.
+用户态节点运行时是单个逻辑 VM 实例在单个参与物理节点上的规范权威。语义协调与本地执行属于统一节点运行时边界内的逻辑角色，而非独立部署服务。
 
-Responsibilities:
+职责：
 
-- Consume only the admitted per-node manifest, route snapshot, dispatch
-  projection, and capability profile.
-- Hold the VM and node identity assigned by the control plane.
-- Own CPU route table and memory placement table for that VM.
-- Own page directory and version state in Mode B baseline.
-- Validate local and remote operations against the admitted identity, manifest,
-  route generation, and semantic contract before dispatch.
-- Dispatch local CPU, memory, and storage operations through the local
-  executor interface.
-- Correlate executor completion with the originating QEMU or remote node
-  request; an executor response must not be mistaken for an unrelated local
-  RPC reply.
-- Send all cross-node traffic through the local sidecar/gateway path.
-- Provide QEMU IPC endpoint for the local frontend.
-- Provide a stable surface for optional accelerators.
+- 仅消费已准入的单节点清单、路由快照、分发投影与能力配置。
+- 持有控制面分配的 VM 与节点标识。
+- 拥有该 VM 的 CPU 路由表与内存放置表。
+- 在 Mode B 基线中拥有页目录与版本状态。
+- 分发前依据已准入标识、清单、路由代次与语义契约校验本地及远端操作。
+- 通过本地执行器接口分发本地 CPU、内存与存储操作。
+- 将执行器完成结果与发起方 QEMU 或远端节点请求精确关联，防止执行器响应与无关本地 RPC 应答混淆。
+- 通过本地 Sidecar/Gateway 路径发送所有跨节点流量。
+- 为本地前端提供 QEMU IPC 端点。
+- 为可选加速器提供稳定接口面。
 
-Multiplicity and concurrency requirements:
+多实例与并发要求：
 
-- Every `{vm_incarnation, physical_node_id}` has its own node-runtime state,
-  even when one process hosts multiple VM instances on the same physical node.
-- The normal data path implements explicit queues, batching, and QoS. Moving an
-  executor behind an in-process interface must not turn the node runtime into
-  one globally serial executor.
+- 即便单进程在同一物理节点上托管多个 VM 实例，每个 `{vm_incarnation, physical_node_id}` 仍须拥有独立的节点运行时状态。
+- 正常数据路径须具备显式队列、批处理与 QoS；将执行器置于进程内接口之后不得使节点运行时退化为全局串行执行器。
 
-### 4.4 Node Runtime Local Executor Role
+### 4.4 节点运行时本地执行器角色
 
-The local executor role performs assigned execution and storage work for one VM
-instance on one physical node. It is not an independent distributed semantic
-authority or a separately deployed master/slave service.
+本地执行器角色在单个物理节点上为单个 VM 实例执行所分配的计算与存储任务，不构成独立的分布式语义权威或独立部署的 master/slave 服务。
 
-Responsibilities:
+职责：
 
-- Execute remote vCPU slices under KVM or TCG.
-- Own local KVM vCPU objects when KVM is available.
-- Spawn helper QEMU TCG instances when using TCG slave execution.
-- Apply and return memory updates needed by remote execution.
-- Handle storage operations assigned to the physical node.
-- Return precise completions and errors through the node runtime's local
-  executor interface.
+- 在 KVM 或 TCG 下执行远端 vCPU 时间片。
+- 当 KVM 可用时持有本地 KVM vCPU 对象。
+- 使用 TCG 从属执行时拉起辅助 QEMU TCG 实例。
+- 应用并返回远端执行所需的内存更新。
+- 处理分配给该物理节点的存储操作。
+- 通过节点运行时的本地执行器接口返回精确的完成结果与错误。
 
-Non-responsibilities:
+非职责：
 
-- The execution runtime must not become the cluster control plane or the
-  per-VM routing/directory authority.
-- It must not communicate cross-node directly. It returns to its local node
-  runtime, which decides whether a sidecar/gateway transmission is required.
-- It must not create or truncate another VM's shared memory backing.
+- 不充当集群控制面或单 VM 路由/目录权威。
+- 不直接进行跨节点通信，而是返回本地节点运行时，由后者决定是否经 Sidecar/Gateway 发送。
+- 不创建或截断其他 VM 的共享内存后备文件。
 
-Deployment rule:
+部署规则：
 
-- KVM executor workers may be in-process worker threads or a separate local
-  supervisor.
-- TCG helper QEMU processes may remain separate local processes.
-- The process choice must not change local request identity, ordering,
-  idempotency, queue ownership, or failure reporting.
+- KVM 执行器 worker 可采用进程内 worker 线程或独立本地守护进程。
+- TCG 辅助 QEMU 进程可保持为独立本地进程。
+- 进程形态选择不得改变本地请求标识、排序、幂等性、队列所有权或故障上报语义。
 
-### 4.5 Node Runtime Boundary
+### 4.5 节点运行时边界
 
-The required boundary is semantic and protocol-oriented, not an unconditional
-process boundary:
+所需边界面向语义与协议，而非无条件的进程边界：
 
-- The node runtime owns manifest validation, routing and placement lookup,
-  request identity, memory/vCPU handoff coordination, and cross-node ingress
-  and egress.
-- The local execution runtime owns execution mechanics and local resources such
-  as KVM vCPU objects or TCG helper processes.
-- The local executor ABI must carry VM identity, incarnation, manifest/route
-  generation, operation identity, completion status, and enough ordering
-  information to satisfy the memory and vCPU contracts. It must be specified
-  by the memory, vCPU, and local IPC specifications before it replaces legacy
-  master-to-slave messages.
-  - Legacy `master_core` to `slave_daemon` IPC is not a supported production
-    ABI and must be replaced by the typed
-    node-runtime/executor interface.
-- Removing a process hop is permitted only after the same role boundary,
-  concurrency model, backpressure behavior, and fault behavior have regression
-  coverage. It is not permission to bypass the node runtime or to serialize the
-  normal path.
+- 节点运行时负责清单校验、路由与放置查询、请求标识、内存/vCPU 交接协调以及跨节点出入口。
+- 本地执行运行时负责执行机制及本地资源（如 KVM vCPU 对象或 TCG 辅助进程）。
+- 本地执行器 ABI 须携带 VM 标识、实例代次、清单/路由代次、操作标识、完成状态以及满足内存与 vCPU 契约所需的排序信息，并在取代旧版 master-to-slave 消息前由内存、vCPU 及本地 IPC 规范明确定义。
+  - 旧版 `master_core` 到 `slave_daemon` 的 IPC 不再作为受支持的生产 ABI，须替换为强类型的节点运行时/执行器接口。
+- 仅在角色边界、并发模型、背压行为与故障行为具备回归测试覆盖后，才允许消除进程跳数，且不得借此绕过节点运行时或串行化正常路径。
 
-### 4.6 Gateway / Sidecar Fabric
+### 4.6 Gateway / Sidecar 路由织网
 
-The gateway fabric is the only production cross-node network path.
+Gateway 路由织网是唯一的生产跨节点网络路径。
 
-Responsibilities:
+职责：
 
-- Route packets by composite target identity.
-- Support flat and fractal topology.
-- Isolate VM traffic by composite ID and explicit route table entries.
-- Avoid auto-learning behavior that overwrites static production routes.
-- Preserve low-latency handling for synchronous RPC messages such as VCPU_RUN/VCPU_EXIT.
-- Deliver cross-node packets to the target node runtime, never directly to an
-  arbitrary executor.
+- 按复合目标标识路由数据包。
+- 支持 Flat 与 Fractal 拓扑。
+- 通过复合 ID 与显式路由表项隔离不同 VM 流量。
+- 避免自动学习行为覆盖静态生产路由。
+- 为 `VCPU_RUN`/`VCPU_EXIT` 等同步 RPC 消息保持低延迟处理。
+- 将跨节点报文投递至目标节点运行时，绝不直接投递至任意执行器。
 
-Non-responsibilities:
+非职责：
 
-- Gateway must not inspect guest semantics beyond routing and scheduling priority.
-- Gateway must not synthesize VM lifecycle decisions.
+- 除路由与调度优先级外，不解析客户机语义。
+- 不自行合成 VM 生命周期决策。
 
-### 4.7 Optional Kernel Accelerator
+### 4.7 可选内核加速器
 
-The kernel module is not a separate Mode A product. It is an optional data-plane accelerator for the user-space canonical path.
+内核模块并非独立的 Mode A 产品，而是用户态规范路径的可选数据面加速器。
 
-Allowed responsibilities:
+允许的职责：
 
-- Fast page dirty capture.
-- Fast page invalidation or page wakeup.
-- Fast local enqueue to a local executor after the node runtime has accepted
-  and authorized the operation.
-- Fast packet TX/RX when it preserves user-space semantics.
-- Optional low-overhead wait queues for blocking memory or vCPU operations.
+- 快速脏页捕获。
+- 快速页失效或页唤醒。
+- 在节点运行时受理并授权操作后，快速本地入队至本地执行器。
+- 在保持用户态语义前提下进行快速报文 TX/RX。
+- 为阻塞内存或 vCPU 操作提供可选的低开销等待队列。
 
-Forbidden responsibilities:
+禁止的职责：
 
-- Owning global vm_id authority.
-- Owning resource planning.
-- Owning host placement.
-- Owning multi-VM lifecycle.
-- Owning a separate copy of cluster topology as the source of truth.
-- Owning another independent logic_core state machine unless that state is explicitly per-VM and synchronized by user-space control.
+- 拥有全局 `vm_id` 权威。
+- 拥有资源规划权。
+- 拥有宿主机放置权。
+- 拥有多 VM 生命周期权威。
+- 持有独立集群拓扑副本作为真值源。
+- 拥有独立的 `logic_core` 状态机（除非该状态明确按 VM 隔离且由用户态控制面同步）。
 
-VM-specific state must be owned by explicit kernel contexts. Shared
-module-wide transports and workers require context references and safe
-lifetimes; they cannot authorize sharing VM identity or semantic state.
-Multi-VM capability remains subject to the isolation gate in Section 14.
+VM 专属状态须归属显式内核上下文。模块级共享传输与 worker 须持有上下文引用并具备安全生命周期，不得共享 VM 标识或语义状态。多 VM 能力受第 14 节隔离门禁约束。
 
-## 5. Mode Model
+## 5. 运行模式模型
 
-### 5.1 Current Terminology
+### 5.1 当前术语
 
-Historically:
+按历史习惯：
 
-- Mode A means `wavevm.ko` is loaded and `/dev/wavevm` is available.
-- Mode B means the system runs without the kernel module.
+- Mode A 表示已加载 `wavevm.ko` 且 `/dev/wavevm` 可用。
+- Mode B 表示在无内核模块的情况下运行。
 
-This terminology remains useful for deployment, but it must not imply two independent architectures.
+该术语在部署层面依然有效，但不意味着存在两套独立架构。
 
-### 5.2 Long-Term Rule
+### 5.2 长期规则
 
-Mode B is the canonical semantic path.
+Mode B 是规范语义路径。
 
-Mode A is Mode B plus optional kernel acceleration.
+Mode A 是 Mode B 叠加可选内核加速。
 
-This means:
+核心原则如下：
 
 ```text
-Correctness first exists in Mode B.
-Mode A may accelerate correctness-preserving operations.
-Mode A must never define different correctness semantics.
+正确性首先在 Mode B 中建立。
+Mode A 可加速保持正确性的操作。
+Mode A 绝不定义不同的正确性语义。
 ```
 
-### 5.3 Practical Consequence
+### 5.3 实践要求
 
-Any new feature must first answer:
+任何新特性均须首先明确以下四个问题：
 
-- What is the Mode B behavior?
-- What is the KVM behavior?
-- What is the TCG behavior?
-- What optional kernel acceleration can speed it up without changing the behavior?
+- Mode B 下的行为是什么？
+- KVM 下的行为是什么？
+- TCG 下的行为是什么？
+- 哪些可选内核加速可在不改变行为的前提下提速？
 
-A feature that only works because `wavevm.ko` owns hidden state is not a baseline feature.
+仅靠 `wavevm.ko` 内部隐含状态才能工作的特性不属于基线能力。
 
-## 6. Execution Backends
+## 6. 执行后端
 
 ### 6.1 KVM
 
-KVM is a hardware-accelerated execution backend.
+KVM 是硬件加速的执行后端。
 
-KVM-specific responsibilities:
+KVM 专属职责：
 
-- Use KVM vCPU ioctls to load and run remote vCPU state.
-- Use KVM dirty logging or equivalent mechanisms for guest RAM writes.
-- Avoid `mprotect(PROT_NONE)` on KVM RAM paths where it causes EPT violation storms or invalid host mappings.
-- Preserve LAPIC, MP state, vCPU events, TSC, and interrupt delivery state across remote execution.
+- 使用 KVM vCPU ioctl 加载并运行远端 vCPU 状态。
+- 使用 KVM 脏页日志或等效机制追踪客户机 RAM 写入。
+- 避免在 KVM RAM 路径使用引发 EPT violation 风暴或破坏宿主机映射的 `mprotect(PROT_NONE)`。
+- 在跨节点远端执行中完整保留 LAPIC、MP 状态、vCPU 事件、TSC 与中断投递状态。
 
-KVM must still obey the same WaveVM CPU route table, memory placement table, and consistency model.
+KVM 仍须严格遵守同一套 WaveVM CPU 路由表、内存放置表与一致性模型。
 
 ### 6.2 TCG
 
-TCG is the required no-KVM execution backend.
+TCG 是必需的无 KVM 执行后端。
 
-TCG-specific responsibilities:
+TCG 专属职责：
 
-- Export and import TCG CPU state.
-- Preserve guest-visible interrupt state, LAPIC state, and halted/runnable state.
-- Maintain remote execution handoff boundaries.
-- Handle memory faults and dirty synchronization in user space.
-- Avoid assuming a hardware MMU or KVM dirty log exists.
+- 导出与导入 TCG CPU 状态。
+- 保留客户机可见的中断状态、LAPIC 状态以及 halted/runnable 状态。
+- 维护远端执行交接边界。
+- 在用户态处理缺页与脏页同步。
+- 不假设存在硬件 MMU 或 KVM 脏页日志。
 
-TCG is not an optional toy path. It is required for restricted containers, no-KVM cloud instances, and development environments.
+TCG 并非可选演示路径，而是受限容器、无 KVM 云实例与开发环境的必需后端。
 
-### 6.3 Shared Semantics Between KVM and TCG
+### 6.3 KVM 与 TCG 的共享语义
 
-KVM and TCG must share these semantics:
+KVM 与 TCG 须共享以下语义：
 
-- Same guest VM resource definition.
-- Same vCPU index to physical-node route mapping.
-- Same memory chunk to physical-node placement mapping.
-- Same page ownership/version policy.
-- Same handoff consistency boundary.
-- Same guest-visible machine layout.
-- Same error reporting semantics.
+- 相同的客户机 VM 资源定义。
+- 相同的 vCPU 索引到物理节点路由映射。
+- 相同的内存分块到物理节点放置映射。
+- 相同的页所有权/版本策略。
+- 相同的交接一致性边界。
+- 相同的客户机可见机器布局。
+- 相同的错误上报语义。
 
-Implementation may differ only at the execution and memory-trap layer.
+实现差异仅限于执行层与内存陷入层。
 
-The exact handoff ABI is defined by `docs/specs/vcpu-handoff.md`. That specification
-must define field ownership, export/import ordering, vCPU exclusion, interrupt
-merging, timeout behavior, and duplicate-request handling before the handoff
-path is substantially changed.
+精确的交接 ABI 由 `docs/specs/vcpu-handoff.md` 定义。对交接路径进行实质性改造前，该规范须明确字段所有权、导出/导入顺序、vCPU 互斥、中断合并、超时行为与重复请求处理。
 
-Minimum supports a homogeneous execution backend inside one VM:
+Minimum 支持单台 VM 内部使用同构执行后端：
 
-- KVM frontend to KVM execution runtime.
-- TCG frontend to TCG execution runtime.
+- KVM 前端对接 KVM 执行运行时。
+- TCG 前端对接 TCG 执行运行时。
 
-The cluster itself may be heterogeneous. A physical node with KVM may
-advertise both KVM and TCG executor capability when its TCG helper is valid;
-a node without KVM normally advertises TCG only. `AUTO` admission prefers a
-complete KVM placement and, if that cannot be admitted, creates a new complete
-TCG placement and records the fallback before activation. `REQUIRE_KVM` fails
-instead of degrading. Guest memory placement is independent of this choice:
-KVM and TCG VMs may use memory participants without KVM when their memory
-service capability, capacity, and route are valid.
+集群本身可以是异构的。具备 KVM 的物理节点若其 TCG 辅助进程有效，可同时宣告 KVM 与 TCG 执行器能力；无 KVM 节点通常仅宣告 TCG。`AUTO` 准入策略优先尝试完整 KVM 放置，无法准入时则新建完整 TCG 放置并在激活前记录回退；`REQUIRE_KVM` 在无法满足时直接失败而不降级。客户机内存放置独立于执行后端选择：只要内存服务能力、容量与路由有效，KVM 与 TCG VM 均可使用无 KVM 的内存参与节点。
 
-Mode A and Mode B may still be mixed between nodes because kernel acceleration
-is independent of the execution backend. KVM-to-TCG or TCG-to-KVM vCPU handoff
-is not a Minimum capability. It must fail capability negotiation rather than
-attempt an implicit conversion.
+由于内核加速独立于执行后端，节点间可混用 Mode A 与 Mode B。KVM 到 TCG 或 TCG 到 KVM 的跨后端 vCPU 交接不属于 Minimum 能力，须在能力协商阶段显式失败，不得隐式转换。
 
-## 7. Multi-VM Model
+## 7. 多 VM 模型
 
-### 7.1 VM Identity
+### 7.1 VM 标识
 
-WaveVM uses complete scoped identities for network-visible operations, as
-defined by the identity/routing and wire specifications. A historical packed
-8-bit VM / 24-bit node identifier cannot represent that contract and must not
-be used as a production VM identity.
+WaveVM 对网络可见操作使用完整的作用域标识（由标识/路由与线协议规范定义）。历史上的 8-bit VM / 24-bit 节点压缩标识无法承载该契约，禁止用作生产 VM 标识。
 
-The identity terms are distinct:
+各类标识术语严格区分：
 
-- `vm_id` is a `u32` logical namespace allocated to a VM. It is not a durable
-  identity by itself.
-- `vm_incarnation` is a generation created for each successful VM creation. It
-  prevents delayed traffic from an old VM lifetime entering a new VM that
-  reuses the same `vm_id`.
-- `physical_node_id` identifies a registered resource-providing host in the
-  cluster.
-- `physical_host_id` identifies the physical host group for aggregate resource
-  accounting and correlated failure. It may contain multiple distinct
-  `physical_node_id` resource providers and gateway roles.
-- `vnode_id` identifies a DHT/routing slot inside one VM namespace. A physical
-  node may own multiple vnodes.
-- `primary_vnode` is the designated local vnode in the admitted route scope.
-  It is not the physical node ID or a substitute for the complete route key.
-- `WVM_INSTANCE_ID` is a local runtime discriminator used to derive socket and
-  file names. It may differ between physical nodes participating in the same VM
-  and must not be used as a network identity.
-- A process instance ID is diagnostic identity for one process lifetime. It is
-  not a VM, node, or routing identity.
-- A network-visible route key identifies a VM-incarnation-scoped destination;
-  production traffic must meet the complete identity and route-scope
-  requirements of the wire and identity/routing specifications.
+- `vm_id`：分配给 VM 的 `u32` 逻辑命名空间，单独使用不构成持久标识。
+- `vm_incarnation`：每次成功创建 VM 时生成的实例代次，防止旧 VM 生命周期的迟到流量串入复用同一 `vm_id` 的新 VM。
+- `physical_node_id`：标识集群中已注册的提供资源的节点实例。
+- `physical_host_id`：标识用于聚合资源核算与关联故障域的物理宿主机组，其下可包含多个独立的 `physical_node_id` 资源提供者与 Gateway 角色。
+- `vnode_id`：标识单个 VM 命名空间内的 DHT/路由槽位，一个物理节点可拥有多个 vnode。
+- `primary_vnode`：已准入路由作用域内指定的本地 vnode，不等同于物理节点 ID，也不能替代完整路由键。
+- `WVM_INSTANCE_ID`：用于派生本地套接字与文件名的运行时区分符，同一 VM 的不同参与物理节点上可取值不同，不得用作网络标识。
+- 进程实例 ID：单个进程生命周期的诊断标识，不属于 VM、节点或路由标识。
+- 网络可见路由键：标识 `vm_incarnation` 作用域内的目标；生产流量须满足线协议与标识/路由规范的完整标识与路由作用域要求。
 
-Minimum identity rules:
+最小标识规则：
 
-- Every network route and packet belongs to exactly one VM namespace.
-- VM operations carry complete identities. `vm_id=0` is reserved for the
-  authenticated cluster-control scope, not raw-ID guest traffic.
-- DHT-internal tables may use raw vnode IDs only where the enclosing per-VM
-  runtime context makes the namespace unambiguous.
-- Physical node IDs and vnode IDs occupy different semantic domains even when
-  their numeric values happen to match.
-- `WVM_INSTANCE_ID` must never be treated as an alias for `vm_id`.
-- Node-agent identity, listener ports, Unix socket paths, shared-memory names,
-  logs, and temporary paths must be explicitly parameterized by the
-  registered node instance. A host-global default is invalid when two node
-  instances share one host.
-- Reject a wire path that cannot validate the required incarnation and scope.
-  ID reuse requires confirmed retirement and a fresh incarnation; node/page
-  epochs must not be repurposed as VM incarnation.
+- 每条网络路由与报文均归属且仅归属一个 VM 命名空间。
+- VM 操作携带完整标识。`vm_id=0` 保留给经认证的集群控制作用域，不得用于裸 ID 客户机流量。
+- 仅在所处单 VM 运行时上下文能唯一确定命名空间时，DHT 内部表方可使用裸 vnode ID。
+- 即使数值偶合，物理节点 ID 与 vnode ID 也属于不同语义域。
+- 严禁将 `WVM_INSTANCE_ID` 当作 `vm_id` 别名。
+- 节点代理标识、监听端口、Unix 套接字路径、共享内存名称、日志与临时路径须由已注册节点实例显式参数化；同一宿主机存在多个节点实例时禁止使用宿主机全局默认值。
+- 拒绝无法校验所需实例代次与作用域的线协议路径。ID 复用须在确认回收并分配新实例代次后进行，不得将节点/页 epoch 挪作 VM 实例代次。
 
-### 7.2 Per-VM Runtime Isolation
+### 7.2 单 VM 运行时隔离
 
-Each VM instance must have isolated:
+每个 VM 实例须拥有以下隔离资源：
 
 - `vm_id`
 - `vm_incarnation`
 - `WVM_INSTANCE_ID`
-- QEMU IPC socket path
+- QEMU IPC 套接字路径
 - `WVM_SHM_FILE`
-- node-runtime ingress endpoint
-- local executor binding
-- gateway/sidecar route namespace or route keys
-- QEMU monitor/serial/SSH forwarding ports
-- log directory
-- temp directory
-- resource reservation
-- page directory state
-- vCPU route table
-- memory placement table
+- 节点运行时入口端点
+- 本地执行器绑定
+- Gateway/Sidecar 路由命名空间或路由键
+- QEMU monitor/serial/SSH 转发端口
+- 日志目录
+- 临时目录
+- 资源预留
+- 页目录状态
+- vCPU 路由表
+- 内存放置表
 
-No two VMs may share the same RAM backing file unless they are explicitly implementing a future shared-memory feature. Accidental SHM sharing is a correctness bug.
+除非明确实现未来的共享内存特性，否则任意两台 VM 不得共享同一 RAM 后备文件；偶发 SHM 共享属于正确性缺陷。
 
-The generated runtime manifest is the source of all local names. Components
-must not independently derive incompatible socket, SHM, port, or log names from
-only a raw node ID. The candidate's local-name salt is derived before its
-self-digest from its allocated `manifest_id`, `admission_tx_id`, VM identity,
-generation, and physical-node ID; the final manifest digest verifies that
-published namespace rather than participating in a hash cycle.
+生成的运行时清单是所有本地名称的唯一来源，各组件不得仅凭裸节点 ID 自行派生不兼容的套接字、SHM、端口或日志名。候选清单的本地名称盐值（salt）在计算自摘要（self-digest）之前，由已分配的 `manifest_id`、`admission_tx_id`、VM 标识、代次与物理节点 ID 派生；最终清单摘要用于校验该已发布命名空间，而不形成哈希循环。
 
-### 7.3 Host Placement
+### 7.3 宿主机放置
 
-A VM's host node is the physical node that runs the authoritative QEMU frontend for that VM.
+VM 的宿主机节点（host node）是运行该 VM 权威 QEMU 前端的物理节点。
 
-Host placement requirements:
+宿主机放置要求：
 
-- Host placement must be explicit, not inferred from the first vCPU placement
-  block.
-- The control plane must be able to accept a VM creation request on any physical node and then choose the host node.
-- The host node does not have to be the node where the request was submitted.
-- Host placement must account for QEMU/control-plane overhead, not only guest vCPU and guest RAM.
+- 宿主机放置须显式指定，不得从首个 vCPU 放置块推断。
+- 控制面须支持在任意物理节点接收 VM 创建请求并决策宿主机节点。
+- 宿主机节点不必与请求提交节点相同。
+- 宿主机放置除客户机 vCPU 与 RAM 外，还须计入 QEMU 与控制面开销。
 
-### 7.4 Admission Control
+### 7.4 准入控制
 
-Creating a VM must be an atomic admission operation.
+创建 VM 须作为原子准入操作执行。
 
-The Minimum admission linearization point is a durable activation fence binding
-one candidate manifest, eligibility fence, route-scope snapshot, and prepared
-reservation set. VM identity/incarnation is allocated before any reservation or
-candidate-manifest digest. A reservation or local manifest in `PREPARED` state
-is expiring and cannot carry guest traffic; `ACTIVATE` promotes it only after
-the durable decision. Coordinator restart replays that decision or aborts an
-unactivated candidate. It never infers commitment from a listener, heartbeat,
-or process survival.
+Minimum 准入线性化点为持久化激活栅栏（activation fence），用于绑定单一候选清单、资格栅栏（eligibility fence）、路由作用域快照以及已准备资源预留集。VM 标识与实例代次在任何预留或候选清单摘要之前分配。处于 `PREPARED` 状态的预留或本地清单具有有效期且不得承载客户机流量；仅在持久化决策完成后，方由 `ACTIVATE` 提升为生效状态。协调器重启时按持久化决策重放或中止未激活候选，绝不依据监听套接字、心跳或进程存活推断提交成功。
 
-Admission must check:
+准入须校验：
 
-- Total requested vCPUs fit in available cluster CPU capacity.
-- Total requested memory fits in available cluster memory capacity.
-- Per-node reservations do not exceed registered capacities.
-- Host node has enough overhead headroom.
-- Required ports and SHM names are available.
-- Required accelerator capabilities exist if the VM requires them.
-- The exact member/gateway/capability/route eligibility fence is still valid at
-  every prepare and activation step.
-- Rollback is possible if any node fails to start its local components.
+- 请求的总 vCPU 数不超过集群可用 CPU 容量。
+- 请求的总内存不超过集群可用内存容量。
+- 单节点预留不超过其已注册容量。
+- 宿主机节点具备足够的开销余量。
+- 所需端口与 SHM 名称可用。
+- 若 VM 要求特定加速器能力，目标节点已具备该能力。
+- 在每个准备与激活步骤中，精确的成员/Gateway/能力/路由资格栅栏均持续有效。
+- 任一节点本地组件启动失败时可完整回滚。
 
-Static planning alone is not enough for long-term multi-VM operation.
+长期多 VM 运行不能仅依赖静态规划。
 
-## 8. Resource Model
+## 8. 资源模型
 
-### 8.1 Physical Node Registration
+### 8.1 物理节点注册
 
-Each physical node registers capacity, not a mandatory NUMA boundary for the guest.
+物理节点注册的是可用容量，而非强制施加给客户机的 NUMA 边界。
 
-Registered capacity includes:
+注册容量包括：
 
-- CPU capacity available to WaveVM.
-- Memory capacity available to WaveVM.
-- Optional DHT/gateway weight.
-- Capabilities such as KVM, TCG, kernel accelerator, storage, GPU, and network features.
+- 可供 WaveVM 使用的 CPU 容量。
+- 可供 WaveVM 使用的内存容量。
+- 可选的 DHT/Gateway 权重。
+- KVM、TCG、内核加速器、存储、GPU、网络等能力。
 
-The registered capacity is a scheduling input. It is not the same as automatic ownership of every resource by every VM.
+注册容量仅作调度输入，不意味着每台 VM 自动拥有全部资源。
 
-Registration is not admission. A registration record additionally identifies
-the physical-node identity, boot/process instance, failure domain, reachable
-sidecar endpoint, Pod membership, and offered roles such as compute, leaf
-sidecar, intermediate gateway, or root gateway. Gateway records explicitly
-name their hosting physical node/failure domain. Capacity and role claims become
-schedulable only after the membership lifecycle has validated them.
+注册不等同于准入。注册记录还须包含物理节点标识、启动/进程实例、故障域、可达 Sidecar 端点、Pod 成员关系以及提供的角色（如计算节点、叶子 Sidecar、中间 Gateway 或根 Gateway）。Gateway 记录须显式标明其宿主物理节点与故障域。所声明的容量与角色仅在成员生命周期校验通过后方可参与调度。
 
-### 8.2 VM Resource Request
+### 8.2 VM 资源请求
 
-A VM should request resources in user-facing terms:
+VM 应以面向用户的方式声明资源请求：
 
-- vCPU count
-- memory size
-- optional placement policy such as compact or spread
-- optional host placement constraints
-- optional accelerator requirement
-- optional consistency policy
-- optional device/storage requirements
+- vCPU 数量
+- 内存大小
+- 可选放置策略（如 compact 或 spread）
+- 可选宿主机放置约束
+- 可选加速器要求
+- 可选一致性策略
+- 可选设备/存储要求
 
-Users should not be forced to manually select NUMA nodes for ordinary VM creation.
+普通 VM 创建场景不应强制用户手工选择 NUMA 节点。
 
-### 8.3 Placement Policy
+### 8.3 放置策略
 
-Compact policy:
+Compact（紧凑）策略：
 
-- Prefer fewer physical nodes.
-- Reduce cross-node communication.
-- Good for latency-sensitive workloads.
-- Can concentrate multiple VM hosts unless host placement is separately balanced.
+- 优先使用更少的物理节点。
+- 减少跨节点通信。
+- 适合延迟敏感型负载。
+- 若不单独均衡宿主机放置，可能导致多台 VM 宿主机集中。
 
-Spread policy:
+Spread（分散）策略：
 
-- Balance resource usage across nodes.
-- Increase fault isolation and use more aggregate bandwidth.
-- May increase cross-node memory and vCPU traffic.
+- 在多节点间均衡资源使用。
+- 提升故障隔离并利用更高聚合带宽。
+- 可能增加跨节点内存与 vCPU 通信流量。
 
-Neither policy replaces admission control or host placement.
+两种策略均不能替代准入控制或宿主机放置决策。
 
-### 8.4 Guest NUMA Presentation
+### 8.4 客户机 NUMA 呈现
 
-Physical resource placement and guest-visible NUMA topology are separate decisions.
+物理资源放置与客户机可见 NUMA 拓扑是两个独立决策。
 
-WaveVM may present:
+WaveVM 可呈现：
 
-- A flat guest topology for compatibility.
-- A NUMA topology matching physical placement.
-- A synthetic topology optimized for the guest OS scheduler.
+- 面向兼容性的 Flat 客户机拓扑。
+- 与物理放置对应的 NUMA 拓扑。
+- 针对客户机 OS 调度器优化的合成拓扑。
 
-The guest should not be forced into physical-node NUMA unless that is explicitly chosen.
+除非显式选择，否则不应强制将客户机绑定至物理节点 NUMA 拓扑。
 
-### 8.5 Cluster Membership and Topology Lifecycle
+### 8.5 集群成员与拓扑生命周期
 
-Cluster membership is a control-plane state machine distinct from VM lifecycle,
-resource placement, and page/vCPU epochs. The authority is an explicit registry
-of compute-node and gateway records plus a desired topology graph. A physical
-host may provide both a compute role and a gateway role, but those roles have
-separate readiness and drain conditions.
+集群成员管理是独立于 VM 生命周期、资源放置与页/vCPU epoch 的控制面状态机。其权威为显式的计算节点与 Gateway 注册表以及期望拓扑图。一台物理宿主机可同时承担计算与 Gateway 角色，但两者的就绪与排空条件相互独立。
 
-Required member states are:
+必需成员状态如下：
 
 ```text
 PENDING -> VALIDATING -> PREPARED -> ACTIVE -> CORDONED -> DRAINING -> REMOVED
-Any nonterminal state -> FAILED after a terminal failure decision.
+任意非终态 -> FAILED（在终结故障决策之后）。
 
-health: HEALTHY | SUSPECT | UNREACHABLE | RECOVERING
+健康状态（health）：HEALTHY | SUSPECT | UNREACHABLE | RECOVERING
 ```
 
-`PENDING` and `VALIDATING` are not routable or schedulable. `PREPARED` has a
-validated identity, capability set, and loaded route snapshot but is not yet
-eligible for new placement. `ACTIVE` is the only normal schedulable/routable
-state. `CORDONED` blocks new placement while preserving current allocations.
-`DRAINING` is a deliberate removal operation. `FAILED` records a failure; it
-does not mean that the controller may silently reuse the identity or erase a
-VM's dependency on the member.
+`PENDING` 与 `VALIDATING` 既不可路由也不可调度。`PREPARED` 已通过标识、能力集与路由快照加载校验，但尚不具备新放置资格。`ACTIVE` 是唯一正常的可调度/可路由状态。`CORDONED` 阻止新放置同时保留既有分配。`DRAINING` 表示受控移除流程。`FAILED` 记录故障，但不授权控制器静默复用其标识或抹除 VM 对该成员的依赖。
 
-Joining a compute node requires registration, identity and capability
-validation, Pod/vnode assignment, sidecar reachability validation, route
-snapshot preparation, a persisted survivor `RequiredAckSet`, and one atomic
-publish before the scheduler may use its capacity. Joining a gateway additionally
-requires loop-free parent/child reachability, explicit hosting-host/failure
-domain registration, and acknowledgement of every required surviving next-hop
-rule before it carries production traffic.
+计算节点加入须完成注册、标识与能力校验、Pod/vnode 分配、Sidecar 可达性校验、路由快照准备、持久化存活者 `RequiredAckSet` 以及单次原子发布，之后调度器方可使用其容量。Gateway 加入还须额外验证无环父子可达性、显式宿主机/故障域注册，以及全部必需存活下一跳规则的确认，之后方可承载生产流量。
 
-Removing a member follows the reverse sequence. A compute node may not leave
-while an admitted VM still has vCPUs, memory ownership/directory duties, storage
-work, or required control-plane duties allocated there. Minimum rejects that
-removal instead of silently rebinding a running VM. A gateway may not leave until a
-prepared successor snapshot provides a validated alternate path for every
-affected destination, new traffic has moved to that snapshot, and old-snapshot
-in-flight traffic has drained or failed through its bounded recovery policy.
-Removal of a sole path must fail explicitly.
+成员移除遵循反向流程。只要已准入 VM 仍在某计算节点上持有 vCPU、内存所有权/目录职责、存储任务或必需控制面职责，该节点即不得离开；Minimum 直接拒绝该移除，而非静默重绑定运行中 VM。Gateway 移除前，须先准备具备经验证替代路径的后继快照覆盖全部受影响目的地、将新流量切至该快照，并使旧快照在途流量排空或按有界恢复策略失败；移除唯一路径须显式失败。
 
-A health timeout, cordon, gateway drain, capability change, or member-instance
-change immediately invalidates unfinished admissions that depend on that member;
-it does not by itself delete routes, reclaim capacity, or migrate guest state.
-If an alternate gateway path exists, the control plane may publish a replacement
-route generation through a persisted required-survivor ACK set. If a VM has no
-safe replacement for a failed resource node, the VM enters a documented
-degraded, paused, or failed lifecycle outcome; it must not be reported as
-healthy. A physical-host failure marks every hosted compute/gateway role
-unreachable together; host removal drains all hosted roles before stop.
+健康超时、隔离（cordon）、Gateway 排空、能力变更或成员实例变更会立即使依赖该成员的未完成准入失效，但本身不会删除路由、回收容量或迁移客户机状态。若存在替代 Gateway 路径，控制面可通过持久化的必需存活者 ACK 集合发布替代路由代次。若故障资源节点无安全替代方案，受影响 VM 将进入文档规定的降级、暂停或失败生命周期结果，不得继续上报为健康。物理宿主机故障会同步将其承载的全部计算与 Gateway 角色标记为不可达；宿主机移除须在停机前排空全部承载角色。
 
-Cluster membership capacity, per-domain vnode capacity, gateway adjacency and
-route capacity, and per-VM admission workspace must have independent resource
-budgets. Storage follows actual records within those budgets, not the largest
-node ID or the entire representable address space. A deployment may retain a
-4096-vnode domain budget without imposing it on the whole cluster.
+集群成员容量、单域 vnode 容量、Gateway 邻接与路由容量以及单 VM 准入工作空间须拥有各自独立的资源预算。存储按预算内的实际记录规模分配，而非按最大节点 ID 或完整可表示地址空间分配。部署可保留 4096-vnode 单域预算，但不得将其强加为全集群上限。
 
-A flat domain may exceed 4096 vnodes when direct sidecar connectivity and the
-declared control-plane and route-consumer budgets permit it. Crossing that
-number alone must not force fractal routing. Fractal routing remains available
-for network topology and route aggregation: intermediate gateways route by Pod
-or prefix, and leaf domains resolve local vnodes. Both topologies use the same
-semantic services and snapshot rules. The formal destination field is `u32`
-with `0xffffffff` reserved; its address space is not a tested cluster-capacity
-claim. Exact addressing, capacity checks, and acceptance tests belong to
-`docs/specs/identity-routing.md`. Every consumer must enforce its declared
-capacity and be verified before a higher capacity is advertised; increasing a
-macro alone cannot establish supported scale.
+当直接 Sidecar 连通性以及声明的控制面与路由消费方预算允许时，Flat 域可超过 4096 vnode，跨越该数值本身不强制切换为 Fractal 路由。Fractal 路由用于网络拓扑与路由聚合：中间 Gateway 按 Pod 或前缀路由，叶子域解析本地 vnode。两种拓扑共享同一套语义服务与快照规则。正式目标字段为 `u32`（保留 `0xffffffff`），其地址空间大小不等于经过测试的集群容量承诺。精确寻址、容量检查与验收测试归属 `docs/specs/identity-routing.md`。每个消费方须强制执行其声明容量，并在对外宣称更高容量前完成验证。
 
-## 9. Consistency Model
+## 9. 一致性模型
 
-The consistency contract is the user-space directory, monotonically versioned
-pages, and subscriber/copyset model specified in
-`docs/specs/memory-consistency.md`. Names such as invalidate, downgrade, and
-write-back do not by themselves establish a MESI state machine. An explicit
-owner or page-state field may be
-added only when that specification demonstrates why it is required and defines
-its transitions. Documentation and code must not claim stronger coherence than
-the accepted contract actually provides.
+一致性契约采用 `docs/specs/memory-consistency.md` 定义的用户态目录、单调递增页版本与订阅者/副本集模型。使用 invalidate、downgrade、write-back 等术语并不自动构成 MESI 状态机；仅当该规范论证必要性并定义状态转换时，才可引入显式 owner 或页状态字段。文档与代码不得宣称强于已接受契约实际提供的一致性保证。
 
-### 9.1 Required Concepts
+### 9.1 必需概念
 
-WaveVM must define memory consistency in terms of explicit concepts:
+WaveVM 须通过以下显式概念定义内存一致性：
 
-- Page state.
-- Page owner or directory owner.
-- Page version.
-- Copyset or subscriber set.
-- Dirty state.
-- Handoff boundary.
-- Acquire/fetch/release behavior.
-- Invalidation or downgrade behavior.
-- Error and timeout behavior.
+- 页状态（Page state）。
+- 页所有者或目录所有者（Page owner / directory owner）。
+- 页版本（Page version）。
+- 副本集或订阅者集合（Copyset / subscriber set）。
+- 脏状态（Dirty state）。
+- 交接边界（Handoff boundary）。
+- 获取/拉取/释放行为（Acquire/fetch/release）。
+- 失效或降级行为（Invalidation / downgrade）。
+- 错误与超时行为。
 
-These concepts must exist independently of whether KVM, TCG, Mode A, or Mode B is used.
+上述概念须独立于 KVM、TCG、Mode A 或 Mode B 而成立。
 
-The consistency specification is implementation-blocking. At minimum it must
-define page states or equivalent predicates, every message transition,
-authority and lock ordering, version/epoch rules, concurrent writers,
-subscriber expiry, duplicate/reordered/delayed packets, timeout recovery, and
-the exact barriers provided by each dirty synchronization policy.
+一致性规范属于实现阻塞契约，至少须定义：页状态或等效谓词、每类消息转换、权威与锁序、版本/epoch 规则、并发写入者、订阅者过期、重复/乱序/延迟报文、超时恢复，以及每种脏页同步策略所提供的精确屏障语义。
 
-### 9.2 Handoff Boundary
+### 9.2 交接边界
 
-Remote vCPU execution is a causal boundary.
+远端 vCPU 执行构成因果边界。
 
-Before a vCPU state is handed to a remote execution node:
+将 vCPU 状态交接给远端执行节点之前：
 
-- Required CPU state must be serialized.
-- Required interrupt/LAPIC/timer state must be serialized or explicitly retained locally.
-- Dirty memory needed for correctness must be visible to the remote node.
-- Pending invalidations that affect the remote slice must not be lost.
+- 必需 CPU 状态须完成序列化。
+- 必需中断/LAPIC/定时器状态须序列化或显式保留在本地。
+- 保证正确性所需的脏内存须对远端节点可见。
+- 影响远端时间片的待处理失效不得丢失。
 
-After remote execution returns:
+远端执行返回之后：
 
-- Returned CPU state must be merged without erasing locally delivered interrupts.
-- Dirty memory updates produced by the remote node must be visible to the authoritative directory path.
-- Errors must be propagated to QEMU rather than being hidden as successful execution.
+- 返回的 CPU 状态须在不抹除本地已投递中断的前提下合并。
+- 远端节点产生的脏内存更新须对权威目录路径可见。
+- 错误须透传至 QEMU，不得伪装为执行成功。
 
-### 9.3 Dirty Memory Policy
+### 9.3 脏页同步策略
 
-Dirty synchronization policy must be explicit.
+脏页同步策略须显式声明，例如：
 
-Examples:
+- Strong 模式：在每个脏页边界或每次配置的单次更新时刷出。
+- Batched 模式：累计 N 次脏页事件或达到时间阈值后刷出。
+- Handoff 模式：在 vCPU 迁移/交接边界刷出。
+- Lazy push 模式：异步推送，遇到版本缺口时强制拉取。
 
-- Strong mode: flush every dirty page boundary or every configured single update.
-- Batched mode: flush after N dirty events or a time threshold.
-- Handoff mode: flush at vCPU migration/handoff boundaries.
-- Lazy push mode: push asynchronously but force fetch on version gap.
+诸如 `dirty-batch-size` 的参数不得意外改变正确性，仅在已文档化的策略框架内调整同步时机。
 
-A knob such as dirty-batch-size must not accidentally change correctness. It should only change when synchronization occurs under a documented policy.
+在 Minimum 中，`dirty-batch-size=1` 表示每次捕获到脏页更新即立即提交至一致性路径，无需等待累计第二次更新；它本身不保证每次客户机存储指令对全集群同步可见，也不能替代 acquire、失效、确认或交接屏障。在正式规范定义该提交对应的确认语义之前，不得将该选项宣传为强一致性。
 
-For Minimum, `dirty-batch-size=1` means that each captured dirty update is submitted
-to the consistency path without waiting to accumulate a second dirty update.
-It does not by itself mean that every guest store is synchronously visible on
-all nodes, and it does not replace acquire, invalidation, acknowledgement, or
-handoff barriers. The formal specification must state which acknowledgement
-completes that submission before the option may be advertised as strong
-consistency.
+### 9.4 缺页处理
 
-### 9.4 Fault Handling
+Mode B 在可移植机制最佳时可使用 `mprotect`/SIGSEGV。
 
-Mode B may use `mprotect`/SIGSEGV where that is the best available portable mechanism.
+长期演进方向：
 
-Long-term options:
+- 环境支持时优先使用 `userfaultfd`。
+- 保留 SIGSEGV/`mprotect` 作为受限宿主机的回退机制。
+- 不将 UFFD 设为基线硬依赖，以兼容禁用 UFFD 的云/容器环境。
 
-- Prefer userfaultfd when the environment allows it.
-- Keep SIGSEGV/mprotect as fallback for restricted hosts.
-- Avoid requiring UFFD as a baseline because some cloud/container environments disable it.
+KVM 路径须避免破坏 EPT/KVM 行为的宿主机页保护模式。
 
-KVM paths must avoid host page protection patterns that break EPT/KVM behavior.
+### 9.5 版本缺口
 
-### 9.5 Version Gaps
+当节点观测到版本缺口时：
 
-If a node observes a version gap:
+- 可在有界窗口内重排。
+- 若无法闭合缺口，须回退至 fetch/acquire。
+- 严禁盲目应用破坏页版本单调性的乱序更新。
 
-- It may reorder within a bounded window.
-- It must fall back to fetch/acquire if the gap cannot be closed.
-- It must not blindly apply out-of-order updates that violate page version monotonicity.
+## 10. 网络与路由模型
 
-## 10. Network and Routing Model
+### 10.1 生产环境跨节点规则
 
-### 10.1 Production Cross-Node Rule
+所有生产跨节点流量须经由 Sidecar/Gateway 路由织网传输。
 
-All cross-node production traffic must go through the sidecar/gateway fabric.
-
-Allowed path:
+允许路径：
 
 ```text
-QEMU or local executor
-  -> local node runtime
-  -> local sidecar -> gateway fabric -> remote sidecar
-  -> remote node runtime
-  -> destination local executor when needed
+QEMU 或本地执行器
+  -> 本地节点运行时
+  -> 本地 Sidecar -> Gateway 路由织网 -> 远端 Sidecar
+  -> 远端节点运行时
+  -> 目标本地执行器（按需）
 ```
 
-Forbidden path:
+禁止路径：
 
 ```text
-local QEMU or executor -> arbitrary remote executor directly
-sidecar/gateway -> remote executor while bypassing the remote node runtime
+本地 QEMU 或执行器 -> 直接访问任意远端执行器
+Sidecar/Gateway -> 绕过远端节点运行时直接访问远端执行器
 ```
 
-Exception:
+例外：
 
-- Explicit diagnostic tools may open direct test connections, but they must not become production runtime dependencies.
+- 显式诊断工具可建立直连测试连接，但不得成为生产运行时依赖。
 
-### 10.2 Routing Table Ownership
+### 10.2 路由表所有权
 
-Routing table truth belongs to the user-space control plane.
+路由表真值归属用户态控制面。
 
-The gateway executes routing. It does not invent placement.
+Gateway 仅执行路由转发，不创造放置决策。
 
-The kernel accelerator may cache routing data, but cached state must be derived from user-space truth and must be safely invalidated or replaced.
+内核加速器可缓存路由数据，但缓存须派生自用户态真值，并支持安全失效或替换。
 
-Route tables remain necessary implementation state, but they are not a
-user-authored VM creation input. At cluster bootstrap an operator supplies
-member endpoints, role/capability declarations, Pod membership, and the desired
-topology graph. The control plane compiles those records into immutable,
-versioned next-hop snapshots and distributes them to node runtimes, sidecars,
-and gateways. Production bootstrap consumes canonical topology/member records;
-legacy `NODE` and `ROUTE` files are not compatibility inputs.
+路由表属于必需实现状态，但并非用户手工编写的 VM 创建输入。集群引导阶段由运维提供成员端点、角色/能力声明、Pod 成员关系与期望拓扑图；控制面据此编译出不可变、带版本的下一跳快照，并下发至节点运行时、Sidecar 与 Gateway。生产引导消费规范的拓扑/成员记录，不支持旧版 `NODE` 与 `ROUTE` 文件作为兼容输入。
 
-### 10.3 VM Route Namespace
+### 10.3 VM 路由命名空间
 
-Minimum route lookup rules are strict:
+Minimum 路由查找执行严格规则：
 
-- Route configuration and runtime tables must preserve the complete composite
-  `{vm_id, vnode_id}` key for every nonzero `vm_id`.
-- A fractal implementation must preserve the complete VM identity while
-  selecting a next hop by Pod/prefix and then a local leaf-vnode mapping. A
-  hierarchy reduces per-gateway route scope; it does not create a second VM
-  namespace or authorize raw-ID fallback.
-- If lookup of a nonzero composite target fails, routing must fail explicitly.
-  It must not strip `vm_id` and retry with a raw vnode ID.
-- Raw-node fallback is prohibited for production traffic. Authenticated
-  cluster-control scope is not an exception for guest routing.
-- Flat and fractal gateways must preserve the same VM namespace at every level;
-  hierarchy is not a namespace boundary.
-- Route-table updates must be generation-based and atomically published. A
-  packet is routed using one complete generation, never a partially updated
-  table.
-- `WVM_NODE_AUTO_ROUTE` is a sentinel, not an identity. Its resolution must
-  produce a VM-scoped composite target before cross-node transmission.
+- 对任意非零 `vm_id`，路由配置与运行时表均须保留完整复合键 `{vm_id, vnode_id}`。
+- Fractal 实现须在按 Pod/前缀选择下一跳并进一步解析本地叶子 vnode 映射的全过程中保留完整 VM 标识；层级结构用于缩小单个 Gateway 的路由范围，既不创建第二 VM 命名空间，也不允许裸 ID 回退。
+- 非零复合目标查找失败时须显式报错，严禁剥离 `vm_id` 后按裸 vnode ID 重试。
+- 生产流量禁止裸节点回退；经认证的集群控制作用域不构成客户机路由例外。
+- Flat 与 Fractal Gateway 在每一层级均须维持同一 VM 命名空间；层级并非命名空间边界。
+- 路由表更新须基于代次原子发布：单个报文始终按完整单一代次路由，绝不读取部分更新的表。
+- `WVM_NODE_AUTO_ROUTE` 是哨兵值而非标识，跨节点发送前须解析为带 VM 作用域的复合目标。
 
-Any raw-ID fallback in an implementation must be removed from the production
-path; its presence cannot authorize weakening the identity/routing contract.
+实现中若残留任何裸 ID 回退逻辑，须从生产路径移除。
 
-### 10.4 Static vs Learned Routes
+### 10.4 静态路由与学习路由
 
-Static configured routes must not be overwritten by auto-learning.
+静态配置路由不得被自动学习覆盖。
 
-Auto-learning may be used for diagnostics or dynamic discovery only when it cannot invalidate explicit routes.
+仅在无法令显式路由失效的前提下，自动学习方可用于诊断或动态发现。
 
-Learned observations must be scoped by VM namespace and incarnation. They
-cannot authorize ID reuse or production route publication.
+学习到的观察结果须受 VM 命名空间与实例代次约束，不得授权 ID 复用或生产路由发布。
 
-Heartbeats and endpoint observations are health evidence. They may cause the
-control plane to revalidate a member, but they must not directly mutate a
-production route table, create a new routable member, or retire an old member.
+心跳与端点观察属于健康证据，可触发控制面重新校验成员状态，但不得直接修改生产路由表、创建新可路由成员或回收旧成员。
 
-## 11. Storage and Device Model
+## 11. 存储与设备模型
 
-Storage and device state are part of the guest-visible machine and must be treated as correctness-critical.
+存储与设备状态属于客户机可见机器的一部分，须按正确性关键路径处理。
 
-Rules:
+规则：
 
-- Device authority must be explicit.
-- Remote execution must not assume device state magically follows the vCPU.
-- MMIO/PIO/APIC/IOAPIC paths must have explicit forwarding or local emulation rules.
-- Block write errors must reach the guest path.
-- Flush operations must be real flushes unless explicitly configured otherwise for unsafe testing.
+- 设备权威须明确。
+- 远端执行不得假设设备状态会随 vCPU 自动迁移。
+- MMIO/PIO/APIC/IOAPIC 路径须具备显式转发或本地模拟规则。
+- 块写入错误须完整传回客户机路径。
+- 除非为非安全测试显式配置，否则 flush 操作须执行真实落盘刷新。
 
-Minimum requires the specified QEMU-host device authority and selected block
-primitives. Arbitrary distributed device ownership requires its own Extended
-contract and must not be implied by those primitives.
+Minimum 要求具备规定的 QEMU 宿主机设备权威与选定的块操作原语。任意分布式设备所有权须由独立的 Extended 契约定义，不从上述原语隐含推导。
 
-## 12. Environment Capability Model
+## 12. 环境能力模型
 
-WaveVM should detect host capabilities and choose the best safe path.
+WaveVM 应探测宿主机能力并选择最优安全路径。
 
-Capabilities include:
+探测能力包括：
 
-- KVM availability.
-- TCG availability.
-- Kernel accelerator availability.
-- userfaultfd availability.
-- Allowed mprotect behavior.
-- Huge pages.
-- NUMA information.
-- Network transport features.
-- Root privileges.
+- KVM 可用性。
+- TCG 可用性。
+- 内核加速器可用性。
+- `userfaultfd` 可用性。
+- 允许的 `mprotect` 行为。
+- 大页（Huge pages）。
+- NUMA 信息。
+- 网络传输特性。
+- Root 权限。
 
-Capability selection rule:
+能力选择规则：
 
 ```text
-If a faster capability is absent, fall back to a slower correct path.
-If no correct path exists, fail early with a clear reason.
+若更快的加速能力不可用，则回退至较慢但正确的路径。
+若不存在正确路径，则尽早失败并给出明确原因。
 ```
 
-Do not silently replace a required feature with a workaround that changes semantics.
+严禁静默以改变语义的变通方案替代必需能力。
 
-## 13. Mode A Repositioning
+## 13. Mode A 重新定位
 
-Mode A must not transfer user-space node-runtime semantic authority into the
-kernel. Kernel-side acceleration must not become an independent implementation
-of those responsibilities.
+Mode A 不得将用户态节点运行时的语义权威转移至内核，内核侧加速也不得演变为这些职责的独立实现。
 
-Target Mode A shape:
+目标 Mode A 形态：
 
 ```text
-User-space node runtime owns semantics.
-Kernel module accelerates selected data-plane operations.
+用户态节点运行时掌握语义。
+内核模块加速选定的数据面操作。
 ```
 
-The kernel accelerator should expose capabilities such as:
+内核加速器应暴露如下能力标志：
 
 - `WVM_CAP_DIRTY_CAPTURE`
 - `WVM_CAP_FAST_INVALIDATE`
@@ -1105,235 +760,105 @@ The kernel accelerator should expose capabilities such as:
 - `WVM_CAP_WAITQUEUE_WAKEUP`
 - `WVM_CAP_FAST_PACKET_TX`
 
-The user-space node runtime decides which capabilities to use.
+由用户态节点运行时决定启用哪些能力。
 
-## 14. Multi-VM and Kernel Accelerator
+## 14. 多 VM 与内核加速器
 
-Minimum chooses an explicit per-VM kernel context, not an implicit per-open context.
-One VM may legitimately have several processes and file descriptors using
-`/dev/wavevm`, including QEMU, node-runtime roles, and control tooling. Creating an
-unrelated VM context for every `open()` would split state that must be shared.
+Minimum 采用显式单 VM 内核上下文模型，而非隐式按 `open()` 隔离的模型。单台 VM 往往需要多个进程与文件描述符（包括 QEMU、节点运行时角色及控制工具）共同访问 `/dev/wavevm`；按 `open()` 创建互不关联的上下文会割裂本应共享的 VM 状态。
 
-The kernel ABI must therefore provide explicit create/attach semantics:
+因此内核 ABI 须提供显式 create/attach 语义：
 
-- A create operation creates one context identified by VM identity and returns
-  an unforgeable kernel context handle.
-- Additional file descriptors explicitly attach to that context after identity
-  and permission validation.
-- Every mmap, ioctl, request ID, route cache, mapping, dirty tracker, and page
-  metadata lookup is resolved through the attached context.
-- Closing one file descriptor releases only its reference. The context is
-  destroyed after lifecycle teardown and the final reference.
-- Module-global workers may remain only when their queues carry a context
-  reference and cannot mix request namespaces.
+- create 操作创建由 VM 标识绑定的单一上下文，并返回不可伪造的内核上下文句柄。
+- 其他文件描述符经标识与权限校验后显式 attach 至该上下文。
+- 所有 mmap、ioctl、请求 ID、路由缓存、映射、脏页追踪器与页元数据查找均通过已附着上下文解析。
+- 关闭单个文件描述符仅释放自身引用；上下文在生命周期销毁及最后一个引用释放后方才回收。
+- 仅当模块全局 worker 的队列携带上下文引用且无法混用请求命名空间时，方可保留模块级共享 worker。
 
-The exact handle representation, ioctl numbers, permissions, reference model,
-and teardown lock order belong in the kernel-accelerator specification.
+精确的句柄表示、ioctl 编号、权限校验、引用模型与销毁锁序由内核加速器规范定义。
 
-Target invariants:
+目标不变量：
 
-- No module-global VM identity.
-- No module-global route table as semantic truth.
-- No module-global memory mapping pointer that can be overwritten by another VM.
+- 不存在模块全局 VM 标识。
+- 不存在充当语义真值的模块全局路由表。
+- 不存在可被其他 VM 覆盖的模块全局内存映射指针。
 
-Before multi-context isolation is verified, capability discovery must advertise
-`SINGLE_CONTEXT` with a maximum of one context, and admission must reject a
-second Mode A VM on that node. Raising the limit requires explicit context
-ownership across sleepable and asynchronous paths, safe TX/VMA/destroy
-references, full u32 VM identity, and isolation/teardown acceptance evidence.
-Module-global VM identity and directory/route fallbacks are prohibited in the
-target path. Stub READY results cannot satisfy Minimum KVM guest login/SSH,
-TCG execution-contract tests, or remote-resource acceptance criteria.
+在多上下文隔离通过验证前，能力探测须宣告 `SINGLE_CONTEXT`（上限为 1 个上下文），且准入控制须拒绝同一节点上的第二台 Mode A VM。提高上限须具备跨可睡眠与异步路径的显式上下文所有权、安全的 TX/VMA/销毁引用计数、完整 `u32` VM 标识支持，以及隔离/销毁验收证据。目标路径禁止模块全局 VM 标识与目录/路由回退；桩式 READY 响应不能替代 Minimum KVM 客户机登录/SSH、TCG 执行契约测试或远端资源验收条件。
 
-## 15. Invariants
+## 15. 系统不变量
 
-The following invariants should guide future code changes:
+后续代码演进须遵循以下不变量：
 
-- Mode B is the semantic baseline.
-- Kernel code accelerates, it does not define correctness.
-- KVM and TCG share high-level semantics.
-- Flat and fractal topologies share high-level semantics.
-- Multi-VM isolation is required by default.
-- A VM creation request is not a placement decision.
-- Host placement is explicit, not inferred from node ID ordering.
-- Resource capacity does not include hidden control-plane overhead unless accounted for.
-- Membership state, topology revision, route generation, VM incarnation, and
-  page/CPU epochs are distinct version domains and must never be overloaded.
-- A member becomes schedulable or routable only after the control plane commits
-  its validated route snapshot. Health evidence alone is insufficient.
-- Member removal is drain-first. A running VM's resource allocation is never
-  silently reassigned because a node or gateway was removed from a table.
-- A gateway removal requires a verified alternate path for every affected
-  destination; a sole path cannot be removed successfully.
-- Cross-node production traffic uses the gateway fabric.
-- Master and slave are node-runtime roles, not mandatory cross-node endpoints
-  or mandatory process boundaries. The node runtime remains the only
-  guest-semantic cross-node ingress/egress endpoint; executors remain local.
-- Test scripts may constrain topology, but production code must not hardcode those constraints.
-- Implement and maintain the concurrent and batched normal path required by
-  Section 0.6; an absent optimization remains an implementation obligation
-  when needed to meet that contract. Correctness repairs must satisfy it.
-  They must not silently replace it with global serialization, synchronous
-  forwarding, or a permanently disabled queue.
-- A local synchronous fallback is allowed only as a bounded backpressure or
-  failure path when dropping work would violate guest correctness. Its trigger,
-  scope, ordering effect, recovery behavior, and performance cost must be
-  specified and tested.
-- Queue, worker, batching, and priority changes are performance-sensitive
-  architecture changes. They require a stated ownership and backpressure model,
-  not only a test that one guest boots.
+- Mode B 是语义基线。
+- 内核代码负责加速，不定义正确性。
+- KVM 与 TCG 共享高层语义。
+- Flat 与 Fractal 拓扑共享高层语义。
+- 默认要求多 VM 隔离。
+- VM 创建请求不等同于放置决策。
+- 宿主机放置须显式决定，不按节点 ID 顺序推断。
+- 除显式核算外，资源容量不含隐性控制面开销。
+- 成员状态、拓扑修订、路由代次、VM 实例代次与页/CPU epoch 属于不同版本域，严禁混用。
+- 成员仅在控制面提交其校验通过的路由快照后方可调度或路由，健康证据本身不足以生效。
+- 成员移除遵循排空优先；绝不因节点或 Gateway 从表中移除而静默重分配运行中 VM 的资源。
+- Gateway 移除须为全部受影响目的地提供经验证的替代路径，唯一路径不可成功移除。
+- 跨节点生产流量须经由 Gateway 路由织网。
+- `master` 与 `slave` 是节点运行时内部角色，既非强制跨节点端点也非强制进程边界；节点运行时是唯一的客户机语义跨节点出入口，执行器保持本地化。
+- 测试脚本可约束测试拓扑，但生产代码不得硬编码此类约束。
+- 须实现并保持第 0.6 节要求的并发与批处理正常路径；正确性修复须满足该并发契约，不得静默退化为全局串行、同步转发或永久禁用队列。
+- 仅在丢弃工作会破坏客户机正确性的有界背压或故障路径上，方可使用本地同步回退，且须明确定义并测试其触发条件、作用域、排序影响、恢复行为与性能开销。
+- 队列、worker、批处理与优先级变更属于性能敏感架构变更，须提供明确的所有权与背压模型，而不仅靠单次客户机启动测试。
 
-## 16. Delivery Scope and Deferred Capabilities
+## 16. 交付范围与延后能力
 
-The following decisions define the required baseline profile. Subsystem
-specifications define their algorithms and ABIs without contradicting them.
+以下决策定义基线配置档要求，子系统规范在不与之冲突的前提下定义具体算法与 ABI：
 
-- A user-facing CLI or API submits a versioned VM request containing requested
-  resources, policy, and constraints. After admission, the control plane
-  generates an immutable versioned launch manifest containing resolved
-  identities, placement, capabilities, and per-node runtime configuration.
-  Handwritten scripts are not the semantic authority for either object.
-- The admitted plan contains an explicit `host_node`. The planner chooses it
-  from capable nodes; it is neither inferred from the request origin nor from
-  the first numeric vnode.
-- Host overhead is an explicit per-node reservation separate from guest vCPU
-  and RAM. An implementation may begin with conservative configured defaults,
-  but it may not pretend the overhead is zero.
-- VM startup is coordinated as identity allocation, candidate plan/route scope,
-  prepared reservations, prepared participants, one durable activation fence,
-  committed local records, start-without-guest-traffic, then `RUNNING` or
-  compensating teardown. Creation is all-or-nothing: a partially started VM is not
-  reported as running, and every resource created before failure has a named
-  cleanup owner.
-- The node accepting a create request acts as lifecycle coordinator for that
-  operation. It may select a different `host_node` for QEMU. The minimum
-  deployment uses one active coordinator and has no coordinator high
-  availability or transparent failover. It must persist enough of the
-  transaction/activation decision to reconcile a restart deterministically or
-  fail closed without leaking a reservation or reporting a false `RUNNING`
-  state. Prepared reservations use bounded leases only before activation;
-  activated reservations remain held until lifecycle teardown.
-- Nonzero VM route namespaces use strict composite keys at every flat or
-  fractal gateway level. Raw-ID guest fallback is prohibited, including through
-  the reserved cluster-control namespace.
-- Flat and leaf-Pod domains have independently budgeted vnode capacity without
-  a fixed domain ceiling. The control plane selects flat or fractal
-  topology from connectivity, route-aggregation needs, and resource budgets;
-  a capacity threshold alone does not force hierarchy. An operator does not
-  hand-author one route per VM destination. Global membership and admission
-  storage must not inherit a leaf-domain budget. Declared capacities must fit
-  every consumer and be verified in both topologies before being advertised;
-  neither wide IDs nor hierarchy alone prove supported scale.
-- Minimum supports controlled member registration, cordon, and drain only through
-  prepared/acknowledged route snapshots with a persisted required-survivor ACK
-  set. Adding a member may make capacity available to future VM admissions; it
-  does not dynamically add resources to a running VM. Cordon/drain/health or
-  instance changes invalidate candidates not yet activated. Removing a member
-  with active VM dependencies is rejected in Minimum.
-- A member or gateway failure marks affected capacity/routes unavailable and
-  triggers documented degraded, paused, or failed VM behavior. A physical-host
-  failure marks all hosted roles together. Minimum does not claim automatic live
-  resource migration, transparent guest-state recovery, or automatic repair of
-  a sole failed gateway path.
-- The default guest topology is flat for compatibility. A placement-aware or
-  synthetic NUMA topology is an explicit manifest choice and must not alter
-  physical placement ownership.
-- `dirty-batch-size=1` has the limited submission meaning defined in Section
-  9.3. Strong consistency is advertised only after the consistency
-  specification defines and the implementation supplies the required ACK and
-  handoff barriers.
-- Sending `VCPU_RUN` and accepting completion of `VCPU_EXIT` are handoff
-  boundaries. The handoff specification determines the exact memory scope and
-  barrier sequence; neither backend may skip it as an optimization.
-- UFFD is an optional fault engine. SIGSEGV/mprotect remains the restricted-host
-  fallback where valid, and KVM dirty logging remains a distinct capability.
-- The kernel accelerator uses the explicit per-VM context model from Section
-  14. Until its isolation acceptance criteria are met, admission must reject
-  a second Mode A VM on the same physical node.
-- Each participating physical node has one logical node-runtime instance for
-  each `{vm_id, vm_incarnation, physical_node_id}`. One node-runtime binary
-  provides master-role coordination and slave-role execution; helper processes
-  obey the local executor contract. The manifest, request namespace, queues,
-  and lifecycle remain per-instance. Source-directory names do not authorize
-  independent master/slave production launch paths or compatibility adapters.
-- The authoritative QEMU frontend owns the guest device model. Remote vCPU
-  execution returns MMIO/PIO and unsupported device exits to that authority.
-  A remote block data service may execute I/O, but ordering, flush completion,
-  and guest-visible errors remain governed by the QEMU-host device authority.
-- The `u32` VM namespace permits `UINT32_MAX` nonzero logical namespaces.
-  Allocation above 255 requires every selected participant to negotiate
-  `WVM_CAP_VM_ID_U32`; incompatible participants cannot join that VM's path.
-  Mode B has no smaller architectural per-host count; admission is constrained
-  by reserved resources and exclusive local names. A nonzero ID is quarantined
-  until all route/cache/operation retirement acknowledgements complete and the
-  next incarnation is checked. No legacy mixed-deployment path is required.
-- **TCG delivery boundary:** Minimum retains real, manifest-bound TCG execution
-  tests for CPU context, remote memory reads/commits and fences, independent
-  vCPU ownership/progress, device/atomic exits, bounded failures, and STOP.
-  Both flat and fractal paths must execute actual guest instructions; a stub,
-  listener, local-only substitute, or KVM execution cannot satisfy that gate.
-  Full TCG guest OS boot, login/SSH, sustained multi-vCPU guest workload, and
-  proof that concurrent remote execution is the normal guest progress path
-  belong to Extended. This does not permit accepting incorrect bytes/context,
-  suppressing errors, or weakening shared memory and lifecycle contracts.
-  Same-host shared RAM requires an actual shared-backing proof; local mapping
-  alone does not establish cross-host coherence. The Section 15 fallback
-  (`force_local`) remains per-vCPU and bounded whenever used; ownership,
-  memory, device, and atomic ordering are not deferred. Section 8.1 of
-  `vcpu-handoff.md` defines the separate Minimum contract tests and Extended
-  TCG guest acceptance. Until Extended acceptance passes, user-facing backend
-  descriptions must distinguish TCG contract support from usable TCG guest OS
-  support, including for a policy-selected TCG fallback.
+- 用户态 CLI 或 API 提交带版本的 VM 请求（含资源需求、策略与约束）；准入后，控制面生成不可变、带版本的启动清单，内含已解析的标识、放置方案、能力与单节点运行时配置。手写脚本不构成两者的语义权威。
+- 已准入方案包含显式 `host_node`，由规划器从具备能力的节点中选出，不从请求来源或首个数字 vnode 推断。
+- 宿主机开销是独立于客户机 vCPU 与 RAM 的显式单节点预留；实现可从保守默认配置起步，但不得将开销视为零。
+- VM 启动按以下顺序协调：标识分配 -> 候选方案/路由作用域 -> 准备资源预留 -> 准备参与方 -> 单次持久化激活栅栏 -> 提交本地记录 -> 无客户机流量启动 -> 进入 `RUNNING` 或执行补偿销毁。创建为全有或全无语义：部分启动的 VM 不得上报为 `RUNNING`，失败前创建的每项资源均须有明确清理责任方。
+- 受理创建请求的节点充当该操作的生命周期协调器，可为 QEMU 选择不同的 `host_node`。Minimum 部署采用单一活跃协调器，不要求协调器高可用或透明故障切换，但须持久化足够的事务/激活决策以在重启后确定性地对账重放或闭环失败，避免资源泄漏或虚假 `RUNNING`。已准备预留仅在激活前使用有界租约；激活后预留持续持有直至生命周期销毁。
+- 非零 VM 路由命名空间在 Flat 与 Fractal 的每一级 Gateway 上均采用严格复合键，禁止裸 ID 客户机回退（包括借道保留的集群控制命名空间）。
+- Flat 与叶子 Pod 域拥有独立预算的 vnode 容量，无固定域上限。控制面根据连通性、路由聚合需求与资源预算选择 Flat 或 Fractal 拓扑，容量阈值本身不强制启用层级结构。运维无需按 VM 目的地手工编写单条路由。全局成员与准入存储不得继承叶子域预算。所宣称容量须适配全部消费方并在两种拓扑下验证通过后方可对外宣告。
+- Minimum 仅通过已准备/已确认的路由快照（附带持久化的必需存活者 ACK 集合）支持受控成员注册、隔离（cordon）与排空。加入成员为后续 VM 准入提供容量，不动态为运行中 VM 扩容。隔离/排空/健康或实例变更会使尚未激活的候选失效。Minimum 拒绝移除仍存在活跃 VM 依赖的成员。
+- 成员或 Gateway 故障会将受影响容量/路由标记为不可用，并触发文档规定的降级、暂停或失败 VM 行为；物理宿主机故障同步标记全部承载角色。Minimum 不提供自动实时资源迁移、透明客户机状态恢复或唯一故障 Gateway 路径的自动修复。
+- 默认客户机拓扑为 Flat 以保证兼容性；放置感知或合成 NUMA 拓扑须在清单中显式选择，且不改变物理放置所有权。
+- `dirty-batch-size=1` 仅具有第 9.3 节界定的立即提交语义；须待一致性规范明确且实现提供所需 ACK 与交接屏障后，方可宣告强一致性。
+- 发送 `VCPU_RUN` 与接受 `VCPU_EXIT` 完成均为交接边界；精确内存范围与屏障顺序由交接规范决定，任何后端不得将其优化跳过。
+- UFFD 是可选缺页引擎；SIGSEGV/`mprotect` 在有效场景下保留为受限宿主机回退；KVM 脏页日志保持为独立能力。
+- 内核加速器采用第 14 节的显式单 VM 上下文模型；在隔离验收通过前，准入控制须拒绝同一物理节点上的第二台 Mode A VM。
+- 每个参与物理节点针对每个 `{vm_id, vm_incarnation, physical_node_id}` 拥有一个逻辑节点运行时实例。单一节点运行时二进制提供 master 协调角色与 slave 执行角色，辅助进程遵守本地执行器契约；清单、请求命名空间、队列与生命周期均按实例隔离。不支持独立的 master/slave 生产启动路径或兼容适配器。
+- 权威 QEMU 前端拥有客户机设备模型，远端 vCPU 执行将 MMIO/PIO 及不支持的设备退出交回该权威。远端块数据服务可执行 I/O，但顺序、flush 完成与客户机可见错误仍由 QEMU 宿主机设备权威管辖。
+- `u32` VM 命名空间允许 `UINT32_MAX` 个非零逻辑命名空间。分配大于 255 的 ID 要求所有选中参与方协商支持 `WVM_CAP_VM_ID_U32`，不兼容参与方不得加入该 VM 路径。Mode B 无更小的架构级单宿主机数量上限，准入仅受预留资源与独占本地名称约束。非零 ID 须在全部路由/缓存/操作回收确认完成且校验下一实例代次后方可复用。无需旧版混合部署兼容路径。
+- **TCG 交付边界：** Minimum 保留真实的清单绑定 TCG 执行测试，覆盖 CPU 上下文、远端内存读取/提交与栅栏、独立 vCPU 所有权/推进、设备/原子退出、有界失败与 STOP；Flat 与 Fractal 路径均须执行真实客户机指令，不得以桩实现、监听进程、纯本地替代或 KVM 执行冒充。完整的 TCG 客户机 OS 启动、登录/SSH、持续多 vCPU 客户机负载以及并发远端执行作为正常推进路径的证明归属 Extended。该划分不放宽数据/上下文正确性、错误上报或共享内存与生命周期契约。同宿主机共享 RAM 须提供真实共享后备证明，本地映射本身无法证明跨宿主机一致性。第 15 节定义的本地同步回退（`force_local`）在启用时仍须按 vCPU 隔离且有界，所有权、内存、设备与原子序均不延后。`vcpu-handoff.md` 第 8.1 节分别定义 Minimum 契约测试与 Extended TCG 客户机验收。在 Extended 验收通过前，面向用户的后端说明须明确区分“TCG 契约支持”与“可用 TCG 客户机 OS 支持”（包括策略自动回退至 TCG 的情形）。
 
-The following capabilities are outside the Minimum profile and belong to
-Extended or separately accepted scope:
+以下能力超出 Minimum 范围，归属 Extended 或独立验收范围：
 
-- Full TCG guest OS boot/login/SSH and sustained distributed multi-vCPU guest
-  execution, including concurrent BSP-local + AP-remote progress as the normal
-  path rather than a token trickle under local fallback. Acceptance belongs in
-  `vcpu-handoff.md` Section 8.1 and roadmap Phase 10 Extended acceptance.
-- Full upstream QEMU in-process / cross-process TCG MTTCG performance and
-  helper-thread MTTCG (or equivalent barriers) that removes the need for a
-  Section 15 bounded local synchronous fallback on the concurrent SHM path
-  for stop_machine / text_poke / softlock-class IPI windows. This performance
-  work is separate from the Extended usable TCG guest acceptance above.
-- Cross-backend KVM-to-TCG or TCG-to-KVM vCPU handoff.
-- Live migration of the QEMU frontend or dynamic replanning of a running VM.
-- Automatic resharding of an active VM when a compute node joins or leaves.
-- Transparent recovery from loss of a required compute node or sole gateway
-  without a separately specified replica or migration mechanism.
-- Highly available or durable lifecycle coordination after coordinator failure.
-- Automatic selection of an optimized synthetic guest NUMA topology.
-- Distributed ownership of arbitrary device models beyond the defined remote
-  block primitives.
-- A tested scale limit lower than the protocol limit, based on measured file
-  descriptors, ports, memory overhead, and gateway capacity.
+- 完整的 TCG 客户机 OS 启动/登录/SSH 与持续分布式多 vCPU 客户机执行，包括以 BSP 本地 + AP 远端并发推进作为正常路径（而非在本地回退下仅作象征性推进）。验收归属 `vcpu-handoff.md` 第 8.1 节与路线图 Phase 10 Extended 验收。
+- 完整的上游 QEMU 进程内/跨进程 TCG MTTCG 性能优化及辅助线程 MTTCG（或等效屏障），以消除并发 SHM 路径在 `stop_machine`/`text_poke`/softlock 类 IPI 窗口对第 15 节有界本地同步回退的依赖；该性能工作独立于上述 Extended 可用 TCG 客户机验收。
+- 跨后端 KVM-to-TCG 或 TCG-to-KVM vCPU 交接。
+- QEMU 前端在线迁移或运行中 VM 的动态重规划。
+- 计算节点加入或离开时对活跃 VM 的自动重分片。
+- 未经独立副本或迁移机制定义的情况下，对必需计算节点或唯一 Gateway 丢失的透明恢复。
+- 协调器故障后的高可用或持久化生命周期故障切换。
+- 自动选择优化的合成客户机 NUMA 拓扑。
+- 超出已定义远端块原语的任意设备模型分布式所有权。
+- 依据实测文件描述符、端口、内存开销与 Gateway 容量确定的低于协议理论上限的已验证规模上限。
 
-## 17. Relation to GiantVM
+## 17. 与 GiantVM 的关系
 
-GiantVM is a useful architectural reference for distributed KVM DSM concepts, especially page ownership, versioning, copysets, and explicit interrupt/device forwarding.
+GiantVM 在分布式 KVM DSM 方面提供了有价值的参考，尤其是页所有权、版本号、副本集以及显式中断/设备转发等概念。
 
-However, GiantVM is not WaveVM's baseline architecture:
+但 GiantVM 并非 WaveVM 的基线架构：
 
-- GiantVM is KVM-only.
-- GiantVM requires a custom host kernel.
-- GiantVM uses direct QEMU-to-QEMU routing.
-- GiantVM does not solve distributed TCG.
-- GiantVM does not provide WaveVM's intended mode-B restricted-environment path.
+- GiantVM 仅支持 KVM。
+- GiantVM 依赖定制宿主机内核。
+- GiantVM 采用 QEMU 直连 QEMU 路由。
+- GiantVM 未解决分布式 TCG 问题。
+- GiantVM 不提供 WaveVM 面向受限环境的 Mode B 路径。
 
-WaveVM may borrow design discipline, not hard dependencies.
+WaveVM 借鉴其设计纪律，但不引入其硬依赖。
 
-## 18. Implementation Dependency Order
+## 18. 实现依赖顺序
 
-The [roadmap](wavevm-refactor-roadmap.md#implementation-order) owns the phase
-sequence. It orders executable identity/record/IPC foundations, the unified
-node runtime, validated member and route services, memory and vCPU/device
-execution, admission and lifecycle integration, multi-instance isolation,
-dynamic membership operations, and optional per-VM kernel acceleration before
-Minimum acceptance. Extended phases build on those contracts.
+各阶段依赖顺序由[路线图](wavevm-refactor-roadmap.md#实现顺序)统一规定，依次涵盖可执行标识/记录/IPC 基础、统一节点运行时、经校验的成员与路由服务、内存与 vCPU/设备执行、准入与生命周期集成、多实例隔离、动态成员操作以及可选单 VM 内核加速，随后完成 Minimum 验收；Extended 阶段建立在这些契约之上。
 
-Specifications constrain each implementation step; writing a specification,
-inventorying existing code, or establishing an empty skeleton is not a runtime
-feature phase or evidence of completion. Maintenance of an existing tree uses
-the same dependency order to identify affected prerequisites, without requiring
-a restart from the beginning of the sequence.
+规范约束每个实现步骤；撰写规范、盘点现有代码或搭建空骨架均不构成运行时特性阶段或完成证据。维护现有代码树时应按同一依赖顺序识别受影响的前置依赖，无需从头推倒重来。

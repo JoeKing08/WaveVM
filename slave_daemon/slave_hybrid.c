@@ -650,6 +650,62 @@ static void install_kvm_alarm_handler(void)
     }
 }
 
+/* Guest KVM_RUN is nominally 50ms, but demand-fill used to re-arm a fresh
+ * 50ms after every page. One VCPU_RUN then ran for seconds and harvested
+ * hundreds of dirty pages into a single 1s slice-wait (run-161500). Keep
+ * actual guest time and wall time inside the commit horizon. */
+#define WVM_KVM_SLICE_GUEST_NS  (50ULL * 1000ULL * 1000ULL)
+#define WVM_KVM_SLICE_WALL_NS   (800ULL * 1000ULL * 1000ULL)
+
+static uint64_t wvm_mono_ns(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static int wvm_kvm_slice_budget_done(uint64_t slice_start_ns,
+                                     uint64_t guest_run_ns)
+{
+    uint64_t now = wvm_mono_ns();
+
+    return guest_run_ns >= WVM_KVM_SLICE_GUEST_NS ||
+           (now - slice_start_ns) >= WVM_KVM_SLICE_WALL_NS;
+}
+
+/* After a successful demand-fill, always retry the just-filled instruction
+ * once. If the slice budget is already exhausted, arm a 1ms timer so that
+ * retry preempts instead of starting another full 50ms of guest time. */
+static int wvm_kvm_rearm_after_fill(timer_t ktimer, const struct itimerspec *its,
+                                    uint64_t slice_start_ns, uint64_t guest_run_ns)
+{
+    static unsigned budget_log = 0;
+    struct itimerspec retry_its;
+
+    t_kvm_alarm_fired = 0;
+    if (wvm_kvm_slice_budget_done(slice_start_ns, guest_run_ns)) {
+        if (budget_log < 32) {
+            fprintf(stderr,
+                    "[KVM cache] slice budget exhausted guest_ns=%llu "
+                    "wall_ns=%llu; retry then preempt\n",
+                    (unsigned long long)guest_run_ns,
+                    (unsigned long long)(wvm_mono_ns() - slice_start_ns));
+            budget_log++;
+        }
+        memset(&retry_its, 0, sizeof(retry_its));
+        retry_its.it_value.tv_nsec = 1000000; /* 1ms */
+        if (timer_settime(ktimer, 0, &retry_its, NULL) < 0) {
+            return -errno;
+        }
+        return 0;
+    }
+    if (timer_settime(ktimer, 0, its, NULL) < 0) {
+        return -errno;
+    }
+    return 0;
+}
+
 // MPSC 队列数据结构
 
 // 任务单元：封装一个需要同步的脏页
@@ -988,6 +1044,16 @@ static uint8_t *wvm_gpa_to_hva(uint64_t gpa)
         }
     }
     return NULL;
+}
+
+static void conceal_kvm_cached_page(uint64_t gpa, void *opaque)
+{
+    uint8_t *hva = wvm_gpa_to_hva(gpa);
+
+    (void)opaque;
+    if (g_kvm_memory_fault_exits && hva) {
+        (void)mprotect(hva, WVM_PAGE_SIZE, PROT_NONE);
+    }
 }
 
 static inline int wvm_gpa_page_valid(uint64_t gpa)
@@ -2854,7 +2920,8 @@ kvm_state_rejected:;
 
     /*
      * Establish the input side of the KVM handoff before KVM_RUN. Prefetch
-     * the vCPU working set (page tables, instruction bytes, stack, GDT/IDT).
+     * the vCPU working set (page tables, instruction bytes, stack, GDT/IDT,
+     * TR/TSS, LDTR, TSS stacks, and pending IDT handlers).
      * Other missing pages are demand-filled when KVM_EXIT_MEMORY_FAULT
      * returns from ioctl; do not pull the entire dirty-tracked RAM in the
      * admitted completion horizon. Keep this slice open through dirty-page
@@ -2876,6 +2943,7 @@ kvm_state_rejected:;
          * silently dropping the kernel dirty bit.
          */
         struct kvm_input_snapshot input = { hdr, &req->ctx.kvm };
+        wvm_kvm_page_cache_global_expire_leases(conceal_kvm_cached_page, NULL);
         if (wvm_kvm_execution_global_join(
                 prepare_kvm_cohort_input, &input, &memory_slice,
                 &memory_error_gpa, cache_error, sizeof(cache_error)) != 0) {
@@ -2982,6 +3050,8 @@ kvm_state_rejected:;
 
     int ret = -EIO;
     int local_exit_consumed = 0;
+    uint64_t slice_start_ns;
+    uint64_t guest_run_ns = 0;
     t_kvm_alarm_fired = 0;
 
     if (memory_fence_status != 0) {
@@ -3015,6 +3085,7 @@ kvm_state_rejected:;
         .it_value = { .tv_sec = 0, .tv_nsec = 50000000 }, /* 50ms */
         .it_interval = { .tv_sec = 0, .tv_nsec = 50000000 }
     };
+    slice_start_ns = wvm_mono_ns();
     if (timer_settime(ktimer, 0, &its, NULL) < 0) {
         memory_fence_status = -errno;
         timer_delete(ktimer);
@@ -3030,7 +3101,11 @@ kvm_state_rejected:;
             __atomic_store_n(&t_kvm_run->immediate_exit, 0, __ATOMIC_RELEASE);
         }
         local_exit_consumed = 0;
-        ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
+        {
+            uint64_t run_t0 = wvm_mono_ns();
+            ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
+            guest_run_ns += wvm_mono_ns() - run_t0;
+        }
         int run_err = (ret < 0) ? errno : 0;
         if (ret == 0 && t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
             /* The split irqchip owns LAPIC state. Any remaining LAPIC MMIO
@@ -3045,7 +3120,10 @@ kvm_state_rejected:;
                     t_kvm_run->mmio.len,
                     t_kvm_run->mmio.is_write)) {
                 local_exit_consumed = 1;
-                if (t_kvm_alarm_fired) break;
+                if (t_kvm_alarm_fired ||
+                    wvm_kvm_slice_budget_done(slice_start_ns, guest_run_ns)) {
+                    break;
+                }
                 continue;
             }
         }
@@ -3082,11 +3160,15 @@ kvm_state_rejected:;
                 break;
             }
             /* A timer that fired during fill must not skip the retry of the
-             * instruction that just received its page. Re-arm a fresh slice. */
-            t_kvm_alarm_fired = 0;
-            if (timer_settime(ktimer, 0, &its, NULL) < 0) {
-                memory_fence_status = -errno;
-                break;
+             * instruction that just received its page. Re-arm a fresh slice
+             * only while the 1s commit horizon still has room. */
+            {
+                int rarm = wvm_kvm_rearm_after_fill(ktimer, &its,
+                                                    slice_start_ns, guest_run_ns);
+                if (rarm != 0) {
+                    memory_fence_status = rarm;
+                    break;
+                }
             }
             continue;
         }
@@ -3128,10 +3210,13 @@ kvm_state_rejected:;
                 ret = -EINTR;
                 break;
             }
-            t_kvm_alarm_fired = 0;
-            if (timer_settime(ktimer, 0, &its, NULL) < 0) {
-                memory_fence_status = -errno;
-                break;
+            {
+                int rarm = wvm_kvm_rearm_after_fill(ktimer, &its,
+                                                    slice_start_ns, guest_run_ns);
+                if (rarm != 0) {
+                    memory_fence_status = rarm;
+                    break;
+                }
             }
             continue;
         }
@@ -3250,10 +3335,24 @@ kvm_run_done:
         fprintf(stderr, "[DBG-SHUTDOWN] input: idt_base=0x%llx idt_limit=0x%x gdt_base=0x%llx gdt_limit=0x%x\n",
                 (unsigned long long)in_s->idt.base, in_s->idt.limit,
                 (unsigned long long)in_s->gdt.base, in_s->gdt.limit);
-        /* Check BIOS integrity at 0xFFFF0 */
-        fprintf(stderr, "[DBG-SHUTDOWN] bios@0xFFFF0=%08x bios@0xF0000=%08x\n",
-                *(uint32_t*)(g_phy_ram + 0xFFFF0),
-                *(uint32_t*)(g_phy_ram + 0xF0000));
+        /* Check BIOS integrity at 0xFFFF0 without dereferencing concealed RAM */
+        if (g_phy_ram) {
+            uint32_t bios_ffff0 = 0;
+            uint32_t bios_f0000 = 0;
+            struct iovec l1 = { .iov_base = &bios_ffff0, .iov_len = sizeof(bios_ffff0) };
+            struct iovec r1 = { .iov_base = g_phy_ram + 0xFFFF0, .iov_len = sizeof(bios_ffff0) };
+            struct iovec l2 = { .iov_base = &bios_f0000, .iov_len = sizeof(bios_f0000) };
+            struct iovec r2 = { .iov_base = g_phy_ram + 0xF0000, .iov_len = sizeof(bios_f0000) };
+            int ok1 = process_vm_readv(getpid(), &l1, 1, &r1, 1, 0) == (ssize_t)sizeof(bios_ffff0);
+            int ok2 = process_vm_readv(getpid(), &l2, 1, &r2, 1, 0) == (ssize_t)sizeof(bios_f0000);
+            if (ok1 && ok2) {
+                fprintf(stderr, "[DBG-SHUTDOWN] bios@0xFFFF0=%08x bios@0xF0000=%08x\n",
+                        bios_ffff0, bios_f0000);
+            } else {
+                fprintf(stderr, "[DBG-SHUTDOWN] bios@0xFFFF0=%s bios@0xF0000=%s (PROT_NONE or unmapped)\n",
+                        ok1 ? "ok" : "unreadable", ok2 ? "ok" : "unreadable");
+            }
+        }
     }
 
     /*
@@ -3627,9 +3726,11 @@ static int ensure_kvm_page_snapshot(
      */
     result = wvm_kvm_fetch_execution_page(gpa, operation_id, hva, version_out,
                                           deadline_ms, error, sizeof(error));
-    if (result != 0 && error[0] != '\0') {
-        fprintf(stderr, "[KVM cache] execution page fetch GPA=%#llx: %s\n",
-                (unsigned long long)gpa, error);
+    if (result != 0) {
+        fprintf(stderr,
+                "[KVM cache] execution page fetch GPA=%#llx rc=%d%s%s\n",
+                (unsigned long long)gpa, result,
+                error[0] ? ": " : "", error);
     }
     return result;
 }
@@ -3944,6 +4045,25 @@ static int translate_kvm_linear_to_gpa(
     return 0;
 }
 
+static uint64_t clamp_linear_extra(uint64_t linear, uint64_t extra)
+{
+    if (extra != 0 && linear > UINT64_MAX - extra) {
+        static unsigned clamp_log;
+        uint64_t clamped = UINT64_MAX - linear;
+
+        if (clamp_log < 32) {
+            fprintf(stderr,
+                    "[KVM cache] clamp linear span lin=%#llx extra=%llu -> %llu\n",
+                    (unsigned long long)linear,
+                    (unsigned long long)extra,
+                    (unsigned long long)clamped);
+            clamp_log++;
+        }
+        return clamped;
+    }
+    return extra;
+}
+
 static int ensure_kvm_linear_span(
     const struct wvm_header *hdr, const struct kvm_sregs *sregs,
     uint64_t linear, uint64_t extra, uint64_t *error_gpa_out)
@@ -3951,6 +4071,7 @@ static int ensure_kvm_linear_span(
     uint64_t gpa;
     int result;
 
+    extra = clamp_linear_extra(linear, extra);
     for (uint64_t offset = 0; offset <= extra; offset += (extra ? extra : 1)) {
         if (linear > UINT64_MAX - offset) {
             return -EOVERFLOW;
@@ -3998,6 +4119,11 @@ static int demand_fill_kvm_fault_pages(
     return 0;
 }
 
+static int prefetch_kvm_arch_working_set(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    const wvm_kvm_context_t *context, int vcpu_fd,
+    int *new_pages, uint64_t *error_gpa_out);
+
 static int prepare_kvm_execution_snapshot(
     const struct wvm_header *hdr, const wvm_kvm_context_t *context,
     uint64_t *error_gpa_out)
@@ -4038,19 +4164,15 @@ static int prepare_kvm_execution_snapshot(
             return result;
         }
     }
-    if (sregs->gdt.base) {
-        result = ensure_kvm_linear_span(
-            hdr, sregs, sregs->gdt.base, sregs->gdt.limit, error_gpa_out);
-        if (result != 0 && result != -ENOENT) {
-            return result;
-        }
-    }
-    if (sregs->idt.base) {
-        result = ensure_kvm_linear_span(
-            hdr, sregs, sregs->idt.base, sregs->idt.limit, error_gpa_out);
-        if (result != 0 && result != -ENOENT) {
-            return result;
-        }
+    /*
+     * GDT/IDT plus TR/TSS, LDTR, TSS.RSP0/IST, and pending IDT handlers.
+     * Bare-EFAULT recovery uses the same working set: this kernel advertises
+     * KVM_CAP_MEMORY_FAULT_INFO but still returns bare -EFAULT with no GPA.
+     */
+    result = prefetch_kvm_arch_working_set(
+        hdr, sregs, context, -1, NULL, error_gpa_out);
+    if (result != 0) {
+        return result;
     }
     if (error_gpa_out) {
         *error_gpa_out = 0;
@@ -4400,9 +4522,7 @@ static int ensure_linear_and_count_new(
     uint64_t end = linear;
     int was_new = 0;
 
-    if (linear > UINT64_MAX - extra) {
-        return -EOVERFLOW;
-    }
+    extra = clamp_linear_extra(linear, extra);
     end = linear + extra;
     for (uint64_t addr = linear; addr <= end; ) {
         state = WVM_KVM_PAGE_ABSENT;
@@ -4441,6 +4561,415 @@ static int ensure_linear_and_count_new(
     return 0;
 }
 
+
+#define WVM_X86_EFER_LMA (UINT64_C(1) << 10)
+#define WVM_X86_TSS64_MIN 0x67U
+#define WVM_X86_TSS64_RSP0 0x04U
+#define WVM_X86_TSS64_IST1 0x24U
+#define WVM_X86_APIC_IRR 0x200U
+
+static int prefetch_counted_linear_span(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    uint64_t linear, uint64_t extra, int *new_pages, uint64_t *error_gpa_out)
+{
+    int result;
+
+    if (new_pages) {
+        return ensure_linear_and_count_new(
+            hdr, sregs, linear, extra, new_pages, error_gpa_out);
+    }
+    result = ensure_kvm_linear_span(hdr, sregs, linear, extra, error_gpa_out);
+    return (result == -ENOENT) ? 0 : result;
+}
+
+static int read_kvm_linear_bytes(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    uint64_t linear, void *dst, size_t len, uint64_t *error_gpa_out)
+{
+    uint8_t *out = dst;
+    size_t i;
+    int result;
+
+    if (!dst || len == 0) {
+        return -EINVAL;
+    }
+    if (len > 0 && linear > UINT64_MAX - (len - 1U)) {
+        len = (size_t)(UINT64_MAX - linear) + 1U;
+        fprintf(stderr,
+                "[KVM cache] clamp linear read lin=%#llx len -> %zu\n",
+                (unsigned long long)linear, len);
+    }
+    result = prefetch_counted_linear_span(
+        hdr, sregs, linear, (uint64_t)(len - 1U), NULL, error_gpa_out);
+    if (result != 0) {
+        return result;
+    }
+    for (i = 0; i < len; i++) {
+        uint64_t gpa = 0;
+        uint8_t *hva;
+
+        result = translate_kvm_linear_to_gpa(
+            hdr, sregs, linear + i, &gpa, error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+        result = ensure_kvm_execution_page(hdr, gpa, error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+        hva = wvm_gpa_to_hva(gpa);
+        if (!hva) {
+            return -EFAULT;
+        }
+        out[i] = *hva;
+    }
+    return 0;
+}
+
+static int prefetch_stack_top(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    uint64_t rsp, int *new_pages, uint64_t *error_gpa_out)
+{
+    const uint64_t below = 127;
+    uint64_t start;
+    uint64_t extra;
+
+    if (rsp == 0) {
+        return 0;
+    }
+    start = (rsp > below) ? (rsp - below) : 0;
+    extra = rsp - start;
+    return prefetch_counted_linear_span(
+        hdr, sregs, start, extra, new_pages, error_gpa_out);
+}
+
+static void add_idt_vector(uint8_t *vecs, int *n, unsigned int vector)
+{
+    int i;
+
+    if (vector > 255U || *n >= 256) {
+        return;
+    }
+    for (i = 0; i < *n; i++) {
+        if (vecs[i] == (uint8_t)vector) {
+            return;
+        }
+    }
+    vecs[(*n)++] = (uint8_t)vector;
+}
+
+static int prefetch_idt_handler(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    unsigned int vector, int long_mode, int *new_pages,
+    uint64_t *error_gpa_out)
+{
+    uint8_t gate[16];
+    uint64_t gate_size = long_mode ? 16U : 8U;
+    uint64_t start;
+    uint64_t offset;
+    uint8_t type;
+    int result;
+
+    if (!sregs->idt.base || vector > 255U) {
+        return 0;
+    }
+    if ((uint64_t)vector * gate_size + (gate_size - 1U) > sregs->idt.limit) {
+        return 0;
+    }
+    start = sregs->idt.base + (uint64_t)vector * gate_size;
+    result = read_kvm_linear_bytes(
+        hdr, sregs, start, gate, (size_t)gate_size, error_gpa_out);
+    if (result != 0) {
+        return (result == -ENOENT) ? 0 : result;
+    }
+    if (((gate[5] >> 7) & 1U) == 0) {
+        return 0;
+    }
+    type = gate[5] & 0xFU;
+    if (long_mode) {
+        if (type != 0xEU && type != 0xFU) {
+            return 0;
+        }
+        offset = (uint64_t)gate[0] | ((uint64_t)gate[1] << 8) |
+                 ((uint64_t)gate[6] << 16) | ((uint64_t)gate[7] << 24) |
+                 ((uint64_t)gate[8] << 32) | ((uint64_t)gate[9] << 40) |
+                 ((uint64_t)gate[10] << 48) | ((uint64_t)gate[11] << 56);
+    } else {
+        if (type != 0x6U && type != 0x7U && type != 0xEU && type != 0xFU) {
+            return 0;
+        }
+        offset = (uint64_t)gate[0] | ((uint64_t)gate[1] << 8) |
+                 ((uint64_t)gate[6] << 16) | ((uint64_t)gate[7] << 24);
+    }
+    if (offset == 0) {
+        return 0;
+    }
+    return prefetch_counted_linear_span(
+        hdr, sregs, offset, 15, new_pages, error_gpa_out);
+}
+
+static int prefetch_kvm_tss_stacks(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    int *new_pages, uint64_t *error_gpa_out)
+{
+    uint8_t tss[WVM_X86_TSS64_MIN + 1U];
+    int long_mode = (sregs->efer & WVM_X86_EFER_LMA) != 0;
+    int result;
+    unsigned int i;
+
+    if (sregs->tr.unusable || !sregs->tr.present || sregs->tr.base == 0) {
+        return 0;
+    }
+    result = prefetch_counted_linear_span(
+        hdr, sregs, sregs->tr.base, sregs->tr.limit, new_pages, error_gpa_out);
+    if (result != 0) {
+        return result;
+    }
+    if (!long_mode || sregs->tr.limit < WVM_X86_TSS64_MIN) {
+        return 0;
+    }
+    memset(tss, 0, sizeof(tss));
+    result = read_kvm_linear_bytes(
+        hdr, sregs, sregs->tr.base, tss, sizeof(tss), error_gpa_out);
+    if (result != 0) {
+        return (result == -ENOENT) ? 0 : result;
+    }
+    for (i = 0; i < 3U; i++) {
+        uint64_t rsp = 0;
+
+        memcpy(&rsp, tss + WVM_X86_TSS64_RSP0 + i * 8U, sizeof(rsp));
+        result = prefetch_stack_top(hdr, sregs, rsp, new_pages, error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+    }
+    for (i = 0; i < 7U; i++) {
+        uint64_t ist = 0;
+
+        memcpy(&ist, tss + WVM_X86_TSS64_IST1 + i * 8U, sizeof(ist));
+        result = prefetch_stack_top(hdr, sregs, ist, new_pages, error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+    }
+    return 0;
+}
+
+static int prefetch_kvm_pending_handlers(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    const struct kvm_vcpu_events *events, int have_events,
+    const struct kvm_lapic_state *lapic, int have_lapic,
+    int *new_pages, uint64_t *error_gpa_out)
+{
+    uint8_t vectors[256];
+    int nvec = 0;
+    int long_mode = (sregs->efer & WVM_X86_EFER_LMA) != 0;
+    int i;
+    int result;
+
+    if (have_events && events) {
+        if (events->exception.injected || events->exception.pending) {
+            add_idt_vector(vectors, &nvec, events->exception.nr);
+        }
+        if (events->interrupt.injected) {
+            add_idt_vector(vectors, &nvec, events->interrupt.nr);
+        }
+        if (events->nmi.injected || events->nmi.pending) {
+            add_idt_vector(vectors, &nvec, 2U);
+        }
+    }
+    if (have_lapic && lapic) {
+        unsigned int word;
+
+        for (word = 0; word < 8U; word++) {
+            uint32_t irr;
+            unsigned int bit;
+
+            memcpy(&irr, lapic->regs + WVM_X86_APIC_IRR + word * 0x10U,
+                   sizeof(irr));
+            for (bit = 0; bit < 32U; bit++) {
+                if (irr & (1U << bit)) {
+                    add_idt_vector(vectors, &nvec, word * 32U + bit);
+                }
+            }
+        }
+    }
+    for (i = 0; i < 4; i++) {
+        uint64_t bits = sregs->interrupt_bitmap[i];
+        unsigned int bit;
+
+        while (bits != 0) {
+            bit = (unsigned int)__builtin_ctzll(bits);
+            add_idt_vector(vectors, &nvec, (unsigned int)i * 64U + bit);
+            bits &= bits - 1U;
+        }
+    }
+    for (i = 0; i < nvec; i++) {
+        result = prefetch_idt_handler(
+            hdr, sregs, vectors[i], long_mode, new_pages, error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+    }
+    return 0;
+}
+
+static int prefetch_kvm_arch_working_set(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    const wvm_kvm_context_t *context, int vcpu_fd,
+    int *new_pages, uint64_t *error_gpa_out)
+{
+    struct kvm_vcpu_events events;
+    struct kvm_lapic_state lapic;
+    int have_events = 0;
+    int have_lapic = 0;
+    int result;
+
+    if (!hdr || !sregs) {
+        return -EINVAL;
+    }
+    if (sregs->gdt.base) {
+        result = prefetch_counted_linear_span(
+            hdr, sregs, sregs->gdt.base, sregs->gdt.limit, new_pages,
+            error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+    }
+    if (sregs->idt.base) {
+        result = prefetch_counted_linear_span(
+            hdr, sregs, sregs->idt.base, sregs->idt.limit, new_pages,
+            error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+    }
+    if (!sregs->ldt.unusable && sregs->ldt.present && sregs->ldt.base) {
+        result = prefetch_counted_linear_span(
+            hdr, sregs, sregs->ldt.base, sregs->ldt.limit, new_pages,
+            error_gpa_out);
+        if (result != 0) {
+            return result;
+        }
+    }
+    result = prefetch_kvm_tss_stacks(hdr, sregs, new_pages, error_gpa_out);
+    if (result != 0) {
+        return result;
+    }
+
+    memset(&events, 0, sizeof(events));
+    memset(&lapic, 0, sizeof(lapic));
+    if (context) {
+        if (context->vcpu_events_valid) {
+            memcpy(&events, context->vcpu_events_data, sizeof(events));
+            have_events = 1;
+        }
+        if (context->lapic_valid) {
+            memcpy(&lapic, context->lapic_data, sizeof(lapic));
+            have_lapic = 1;
+        }
+    } else if (vcpu_fd >= 0) {
+        if (ioctl(vcpu_fd, KVM_GET_VCPU_EVENTS, &events) == 0) {
+            have_events = 1;
+        }
+        if (ioctl(vcpu_fd, KVM_GET_LAPIC, &lapic) == 0) {
+            have_lapic = 1;
+        }
+    }
+    return prefetch_kvm_pending_handlers(
+        hdr, sregs, have_events ? &events : NULL, have_events,
+        have_lapic ? &lapic : NULL, have_lapic, new_pages, error_gpa_out);
+}
+
+static uint64_t translate_linear_gpa_or_zero(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs,
+    uint64_t linear)
+{
+    uint64_t gpa = 0;
+    uint64_t ignored = 0;
+
+    if (!linear) {
+        return 0;
+    }
+    if (translate_kvm_linear_to_gpa(hdr, sregs, linear, &gpa, &ignored) != 0) {
+        return 0;
+    }
+    return gpa;
+}
+
+static void log_kvm_bare_efault_arch(
+    const struct wvm_header *hdr, const struct kvm_sregs *sregs, int vcpu_fd)
+{
+    struct kvm_vcpu_events events;
+    struct kvm_lapic_state lapic;
+    int have_events = 0;
+    int have_lapic = 0;
+    unsigned int word;
+    unsigned int nirr = 0;
+
+    memset(&events, 0, sizeof(events));
+    memset(&lapic, 0, sizeof(lapic));
+    if (vcpu_fd >= 0 && ioctl(vcpu_fd, KVM_GET_VCPU_EVENTS, &events) == 0) {
+        have_events = 1;
+    }
+    if (vcpu_fd >= 0 && ioctl(vcpu_fd, KVM_GET_LAPIC, &lapic) == 0) {
+        have_lapic = 1;
+    }
+    fprintf(stderr,
+            "[KVM cache] bare EFAULT arch cr0=%#llx cr3=%#llx cr4=%#llx "
+            "efer=%#llx gdt_lin=%#llx gdt_gpa=%#llx idt_lin=%#llx "
+            "idt_gpa=%#llx tr_lin=%#llx tr_gpa=%#llx tr_limit=%#x "
+            "ldt_lin=%#llx",
+            (unsigned long long)sregs->cr0,
+            (unsigned long long)sregs->cr3,
+            (unsigned long long)sregs->cr4,
+            (unsigned long long)sregs->efer,
+            (unsigned long long)sregs->gdt.base,
+            (unsigned long long)translate_linear_gpa_or_zero(
+                hdr, sregs, sregs->gdt.base),
+            (unsigned long long)sregs->idt.base,
+            (unsigned long long)translate_linear_gpa_or_zero(
+                hdr, sregs, sregs->idt.base),
+            (unsigned long long)sregs->tr.base,
+            (unsigned long long)translate_linear_gpa_or_zero(
+                hdr, sregs, sregs->tr.base),
+            (unsigned)sregs->tr.limit,
+            (unsigned long long)sregs->ldt.base);
+    if (have_events) {
+        fprintf(stderr,
+                " ev_exc_inj=%u ev_exc_pend=%u ev_exc=%u ev_int_inj=%u "
+                "ev_int=%u ev_nmi_inj=%u ev_nmi_pend=%u",
+                events.exception.injected, events.exception.pending,
+                events.exception.nr, events.interrupt.injected,
+                events.interrupt.nr, events.nmi.injected, events.nmi.pending);
+    } else {
+        fprintf(stderr, " ev=unavailable");
+    }
+    fprintf(stderr, " irr=");
+    if (have_lapic) {
+        for (word = 0; word < 8U; word++) {
+            uint32_t irr;
+            unsigned int bit;
+
+            memcpy(&irr, lapic.regs + WVM_X86_APIC_IRR + word * 0x10U,
+                   sizeof(irr));
+            for (bit = 0; bit < 32U; bit++) {
+                if (irr & (1U << bit)) {
+                    fprintf(stderr, "%s%u", nirr ? "," : "",
+                            word * 32U + bit);
+                    nirr++;
+                }
+            }
+        }
+        if (nirr == 0) {
+            fprintf(stderr, "none");
+        }
+    } else {
+        fprintf(stderr, "unavailable");
+    }
+    fprintf(stderr, "\n");
+}
+
 static int demand_fill_kvm_bare_efault(
     const struct wvm_header *hdr, int vcpu_fd, uint64_t *error_gpa_out)
 {
@@ -4458,11 +4987,19 @@ static int demand_fill_kvm_bare_efault(
         ioctl(vcpu_fd, KVM_GET_SREGS, &sregs) < 0) {
         return errno ? -errno : -EIO;
     }
+    if (error_gpa_out) {
+        *error_gpa_out = 0;
+    }
 
     /* Always re-establish the instruction bytes first. */
     result = ensure_linear_and_count_new(hdr, &sregs, sregs.cs.base + regs.rip,
                                          15, &new_pages, error_gpa_out);
     if (result != 0) {
+        fprintf(stderr,
+                "[KVM cache] bare EFAULT demand-fill rip=%#llx "
+                "insn-fetch rc=%d new_pages=%d\n",
+                (unsigned long long)regs.rip, result, new_pages);
+        log_kvm_bare_efault_arch(hdr, &sregs, vcpu_fd);
         return result;
     }
 
@@ -4493,8 +5030,29 @@ static int demand_fill_kvm_bare_efault(
         result = ensure_linear_and_count_new(hdr, &sregs, linears[i], 8,
                                              &new_pages, error_gpa_out);
         if (result != 0) {
+            fprintf(stderr,
+                    "[KVM cache] bare EFAULT demand-fill rip=%#llx "
+                    "operand[%d] lin=%#llx extra=8 rc=%d err_gpa=%#llx "
+                    "insn=%02x %02x %02x %02x %02x %02x memops=%d\n",
+                    (unsigned long long)regs.rip, i,
+                    (unsigned long long)linears[i], result,
+                    (unsigned long long)(error_gpa_out ? *error_gpa_out : 0),
+                    insn[0], insn[1], insn[2], insn[3], insn[4], insn[5],
+                    nlinears);
+            log_kvm_bare_efault_arch(hdr, &sregs, vcpu_fd);
             return result;
         }
+    }
+
+    result = prefetch_kvm_arch_working_set(
+        hdr, &sregs, NULL, vcpu_fd, &new_pages, error_gpa_out);
+    if (result != 0) {
+        fprintf(stderr,
+                "[KVM cache] bare EFAULT demand-fill rip=%#llx "
+                "arch-prefetch rc=%d new_pages=%d\n",
+                (unsigned long long)regs.rip, result, new_pages);
+        log_kvm_bare_efault_arch(hdr, &sregs, vcpu_fd);
+        return result;
     }
 
     if (bare_log < 32) {
@@ -4509,6 +5067,7 @@ static int demand_fill_kvm_bare_efault(
                     (unsigned long long)linears[i]);
         }
         fprintf(stderr, "\n");
+        log_kvm_bare_efault_arch(hdr, &sregs, vcpu_fd);
         bare_log++;
     }
     /*

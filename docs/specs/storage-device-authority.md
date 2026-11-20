@@ -1,60 +1,47 @@
-# WaveVM Storage and Device Authority Specification
+# WaveVM 存储与设备权威规范
 
-Status: normative implementation specification.
+状态：规范性实现规范。
 
-The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
-rules apply to this specification.
+本规范适用[文档维护规则](../wavevm-refactor-roadmap.md#文档维护规则)。
 
-Scope: guest-visible device authority, remote block I/O dispatch, read/write
-ordering, flush/FUA semantics, idempotency, error mapping, and interaction with
-remote vCPU exits. This Minimum document specifies remote block primitives; it does
-not claim full distributed ownership of arbitrary PCI, VFIO, or GPU devices.
-The admitted manifest/resource plan selects storage participants, while
-`wire-ipc-abi.md` defines their transport envelope.
+范围：客户机可见设备权威、远端块 I/O 派发、读写排序、flush/FUA 语义、幂等性、错误映射以及与远端 vCPU 退出的交互。本 Minimum 文档仅规范远端块存储原语，不宣称对任意 PCI、VFIO 或 GPU 设备提供完整分布式所有权。存储参与方由已准入清单与资源计划选定，传输信封由 `wire-ipc-abi.md` 定义。
 
-## Subsystem Boundary Contract
+## 子系统边界契约
 
-This summary indexes the owning rules; it does not duplicate their definitions.
-Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+下表索引本子系统的核心归属规则，不重复其详细定义。边界变更须遵循[基线第 0 节](../wavevm-architecture-baseline.md#0-架构权威与维护契约)。
 
-| Boundary | Required contract |
+| 边界 | 必选契约 |
 | --- | --- |
-| Responsibility and authority | QEMU host owns guest device semantics; manifest-selected block service performs authorized I/O. Neither owns VM lifecycle, CPU placement or page consistency. |
-| State and mutation | Device/queue/operation identity scopes ordering and deduplication. A backend mutates only its authorized resource; cached results retain payload and lifetime through the required query horizon. |
-| Allowed implementation dependencies | Public QEMU device bridge, block-operation records, wire/identity/route and admitted resource/capability interfaces. No private vCPU coordinator, memory directory or lifecycle data structures. |
-| Interactions and lifetime | Sections 4 through 6 own block success and flush/device ordering; [vCPU exits](vcpu-handoff.md#7-exit-device-interrupt-and-time-semantics) return to device authority. [Lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) retains I/O buffers/handles through completion or fencing. |
-| Concurrency and cost | Preserve per-queue ordering with independent queue/VM progress. Declare copy/I/O costs, in-flight and retained-result budgets; reserve required completion capacity before executing side effects, not after. |
-| Failure and verification | Sections 5 and 9 require typed I/O/flush/uncertain errors and deduplicated retries. Resource IDs are not authorization; define resource scope and revocation without mandating capability wrappers for all calls. |
+| 职责与权威 | QEMU 宿主机拥有客户机设备语义；清单选定的块服务执行经授权的 I/O。二者均不拥有 VM 生命周期、CPU 放置或页一致性。 |
+| 状态与变更 | 设备、队列与操作身份共同界定排序与去重范围。后端仅可变更其获授权的资源；缓存结果须在必需的查询窗口内保留载荷与生命周期。 |
+| 允许的实现依赖 | 公共 QEMU 设备桥、块操作记录、传输/身份/路由及已准入资源/能力接口。禁止访问私有 vCPU 协调器、内存目录或生命周期数据结构。 |
+| 交互与生命周期 | 第 4 至 6 节负责块操作成功及 flush/设备排序；[vCPU 退出语义](vcpu-handoff.md#7-退出与设备中断时间语义)将设备退出归还至设备权威；[生命周期回收](runtime-manifest-lifecycle.md#63-跨子系统资源回收)确保 I/O 缓冲区与句柄保留至完成或隔离栅栏之后。 |
+| 并发与成本 | 在保持每队列有序的同时支持独立队列与跨 VM 并发推进。须显式声明拷贝/I/O 开销、在途预算与结果保留预算；必需的完成记录容量须在产生副作用之前预留，而非事后分配。 |
+| 故障与验证 | 第 5 节与第 9 节要求强类型 I/O/flush/不确定错误及去重重试。资源 ID 本身不代表授权；须明确定义资源作用域与撤销机制，但不强制所有调用都套用统一能力封装器。 |
 
-## 1. Goal and Non-Goals
+## 1. 目标与非目标
 
-The guest sees one QEMU machine and one coherent device model. Remote resource
-nodes may execute block data work, but they do not become independent guest
-device authorities. A completed write, flush, or error must have the same
-guest-visible meaning regardless of the selected physical storage executor.
+客户机仅观测到单一的 QEMU 虚拟机与一致的设备模型。远端资源节点可执行块数据读写，但不成为独立的客户机设备权威。无论选中哪台物理存储执行器，一次已完成的写、flush 或错误都必须具备相同的客户机可见语义。
 
-Non-goals for Minimum:
+Minimum 轮廓的非目标：
 
-- Transparent migration of a live block backend or arbitrary device model.
-- Treating `MSG_BLOCK_ACK` without status, ordering, or durable completion as a
-  successful guest flush.
-- Direct cross-node storage traffic from a local executor to an arbitrary
-  remote executor.
-- Giving remote VFIO/GPU code authority over guest interrupt routing or device
-  lifecycle without a separate device specification.
+- 活跃块后端或任意设备模型的在线透明迁移。
+- 将缺少状态、排序或持久化完成证明的 `MSG_BLOCK_ACK` 当作客户机 flush 成功。
+- 从本地执行器向任意远端执行器发起直接的跨节点存储流量。
+- 在无独立设备规范的情况下，赋予远端 VFIO/GPU 代码客户机中断路由或设备生命周期权威。
 
-## 2. Authority and Placement
+## 2. 权威与放置
 
-| State or decision | Authoritative owner |
+| 状态或决策 | 权威所有者 |
 | --- | --- |
-| Guest-visible disk/controller/virtqueue semantics | Authoritative QEMU frontend. |
-| VM identity, storage placement, and selected executor | Admitted VM manifest and control plane. |
-| Request ordering and completion to guest | QEMU frontend through its node runtime. |
-| Physical block data access | Assigned local storage executor only. |
-| Network route | Source/destination node runtimes through sidecar/gateway fabric. |
-| Device MMIO/PIO exit completion | Authoritative QEMU frontend. |
+| 客户机可见磁盘/控制器/virtqueue 语义 | 权威 QEMU 前端。 |
+| VM 身份、存储放置与选定执行器 | 已准入 VM 清单与控制面。 |
+| 请求排序及向客户机汇报完成 | QEMU 前端经由其节点运行时。 |
+| 物理块数据访问 | 仅限指派的本地存储执行器。 |
+| 网络路由 | 源/目标节点运行时经由 Sidecar/Gateway 路由织网。 |
+| 设备 MMIO/PIO 退出完成 | 权威 QEMU 前端。 |
 
-Remote storage execution follows:
+远端存储执行固定遵循以下路径：
 
 ```text
 QEMU device authority -> local node runtime -> sidecar/gateway fabric
@@ -62,23 +49,15 @@ QEMU device authority -> local node runtime -> sidecar/gateway fabric
                       -> remote node runtime -> origin node runtime -> QEMU
 ```
 
-No remote storage executor sends a guest completion directly to QEMU or a
-remote executor.
+远端存储执行器严禁绕过节点运行时直接向 QEMU 或其他远端执行器发送客户机完成响应。
 
-### 2.1 Minimum WaveVM Block-Service Device Cardinality
+### 2.1 Minimum WaveVM 块服务设备基数
 
-Minimum admits **at most one** WaveVM block-service device assignment
-per VM (`storage_device_plan` / placement storage templates / local runtime
-assignments). A second `device_index` is rejected at plan validation, admission
-placement, and local block execution rather than silently aliasing the same
-chunk files. Ordinary QEMU-local disks that never enter this block-service path
-remain valid Minimum; remote multi-disk backend mapping is out of Minimum scope
-unless an Extended device-to-backend mapping contract provides independent
-authorization, ordering, durable names, and failure semantics per device.
+Minimum 轮廓下，每个 VM **至多准入一个** WaveVM 块服务设备分配（涵盖 `storage_device_plan`、放置存储模板与本地运行时分配）。出现第二个 `device_index` 时，必须在计划校验、准入放置及本地块执行阶段显式拒绝，不得静默别名为同一组 chunk 文件。不进入该块服务路径的普通 QEMU 本地磁盘在 Minimum 中依然合法；远端多盘后端映射超出 Minimum 范围，须由 Extended 设备到后端映射契约提供逐设备的独立授权、排序、持久化命名与故障语义。
 
-## 3. Block Request Model
+## 3. 块请求模型
 
-The semantic request is:
+语义请求与结果模型如下：
 
 ```text
 BlockRequest {
@@ -118,140 +97,87 @@ BlockForwardingMetadata {
 }
 ```
 
-`operation_id` is a nonwrapping 128-bit idempotency value allocated by the
-origin runtime. The semantic operation key is `{vm_id, vm_incarnation,
-origin_physical_node_id, origin_runtime_instance_id, operation_id}`.
-`queue_sequence` preserves required guest ordering for a virtqueue or
-equivalent ordering domain. A future device specification may define multiple
-independent order domains; Minimum must not silently reorder writes that the QEMU
-frontend has serialized.
+`operation_id` 是由源运行时分配的不回绕 128 位幂等标识。语义操作键为 `{vm_id, vm_incarnation, origin_physical_node_id, origin_runtime_instance_id, operation_id}`。`queue_sequence` 用于维持 virtqueue 或等价排序域内必需的客户机顺序。后续设备规范可定义多个独立排序域，但 Minimum 严禁静默重排 QEMU 前端已串行化的写入。
 
-`BlockForwardingMetadata` is outside the semantic payload digest. A route
-replacement may change it for a retry/query but must retain the same semantic
-key, queue sequence, flags, and data digest. The storage executor deduplicates
-using the semantic key and must not apply a second write merely because G ->
-G+1 changed a forwarding field.
+`BlockForwardingMetadata` 不参与语义载荷摘要计算。路由替换后，重试或查询可更新转发元数据，但必须保持相同的语义键、`queue_sequence`、标志位与数据摘要。存储执行器依据语义键去重，绝不因 G -> G+1 路由替换改变了转发字段而执行第二次写入。
 
-The storage operation cache retains each semantic key/result through the
-maximum route predecessor completion-query/retry horizon. After that horizon it
-returns `RESULT_EXPIRED`/typed I/O failure and never converts a lost result into
-a fresh write or flush.
+存储操作缓存须在最大路由前驱完成查询/重试窗口内保留每个语义键及结果；期满后返回 `RESULT_EXPIRED` / 强类型 I/O 失败，绝不将丢失的结果转化为新的写操作或 flush。
 
-Untyped payloads such as `{ lba, count, data[] }` or `{ lba, len, is_write,
-data[] }` cannot satisfy this contract without incarnation, queue sequence,
-FUA/barrier flags, typed status, and explicit durable-completion semantics.
-They are not supported production alternatives.
+缺乏实例代次、队列序号、FUA/屏障标志、强类型状态及显式持久化完成语义的无类型载荷（例如 `{ lba, count, data[] }` 或 `{ lba, len, is_write, data[] }`）无法满足本契约，不属于受支持的生产方案。
 
-## 4. Normal Operations
+## 4. 常规操作
 
-### 4.1 Read
+### 4.1 读操作
 
-1. QEMU creates a request with one operation ID and queue sequence.
-2. The origin node runtime validates storage placement and sends it to the
-   selected storage node runtime.
-3. The storage executor reads exactly the requested range and returns data plus
-   checksum and typed status.
-4. QEMU validates identity, sequence, length, and checksum before completing
-   the guest request.
+1. QEMU 生成携带唯一操作 ID 与队列序号的读请求。
+2. 源节点运行时校验存储放置，并将请求发送至选定的存储节点运行时。
+3. 存储执行器精确读取请求区间，返回数据、校验和与强类型状态。
+4. QEMU 校验身份、序号、长度与校验和后，方才完成客户机请求。
 
-A retry keeps the same semantic operation key. Duplicate reads may return the
-same data or a result allowed by the selected backend's ordering snapshot; they
-must not be misattributed to another VM or request.
+重试保持同一语义操作键。重复读可返回相同数据或所选后端排序快照允许的结果，但绝不得错误归属至其他 VM 或请求。
 
-### 4.2 Write
+### 4.2 写操作
 
-1. QEMU assigns one operation ID, queue sequence, LBA/range, flags, and payload
-   digest.
-2. The storage executor records duplicate-detection state before applying data.
-3. It applies the write in the requested order domain and records its completion
-   result before replying.
-4. A duplicate with matching identity and digest replays the recorded result.
-   A duplicate with different bytes or flags is protocol corruption.
-5. QEMU completes the guest request only after its specified write-completion
-   condition is true.
+1. QEMU 分配唯一操作 ID、队列序号、LBA/范围、标志位及载荷摘要。
+2. 存储执行器在应用数据前先记录去重检测状态。
+3. 执行器在所请求的排序域内应用写入，并在回复前记录完成结果。
+4. 身份与摘要一致的重复请求重放已记录结果；字节或标志位不一致的重复请求按协议损坏拒绝。
+5. 仅当满足规定的写完成条件时，QEMU 方可向客户机回报完成。
 
-Write acknowledgement alone is not durable completion unless the backend
-contract says it has reached the selected durability boundary.
+除非后端契约明确保证已抵达选定的持久化边界，否则写确认（ACK）本身不代表持久化完成。
 
-### 4.3 Flush and FUA
+### 4.3 Flush 与 FUA
 
-`FLUSH` orders all prior writes in its queue/order domain before the flush and
-requires the assigned storage backend to complete its real durable flush before
-returning success. `FUA` writes have the same durable requirement for that
-write, even if a later flush is absent.
+`FLUSH` 将同一队列/排序域中此前的所有写入排序在其之前，并要求指派的存储后端在返回成功前完成真实的持久化刷盘。`FUA` 写对该次写入施加同等的持久化要求，即便后续没有额外的 flush。
 
-If the backend cannot provide the requested flush/FUA semantics, the operation
-fails explicitly. It may not report success merely because data entered a local
-buffer or UDP send queue.
+若后端无法提供所请求的 flush/FUA 语义，操作必须显式失败，不得仅因数据进入本地缓冲区或 UDP 发送队列就回报成功。
 
-### 4.4 Unsupported Operations
+### 4.4 不支持的操作
 
-Discard, write-zeroes, resize, snapshot, and cache-mode semantics are disabled
-unless their flags, ordering, idempotency, recovery, and guest error mapping are
-specified. An unsupported request returns a typed unsupported/error result to
-the authoritative QEMU frontend.
+在标志位、排序、幂等性、恢复与客户机错误映射明确规范之前，discard、write-zeroes、resize、snapshot 与缓存模式语义默认禁用。不支持的请求须向权威 QEMU 前端返回强类型的不支持/错误结果。
 
-## 5. Ordering, Retry, and Failure
+## 5. 排序、重试与故障
 
-| Condition | Required behavior |
+| 条件 | 必选行为 |
 | --- | --- |
-| Duplicate write/flush | Storage executor consults operation cache and replays only matching completion. |
-| Result lost after write | Origin queries/retries the same semantic operation key; only forwarding metadata may change and it never generates a second write ID. |
-| Out-of-order sequence | Executor holds or rejects according to explicit queue-order policy; it never silently applies an unsafe order. |
-| Storage route unavailable | Return typed I/O failure or VM degraded status; no local arbitrary-node fallback. |
-| Executor fails before durable completion | Return uncertain/error according to backend capability; do not claim guest completion. |
-| Executor fails after recorded durable completion | Replay result after recovery only when operation cache/durability contract proves it. |
-| QEMU/device authority fails | VM lifecycle owns failure; remote executors do not continue accepting guest-visible writes independently. |
+| 重复写/flush | 存储执行器查询操作缓存，仅重放匹配的完成结果。 |
+| 写入后结果丢失 | 源端按同一语义操作键查询或重试；仅转发元数据可变更，绝不生成第二个写操作 ID。 |
+| 乱序到达的队列序号 | 执行器按显式队列排序策略暂存或拒绝，绝不静默以不安全顺序应用。 |
+| 存储路由不可用 | 返回强类型 I/O 失败或 VM 降级状态，禁止回退至任意本地节点。 |
+| 持久化完成前执行器故障 | 按后端能力返回不确定或错误状态，不得宣称客户机完成。 |
+| 记录持久化完成后执行器故障 | 仅当操作缓存/持久化契约可证明已完成时，恢复后方可重放结果。 |
+| QEMU/设备权威故障 | 由 VM 生命周期接管故障处理；远端执行器不得继续独立接受客户机可见写入。 |
 
-The device authority may use bounded queues and batching, but it must preserve
-each queue/order domain's contract. It cannot globally serialize unrelated
-queues merely to simplify correctness, nor drop writes/flushes under overload.
+设备权威可使用有界队列与批处理，但必须严格维护各队列/排序域的有序契约；不得为简化正确性而全局串行化无关队列，亦不得在过载时丢弃写或 flush 操作。
 
-## 6. vCPU and Interrupt Interaction
+## 6. vCPU 与中断交互
 
-Remote vCPU execution may produce PIO/MMIO exits related to storage. The remote
-executor returns a typed exit to the authoritative QEMU frontend through the
-node-runtime path. QEMU performs device emulation and supplies any read result
-to the next vCPU interval as defined by `vcpu-handoff.md`.
+远端 vCPU 执行可能触发存储相关的 PIO/MMIO 退出。远端执行器通过节点运行时路径向权威 QEMU 前端返回强类型退出；由 QEMU 执行设备模拟，并按 `vcpu-handoff.md` 定义向下一个 vCPU 执行区间提供读结果。
 
-Remote device/VFIO interrupts are events, not proof of device completion. They
-must carry VM identity, source device identity, delivery sequence, and typed
-status through the node runtime; QEMU remains responsible for guest IRQ/APIC
-delivery and duplicate suppression.
+远端设备/VFIO 中断属于事件通知，而非设备完成的凭证。它们必须携带 VM 身份、源设备身份、投递序号及强类型状态经由节点运行时传递；QEMU 始终负责客户机 IRQ/APIC 投递与去重抑制。
 
-## 7. Implementation Touchpoints and Requirements
+## 7. 实现触点与要求
 
-| File, symbol, or boundary | Required responsibility |
+| 文件、符号或边界 | 必选职责 |
 | --- | --- |
-| `wavevm-qemu/.../wavevm-all.c:wvm_send_ipc_block_io` | Add request identity, queue ordering, flags, typed completion, and manifest validation. |
-| `slave_daemon/slave_hybrid.c:handle_block_io_phys` | Implement operation cache, real backend durability, status/error mapping, and bounds checks under the canonical schema. |
-| `common_include/wavevm_protocol.h` | Define the canonical block envelope and reject unsupported untyped payloads. |
-| Gateway/node runtime paths | Preserve node-runtime authority, queue QoS, and strict VM route identity. |
-| VFIO paths | Keep as future device-event source; do not claim Minimum distributed device authority. |
+| `wavevm-qemu/.../wavevm-all.c:wvm_send_ipc_block_io` | 补充请求身份、队列排序、标志位、强类型完成与清单校验。 |
+| `slave_daemon/slave_hybrid.c:handle_block_io_phys` | 在规范 schema 下实现操作缓存、真实后端持久化、状态/错误映射与边界检查。 |
+| `common_include/wavevm_protocol.h` | 定义规范块信封，拒绝不支持的无类型载荷。 |
+| Gateway/节点运行时路径 | 维护节点运行时权威、队列 QoS 与严格的 VM 路由身份校验。 |
+| VFIO 路径 | 保留为未来设备事件源，不宣称 Minimum 分布式设备权威。 |
 
-## 8. Compatibility Boundary
+## 8. 兼容性边界
 
-No legacy block request, implicit ACK, or direct executor-to-frontend route is
-a production alternative. Block operations use typed identities, ordered
-completion, backend durability results, and the QEMU device-authority contract.
-Unsupported operations return explicit errors.
+生产环境不支持历史块请求、隐式 ACK 或执行器直连前端路由。块操作必须遵循强类型身份、有序完成、后端持久化结果及 QEMU 设备权威契约；不支持的操作一律返回显式错误。
 
-## 9. Acceptance Tests
+## 9. 验收测试
 
-- Read, write, and flush exercise remote storage and return results to the
-  authoritative QEMU frontend.
-- A duplicate write with the same operation ID applies bytes once; a duplicate
-  with different bytes is rejected.
-- A lost result after durable write is safely replayed without a duplicate
-  backend mutation.
-- A route replacement while a durable result is lost preserves one semantic
-  write/flush and returns a cached result or bounded `RESULT_EXPIRED` error.
-- Flush and FUA success requires an instrumented durable backend completion.
-- Storage executor overload and route loss produce bounded guest-visible errors
-  rather than hangs or false success.
-- Independent queues can progress concurrently while ordered writes within one
-  queue preserve their declared sequence.
-- MMIO/PIO and IRQ paths retain QEMU device authority and do not bypass the
-  node runtime.
-- A storage operation from one VM cannot complete another VM's request even
-  when raw node/vnode values overlap.
+- 读、写与 flush 经过远端存储执行并将结果返回至权威 QEMU 前端。
+- 相同操作 ID 的重复写仅应用一次字节；携带不同字节的重复写被拒绝。
+- 持久化写入后丢失结果时，可安全重放且不产生重复后端变更。
+- 持久化结果丢失期间发生路由替换时，保持单一语义写/flush，并返回缓存结果或有界 `RESULT_EXPIRED` 错误。
+- Flush 与 FUA 成功必须由经观测验证的真实持久化后端完成作为前提。
+- 存储执行器过载与路由丢失产生有界的客户机可见错误，不发生挂死或伪成功。
+- 相互独立的队列可并发推进，而同一队列内的有序写入保持声明顺序。
+- MMIO/PIO 与 IRQ 路径保持 QEMU 设备权威，且不绕过节点运行时。
+- 即使原始 node/vnode 数值重叠，一个 VM 的存储操作也无法完成另一个 VM 的请求。

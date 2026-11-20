@@ -347,6 +347,8 @@ int kvm_physical_memory_addr_from_host(KVMState *s, void *ram,
     return ret;
 }
 
+static void kvm_discard_virgin_dirty_log(KVMMemoryListener *kml, KVMSlot *slot);
+
 static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, bool new)
 {
     KVMState *s = kvm_state;
@@ -376,7 +378,26 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
     }
     mem.memory_size = slot->memory_size;
     ret = kvm_vm_ioctl(s, KVM_SET_USER_MEMORY_REGION, &mem);
-    slot->old_flags = mem.flags;
+    {
+        unsigned int prev_flags = slot->old_flags;
+        slot->old_flags = mem.flags;
+        /*
+         * KVM initializes a new LOG_DIRTY slot to all-ones. region_del of
+         * that slot then kvm_physical_sync_dirty_bitmap() ORs the virgin
+         * 3GB log back into QEMU (run-162924: remaining=785911 after a
+         * consume that had already cleared QEMU bits). Discard the kernel
+         * baseline now, without applying it, so later syncs/flushes see
+         * only real writes. With MANUAL_PROTECT, GET_DIRTY_LOG alone
+         * does not clear kernel bits; discard must also CLEAR so a
+         * later sync, remap, or dirty-log re-enable cannot restore
+         * the full 3GB baseline (run-090432 remaining=785931).
+         */
+        if (ret >= 0 && slot->memory_size != 0 &&
+            (mem.flags & KVM_MEM_LOG_DIRTY_PAGES) &&
+            (new || !(prev_flags & KVM_MEM_LOG_DIRTY_PAGES))) {
+            kvm_discard_virgin_dirty_log(kml, slot);
+        }
+    }
 err:
     trace_kvm_set_user_memory(mem.slot, mem.flags, mem.guest_phys_addr,
                               mem.memory_size, mem.userspace_addr, ret);
@@ -646,6 +667,84 @@ static void kvm_memslot_init_dirty_bitmap(KVMSlot *mem)
     hwaddr bitmap_size = ALIGN(((mem->memory_size) >> TARGET_PAGE_BITS),
                                         /*HOST_LONG_BITS*/ 64) / 8;
     mem->dirty_bmap = g_malloc0(bitmap_size);
+}
+
+static void kvm_discard_virgin_dirty_log(KVMMemoryListener *kml, KVMSlot *slot)
+{
+    KVMState *s = kvm_state;
+    struct kvm_dirty_log d = {};
+    hwaddr bitmap_size;
+    static unsigned log_count;
+
+    if (!slot || !slot->memory_size ||
+        !(slot->flags & KVM_MEM_LOG_DIRTY_PAGES)) {
+        return;
+    }
+    if (!slot->dirty_bmap) {
+        kvm_memslot_init_dirty_bitmap(slot);
+    }
+    if (!slot->dirty_bmap) {
+        return;
+    }
+    bitmap_size = ALIGN(((slot->memory_size) >> TARGET_PAGE_BITS),
+                        /*HOST_LONG_BITS*/ 64) / 8;
+    memset(slot->dirty_bmap, 0, (size_t)bitmap_size);
+    d.dirty_bitmap = slot->dirty_bmap;
+    d.slot = slot->slot | (kml->as_id << 16);
+    if (kvm_vm_ioctl(s, KVM_GET_DIRTY_LOG, &d) == -1) {
+        if (log_count < 32) {
+            fprintf(stderr,
+                    "[KVM-MEM] virgin dirty discard failed slot=%d as_id=%d "
+                    "gpa=%#" PRIx64 " size=%#" PRIx64 " errno=%d\n",
+                    slot->slot, kml->as_id,
+                    (uint64_t)slot->start_addr,
+                    (uint64_t)slot->memory_size, errno);
+            log_count++;
+        }
+        return;
+    }
+    /*
+     * MANUAL_PROTECT (enabled by default here) leaves kernel bits intact
+     * after GET_DIRTY_LOG. A later log_sync or region_del would otherwise
+     * OR this birth bitmap back into the same QEMU bitmap the handoff
+     * flush snapshots. Clear the kernel log now, including after a
+     * slot remap or LOG_DIRTY re-enable, then drop the userspace copy.
+     */
+    if (s->manual_dirty_log_protect) {
+        struct kvm_clear_dirty_log c = {};
+        unsigned long npages = slot->memory_size / qemu_real_host_page_size;
+
+        c.slot = d.slot;
+        c.first_page = 0;
+        /* Full-slot clear may run to the end without 64-page alignment. */
+        c.num_pages = npages;
+        c.dirty_bitmap = slot->dirty_bmap;
+        if (kvm_vm_ioctl(s, KVM_CLEAR_DIRTY_LOG, &c) == -1) {
+            if (log_count < 32) {
+                fprintf(stderr,
+                        "[KVM-MEM] virgin dirty clear failed slot=%d as_id=%d "
+                        "gpa=%#" PRIx64 " size=%#" PRIx64 " errno=%d\n",
+                        slot->slot, kml->as_id,
+                        (uint64_t)slot->start_addr,
+                        (uint64_t)slot->memory_size, errno);
+                log_count++;
+            }
+            memset(slot->dirty_bmap, 0, (size_t)bitmap_size);
+            return;
+        }
+    }
+    /* Drop the all-ones birth bitmap; do not OR it into QEMU. */
+    memset(slot->dirty_bmap, 0, (size_t)bitmap_size);
+    if (log_count < 64) {
+        fprintf(stderr,
+                "[KVM-MEM] discarded virgin dirty log slot=%d as_id=%d "
+                "gpa=%#" PRIx64 " size=%#" PRIx64 "%s\n",
+                slot->slot, kml->as_id,
+                (uint64_t)slot->start_addr,
+                (uint64_t)slot->memory_size,
+                s->manual_dirty_log_protect ? " (kernel cleared)" : "");
+        log_count++;
+    }
 }
 
 /**

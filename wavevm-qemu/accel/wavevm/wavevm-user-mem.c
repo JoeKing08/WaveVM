@@ -52,6 +52,7 @@ int wavevm_publish_initial_ram(uint64_t gpa, void *hva, uint64_t bytes,
 
 // --- 全局配置与状态 ---
 static int g_is_slave = 0;
+static bool g_migration_dirty_log_started;
 static int g_fd_req = -1;
 static __thread uint8_t t_net_buf[WVM_MAX_PACKET_SIZE];
 static int g_fd_push = -1;
@@ -140,6 +141,7 @@ void wavevm_user_mem_set_tcg_shm_coherent(int enabled)
          */
         if (g_is_slave && !kvm_enabled()) {
             memory_global_dirty_log_start();
+            g_migration_dirty_log_started = true;
         }
         fprintf(stderr,
                 "[WaveVM-User] TCG SHM coherent mode ON "
@@ -192,6 +194,10 @@ static _Atomic uint64_t g_operation_sequence = 1;
 static uint64_t get_us_time(void);
 static uint64_t get_local_page_version(uint64_t gpa);
 static void set_local_page_version(uint64_t gpa, uint64_t version);
+static void mark_commit_inflight(uint64_t gpa);
+static void complete_commit_inflight(uint64_t gpa, uint64_t accepted_ver);
+static bool push_check_should_apply(uint64_t gpa, uint64_t push_ver,
+                                    uint64_t *local_ver_out);
 static long wait_for_directory_ack_safe_us(uint64_t timeout_us);
 static long wait_for_directory_ack_safe(void);
 static int internal_connect_master(void);
@@ -281,10 +287,84 @@ typedef struct {
     ram_addr_t ram_start;
     uint64_t  gpa_start;
     uint64_t  size;
+    bool baseline_consumed;
 } GVMRamBlock;
 
 static GVMRamBlock g_mem_blocks[MAX_RAM_BLOCKS];
 static int g_block_count = 0;
+
+/*
+ * memory_global_dirty_log_start() typically marks every existing page dirty.
+ * Official 3GB KVM then looks like 786432 real writes (run-161500 remaining
+ * 785931 of 786432). Discard that virgin all-set baseline with a one-shot
+ * snapshot_and_clear and no restore / no commit. This is O(bitmap), not a
+ * per-page 3GB walk. Guest writes after this remain in the live bitmap.
+ */
+static int consume_one_block_dirty_baseline(GVMRamBlock *blk)
+{
+    ram_addr_t mr_offset;
+    RAMBlock *rb;
+    DirtyBitmapSnapshot *snap;
+
+    if (!blk || blk->baseline_consumed || blk->size == 0) {
+        return 0;
+    }
+    rb = qemu_ram_block_from_host((void *)blk->hva_start, false, &mr_offset);
+    if (!rb) {
+        return -EFAULT;
+    }
+    snap = cpu_physical_memory_snapshot_and_clear_dirty(
+        rb->mr, mr_offset, blk->size, DIRTY_MEMORY_MIGRATION);
+    if (!snap) {
+        return -ENOMEM;
+    }
+    g_free(snap);
+    blk->baseline_consumed = true;
+    return 0;
+}
+
+static void wavevm_user_mem_consume_dirty_baseline(void)
+{
+    int consumed = 0;
+    int skipped = 0;
+    int rc;
+
+    if (!g_migration_dirty_log_started || !kvm_enabled() || g_is_slave ||
+        g_block_count <= 0) {
+        return;
+    }
+    for (int bi = 0; bi < g_block_count; bi++) {
+        /*
+         * This helper runs from dirty-log start. A later re-enable marks
+         * QEMU all-dirty again; forget the previous consume so the new
+         * baseline is dropped instead of surviving into the first flush.
+         */
+        g_mem_blocks[bi].baseline_consumed = false;
+        rc = consume_one_block_dirty_baseline(&g_mem_blocks[bi]);
+        if (rc != 0) {
+            fprintf(stderr,
+                    "[WaveVM-User] dirty baseline consume failed "
+                    "gpa=%#llx size=%#llx rc=%d\n",
+                    (unsigned long long)g_mem_blocks[bi].gpa_start,
+                    (unsigned long long)g_mem_blocks[bi].size, rc);
+            continue;
+        }
+        consumed++;
+    }
+    if (consumed > 0) {
+        fprintf(stderr,
+                "[WaveVM-User] dirty baseline consumed blocks=%d skipped=%d "
+                "(virgin all-dirty discarded, no commit, no page walk)\n",
+                consumed, skipped);
+    }
+}
+
+static void wavevm_enable_migration_dirty_log(void)
+{
+    memory_global_dirty_log_start();
+    g_migration_dirty_log_started = true;
+    wavevm_user_mem_consume_dirty_baseline();
+}
 
 int wavevm_user_mem_prepare_tcg_dirty_baseline(void)
 {
@@ -540,15 +620,33 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
         g_fault_hook_checked = true;
     }
     for (int i = 0; i < g_block_count; i++) {
-        if (g_mem_blocks[i].gpa_start == gpa &&
-            g_mem_blocks[i].hva_start == (uintptr_t)hva &&
-            g_mem_blocks[i].size == size) {
+        const GVMRamBlock *eb = &g_mem_blocks[i];
+        if (eb->gpa_start == gpa &&
+            eb->hva_start == (uintptr_t)hva &&
+            eb->size == size) {
             fprintf(stderr,
                     "[WaveVM-User] dedup ram_block hva=%p gpa=%#llx size=%#llx blocks=%d\n",
                     hva,
                     (unsigned long long)gpa,
                     (unsigned long long)size,
                     g_block_count);
+            return;
+        }
+        if (size > 0 && gpa >= eb->gpa_start &&
+            size <= eb->size && (gpa - eb->gpa_start) <= eb->size - size &&
+            (uintptr_t)hva == eb->hva_start + (uintptr_t)(gpa - eb->gpa_start)) {
+            static unsigned subrange_log_count;
+            if (subrange_log_count < 32U) {
+                fprintf(stderr,
+                        "[WaveVM-User] dedup-subrange ram_block hva=%p gpa=%#llx size=%#llx parent_gpa=%#llx parent_size=%#llx blocks=%d\n",
+                        hva,
+                        (unsigned long long)gpa,
+                        (unsigned long long)size,
+                        (unsigned long long)eb->gpa_start,
+                        (unsigned long long)eb->size,
+                        g_block_count);
+                subrange_log_count++;
+            }
             return;
         }
     }
@@ -571,7 +669,28 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
     g_mem_blocks[g_block_count].ram_start = qemu_ram_addr_from_host(hva);
     g_mem_blocks[g_block_count].gpa_start = gpa;
     g_mem_blocks[g_block_count].size      = size;
+    g_mem_blocks[g_block_count].baseline_consumed = false;
     g_block_count++;
+    /*
+     * Blocks registered after dirty-log start also come up all-dirty.
+     * Consume that virgin baseline now so later guest/firmware writes stay
+     * visible, without walking 3GB page-by-page.
+     */
+    if (g_migration_dirty_log_started && kvm_enabled() && !g_is_slave) {
+        int brc = consume_one_block_dirty_baseline(
+            &g_mem_blocks[g_block_count - 1]);
+        if (brc != 0) {
+            fprintf(stderr,
+                    "[WaveVM-User] dirty baseline consume failed "
+                    "gpa=%#llx size=%#llx rc=%d\n",
+                    (unsigned long long)gpa, (unsigned long long)size, brc);
+        } else {
+            fprintf(stderr,
+                    "[WaveVM-User] dirty baseline consumed gpa=%#llx "
+                    "size=%#llx (virgin all-dirty discarded, no commit)\n",
+                    (unsigned long long)gpa, (unsigned long long)size);
+        }
+    }
     {
         char msg[224];
         int n = snprintf(msg, sizeof(msg),
@@ -841,13 +960,10 @@ static void wvm_apply_push(uint16_t msg_type, void *payload,
         struct wvm_diff_log* log = (struct wvm_diff_log*)payload;
         uint64_t gpa = WVM_NTOHLL(log->gpa);
         uint64_t push_ver = WVM_NTOHLL(log->version);
-        uint64_t local_ver = get_local_page_version(gpa);
+        uint64_t local_ver = 0;
 
-        // [FIX] 严格版本/幂等性校验
-
-        // 情况 A: 过期或重复的包 (Stale/Duplicate)
-        // 网络重传或乱序导致，直接静默丢弃，不做任何内存操作
-        if (!is_newer_version(local_ver, push_ver)) {
+        // [FIX] 原子判定在途提交与版本单调性，消除 ACK/PUSH 回声竞态
+        if (!push_check_should_apply(gpa, push_ver, &local_ver)) {
             return;
         }
 
@@ -901,8 +1017,9 @@ static void wvm_apply_push(uint16_t msg_type, void *payload,
         struct wvm_full_page_push* full = (struct wvm_full_page_push*)payload;
         uint64_t gpa = WVM_NTOHLL(full->gpa);
         uint64_t push_ver = WVM_NTOHLL(full->version);
+        uint64_t local_ver = 0;
 
-        if (is_newer_version(get_local_page_version(gpa), push_ver)) {
+        if (push_check_should_apply(gpa, push_ver, &local_ver)) {
             void *page_hva = gpa_to_hva_safe(gpa);
             if (!page_hva) return;
             if (!(backing_already_applied && g_tcg_shm_coherent)) {
@@ -1033,6 +1150,11 @@ static __thread int t_com_sock = -1;
 static __thread uint64_t t_memory_deadline_us;
 #define WVM_MEMORY_IPC_TIMEOUT_US 120000000ULL /* F05 cross-host fence */
 #define WVM_MEMORY_DIRTY_BATCH_TIMEOUT_US 60000000ULL
+/* Official KVM remoting cannot walk 3GB under a short horizon (run-160430
+ * soft-lockup). Cap one handoff harvest by time and page count; leftover
+ * dirty bits are restored for the next boundary. */
+#define WVM_MEMORY_HANDOFF_DIRTY_BUDGET_US 150000ULL
+#define WVM_MEMORY_HANDOFF_DIRTY_PAGE_BUDGET 256
 
 // --- 辅助函数 ---
 
@@ -1085,6 +1207,78 @@ static void set_local_page_version(uint64_t gpa, uint64_t version)
 {
     uint64_t *slot = local_page_version_slot(gpa, true);
     __atomic_store_n(slot, version, __ATOMIC_RELEASE);
+}
+
+/*
+ * Directory echoes PAGE_PUSH of a just-accepted local commit back to this
+ * FE. The push can arrive before the commit ACK sets the local version, so
+ * apply_push still sees local=0 and memcpy's the snapshot over live guest
+ * RAM (101244: tens of thousands of type=26 echoes, then CPU2 oopsed in
+ * dropbearkey). Mark the GPA in-flight around the commit so apply skips
+ * the memcpy; the ACK still records the accepted version.
+ */
+#define WVM_COMMIT_INFLIGHT_CAP 1024
+static pthread_mutex_t g_commit_inflight_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_commit_inflight[WVM_COMMIT_INFLIGHT_CAP];
+static int g_commit_inflight_count;
+
+static bool commit_is_inflight_locked(uint64_t gpa)
+{
+    for (int i = 0; i < g_commit_inflight_count; i++) {
+        if (g_commit_inflight[i] == gpa) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void mark_commit_inflight(uint64_t gpa)
+{
+    pthread_mutex_lock(&g_commit_inflight_lock);
+    if (g_commit_inflight_count < WVM_COMMIT_INFLIGHT_CAP) {
+        g_commit_inflight[g_commit_inflight_count++] = gpa;
+    }
+    pthread_mutex_unlock(&g_commit_inflight_lock);
+}
+
+static void complete_commit_inflight(uint64_t gpa, uint64_t accepted_ver)
+{
+    int i;
+
+    pthread_mutex_lock(&g_commit_inflight_lock);
+    if (accepted_ver != 0) {
+        set_local_page_version(gpa, accepted_ver);
+    }
+    for (i = 0; i < g_commit_inflight_count; i++) {
+        if (g_commit_inflight[i] == gpa) {
+            g_commit_inflight[i] =
+                g_commit_inflight[--g_commit_inflight_count];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_commit_inflight_lock);
+}
+
+static bool push_check_should_apply(uint64_t gpa, uint64_t push_ver,
+                                    uint64_t *local_ver_out)
+{
+    uint64_t local_ver;
+
+    pthread_mutex_lock(&g_commit_inflight_lock);
+    if (!g_is_slave && commit_is_inflight_locked(gpa)) {
+        pthread_mutex_unlock(&g_commit_inflight_lock);
+        return false;
+    }
+    local_ver = get_local_page_version(gpa);
+    if (!is_newer_version(local_ver, push_ver)) {
+        pthread_mutex_unlock(&g_commit_inflight_lock);
+        return false;
+    }
+    pthread_mutex_unlock(&g_commit_inflight_lock);
+    if (local_ver_out) {
+        *local_ver_out = local_ver;
+    }
+    return true;
 }
 
 static void safe_log(const char *msg) {
@@ -2629,15 +2823,117 @@ void wavevm_user_mem_finish_handoff_dirty(WVMHandoffDirtyJournal *journal,
     free_handoff_dirty_journal(journal);
 }
 
+static int handoff_dirty_budget_us(void)
+{
+    const char *env = getenv("WVM_HANDOFF_DIRTY_BUDGET_US");
+    unsigned long v;
+
+    if (!env || env[0] == '\0') {
+        return (int)WVM_MEMORY_HANDOFF_DIRTY_BUDGET_US;
+    }
+    v = strtoul(env, NULL, 10);
+    if (v < 10000UL) {
+        v = 10000UL;
+    } else if (v > 500000UL) {
+        /* Never again allow a tens-of-seconds full-RAM walk. */
+        v = 500000UL;
+    }
+    return (int)v;
+}
+
+static int handoff_dirty_page_budget(void)
+{
+    const char *env = getenv("WVM_HANDOFF_DIRTY_PAGE_BUDGET");
+    int v;
+
+    if (!env || env[0] == '\0') {
+        return WVM_MEMORY_HANDOFF_DIRTY_PAGE_BUDGET;
+    }
+    v = atoi(env);
+    if (v < 16) {
+        v = 16;
+    } else if (v > 1024) {
+        v = 1024;
+    }
+    return v;
+}
+
+static int g_flush_cursor_bi = 0;
+static uint64_t g_flush_cursor_off = 0;
+
+static int restore_snapshot_range(DirtyBitmapSnapshot *snap,
+                                  ram_addr_t ram_base,
+                                  uint64_t begin, uint64_t end)
+{
+    int remaining = 0;
+
+    for (uint64_t off = begin; off + 4096 <= end; ) {
+        uint64_t window = end - off;
+        if (window > 256ULL * 4096) {
+            window = 256ULL * 4096;
+        }
+        if (!cpu_physical_memory_snapshot_get_dirty(snap, ram_base + off,
+                                                     window)) {
+            off += window;
+            continue;
+        }
+        if (cpu_physical_memory_snapshot_get_dirty(snap, ram_base + off,
+                                                    4096)) {
+            cpu_physical_memory_set_dirty_range(
+                ram_base + off, 4096, 1 << DIRTY_MEMORY_MIGRATION);
+            remaining++;
+        }
+        off += 4096;
+    }
+    return remaining;
+}
+
+static void restore_uncommitted_dirty_snapshot(
+    DirtyBitmapSnapshot *snapshots[], ram_addr_t ram_bases[],
+    const uint64_t p2_end[], const uint64_t p1_begin[],
+    const uint64_t p1_end[], int *remaining_out)
+{
+    int remaining = 0;
+
+    for (int bi = 0; bi < g_block_count; bi++) {
+        GVMRamBlock *blk = &g_mem_blocks[bi];
+
+        if (!snapshots[bi]) {
+            continue;
+        }
+        remaining += restore_snapshot_range(snapshots[bi], ram_bases[bi],
+                                            p2_end[bi], p1_begin[bi]);
+        remaining += restore_snapshot_range(snapshots[bi], ram_bases[bi],
+                                            p1_end[bi], blk->size);
+        g_free(snapshots[bi]);
+        snapshots[bi] = NULL;
+    }
+    if (remaining_out) {
+        *remaining_out = remaining;
+    }
+}
+
 static int flush_dirty_to_ipc(int ipc_fd,
                               WVMHandoffDirtyJournal **journal_out)
 {
     int flushed = 0;
     int skipped_zero = 0;
-    uint64_t scanned_pages = 0;
+    uint64_t scanned_windows = 0;
     uint64_t dirty_pages = 0;
+    int remaining = 0;
+    int budgeted = 0;
+    int first_error = 0;
     static int flush_log_count = 0;
     WVMHandoffDirtyJournal *journal = NULL;
+    DirtyBitmapSnapshot *snapshots[MAX_RAM_BLOCKS] = {0};
+    ram_addr_t ram_bases[MAX_RAM_BLOCKS];
+    uint64_t p1_begin[MAX_RAM_BLOCKS] = {0};
+    uint64_t p1_end[MAX_RAM_BLOCKS] = {0};
+    uint64_t p2_end[MAX_RAM_BLOCKS] = {0};
+    uint64_t start_us;
+    uint64_t deadline;
+    int page_budget;
+    uint64_t elapsed_us = 0;
 
     if (journal_out) {
         *journal_out = NULL;
@@ -2651,198 +2947,331 @@ static int flush_dirty_to_ipc(int ipc_fd,
         return 0;
     }
 
+    start_us = get_us_time();
+    deadline = start_us + (uint64_t)handoff_dirty_budget_us();
+    if (t_memory_deadline_us && t_memory_deadline_us < deadline) {
+        deadline = t_memory_deadline_us;
+    }
+    page_budget = handoff_dirty_page_budget();
+
+    /*
+     * Take BQL before the flush lock (stay-local harvest may run without
+     * it). memory_global_dirty_log_sync pulls KVM dirty bits into the same
+     * QEMU bitmap the snapshot walks. Do not invert lock order: remoting
+     * can already hold BQL when it flushes.
+     */
+    bool took_bql = false;
+    if (!qemu_mutex_iothread_locked()) {
+        qemu_mutex_lock_iothread();
+        took_bql = true;
+    }
+
     pthread_mutex_lock(&g_dirty_flush_lock);
 
     /*
-     * Remote TCG handoff is a memory ordering boundary: page tables and other
-     * CPU-visible RAM writes made by the master must reach the directory before
-     * the slave executes the exported architectural state.  Send these diffs on
-     * the same IPC stream as the following CPU_RUN so the master daemon observes
-     * commit-before-run ordering.
+     * Snapshot the dirty set once and walk only dirty windows. A per-page
+     * test_and_clear over official 3GB / 786432 pages stalled vCPU 2 in
+     * run-160430 until CPU 1 hit a soft lockup. Writes after this snapshot
+     * stay in the live bitmap for the next handoff.
+     *
+     * Sync KVM first so this snapshot is the same bitmap the birth-discard
+     * and region-del paths update. Without the sync, KVM vCPU writes stay
+     * invisible; with it, a virgin all-ones kernel log would reappear unless
+     * kvm_discard_virgin_dirty_log already cleared that baseline.
      */
+    memory_global_dirty_log_sync();
+
+    int start_bi = g_flush_cursor_bi;
+    uint64_t start_off = g_flush_cursor_off & ~4095ULL;
+    if (start_bi < 0 || start_bi >= g_block_count) {
+        start_bi = 0;
+        start_off = 0;
+    } else if (start_off + 4096 > g_mem_blocks[start_bi].size) {
+        start_bi = (start_bi + 1) % g_block_count;
+        start_off = 0;
+    }
     for (int bi = 0; bi < g_block_count; bi++) {
         GVMRamBlock *blk = &g_mem_blocks[bi];
-        ram_addr_t ram_base = qemu_ram_addr_from_host((void *)blk->hva_start);
-        if (ram_base == RAM_ADDR_INVALID) {
-            continue;
+        ram_addr_t mr_offset;
+        RAMBlock *rb = qemu_ram_block_from_host((void *)blk->hva_start,
+                                               false, &mr_offset);
+
+        if (bi < start_bi) {
+            p1_begin[bi] = blk->size;
+            p1_end[bi] = blk->size;
+        } else if (bi == start_bi) {
+            p1_begin[bi] = start_off;
+            p1_end[bi] = start_off;
+        } else {
+            p1_begin[bi] = 0;
+            p1_end[bi] = 0;
         }
+        p2_end[bi] = 0;
 
-        for (uint64_t off = 0; off + 4096 <= blk->size; off += 4096) {
-            ram_addr_t ra = ram_base + off;
-            scanned_pages++;
-            if (get_us_time() >= memory_ipc_deadline()) {
-                fprintf(stderr,
-                        "[WaveVM-User] handoff dirty scan deadline "
-                        "scanned=%llu dirty=%llu committed=%d skipped_zero=%d\n",
-                        (unsigned long long)scanned_pages,
-                        (unsigned long long)dirty_pages, flushed,
-                        skipped_zero);
-                pthread_mutex_unlock(&g_dirty_flush_lock);
-                free_handoff_dirty_journal(journal);
-                return -ETIMEDOUT;
-            }
-            if (!cpu_physical_memory_test_and_clear_dirty(ra, 4096,
-                                                          DIRTY_MEMORY_MIGRATION)) {
-                continue;
-            }
-            dirty_pages++;
+        ram_bases[bi] = qemu_ram_addr_from_host((void *)blk->hva_start);
+        if (!rb || ram_bases[bi] == RAM_ADDR_INVALID ||
+            blk->size % WVM_MEMORY_PAGE_BYTES != 0) {
+            first_error = -EFAULT;
+            break;
+        }
+        snapshots[bi] = cpu_physical_memory_snapshot_and_clear_dirty(
+            rb->mr, mr_offset, blk->size, DIRTY_MEMORY_MIGRATION);
+        if (!snapshots[bi]) {
+            first_error = -ENOMEM;
+            break;
+        }
+    }
+    if (first_error != 0) {
+        restore_uncommitted_dirty_snapshot(snapshots, ram_bases, p2_end,
+                                           p1_begin, p1_end, &remaining);
+        pthread_mutex_unlock(&g_dirty_flush_lock);
+        if (took_bql) {
+            qemu_mutex_unlock_iothread();
+        }
+        if (flush_log_count < 32) {
+            fprintf(stderr,
+                    "[WaveVM-User] handoff dirty snapshot failed rc=%d "
+                    "remaining=%d fd=%d\n",
+                    first_error, remaining, ipc_fd);
+            flush_log_count++;
+        }
+        /* Do not abort VCPU_RUN because the snapshot failed; leftover bits
+         * were put back. A hard error here would skip remoting entirely. */
+        return 0;
+    }
 
-            uint64_t gpa = blk->gpa_start + off;
-            void *hva = (void *)(blk->hva_start + off);
-            uint64_t cur_ver = get_local_page_version(gpa);
-            if (cur_ver == 0 && is_page_all_zero(hva)) {
-                /*
-                 * Directory SHM starts zeroed; read_page lazily materializes at
-                 * (initial_epoch<<32)|1, not plain version 1. Skip zero dirty
-                 * bits without inventing a local version — remote fault-read
-                 * will materialize matching zeros.
-                 */
-                skipped_zero++;
-                continue;
-            }
-            if (cur_ver == 0) {
-                /*
-                 * Unset local version: commit against the directory's implicit
-                 * zero page. Production CREATE materialize logs showed base=1;
-                 * wvm_handle_local_commit create-on-commits when base matches
-                 * MAKE_VERSION(epoch,1), so we do not fault-materialize every
-                 * dirty page (that exhausted the V1 waiter retention table).
-                 */
-                cur_ver = 1;
-            }
+    int stop_bi = 0;
+    uint64_t stop_off = 0;
+    for (int phase = 0; phase < 2 && !budgeted; phase++) {
+        if (phase == 1 && start_bi == 0 && start_off == 0) {
+            break;
+        }
+        int bi_begin = (phase == 0) ? start_bi : 0;
+        int bi_end = (phase == 0) ? g_block_count : (start_bi + 1);
+        for (int bi = bi_begin; bi < bi_end && !budgeted; bi++) {
+            GVMRamBlock *blk = &g_mem_blocks[bi];
+            uint64_t *cursor_end = (phase == 0) ? &p1_end[bi] : &p2_end[bi];
+            uint64_t phase_limit =
+                (phase == 1 && bi == start_bi) ? start_off : blk->size;
 
-            /* Wire log->version is base_version (memory-consistency.md §4.2);
-             * the directory advances to next(base) on accept. The gated path
-             * already sends cur_ver via request_commit_on_fd; the legacy
-             * COMMIT_DIFF_SYNC path must do the same or remote directories
-             * reject-version (commit=base+1, local=base). */
-            uint64_t ver = cur_ver + 1;
-            if (append_handoff_dirty_record(&journal, gpa, ra, cur_ver, ver) < 0) {
-                int saved_errno = ENOMEM;
-                cpu_physical_memory_set_dirty_range(ra, 4096,
-                                                    1 << DIRTY_MEMORY_MIGRATION);
-                if (journal_out) {
-                    *journal_out = journal;
-                    journal = NULL;
-                } else {
-                    rollback_handoff_dirty_locked(journal);
+            while (*cursor_end + 4096 <= phase_limit) {
+                uint64_t off = *cursor_end;
+                ram_addr_t ra = ram_bases[bi] + off;
+                uint64_t gpa;
+                void *hva;
+                uint64_t cur_ver;
+                uint64_t ver;
+                uint64_t window;
+
+                if (get_us_time() >= deadline || flushed >= page_budget) {
+                    stop_bi = bi;
+                    stop_off = off;
+                    budgeted = 1;
+                    break;
                 }
-                pthread_mutex_unlock(&g_dirty_flush_lock);
-                if (flush_log_count < 20) {
-                    fprintf(stderr,
-                            "[WaveVM-User] handoff dirty journal failed gpa=%#llx "
-                            "sent=%d skipped_zero=%d fd=%d errno=%d\n",
-                            (unsigned long long)gpa, flushed, skipped_zero,
-                            ipc_fd, saved_errno);
-                    flush_log_count++;
+                window = phase_limit - off;
+                if (window > 256ULL * 4096) {
+                    window = 256ULL * 4096;
                 }
-                free_handoff_dirty_journal(journal);
-                return -ENOMEM;
-            }
-            if (wavevm_qemu_runtime_gate_enabled()) {
-                struct wvm_mem_commit_ack ack;
-                int commit_ret = request_commit_on_fd(
-                    ipc_fd, gpa, cur_ver, 0, hva,
-                    WVM_MEMORY_PAGE_BYTES, &ack);
+                scanned_windows++;
+                if (!cpu_physical_memory_snapshot_get_dirty(snapshots[bi],
+                                                             ra, window)) {
+                    *cursor_end += window;
+                    continue;
+                }
+                if (!cpu_physical_memory_snapshot_get_dirty(snapshots[bi],
+                                                             ra, 4096)) {
+                    *cursor_end += 4096;
+                    continue;
+                }
+                dirty_pages++;
 
-                if (commit_ret == -ENOENT || commit_ret == -ESTALE) {
+                gpa = blk->gpa_start + off;
+                hva = (void *)(blk->hva_start + off);
+                cur_ver = get_local_page_version(gpa);
+                if (cur_ver == 0 && is_page_all_zero(hva)) {
                     /*
-                     * G6: rematerialize alone is not enough — recommitting the
-                     * old HVA full page under a new base_version can clobber
-                     * concurrent directory writes. Handoff dirty-log has no
-                     * per-page pre-image here, so fail closed after one
-                     * rematerialize attempt that would only retag bytes.
+                     * Directory SHM starts zeroed; read_page lazily materializes at
+                     * (initial_epoch<<32)|1, not plain version 1. Skip zero dirty
+                     * bits without inventing a local version — remote fault-read
+                     * will materialize matching zeros.
                      */
-                    struct wvm_mem_ack mat_ack;
-                    uint8_t mat_page[WVM_MEMORY_PAGE_BYTES];
-                    int mat_ret = request_page_over_ipc(gpa, &mat_ack, mat_page);
-                    static int handoff_retry_log;
-                    if (mat_ret == 0 &&
-                        ack_status_to_errno(mat_ack.status) == 0 &&
-                        mat_ack.version != 0 &&
-                        mat_ack.version == cur_ver) {
-                        /* Same base after rematerialize: safe to retry once. */
-                        commit_ret = request_commit_on_fd(
-                            ipc_fd, gpa, cur_ver, 0, hva,
-                            WVM_MEMORY_PAGE_BYTES, &ack);
-                    } else {
-                        commit_ret = commit_ret ? commit_ret : -ESTALE;
-                        if (handoff_retry_log < 20) {
+                    skipped_zero++;
+                    *cursor_end += 4096;
+                    continue;
+                }
+                if (cur_ver == 0) {
+                    /*
+                     * Unset local version: commit against the directory's implicit
+                     * zero page. Production CREATE materialize logs showed base=1;
+                     * wvm_handle_local_commit create-on-commits when base matches
+                     * MAKE_VERSION(epoch,1), so we do not fault-materialize every
+                     * dirty page (that exhausted the V1 waiter retention table).
+                     */
+                    cur_ver = 1;
+                }
+
+                ver = cur_ver + 1;
+                if (append_handoff_dirty_record(&journal, gpa, ra, cur_ver, ver) < 0) {
+                    cpu_physical_memory_set_dirty_range(ra, 4096,
+                                                        1 << DIRTY_MEMORY_MIGRATION);
+                    *cursor_end += 4096;
+                    stop_bi = bi;
+                    stop_off = off;
+                    budgeted = 1;
+                    first_error = -ENOMEM;
+                    break;
+                }
+                if (wavevm_qemu_runtime_gate_enabled()) {
+                    struct wvm_mem_commit_ack ack;
+                    uint64_t last_mat_ver = 0;
+                    int commit_ret;
+
+                    mark_commit_inflight(gpa);
+                    commit_ret = request_commit_on_fd(
+                        ipc_fd, gpa, cur_ver, 0, hva,
+                        WVM_MEMORY_PAGE_BYTES, &ack);
+
+                    if (commit_ret == -ENOENT || commit_ret == -ESTALE) {
+                        static int rebase_log;
+                        static int handoff_retry_log;
+                        uint64_t orig_ver = cur_ver;
+
+                        for (int attempt = 0; attempt < 2; attempt++) {
+                            struct wvm_mem_ack mat_ack;
+                            uint8_t mat_page[WVM_MEMORY_PAGE_BYTES];
+                            int mat_ret = request_page_over_ipc(
+                                gpa, &mat_ack, mat_page);
+
+                            if (mat_ret == 0 &&
+                                ack_status_to_errno(mat_ack.status) == 0 &&
+                                mat_ack.version != 0) {
+                                last_mat_ver = mat_ack.version;
+                                if (memcmp(mat_page, hva,
+                                           WVM_MEMORY_PAGE_BYTES) == 0) {
+                                    ack.result_version = mat_ack.version;
+                                    commit_ret = 0;
+                                    break;
+                                }
+                                cur_ver = mat_ack.version;
+                                if (journal && journal->count > 0) {
+                                    journal->items[journal->count - 1]
+                                        .old_version = cur_ver;
+                                }
+                                commit_ret = request_commit_on_fd(
+                                    ipc_fd, gpa, cur_ver, 0, hva,
+                                    WVM_MEMORY_PAGE_BYTES, &ack);
+                                if (commit_ret == 0) {
+                                    if (rebase_log < 32) {
+                                        fprintf(stderr,
+                                                "[WaveVM-User] handoff ESTALE rebased "
+                                                "gpa=%#llx old=%#llx mat_ver=%#llx new=%#llx\n",
+                                                (unsigned long long)gpa,
+                                                (unsigned long long)orig_ver,
+                                                (unsigned long long)mat_ack.version,
+                                                (unsigned long long)ack.result_version);
+                                        rebase_log++;
+                                    }
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                        if (commit_ret != 0 && handoff_retry_log < 32) {
                             fprintf(stderr,
-                                    "[WaveVM-User] handoff ESTALE fail-closed "
-                                    "gpa=%#llx cur=%#llx mat_ver=%#llx mat=%d\n",
+                                    "[WaveVM-User] handoff ESTALE unresolved "
+                                    "gpa=%#llx cur=%#llx mat_ver=%#llx rc=%d\n",
                                     (unsigned long long)gpa,
                                     (unsigned long long)cur_ver,
-                                    (unsigned long long)(mat_ret == 0 ?
-                                        mat_ack.version : 0),
-                                    mat_ret);
+                                    (unsigned long long)last_mat_ver,
+                                    commit_ret);
                             handoff_retry_log++;
                         }
                     }
-                }
 
-                if (commit_ret == 0) {
-                    ver = ack.result_version;
-                    journal->items[journal->count - 1].new_version = ver;
-                    journal->items[journal->count - 1].commit_confirmed = true;
-                } else {
+                    if (commit_ret == 0) {
+                        ver = ack.result_version;
+                        complete_commit_inflight(gpa, ver);
+                        if (journal && journal->count > 0) {
+                            journal->items[journal->count - 1].new_version = ver;
+                            journal->items[journal->count - 1].commit_confirmed = true;
+                        }
+                    } else {
+                        complete_commit_inflight(gpa, last_mat_ver);
+                        cpu_physical_memory_set_dirty_range(
+                            ra, 4096, 1 << DIRTY_MEMORY_MIGRATION);
+                        /* Drop the unconfirmed journal record and advance cursor
+                         * past this page so one hot GPA cannot starve higher RAM. */
+                        journal->count--;
+                        *cursor_end += 4096;
+                        stop_bi = bi;
+                        stop_off = *cursor_end;
+                        budgeted = 1;
+                        first_error = commit_ret;
+                        break;
+                    }
+                } else if (send_full_page_diff_to_ipc_fd(ipc_fd, gpa, cur_ver, hva) < 0) {
                     cpu_physical_memory_set_dirty_range(
                         ra, 4096, 1 << DIRTY_MEMORY_MIGRATION);
-                    pthread_mutex_unlock(&g_dirty_flush_lock);
-                    free_handoff_dirty_journal(journal);
-                    return commit_ret;
+                    journal->count--;
+                    *cursor_end += 4096;
+                    stop_bi = bi;
+                    stop_off = off;
+                    budgeted = 1;
+                    first_error = -EIO;
+                    break;
                 }
-            } else if (send_full_page_diff_to_ipc_fd(ipc_fd, gpa, cur_ver, hva) < 0) {
-                int saved_errno = errno;
-                if (journal_out) {
-                    *journal_out = journal;
-                    journal = NULL;
-                } else {
-                    rollback_handoff_dirty_locked(journal);
-                }
-                pthread_mutex_unlock(&g_dirty_flush_lock);
-                if (flush_log_count < 20) {
-                    fprintf(stderr,
-                            "[WaveVM-User] handoff dirty flush failed gpa=%#llx "
-                            "sent=%d skipped_zero=%d fd=%d errno=%d\n",
-                            (unsigned long long)gpa, flushed, skipped_zero,
-                            ipc_fd, saved_errno);
-                    flush_log_count++;
-                }
-                free_handoff_dirty_journal(journal);
-                return -EIO;
+                flushed++;
+                *cursor_end += 4096;
             }
-            /*
-             * Legacy COMMIT_DIFF_SYNC: do not bump the local version until
-             * a directory accept ACK (or successful fence, which is the
-             * batch equivalent) confirms the page. Optimistic cur+1 plus
-             * fence-fail rollback was resending stale base=1 after the
-             * directory had already advanced to 2.
-             */
-            flushed++;
         }
     }
+
+    if (budgeted) {
+        g_flush_cursor_bi = stop_bi;
+        g_flush_cursor_off = stop_off;
+    } else {
+        g_flush_cursor_bi = 0;
+        g_flush_cursor_off = 0;
+    }
+
+    restore_uncommitted_dirty_snapshot(snapshots, ram_bases, p2_end,
+                                       p1_begin, p1_end, &remaining);
 
     if (journal_out) {
         *journal_out = journal;
         g_active_handoff_journal = journal;
         journal = NULL;
+    } else if (journal) {
+        /* No caller finish() on stay-local harvest: keep accepted versions. */
+        confirm_all_unconfirmed_handoff_locked(journal);
     }
     pthread_mutex_unlock(&g_dirty_flush_lock);
+    if (took_bql) {
+        qemu_mutex_unlock_iothread();
+    }
     free_handoff_dirty_journal(journal);
 
-    if ((flushed > 0 || skipped_zero > 0) && flush_log_count < 20) {
+    elapsed_us = get_us_time() - start_us;
+    if (flush_log_count < 32) {
         fprintf(stderr,
-                "[WaveVM-User] handoff dirty flush pages=%d skipped_zero=%d fd=%d\n",
-                flushed, skipped_zero, ipc_fd);
+                "[WaveVM-User] handoff dirty flush pages=%d skipped_zero=%d "
+                "dirty=%llu remaining=%d budgeted=%d windows=%llu "
+                "elapsed_us=%llu fd=%d rc=%d\n",
+                flushed, skipped_zero,
+                (unsigned long long)dirty_pages, remaining, budgeted,
+                (unsigned long long)scanned_windows,
+                (unsigned long long)elapsed_us, ipc_fd, first_error);
         flush_log_count++;
     }
     /*
-     * Callers (wavevm-cpu handoff) treat ret>0 as "pages committed on this
-     * stream — run push-visibility fence before CPU_RUN". Returning 0 on
-     * success silently skipped the fence and left remote TCG racing PAGE_PUSH
-     * APPLY (attach10/11 freeze at Cirros initramfs→vda1).
+     * A budgeted partial harvest is still success. Returning -ETIMEDOUT here
+     * would skip VCPU_RUN and stall remoting (run-160430). Leftover dirty
+     * bits were restored for the next handoff. Callers treat ret>=0 as
+     * "run the push-visibility fence, then CPU_RUN".
      */
+    (void)first_error;
     return flushed;
 }
 
@@ -4089,7 +4518,7 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
      * empty writable list and never TYPED_MEM_COMMITs guest stores.
      */
     if (kvm_enabled() || !g_is_slave || g_tcg_shm_coherent) {
-        memory_global_dirty_log_start();
+        wavevm_enable_migration_dirty_log();
         fprintf(stderr,
                 "[WaveVM] dirty log tracking enabled (kvm=%d slave=%d coherent=%d).\n",
                 kvm_enabled() ? 1 : 0, g_is_slave, g_tcg_shm_coherent);

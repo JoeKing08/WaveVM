@@ -63,6 +63,9 @@ bool wavevm_should_park_ap_shutdown(CPUState *cpu)
 static int *g_vcpu_socks = NULL;
 static int g_configured_vcpus = 0;
 static int g_wvm_debug_once = 0;
+typedef struct WVMHandoffDirtyJournal WVMHandoffDirtyJournal;
+extern int wavevm_user_mem_flush_dirty_to_ipc(int ipc_fd,
+                                              WVMHandoffDirtyJournal **journal_out);
 
 /* Bound-slice kick for deferred local kvm_cpu_exec. Official A10/A11:
  * a SIGRTMIN 1s timer (even with sigaction and no SA_RESTART, plus
@@ -225,6 +228,27 @@ static void wavevm_ap_run_local_boot_slice(CPUState *cpu)
     }
     fprintf(stderr, "[WVM-REMOTE-DEFER] cpu=%d local slice done wr=%d halted=%d\n",
             cpu->cpu_index, wr, cpu->halted);
+
+    /*
+     * Harvest real boot dirty during stay-local defer, inside the same
+     * budgeted flush used at remoting handoff (150ms / 256 pages). The
+     * virgin all-dirty baseline is discarded separately; this push is only
+     * post-baseline guest writes so the first VCPU_RUN is not staring at
+     * ~3GB of leftover bits. No 120s push-fence here: remoting fences.
+     */
+    if (g_vcpu_socks && cpu->cpu_index >= 0 &&
+        cpu->cpu_index < g_configured_vcpus) {
+        int sock = g_vcpu_socks[cpu->cpu_index];
+        int flush_ret;
+
+        if (sock >= 0) {
+            flush_ret = wavevm_user_mem_flush_dirty_to_ipc(sock, NULL);
+            fprintf(stderr,
+                    "[WVM-REMOTE-DEFER] cpu=%d stay-local dirty harvest "
+                    "flush_ret=%d sock=%d\n",
+                    cpu->cpu_index, flush_ret, sock);
+        }
+    }
 }
 
 static void wavevm_try_import_split_from_peer(int sock)
@@ -372,7 +396,6 @@ extern void wvm_tcg_set_master_ack_state(CPUState *cpu,
                                          wvm_tcg_context_t *ctx,
                                          const wvm_tcg_context_t *sent);
 extern void wavevm_slave_vcpu_loop(CPUState *cpu);
-typedef struct WVMHandoffDirtyJournal WVMHandoffDirtyJournal;
 extern int wavevm_user_mem_ipc_push_fence(int ipc_fd, uint64_t timeout_us);
 extern int wavevm_user_mem_tcg_shm_coherent(void);
 /*
@@ -2945,26 +2968,38 @@ static void wavevm_remote_exec(CPUState *cpu) {
         }
     }
 
+    /*
+     * KVM remoting used to skip this flush/fence and only pack CPU state.
+     * Local vCPU 0/1 and device DMA keep writing FE RAM while vCPU 2 is
+     * sent to a remote executor; without a directory commit+fence those
+     * writes stay invisible and the remote vCPU runs on stale kernel
+     * pages (LIST_POISON / stack canary). TCG already flushed here.
+     * Do the same dirty flush + push-fence for both backends.
+     */
     if (req.mode_tcg) {
-        int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
-        static int handoff_dbg[MAX_VCPUS] = {0};
         wavevm_tcg_remote_slice_enter(cpu);
         tcg_slice_active = true;
+    }
+    {
+        int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+        static int handoff_dbg[MAX_VCPUS] = {0};
         /* A local SHM attach says nothing about a remote executor's backing.
          * Both mappings must observe canonical directory commit/fence. */
         if (handoff_dbg[ci] < 20) {
-            fprintf(stderr, "[WVM-TCG-HANDOFF] cpu=%d flush begin fd=%d\n",
-                    cpu->cpu_index, vcpu_sock);
+            fprintf(stderr, "[WVM-HANDOFF] cpu=%d mode_tcg=%u flush begin fd=%d\n",
+                    cpu->cpu_index, req.mode_tcg, vcpu_sock);
         }
         int flush_ret = wavevm_user_mem_flush_dirty_to_ipc(vcpu_sock,
                                                            &dirty_journal);
         if (handoff_dbg[ci] < 20) {
-            fprintf(stderr, "[WVM-TCG-HANDOFF] cpu=%d flush done fd=%d ret=%d\n",
-                    cpu->cpu_index, vcpu_sock, flush_ret);
+            fprintf(stderr, "[WVM-HANDOFF] cpu=%d mode_tcg=%u flush done fd=%d ret=%d\n",
+                    cpu->cpu_index, req.mode_tcg, vcpu_sock, flush_ret);
         }
         if (flush_ret < 0) {
             wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
-            wavevm_tcg_remote_slice_leave(cpu);
+            if (req.mode_tcg) {
+                wavevm_tcg_remote_slice_leave(cpu);
+            }
             return;
         }
         /*
@@ -2979,44 +3014,48 @@ static void wavevm_remote_exec(CPUState *cpu) {
             int fence_ret = wavevm_user_mem_ipc_push_fence(vcpu_sock, 120000000ULL); /* F05 cross-host */
             if (handoff_dbg[ci] < 20) {
                 fprintf(stderr,
-                        "[WVM-TCG-HANDOFF] cpu=%d push-fence fd=%d ret=%d flush=%d\n",
-                        cpu->cpu_index, vcpu_sock, fence_ret, flush_ret);
+                        "[WVM-HANDOFF] cpu=%d mode_tcg=%u push-fence fd=%d ret=%d flush=%d\n",
+                        cpu->cpu_index, req.mode_tcg, vcpu_sock, fence_ret, flush_ret);
             }
             if (fence_ret < 0) {
                 fprintf(stderr,
-                        "[WVM-TCG-HANDOFF] cpu=%d push-fence failed ret=%d flush=%d\n",
-                        cpu->cpu_index, fence_ret, flush_ret);
+                        "[WVM-HANDOFF] cpu=%d mode_tcg=%u push-fence failed ret=%d flush=%d\n",
+                        cpu->cpu_index, req.mode_tcg, vcpu_sock, fence_ret, flush_ret);
                 wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
-                wavevm_tcg_remote_slice_leave(cpu);
+                if (req.mode_tcg) {
+                    wavevm_tcg_remote_slice_leave(cpu);
+                }
                 return;
             }
         }
-        /* Transfer ownership of this vCPU's LAPIC timer with its CPU state.
-         * Running the same timer in both QEMU processes can coalesce distinct
-         * same-vector arrivals into one IRR bit and lose a guest interrupt. */
-        qemu_mutex_lock_iothread();
-        wvm_tcg_get_state(cpu, &req.ctx.tcg);
-        wavevm_tcg_pause_apic_timer(cpu);
-        tcg_apic_timer_paused = true;
-        qemu_mutex_unlock_iothread();
-        req.ctx.tcg.slice_budget_us = wavevm_tcg_slice_budget_us(cpu);
-        {
-            static int cr3_dbg[MAX_VCPUS] = {0};
-            if (cr3_dbg[ci] < 20) {
-                int ok = 0;
-                uint64_t pml4e508 =
-                    wavevm_user_mem_debug_read_u64(req.ctx.tcg.cr[3], 0xfe0, &ok);
-                fprintf(stderr,
-                        "[WVM-TCG-CR3] cpu=%d cr3=0x%llx pml4e508=0x%llx ok=%d\n",
-                        cpu->cpu_index,
-                        (unsigned long long)req.ctx.tcg.cr[3],
-                        (unsigned long long)pml4e508,
-                        ok);
-                cr3_dbg[ci]++;
+        if (req.mode_tcg) {
+            /* Transfer ownership of this vCPU's LAPIC timer with its CPU state.
+             * Running the same timer in both QEMU processes can coalesce distinct
+             * same-vector arrivals into one IRR bit and lose a guest interrupt. */
+            qemu_mutex_lock_iothread();
+            wvm_tcg_get_state(cpu, &req.ctx.tcg);
+            wavevm_tcg_pause_apic_timer(cpu);
+            tcg_apic_timer_paused = true;
+            qemu_mutex_unlock_iothread();
+            req.ctx.tcg.slice_budget_us = wavevm_tcg_slice_budget_us(cpu);
+            {
+                static int cr3_dbg[MAX_VCPUS] = {0};
+                if (cr3_dbg[ci] < 20) {
+                    int ok = 0;
+                    uint64_t pml4e508 =
+                        wavevm_user_mem_debug_read_u64(req.ctx.tcg.cr[3], 0xfe0, &ok);
+                    fprintf(stderr,
+                            "[WVM-TCG-CR3] cpu=%d cr3=0x%llx pml4e508=0x%llx ok=%d\n",
+                            cpu->cpu_index,
+                            (unsigned long long)req.ctx.tcg.cr[3],
+                            (unsigned long long)pml4e508,
+                            ok);
+                    cr3_dbg[ci]++;
+                }
             }
+            wavevm_tcg_log_stack(cpu, "master-pre-send");
+            handoff_dbg[ci]++;
         }
-        wavevm_tcg_log_stack(cpu, "master-pre-send");
-        handoff_dbg[ci]++;
     }
 
     // 2. IPC 发送 (wvm_ipc_header + wvm_ipc_cpu_run_req)
@@ -3027,10 +3066,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 cpu->cpu_index, vcpu_sock);
     }
     if (write_full(vcpu_sock, &ipc_hdr, sizeof(ipc_hdr)) < 0) {
+        fprintf(stderr, "[WVM-IPC] cpu=%d mode_tcg=%u write header failed fd=%d errno=%d\n",
+                cpu->cpu_index, req.mode_tcg, vcpu_sock, errno);
+        wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
         if (req.mode_tcg) {
-            fprintf(stderr, "[WVM-TCG-IPC] cpu=%d write header failed fd=%d errno=%d\n",
-                    cpu->cpu_index, vcpu_sock, errno);
-            wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
             qemu_mutex_lock_iothread();
             wavevm_tcg_resume_apic_timer(cpu);
             tcg_apic_timer_paused = false;
@@ -3042,10 +3081,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
         return;
     }
     if (write_full(vcpu_sock, &req, sizeof(req)) < 0) {
+        fprintf(stderr, "[WVM-IPC] cpu=%d mode_tcg=%u write payload failed fd=%d errno=%d\n",
+                cpu->cpu_index, req.mode_tcg, vcpu_sock, errno);
+        wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
         if (req.mode_tcg) {
-            fprintf(stderr, "[WVM-TCG-IPC] cpu=%d write payload failed fd=%d errno=%d\n",
-                    cpu->cpu_index, vcpu_sock, errno);
-            wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
             qemu_mutex_lock_iothread();
             wavevm_tcg_resume_apic_timer(cpu);
             tcg_apic_timer_paused = false;
@@ -3064,10 +3103,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
         tcg_ipc_dbg[tcg_ipc_dbg_ci]++;
     }
     if (read_full(vcpu_sock, &ack, sizeof(ack)) < 0) {
+        fprintf(stderr, "[WVM-IPC] cpu=%d mode_tcg=%u read ack failed fd=%d errno=%d\n",
+                cpu->cpu_index, req.mode_tcg, vcpu_sock, errno);
+        wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
         if (req.mode_tcg) {
-            fprintf(stderr, "[WVM-TCG-IPC] cpu=%d read ack failed fd=%d errno=%d\n",
-                    cpu->cpu_index, vcpu_sock, errno);
-            wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
             qemu_mutex_lock_iothread();
             wavevm_tcg_resume_apic_timer(cpu);
             tcg_apic_timer_paused = false;
@@ -3080,8 +3119,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
     }
     /* B7: do not mark remote_rpc_ok until negative ACK state is rejected. */
     if (ack.status < 0) {
+        wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
         if (req.mode_tcg) {
-            wavevm_user_mem_finish_handoff_dirty(dirty_journal, 0);
             if (tcg_slice_active) {
                 wavevm_tcg_remote_slice_leave(cpu);
             }
@@ -3106,9 +3145,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
                      cpu->cpu_index);
         exit(EXIT_FAILURE);
     }
-    if (req.mode_tcg) {
-        wavevm_user_mem_finish_handoff_dirty(dirty_journal, 1);
-    }
+    wavevm_user_mem_finish_handoff_dirty(dirty_journal, 1);
 
     // 4. 反序列化 CPU 状态
     if (ack.mode_tcg) {

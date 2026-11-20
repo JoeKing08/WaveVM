@@ -1,90 +1,67 @@
-# WaveVM Identity and Routing Specification
+# WaveVM 身份与路由规范
 
-Status: normative implementation specification.
+状态：规范性实现规范。
 
-The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
-rules apply to this specification.
+本规范适用[文档维护规则](../wavevm-refactor-roadmap.md#文档维护规则)。
 
-Scope: identity allocation, identity lifetime, flat and fractal route scope,
-route lookup, route-snapshot ownership, complete destination validation, and
-failure behavior for missing or stale routes. This
-specification does not define packet framing, payload layout, membership state
-transitions, page consistency, or vCPU handoff; those belong to the wire IPC,
-membership, memory, and vCPU specifications. VM identity allocation and
-retirement are consumed from `runtime-manifest-lifecycle.md`; resource placement
-is consumed from `resource-placement-admission.md`.
+范围：身份分配、身份生命周期、Flat 与 Fractal 路由域、路由查找、路由快照所有权、完整目标校验，以及路由缺失或过期时的故障行为。本规范不定义报文分帧、载荷布局、成员状态转换、页一致性或 vCPU 交接；这些内容分属线协议 IPC、成员管理、内存一致性与 vCPU 交接规范。VM 身份的分配与回收由 `runtime-manifest-lifecycle.md` 提供，资源放置由 `resource-placement-admission.md` 提供。
 
-This document is normative for routing work. Raw-ID fallback, `NODE`/`ROUTE`
-production inputs, and gateway-invented membership are prohibited; bounded
-storage must follow the declared independent capacity budgets.
+本文档对路由实现具有规范约束力。生产路径严禁原始 ID 回退、基于 `NODE`/`ROUTE` 的手工生产配置输入以及网关自造的成员关系；所有有界存储必须遵守各自独立声明的容量预算。
 
-## Subsystem Boundary Contract
+## 子系统边界契约
 
-This summary indexes the owning rules; it does not duplicate their definitions.
-Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+本节仅索引归属规则，不重复其详细定义。任何边界变更须遵守[架构基线第 0 节](../wavevm-architecture-baseline.md#0-架构权威与维护契约)。
 
-| Boundary | Required contract |
+| 边界 | 契约要求 |
 | --- | --- |
-| Responsibility and authority | Own identity/key interpretation, scoped lookup and operation lifetime across route replacement. Lifecycle allocates VM lifetimes; membership publishes routing truth. |
-| State and mutation | Runtime route maps are immutable snapshot projections keyed by full scope/generation. Only authorized publication replaces them; lookup never invents an ID, member, or placement. |
-| Allowed implementation dependencies | Shared identity types, canonical snapshot records, public snapshot/compiler utilities and transport-facing lookup interfaces. Consume membership projections, not controller private state. |
-| Interactions and lifetime | Section 6.1 owns rerouting without duplicate effects. Retirement consumes [lifecycle Section 6.3](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement); preserve old snapshot references through required result/query horizons. |
-| Concurrency and cost | Concurrent lookups use complete snapshots. Declare lookup/compilation storage budgets and flat/fractal hop costs; sparse IDs do not justify dense allocation or global lookup serialization. |
-| Failure and verification | Sections 6 and 10 require typed missing/stale/capacity errors and identity isolation. A wider field or extra gateway level does not prove supported scale. |
+| 职责与权威 | 负责身份与键的语义解析、作用域内查找，以及跨路由替换的操作生命周期。VM 生命周期由生命周期子系统分配，路由真值由成员管理子系统发布。 |
+| 状态与变更 | 运行时路由表是按完整作用域与代次索引的不可变快照投影。仅经授权的发布流程可替换快照；查找操作绝不凭空构造 ID、成员或放置决策。 |
+| 允许的实现依赖 | 共享身份类型、规范快照记录、公共快照/编译工具以及面向传输层的查找接口。仅消费成员管理发布的投影，不依赖控制器私有状态。 |
+| 交互与生命周期 | 第 6.1 节规范无重复副作用的重路由语义。回收流程遵循[生命周期第 6.3 节](runtime-manifest-lifecycle.md#63-跨子系统资源回收)，在必要的结果查询窗口内保留旧快照引用。 |
+| 并发与开销 | 并发查找基于完整快照执行。须显式声明查找与编译的存储预算，以及 Flat/Fractal 跳数开销；稀疏 ID 不允许触发稠密数组分配或全局查找串行化。 |
+| 故障与验证 | 第 6 节与第 10 节要求输出类型化的缺失/过期/超容错误并确保身份隔离。位宽扩大或增加网关层级本身并不构成支持对应规模的证明。 |
 
-## 1. Goal and Non-Goals
+## 1. 目标与非目标
 
-Every network-visible request must identify one VM lifetime, one routing
-destination, and one route snapshot without relying on a test topology, source
-address, arrival order, or raw node ID coincidence. A stale packet from an old
-VM or member lifetime must fail rather than enter a newer one.
+每个网络可见请求都必须明确标识唯一的 VM 生命周期、唯一的路由目标和唯一的路由快照，不得依赖测试拓扑、源地址、到达顺序或原始节点 ID 的巧合。来自旧 VM 或旧成员生命周期的延迟报文必须被拒绝，严禁进入新生命周期。
 
-The goal is a hierarchy-aware route model where flat and fractal deployments
-share the same VM namespace and endpoint semantics while each gateway holds
-only the route scope it needs.
+目标是建立层级感知的路由模型：Flat 与 Fractal 部署共享相同的 VM 命名空间和端点语义，而每个网关仅需保存其职责范围内的路由作用域。
 
-Non-goals for Minimum:
+Minimum 版本的非目标：
 
-- Reusing a `vm_id` immediately while old processes, routes, or packets can
-  still exist.
-- Inferring a route from a UDP source address or heartbeat.
-- Exposing physical topology selection or per-destination routes as ordinary
-  VM-user input.
-- Treating an identifier's representable range as proof that route tables can
-  support the same number of endpoints.
-- Supporting a distributed-hash or auto-learning route algorithm as a semantic
-  authority without a separately accepted discovery and membership contract.
+- 在旧进程、旧路由或延迟报文仍可能存在时立即复用 `vm_id`。
+- 根据 UDP 源地址或心跳包推断路由。
+- 将物理拓扑选择或逐目标路由作为普通 VM 用户输入暴露。
+- 将标识符的可表示范围直接等同于路由表支持的端点数规模。
+- 在缺乏独立验收的发现与成员契约的前提下，将分布式哈希（DHT）或自学习路由算法作为语义权威。
 
-## 2. Identity Model
+## 2. 身份模型
 
-The following identifiers are distinct even when numerically equal.
+下列标识符即便数值相同，其语义也严格区分。
 
-| Identifier | Owner | Lifetime and meaning |
+| 标识符 | 权威所有者 | 生命周期与语义 |
 | --- | --- | --- |
-| `vm_id` | Cluster control plane | Logical VM namespace is `u32` values `1..UINT32_MAX`. It is not durable on its own. |
-| `vm_incarnation` | Cluster control plane | Fresh value per identity allocation, consumed even by an aborted candidate; protects against delayed traffic after `vm_id` reuse. |
-| `physical_node_id` | Cluster control plane | Registered resource-provider host. It is not a DHT or route-table index. |
-| `node_instance_id` | Registered node agent | Fresh boot/process instance for a physical node registration. |
-| `gateway_id` / `gateway_instance_id` | Cluster control plane and gateway agent | Logical gateway role and one gateway process lifetime. |
-| `pod_id` | Cluster control plane | Fractal routing domain or prefix scope. It is not guest NUMA identity. |
-| `vnode_id` | Cluster control plane | Logical routing slot inside a VM/POD route domain. One physical node can own multiple vnodes. |
-| `primary_vnode` | Cluster control plane | Designated local vnode in the admitted route scope; not a substitute for a complete key. |
-| `WVM_INSTANCE_ID` | Local runtime manifest | Local namespace discriminator for sockets, SHM, logs, and processes. Never a wire route ID. |
-| `process_instance_id` | Component runtime | Diagnostic lifetime for one process. Never a VM identity or route key. |
-| `membership_revision` | Cluster membership authority | Desired member-record revision. |
-| `topology_revision` | Cluster topology authority | Pod/gateway graph revision. |
-| `route_scope_id` | VM lifecycle/control plane | One VM-incarnation route namespace or leaf scope. |
-| `route_generation` | Route snapshot authority | Immutable next-hop generation within one route scope. |
-| `route_snapshot_digest` | Route compiler | Digest of one full immutable snapshot. |
+| `vm_id` | 集群控制面 | 逻辑 VM 命名空间，取值 `u32` 范围 `1..UINT32_MAX`。单独存在时不具备持久化唯一性。 |
+| `vm_incarnation` | 集群控制面 | 每次身份分配产生的新值，即使候选准入中止也会消耗；用于防范 `vm_id` 复用后的延迟流量串扰。 |
+| `physical_node_id` | 集群控制面 | 已注册的资源提供宿主机标识。不是 DHT 或路由表数组下标。 |
+| `node_instance_id` | 已注册节点代理 | 物理节点每次启动/注册产生的全新进程实例标识。 |
+| `gateway_id` / `gateway_instance_id` | 集群控制面与网关代理 | 逻辑网关角色标识与单次网关进程生命周期标识。 |
+| `pod_id` | 集群控制面 | Fractal 路由域或前缀作用域，不等同于 Guest NUMA 标识。 |
+| `vnode_id` | 集群控制面 | VM/POD 路由域内的逻辑路由槽位。单个物理节点可承载多个 vnode。 |
+| `primary_vnode` | 集群控制面 | 已准入路由域中指定的本地 vnode；不可替代完整路由键。 |
+| `WVM_INSTANCE_ID` | 本地运行时清单 | 用于隔离本地套接字、SHM、日志与进程的命名空间区分符，绝不作为线协议路由 ID。 |
+| `process_instance_id` | 组件运行时 | 单个进程的诊断生命周期标识，绝不作为 VM 身份或路由键。 |
+| `membership_revision` | 集群成员权威 | 期望成员记录的版本号。 |
+| `topology_revision` | 集群拓扑权威 | Pod/网关拓扑图的版本号。 |
+| `route_scope_id` | VM 生命周期/控制面 | 单个 VM 实例代次的路由命名空间或叶子作用域。 |
+| `route_generation` | 路由快照权威 | 单个路由作用域内不可变的下一跳代次。 |
+| `route_snapshot_digest` | 路由编译器 | 单个完整不可变快照的摘要。 |
 
-An 8-bit VM / 24-bit node packed identifier cannot carry VM incarnation,
-member-instance identity, topology revision, or route generation. Such helpers
-must not replace the complete production key. The zero VM namespace is for
-authenticated cluster control, not an exception permitting raw-ID guest routes.
+8 位 VM / 24 位节点压缩打包的标识符无法携带 `vm_incarnation`、成员实例身份、拓扑版本或路由代次，严禁替代生产环境的完整路由键。零号 VM 命名空间仅保留给经过认证的集群控制流量，绝非允许 Guest 走原始 ID 路由的例外。
 
-### 2.1 VM Namespace Allocation and Retirement
+### 2.1 VM 命名空间分配与回收
 
-The allocator persists one record per logical VM namespace:
+分配器为每个逻辑 VM 命名空间持久化一条记录：
 
 ```text
 VmNamespaceRecord {
@@ -96,54 +73,34 @@ VmNamespaceRecord {
 }
 ```
 
-The required state transitions are:
+必须遵循的状态转换如下：
 
 ```text
 FREE -> ALLOCATED -> ACTIVE -> RETIRING -> QUARANTINED -> FREE
-                 \-> RETIRING                 // aborted candidate
+                 \-> RETIRING                 // 中止的候选准入
 ```
 
-`ALLOCATED` occurs before any reservation, candidate-manifest digest, or route
-scope is emitted. It allocates a strictly new `vm_incarnation`; retrying an
-aborted attempt never revives the old value. `ACTIVE` follows the lifecycle
-activation fence, not a route listener or process start.
+`ALLOCATED` 必须在任何资源预留、候选清单摘要或路由作用域生成之前完成。该阶段严格分配全新的 `vm_incarnation`，重试中止的准入绝不会复活旧代次。`ACTIVE` 必须由生命周期激活栅栏触发，而非由路由监听就绪或进程启动触发。
 
-For the defined wire ABI, `RETIRING -> QUARANTINED` requires all of the following:
+对于已定义的线协议 ABI，`RETIRING -> QUARANTINED` 必须同时满足以下全部条件：
 
-- The VM route scopes/current and predecessor snapshots have received required
-  retirement acknowledgements and have no active operation references.
-- The maximum memory/vCPU/block completion-query and retry horizon has elapsed
-  or each remaining operation has a recorded terminal result.
-- Node runtimes, executors, QEMU endpoints, kernel contexts, local names, and
-  directory subscriber records report manifest-incarnation teardown.
+- 该 VM 路由作用域的当前快照及前驱快照均已收到必需的回收确认，且无活跃操作引用。
+- 内存/vCPU/块存储的最大完成查询与重试窗口已届满，或所有剩余操作均已记录终态结果。
+- 节点运行时、执行器、QEMU 端点、内核上下文、本地命名空间以及目录订阅者记录均已上报对应清单代次的清理完成。
 
-Only then may the allocator return the ID to `FREE`; the next allocation uses a
-new incarnation and rejects every old-format/new-format packet that does not
-match it.
+满足上述条件后，分配器方可将该 ID 归还至 `FREE`；下一次分配必须使用新的 `vm_incarnation`，并拒绝所有代次不匹配的旧格式或新格式报文。
 
-Old formats without the required incarnation are rejected. Their rejection
-must not depend on a global epoch reset or a supported legacy VM deployment.
+任何未携带必需 `vm_incarnation` 的旧格式报文一律拒绝，且该拒绝逻辑不得依赖全局 epoch 重置或旧版 VM 部署兼容路径。
 
-### 2.2 Identity Width and Participant Capability
+### 2.2 身份位宽与参与者能力
 
-The envelope's `vm_id` is a full `u32` namespace. A fixed dense resource-plan
-array must not cap or alias that namespace. Identity/admission storage follows
-actual records and declared capacity, independently of identifier magnitude.
-The allocator may assign
-any value in `1..UINT32_MAX` only after every required participant for that VM
-(QEMU frontend, node runtimes, executors, sidecars, gateways, and selected
-accelerator contexts) has negotiated `WVM_CAP_VM_ID_U32`. A participant
-outside the VM's manifest need not negotiate this feature merely because it is
-registered in the cluster.
+信封中的 `vm_id` 为完整 `u32` 命名空间，不得使用固定稠密资源计划数组截断或混叠该命名空间。身份与准入存储按实际记录数和声明容量分配，与标识符数值大小无关。分配器仅在目标 VM 的所有必需参与者（QEMU 前端、节点运行时、执行器、Sidecar、网关及所选加速器上下文）均已协商 `WVM_CAP_VM_ID_U32` 后，方可在 `1..UINT32_MAX` 范围内分配值。未纳入该 VM 清单的其他集群注册节点无需参与此能力协商。
 
-A production VM never traverses a legacy header hop. The control plane records
-the required namespace ABI in the candidate manifest and rejects a plan whose
-route or local participant lacks it. Mixed old/new VM deployments and dual
-identity decoders are not required.
+生产 VM 流量绝不经过旧版报头跳点。控制面在候选清单中记录所需的命名空间 ABI，若路径或本地参与者不具备该能力，则直接拒绝计划。无需支持新旧混合的 VM 部署或双轨身份解码器。
 
-## 3. Canonical Route Key
+## 3. 规范路由键
 
-The semantic route key is:
+语义路由键定义如下：
 
 ```text
 RouteKey = {
@@ -165,242 +122,145 @@ RouteSnapshotKey = {
 }
 ```
 
-`destination_scope` is empty for a flat route domain and is a Pod/prefix for a
-fractal route domain. The wire carriage is the 24-byte routed-frame
-prefix in `wire-ipc-abi.md`: its `destination_kind`,
-`destination_scope`, and `destination_vnode_or_endpoint` fields complete this
-key. The prefix is forwarding metadata protected by the frame CRC but excluded
-from the semantic payload digest.
+在 Flat 路由域中 `destination_scope` 为空（0），在 Fractal 路由域中为 Pod 或前缀标识。线协议传输由 `wire-ipc-abi.md` 定义的 24 字节路由帧前缀承载：其中的 `destination_kind`、`destination_scope` 与 `destination_vnode_or_endpoint` 共同补全上述路由键。该前缀属于转发元数据，受帧 CRC 保护，但不计入语义载荷摘要。
 
-The logical destination form is:
+逻辑目标表示形式如下：
 
 ```text
 flat:    { vm_id, vm_incarnation, local_vnode }
 fractal: { vm_id, vm_incarnation, pod_or_prefix, local_vnode }
 ```
 
-Vnode address space and deployed capacity are separate contracts. A domain's
-capacity follows explicit bounded storage and transport budgets, not an
-identifier bitfield or a fixed array. Fractal topology may aggregate multiple
-independently budgeted leaf domains; it is not required merely because an
-identifier is numerically large.
+vnode 地址空间与部署容量是相互独立的契约。单域容量由显式的有界存储和传输预算决定，而非由标识符位宽或固定数组决定。Fractal 拓扑可用于聚合多个独立核算预算的叶子域，而非因标识符数值偏大而被迫启用。
 
-### 3.1 Address Space and Capacity Budgets
+### 3.1 地址空间与容量预算
 
-The formal routed-frame prefix in `wire-ipc-abi.md` carries a `u32`
-`destination_vnode_or_endpoint`. Values `0..0xfffffffe` are representable vnode
-IDs; `0xffffffff` is reserved and must reject. This gives 4,294,967,295 possible
-vnode values per VM-scoped flat or leaf-Pod domain. It is an address-space bound,
-not a physical-host count or an achievable deployment size. Range/count
-arithmetic must reject overflow and inclusion of the sentinel.
+`wire-ipc-abi.md` 定义的规范路由帧前缀携带 `u32` 类型的 `destination_vnode_or_endpoint`。取值 `0..0xfffffffe` 为合法可表示的 vnode ID，`0xffffffff` 为保留哨兵值，必须拒绝。这意味着每个 VM 级 Flat 域或叶子 Pod 域拥有 4,294,967,295 个可表示的 vnode 编号。这仅代表地址空间上界，不代表物理宿主机数量或实际可达到的部署规模。任何范围或计数运算必须拒绝整数溢出及哨兵值混入。
 
-The control plane owns independent capacity budgets for cluster members,
-domain vnode counts, gateway adjacency and route records, and per-VM admission
-and runtime state. Each consumer also enforces its allocated record/byte limits,
-including serialized snapshot and control-message limits. A provider's supported
-capacity constrains the admitted plan; an operator cannot enable unsupported
-scale merely by raising a policy value. These are deployment resource budgets,
-not per-VM hand-authored routes or test-only overrides.
+控制面独立维护以下容量预算：集群成员数、单域 vnode 数、网关邻接与路由记录数，以及单 VM 准入与运行时状态规模。各消费端也须强制执行自身分配的记录数与字节数上限（包括序列化快照和控制报文上限）。资源提供方实际支持的容量约束准入计划，运维人员无法仅通过调高策略阈值来突破底层支持规模。这些预算属于部署级资源约束，而非单 VM 手工路由或测试期绕过参数。
 
-Identity validity and occupancy limits are separate: a sparse high vnode ID
-does not consume all lower-numbered entries. Allocate bounded storage for actual
-records and retained snapshot generations, with explicit count/capacity checks.
-Lookups use complete keys; they must not require node IDs to index a dense global
-array. Kernel caches and subscriber sets need the same property, using bounded
-sparse or lazily allocated blocks while preserving batching and queue concurrency.
-Insufficient capacity must cause an explicit admission/prepare failure without
-truncation, partial route publication, or leaked reservations.
+身份合法性与占用容量限额严格分离：稀疏的高编号 vnode ID 不会占用低编号槽位。各组件须按实际记录数与保留快照代次数分配有界存储，并做显式计数与容量校验；查找必须基于完整键，禁止以节点 ID 直接索引稠密全局数组。内核缓存与订阅者集合须满足同样原则，采用有界稀疏或按需延迟分配的块结构，同时保持批处理与队列并发能力。容量不足时必须在准入或准备阶段显式失败，严禁截断、部分发布路由或泄漏资源预留。
 
-A deployment may keep a 4096-vnode domain budget, raise it within supported
-resource limits, or use several bounded Pods. Flat routing must remain available
-above 4096 when connectivity and consumer budgets permit. Fractal routing is a
-topology/aggregation choice, not a mandatory response to crossing that constant.
-Multiple Pods may reuse local vnode values because their destination scopes
-differ; global membership/admission limits must not inherit one Pod's budget.
+部署可以保持 4096 vnode 的单域预算、在受支持资源范围内调高该预算，或拆分为多个有界 Pod。当连通性与消费端预算允许时，Flat 路由必须在超过 4096 时仍保持可用；选择 Fractal 路由是基于拓扑聚合需求，而非跨越 4096 常数时的强制动作。不同 Pod 因 `destination_scope` 不同可复用相同的本地 vnode 编号，全局成员与准入上限不得直接套用单个 Pod 的预算。
 
-## 4. Authority and Route Snapshots
+## 4. 权威归属与路由快照
 
-| State or decision | Authoritative owner | Consumer behavior |
+| 状态或决策 | 权威所有者 | 消费端行为 |
 | --- | --- | --- |
-| VM namespace and incarnation | Control plane / admitted manifest | All consumers validate before accepting an operation. |
-| Physical member and gateway graph | Cluster membership/topology control plane | Gateways consume prepared snapshots; they do not infer membership. |
-| Pod/vnode assignment | Control plane | Node runtimes and gateways cache the admitted mapping only. |
-| VM route-scope lifecycle | VM lifecycle coordinator | It creates/activates/retires one VM-incarnation scope without mutating another VM's entries. |
-| Next-hop table | Control plane route-snapshot compiler | Each node runtime, sidecar, gateway, and kernel cache performs lookup against one immutable full snapshot key. |
-| Page directory and vCPU placement | Admitted VM manifest plus owning semantic specification | Route lookup transports a selected operation; it never invents placement. |
+| VM 命名空间与实例代次 | 控制面 / 已准入清单 | 所有消费端在接受操作前必须校验。 |
+| 物理成员与网关拓扑图 | 集群成员/拓扑控制面 | 网关仅消费已准备好的快照，不得自行推断成员关系。 |
+| Pod/vnode 分配 | 控制面 | 节点运行时与网关仅缓存已准入的映射关系。 |
+| VM 路由作用域生命周期 | VM 生命周期协调器 | 按单个 VM 实例代次创建、激活与回收作用域，不影响其他 VM 的表项。 |
+| 下一跳路由表 | 控制面路由快照编译器 | 每个节点运行时、Sidecar、网关及内核缓存均基于单个不可变完整快照键查找。 |
+| 页目录与 vCPU 放置 | 已准入 VM 清单及所属语义规范 | 路由查找仅负责传输选定操作，绝不生成放置决策。 |
 
-For every VM route scope, route publication is:
-
-```text
-compile G+1 from topology plus the VM-incarnation route scope
-  -> persist a RequiredAckSet of eligible surviving senders/gateways
-  -> prepare G+1 only on that exact set
-  -> validate full snapshot key, identity, namespace, and next-hop reachability
-  -> activate G+1 after that set acknowledges
-  -> retain G while operation references or query/retry horizon remain
-  -> retire G only after scope-specific completion
-```
-
-The current and predecessor generations may coexist during drain, but a packet
-lookup obtains exactly one complete snapshot. A gateway may not mutate a shared
-map in place such that one lookup observes a partial update. The full snapshot
-key is needed because a route generation is not globally unique across VM
-scopes.
-
-## 5. Flat and Fractal Lookup
-
-The external operation path is identical:
+对每个 VM 路由作用域，路由发布遵循以下流程：
 
 ```text
-source node runtime -> local sidecar -> gateway fabric
-                    -> remote sidecar -> target node runtime
-                    -> local directory or executor
+基于拓扑与 VM 实例代次路由作用域编译 G+1
+  -> 持久化包含存活且具备资格的发送方/网关的 RequiredAckSet
+  -> 仅在该精确集合上准备（prepare）G+1
+  -> 校验完整快照键、身份、命名空间与下一跳可达性
+  -> 在该集合全部确认后激活（activate）G+1
+  -> 只要仍存在活跃操作引用或未过查询/重试窗口，保留前驱快照 G
+  -> 仅在作用域级清理完成后回收（retire）G
 ```
 
-Only next-hop selection differs.
+排空期间当前代次与前驱代次可并存，但单次报文查找只能命中一个完整快照。网关不得原地修改共享路由表导致并发查找观察到半更新状态。由于 `route_generation` 在不同 VM 作用域间并不全局唯一，必须始终使用完整快照键。
+
+## 5. Flat 与 Fractal 查找
+
+外部操作经过的组件路径完全一致：
+
+```text
+源节点运行时 -> 本地 Sidecar -> Gateway 路由织网
+            -> 远端 Sidecar -> 目标节点运行时
+            -> 本地页目录或执行器
+```
+
+二者仅在下一跳选择策略上存在差异。
 
 ### 5.1 Flat
 
-A flat route domain maps the complete VM-scoped destination directly to the
-target sidecar or node-runtime ingress endpoint. It is selected only when the
-required sidecar connectivity and declared domain/consumer budgets fit one
-domain. No permanent 4096-vnode ceiling applies. A high numeric vnode ID alone
-does not require a gateway or a topology change.
+Flat 路由域将完整的 VM 作用域目标直接映射至目标 Sidecar 或节点运行时入口端点。仅当所需 Sidecar 连通性及声明的域/消费端预算满足单域条件时选用 Flat。不存在永久性的 4096 vnode 上限，单纯的 vnode 编号偏大不触发引入网关或变更拓扑。
 
 ### 5.2 Fractal
 
-In a fractal topology:
+在 Fractal 拓扑中：
 
-- A leaf sidecar maps local leaf vnodes to local node-runtime endpoints and
-  uses a parent next hop for nonlocal Pod prefixes.
-- An intermediate gateway maps an admitted destination Pod/prefix to a child
-  or parent next hop.
-- A root or upper-level gateway maps a destination Pod/prefix to a subtree.
-- Every level preserves the original VM namespace and incarnation. Hierarchy
-  does not authorize a raw-ID lookup or VM-namespace stripping.
+- 叶子 Sidecar 将本域叶子 vnode 映射至本地节点运行时端点，将非本地 Pod 前缀路由至父级下一跳。
+- 中间网关将已准入的目标 Pod/前缀映射至子级或父级下一跳。
+- 根网关或上层网关将目标 Pod/前缀映射至对应子树。
+- 每一层级均完整保留原始 VM 命名空间与 `vm_incarnation`。层级转发不授权原始 ID 查找或剥离 VM 命名空间。
 
-The canonical route-rule shape is deliberately stricter than the wire key:
-an `EXACT_VNODE` rule denotes one `{scope, vnode}` leaf destination, while a
-`PREFIX` rule has a nonzero scope, `destination_vnode_or_endpoint=0`, and a
-`GATEWAY` next hop whose member role is `GATEWAY`. A flat snapshot contains
-only exact rules with `destination_scope=0`. A fractal exact rule has a
-nonzero destination scope. These are control-plane validation rules, so a
-gateway never receives an ambiguous snapshot that can only fail at lookup.
+规范路由规则的形态比线协议键更严格：`EXACT_VNODE` 规则指向单个 `{scope, vnode}` 叶子目标；`PREFIX` 规则具有非零 `destination_scope`、`destination_vnode_or_endpoint=0`，且其下一跳必须是角色为 `GATEWAY` 的网关成员。Flat 快照仅包含 `destination_scope=0` 的精确规则；Fractal 精确规则必须具有非零 `destination_scope`。这些约束在控制面校验阶段强制执行，确保网关不会收到只能在查找时才暴露歧义的快照。
 
-The control plane chooses `flat`, `fractal`, or `auto` from connectivity,
-route-aggregation policy, independent resource budgets, and active topology.
-It must not select hierarchy solely because membership or a vnode ID exceeds
-4096. A VM request may express placement policy but does not hand-author its
-gateway path. A topology change still requires the normal prepared snapshot
-transaction; increasing a capacity budget does not itself change live routes.
+控制面根据连通性、路由聚合策略、独立资源预算及活跃拓扑选择 `flat`、`fractal` 或 `auto`，不得仅因成员数或 vnode ID 超过 4096 而强制启用层级拓扑。VM 请求可声明放置策略，但不能手工指定网关路径。拓扑切换仍须走完整的快照准备事务；单纯提高容量预算不会自动修改在线路由。
 
-## 6. Lookup and Error Semantics
+## 6. 查找与错误语义
 
-A route consumer validates, in this order:
+路由消费端必须按以下顺序逐项校验：
 
-1. Packet/frame syntax and protocol version.
-2. Non-sentinel target identity and valid VM namespace.
-3. VM incarnation when the wire carries it; before then, reject unsafe `vm_id`
-   reuse by lifecycle policy.
-4. Local accepted full route snapshot key and generation.
-5. Destination scope and next-hop existence in one snapshot.
-6. Gateway role and target node-runtime endpoint consistency.
+1. 报文/帧语法及协议版本。
+2. 非哨兵目标身份及合法 VM 命名空间。
+3. 线协议携带的 `vm_incarnation`；未携带时按生命周期策略拒绝不安全的 `vm_id` 复用。
+4. 本地已接受的完整路由快照键与代次。
+5. 单一快照内的目标作用域与下一跳存在性。
+6. 网关角色与目标节点运行时端点的一致性。
 
-Required route failures are logical statuses defined in the wire ABI:
+线协议 ABI 定义的规范路由错误状态如下：
 
-| Status | Meaning | Required caller behavior |
+| 状态码 | 含义 | 调用方必需行为 |
 | --- | --- | --- |
-| `WVM_ROUTE_UNKNOWN` | No route exists for a valid destination in the selected generation. | Fail the operation; do not retry with a raw node ID. |
-| `WVM_ROUTE_STALE` | Sender or receiver uses an unavailable/stale snapshot key or VM lifetime. | Refresh forwarding metadata through the control path, then retry only if operation semantics permit. |
-| `WVM_ROUTE_NAMESPACE_MISMATCH` | VM identity/incarnation mismatch. | Drop and record a protocol fault; never deliver locally. |
-| `WVM_ROUTE_TOPOLOGY_UNAVAILABLE` | Required member or path is unavailable. | Surface the owning operation's degraded/error result. |
-| `WVM_ROUTE_LOOP` | Hop budget or route trace proves a forwarding loop. | Drop, report topology fault, and prevent retry amplification. |
+| `WVM_ROUTE_UNKNOWN` | 所选代次中不存在该合法目标的路由。 | 使操作失败；严禁剥离命名空间后以原始节点 ID 重试。 |
+| `WVM_ROUTE_STALE` | 发送方或接收方使用了不可用/过期的快照键或 VM 生命周期。 | 通过控制面刷新转发元数据，仅在操作语义允许时重试。 |
+| `WVM_ROUTE_NAMESPACE_MISMATCH` | VM 身份或实例代次不匹配。 | 丢弃报文并记录协议故障；绝不投递至本地。 |
+| `WVM_ROUTE_TOPOLOGY_UNAVAILABLE` | 所需成员或路径不可用。 | 向上层返回所属操作的降级或失败结果。 |
+| `WVM_ROUTE_LOOP` | 跳数预算或路由跟踪表明存在转发环路。 | 丢弃报文、上报拓扑故障，并阻断重试放大。 |
 
-`WVM_NODE_AUTO_ROUTE` is a compatibility sentinel, not a destination. It must
-be resolved by the local node runtime before production cross-node transmission
-and must never be inserted into a route table or passed through hierarchy as an
-identity.
+`WVM_NODE_AUTO_ROUTE` 仅为兼容性哨兵值，不是有效路由目标。它必须在生产跨节点发送前由本地节点运行时解析完毕，严禁写入路由表或作为身份沿层级传播。
 
-### 6.1 Route Replacement and Operation Lifetime
+### 6.1 路由替换与操作生命周期
 
-The semantic operation key/digest is independent of mutable forwarding
-metadata. On a route refresh, a sender retains the same VM incarnation, origin
-identity, operation ID, handoff sequence or block queue sequence, and semantic
-payload digest; it may replace only the `RouteSnapshotKey` and delivery-attempt
-metadata in the outer envelope.
+语义操作键及其摘要独立于可变的转发元数据。路由刷新时，发送方必须保持相同的 `vm_incarnation`、源节点身份、`operation_id`、交接序号或块队列序号以及语义载荷摘要，仅允许替换外层信封中的 `RouteSnapshotKey` 与投递尝试元数据。
 
-Destination deduplication therefore cannot mistake rerouting for a new vCPU
-execution, memory mutation, or block write. A predecessor snapshot remains
-queryable for the maximum operation completion/retry horizon and active
-operation references. After retirement a result query returns a typed
-`RESULT_EXPIRED` or subsystem failure; it never creates a fresh semantic
-operation. Details of envelope separation and completion retention belong to
-`wire-ipc-abi.md`.
+由此，目标端去重机制不会将重路由误判为新的 vCPU 执行、内存修改或块写入。前驱快照在最大操作完成/重试窗口内以及存在活跃操作引用期间保持可查询。快照回收后，结果查询返回类型化的 `RESULT_EXPIRED` 或对应子系统错误，绝不派生新的语义操作。信封字段分离与完成记录保留的详细规则见 `wire-ipc-abi.md`。
 
-## 7. Static, Dynamic, and Learned State
+## 7. 静态、动态与学习状态
 
-Static bootstrap configuration may seed a topology record. It may not be
-silently overwritten by route learning. Gateway heartbeats, source endpoint
-observations, and view gossip are diagnostic/health evidence only.
+静态引导配置可用于初始化拓扑记录，但不得被路由学习静默覆盖。网关事件心跳、源端点观测和视图 gossip 仅作为诊断与健康证据。
 
-Dynamic membership uses the membership specification's registration,
-validation, prepare/ack/publish/retire lifecycle. A gateway's `ADD_ROUTE` or
-future delete command is only a derived-snapshot installation primitive; it
-cannot independently create, remove, or reactivate a member.
+动态成员管理必须遵循成员规范定义的注册、校验与准备/确认/发布/回收生命周期。网关的 `ADD_ROUTE` 或后续删除命令仅是派生快照的安装原语，无法独立创建、移除或重新激活成员。
 
-## 8. Implementation Touchpoints and Requirements
+## 8. 实现触点与要求
 
-| File, symbol, or boundary | Required responsibility |
+| 文件、符号或边界 | 规范职责 |
 | --- | --- |
-| `common_include/wavevm_protocol.h` | Define the canonical route key carrying incarnation and fractal scope. |
-| `common_include/wavevm_config.h` | Replace shared fixed limits with independent resource budgets and storage sized for actual records; 4096 is not a permanent flat/leaf ceiling. |
-| `common_include/wavevm_cluster.c`, `wavevm_admission.[ch]`, and `wavevm_runtime_dispatch.c` | Separate member/plan capacities from domain occupancy and ID validity; validate complete scoped destinations without dense-ID assumptions. |
-| `master_core/user_backend.c` | Cache only local sidecar/derived next-hop state; do not require every destination to fit one local array. |
-| `gateway_service/aggregator.c` | Use strict complete keys and immutable snapshot lookup; reject raw-ID production fallback. |
-| `common_include/wavevm_resources.c` | Import as bootstrap data into a versioned member/topology registry. |
-| `master_core/kernel_backend.c` | Convert to a context-scoped derived accelerator cache after kernel specification acceptance. |
+| `common_include/wavevm_protocol.h` | 定义携带实例代次与 Fractal 作用域的规范路由键。 |
+| `common_include/wavevm_config.h` | 将共享固定上限替换为独立资源预算与按实际记录分配的存储；4096 不再是永久的 Flat/叶子域上限。 |
+| `common_include/wavevm_cluster.c`、`wavevm_admission.[ch]` 与 `wavevm_runtime_dispatch.c` | 将成员/计划容量与域占用及 ID 合法性解耦；在不依赖稠密数组假设的前提下校验完整作用域目标。 |
+| `master_core/user_backend.c` | 仅缓存本地 Sidecar 或派生的下一跳状态，不要求所有目标挤入单一本地数组。 |
+| `gateway_service/aggregator.c` | 执行严格的完整键与不可变快照查找；拒绝生产环境的原始 ID 回退。 |
+| `common_include/wavevm_resources.c` | 作为引导数据导入带版本的成员/拓扑注册表。 |
+| `master_core/kernel_backend.c` | 在内核加速器规范验收后，改造为上下文作用域的派生加速缓存。 |
 
-## 9. Compatibility Boundary
+## 9. 兼容性边界
 
-No legacy raw-ID route, static route file, dense-index assumption, or dual
-decoder is required. Production traffic uses complete VM-incarnation-scoped
-keys and admitted snapshots; unsupported identities and missing routes reject
-before forwarding. VM-ID reuse follows the retirement contract in Section 2.
+无需支持旧版原始 ID 路由、静态路由文件、稠密下标假设或双轨解码器。生产流量统一采用带 VM 实例代次作用域的完整键与已准入快照；不支持的身份与缺失路由在转发前即被拒绝。`vm_id` 复用严格遵循第 2 节的回收契约。
 
-## 10. Acceptance Tests
+## 10. 验收测试
 
-- Two VMs can use the same raw local vnode values without route collision.
-- A delayed packet from an old VM incarnation is rejected before reaching a
-  node runtime or executor.
-- A nonzero VM route miss never strips the VM ID and retries a raw lookup.
-- Flat and fractal deployments deliver identical semantic operations to the
-  same target node runtime for equivalent admitted manifests.
-- **Minimum:** A domain fixture budgeted for 4096 vnodes accepts 4096 admitted entries and
-  rejects an additional entry without partial publication. A separate flat
-  fixture with sufficient budgets admits more than 4096 entries, compiles the
-  snapshot, and resolves/forwards destinations on both sides of the old boundary
-  without adding a Pod or gateway layer. Compiler initialization alone is not
-  evidence for this test.
-- Sparse domain fixtures route IDs `0`, `4096`, `65536`, and `0xfffffffe` using
-  bounded storage proportional to their entries; `0xffffffff` and overflowing
-  vnode ranges reject. Occupancy limits must not be used as numeric-ID limits.
-- Multiple leaf Pods reuse local vnode values and exceed 4096 total members
-  while each remains within its own budget. Membership capture, admission,
-  compiled routes, and forwarding preserve scope and do not hit a global
-  leaf-sized array. An over-budget control workspace or serialized snapshot
-  rejects explicitly without truncation or resource leaks.
-- A fractal fixture proves that an intermediate gateway holds only prefix
-  routes, not every leaf endpoint.
-- Route generation replacement under load never yields a partial table, loop,
-  or cross-VM delivery.
-- Replace G with G+1 while dropping a `VCPU_EXIT`, memory commit ACK, and
-  durable block result. Each retry/reroute preserves one semantic operation and
-  produces one cached result or one bounded terminal failure.
-- Start/stop VM A while VM B shares gateways and raw vnode values. VM A route
-  retirement never mutates VM B's current or predecessor snapshot.
-- Delayed old-format and wrong-incarnation packets after VM-ID reuse cannot
-  reach the new incarnation; no legacy decoder bypasses that check.
-- Source-address changes and heartbeat observations cannot overwrite a pinned
-  production route or create a member.
-- Kernel and user-space derived caches reject a stale VM identity or route
-  generation rather than forwarding with a previous VM's state.
+- 两个 VM 使用相同的原始本地 vnode 编号时不会发生路由冲突。
+- 来自旧 `vm_incarnation` 的延迟报文在到达节点运行时或执行器前即被拒绝。
+- 非零 VM 路由未命中时，绝不会剥离 `vm_id` 并回退执行原始 ID 查找。
+- 对等价的已准入清单，Flat 与 Fractal 部署将相同的语义操作投递至同一目标节点运行时。
+- **Minimum：** 预算为 4096 vnode 的域夹具接纳 4096 条准入表项，并在第 4097 条时干净拒绝且无部分发布；另设预算充足的 Flat 夹具，在不引入 Pod 或网关层级的情况下准入超过 4096 条表项、编译快照并成功解析转发旧边界两侧的目标。仅验证编译器初始化不足以通过本项测试。
+- 稀疏域夹具以与实际表项数成正比的有界存储路由 ID `0`、`4096`、`65536` 与 `0xfffffffe`；拒绝 `0xffffffff` 及溢出的 vnode 范围。占用上限不得充当 ID 数值上限。
+- 多个叶子 Pod 复用本地 vnode 编号且总成员数超过 4096，同时各 Pod 保持在各自预算内。成员捕获、准入、路由编译与转发全程保留作用域，不触碰叶子大小的全局数组；超出预算的控制工作区或序列化快照显式拒绝，无截断与资源泄漏。
+- Fractal 夹具验证中间网关仅保存前缀路由，而不保存全部叶子端点。
+- 负载下的路由代次替换绝不产生半更新表、路由环路或跨 VM 投递。
+- 在 G 替换为 G+1 期间丢弃 `VCPU_EXIT`、内存提交 ACK 及持久化块写入结果，每次重试/重路由均保持单一语义操作，并返回唯一的缓存结果或有界终态错误。
+- VM B 与 VM A 共享网关及相同原始 vnode 编号时，反复启停 VM A 并回收其路由，绝不修改 VM B 的当前或前驱快照。
+- `vm_id` 复用后，旧格式及错误实例代次的延迟报文无法触达新代次，且不存在绕过该校验的旧解码路径。
+- 源地址变化与心跳观测无法覆盖已固定的生产路由或凭空创建成员。
+- 内核与用户态派生缓存拒绝过期的 VM 身份或路由代次，绝不沿用上一 VM 的状态继续转发。

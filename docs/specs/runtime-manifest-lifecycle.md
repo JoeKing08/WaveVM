@@ -1,152 +1,112 @@
-# WaveVM Runtime Manifest and Lifecycle Specification
+# WaveVM 运行时清单与生命周期规范
 
-Status: normative implementation specification.
+状态：规范性实现规范。
 
-The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
-rules apply to this specification.
+本规范适用[文档维护规则](../wavevm-refactor-roadmap.md#文档维护规则)。
 
-Scope: the user-facing VM request, the immutable admitted launch manifest,
-per-node runtime manifests, manifest publication, VM lifecycle state, startup,
-stop, rollback, and recovery boundaries. Resource selection belongs to
-`resource-placement-admission.md`; member and route changes belong to
-`cluster-membership-topology-lifecycle.md`; wire identity belongs to
-`identity-routing.md` and `wire-ipc-abi.md`.
+范围：面向用户的 VM 请求、不可变的已准入启动清单、每节点运行时清单、清单发布、VM 生命周期状态、启动、停止、回滚及恢复边界。资源选择归属 `resource-placement-admission.md`；成员与路由变更归属 `cluster-membership-topology-lifecycle.md`；线协议标识归属 `identity-routing.md` 和 `wire-ipc-abi.md`。
 
-This specification is normative for all VM lifecycle work. Existing launch
-scripts, environment variables, `NODE`/`ROUTE` files, and positional process
-arguments are not production inputs; they are test history to be removed or
-rewritten as manifest renderers.
+本规范对所有 VM 生命周期工作具有规范效力。现有启动脚本、环境变量、`NODE`/`ROUTE` 文件及位置进程参数均非生产输入，仅作为历史测试资产予以移除或重写为清单渲染器。
 
-## Subsystem Boundary Contract
+## 子系统边界契约
 
-This summary indexes the owning rules; it does not duplicate their definitions.
-Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+本摘要仅索引各归属规则，不重复其定义。涉及边界变更时适用[架构基线第 0 节](../wavevm-architecture-baseline.md#0-架构权威与维护契约)。
 
-| Boundary | Required contract |
+| 边界 | 必需契约 |
 | --- | --- |
-| Responsibility and authority | Own VM identity lifetime, candidate/admitted manifests, durable activation and overall lifecycle coordination. Domain operations and their internal reclamation remain with their subsystem owners. |
-| State and mutation | Coordinator APIs mutate transaction/lifecycle records; participants persist identity-bound observations and idempotent decisions. Neither a participant nor a cached manifest independently declares RUNNING. |
-| Allowed implementation dependencies | Public membership/snapshot, placement/reservation, canonical record and participant-control contracts. Orchestration invokes those interfaces rather than accessing domain-private queues, globals or structures. |
-| Interactions and lifetime | Sections 5.2 and 6.3 own cross-domain activation and resource retirement. Admission fences, route references, engine/context references and name leases retain their individual owners. |
-| Concurrency and cost | Section 7 orders one transaction while independent VMs and participants may progress concurrently. Do not hold shared authority locks over remote prepare/ACK/drain waits or insert control-plane work into every memory/vCPU operation. |
-| Failure and verification | Sections 5.3, 6 and 10 define restart reconciliation, uncertain effects, partial cleanup and profile acceptance. Basic replay/compensation is Minimum; HA and transparent recovery are Extended. |
+| 职责与权威 | 负责 VM 标识生命周期、候选/已准入清单、持久化激活及整体生命周期协调。各领域操作及其内部回收仍归属各自子系统所有者。 |
+| 状态与变更 | 协调器 API 负责变更事务/生命周期记录；参与者持久化与标识绑定的观测记录和幂等决策。参与者与缓存清单均不得单方面宣告 `RUNNING`。 |
+| 允许的实现依赖 | 公共成员关系/快照、放置/资源预留、规范记录及参与者控制契约。编排层仅通过这些公开接口交互，禁止访问领域私有队列、全局状态或内部结构。 |
+| 交互与生命周期 | 第 5.2 节与第 6.3 节分别负责跨领域激活与跨子系统资源回收。准入栅栏、路由引用、引擎/上下文引用及名称租约保留其各自所有者。 |
+| 并发与开销 | 第 7 节负责单个事务的串行化，独立 VM 与参与者可并发推进。禁止在远程 prepare/ACK/排空等待期间持有共享权威锁，也禁止在每次内存或 vCPU 操作路径中插入控制面开销。 |
+| 故障与验证 | 第 5.3、6 和 10 节定义重启对账、不确定结果处理、部分清理及档位验收要求。基础重放与补偿属于 Minimum；高可用（HA）与透明恢复属于 Extended。 |
 
-## 1. Goal and Non-Goals
+## 1. 目标与非目标
 
-The goal is for one successful VM creation to produce one immutable,
-versioned, auditable description of the VM actually admitted to the cluster.
-Every QEMU frontend, node runtime, executor, sidecar, gateway cache, and
-optional kernel accelerator must be able to identify the same VM incarnation,
-the same resource plan, and the same local names from that description.
+目标是让每次成功的 VM 创建产出唯一一份不可变、带版本且可审计的描述，准确刻画集群实际准入的 VM。每个 QEMU 前端、节点运行时、执行器、Sidecar、Gateway 缓存及可选内核加速器，都必须能依据该描述识别出相同的 VM 实例代次（`vm_incarnation`）、相同的资源计划以及相同的本地名称。
 
-The normal control flow is:
+正常控制流如下：
 
 ```text
 VmRequest
-  -> validation + deterministic placement + reservation
+  -> 校验 + 确定性放置 + 资源预留
   -> AdmittedVmManifest
-  -> per-node RuntimeManifest prepare
-  -> acknowledged commit/start
-  -> RUNNING or one explicit failed/aborted outcome
+  -> 每节点 RuntimeManifest prepare
+  -> 经确认的 commit/start
+  -> RUNNING 或明确的 failed/aborted 终态
 ```
 
-Non-goals for Minimum:
+Minimum 非目标：
 
-- Live migration, hot-add, hot-remove, or implicit rebalancing of a running
-  VM.
-- Editing a running VM's resource, backend, or consistency semantics in place.
-- Treating a launcher command line, process environment, or route file as a
-  second authority after admission.
-- Inferring success from a bound port, a surviving process, or one heartbeat.
-- Reusing a `vm_id` immediately after stop before the identity/wire rules allow
-  delayed traffic to be rejected by incarnation.
-- Turning a node restart into permission to recreate a VM with changed
-  placement, backend, or local names.
+- 运行中 VM 的热迁移、热添加、热移除或隐式再均衡。
+- 原地修改运行中 VM 的资源、执行后端或一致性语义。
+- 在准入完成后将启动命令行、进程环境变量或路由文件作为第二权威来源。
+- 仅凭端口已绑定、进程存活或单次心跳推断启动成功。
+- 在停止后、尚未满足标识/线协议规则对延迟流量的代次拒绝条件前立即复用 `vm_id`。
+- 借节点重启原地重建放置方案、后端或本地名称已改变的 VM。
 
-## 2. Authority and Version Domains
+## 2. 权威归属与版本域
 
-| State or decision | Authoritative owner | Allowed caches/consumers |
+| 状态或决策 | 权威所有者 | 允许的缓存/消费者 |
 | --- | --- | --- |
-| User request and request idempotency record | Cluster control plane | CLI/API client may retain a copy. |
-| `vm_id` and `vm_incarnation` allocation | Cluster control plane | Every runtime validates it from the admitted manifest. |
-| Candidate vCPU, memory, host, storage, device, and local-name plan | Immutable candidate manifest | Prepared reservations and participants only. |
-| Admission/activation decision | Lifecycle coordinator's durable transaction record | Participants retain an idempotent local decision record. |
-| Resolved vCPU, memory, host, storage, device, and local-name plan | Admitted VM manifest plus activation record | Per-node manifests and process-local caches. |
-| Current VM lifecycle state | Lifecycle coordinator in the control plane | Node agents report observed substate only. |
-| Route next hops | Versioned route snapshot from membership/topology control plane | Manifest references the required scope/generation; it does not duplicate mutable routes. |
-| Page, vCPU, storage-operation, and interrupt state | Their subsystem authorities | Manifest only selects their policy and participants. |
+| 用户请求与请求幂等记录 | 集群控制面 | CLI/API 客户端可保留副本。 |
+| `vm_id` 与 `vm_incarnation` 分配 | 集群控制面 | 所有运行时依据已准入清单进行校验。 |
+| 候选 vCPU、内存、宿主、存储、设备及本地名称计划 | 不可变候选清单 | 仅限已准备的资源预留与参与者。 |
+| 准入/激活决策 | 生命周期协调器的持久化事务记录 | 参与者保留幂等的本地决策记录。 |
+| 解析后的 vCPU、内存、宿主、存储、设备及本地名称计划 | 已准入 VM 清单 + 激活记录 | 每节点清单及进程内本地缓存。 |
+| 当前 VM 生命周期状态 | 控制面生命周期协调器 | 节点代理仅上报观测到的子状态。 |
+| 路由下一跳 | 成员关系/拓扑控制面发布的带版本路由快照 | 清单仅引用所需作用域/代次，不复制可变路由表。 |
+| 页、vCPU、存储操作及中断状态 | 各自子系统权威 | 清单仅选择其策略与参与方。 |
 
-The following values are distinct and must never be overloaded:
+以下标识与版本值彼此独立，严禁混用或重载：
 
-| Value | Meaning |
+| 字段 | 含义 |
 | --- | --- |
-| `request_id` | Idempotency key for one user create/update request. |
-| `vm_id` | Reusable logical VM namespace only after safe retirement. |
-| `vm_incarnation` | One successful VM lifetime within a `vm_id` namespace. |
-| `admission_tx_id` | One create/activate/abort transaction for a fresh VM incarnation. |
-| `manifest_generation` | Immutable candidate/admitted manifest generation for one incarnation. |
-| `activation_fence` | Durable, unique decision that converts one candidate manifest into an admitted allocation. |
-| `eligibility_fence` | Exact eligible member, capability, route, and node-instance set accepted by one admission transaction. |
-| `membership_revision` / `topology_revision` | Cluster desired-member and topology state. |
-| `route_scope_id` | One VM-incarnation route namespace or leaf scope. |
-| `route_generation` | Immutable routing snapshot generation within one route-scope identity. |
-| `operation_id` | One data-plane or lifecycle operation. |
+| `request_id` | 单次用户创建/更新请求的幂等键。 |
+| `vm_id` | 仅在安全回收后可复用的逻辑 VM 命名空间。 |
+| `vm_incarnation` | `vm_id` 命名空间内单次成功的 VM 生命周期代次。 |
+| `admission_tx_id` | 针对新 VM 实例代次的一次创建/激活/中止事务标识。 |
+| `manifest_generation` | 单一实例代次内不可变候选/已准入清单的代次编号。 |
+| `activation_fence` | 将单份候选清单转化为已准入分配的唯一持久化决策栅栏。 |
+| `eligibility_fence` | 单次准入事务采纳的精确合格成员、能力、路由及节点实例集合。 |
+| `membership_revision` / `topology_revision` | 集群期望成员关系与拓扑状态修订号。 |
+| `route_scope_id` | 单个 VM 实例代次的路由命名空间或叶级作用域。 |
+| `route_generation` | 单个路由作用域标识内不可变路由快照的代次号。 |
+| `operation_id` | 单次数据面或生命周期操作标识。 |
 
-`route_generation` can advance through a valid gateway replacement without
-mutating the VM's resource plan. A topology or route update never changes
-`vm_incarnation`, page versions, vCPU handoff sequences, or storage ordering.
-The route operation lifetime and its separate forwarding metadata are defined
-by `identity-routing.md` and `wire-ipc-abi.md`.
+`route_generation` 可通过合法的 Gateway 替换向前推进，而不变更 VM 的资源计划。拓扑或路由更新绝不会改变 `vm_incarnation`、页版本号、vCPU 交接序列号或存储顺序。路由操作生命周期及其独立的转发元数据由 `identity-routing.md` 和 `wire-ipc-abi.md` 定义。
 
-## 3. Manifest Data Model
+## 3. 清单数据模型
 
-All manifest forms use the exact canonical, versioned serialization in
-`canonical-record-schema.md`, with the envelope in `wire-ipc-abi.md`. JSON,
-shell fragments, and environment variables may be debug renderings but are not
-independent semantic formats. A candidate manifest is immutable enough to
-prepare against, but it is not an admitted allocation until its separately
-persisted activation record exists.
+所有清单形态均采用 `canonical-record-schema.md` 中定义的精确规范化版本序列化格式，并封装于 `wire-ipc-abi.md` 的消息信封内。JSON、Shell 片段与环境变量仅可作为调试渲染视图，不得作为独立语义格式。候选清单在 prepare 阶段保持不可变，但在其独立持久化的激活记录落盘前，不构成已准入的资源分配。
 
-### 3.1 User-Facing VM Request
+### 3.1 面向用户的 VM 请求
 
 ```text
 VmRequest {
     api_version;
     request_id;
-    display_name;                 // optional, not a route key
-    requested_vcpus;              // positive integer
-    requested_memory_bytes;       // positive, page-aligned after validation
-    execution_backend_policy;     // AUTO, REQUIRE_KVM, or REQUIRE_TCG
-    accelerator_policy;           // DISABLED, PREFER, or REQUIRE_KERNEL_ACCEL
-    placement_policy;             // COMPACT or SPREAD
+    display_name;                 // 可选，不作为路由键
+    requested_vcpus;              // 正整数
+    requested_memory_bytes;       // 正整数，校验后需页对齐
+    execution_backend_policy;     // AUTO、REQUIRE_KVM 或 REQUIRE_TCG
+    accelerator_policy;           // DISABLED、PREFER 或 REQUIRE_KERNEL_ACCEL
+    placement_policy;             // COMPACT 或 SPREAD
     host_constraints;
-    guest_topology_policy;        // FLAT, PLACEMENT_NUMA, or SYNTHETIC_NUMA
+    guest_topology_policy;        // FLAT、PLACEMENT_NUMA 或 SYNTHETIC_NUMA
     consistency_policy;
     storage_and_device_requirements;
-    requested_lifecycle_options;  // only documented start/stop policy fields
+    requested_lifecycle_options;  // 仅包含文档化的启停策略字段
 }
 ```
 
-The user supplies desired resources and constraints, not physical node IDs,
-vnode IDs, gateway ports, socket paths, `WVM_INSTANCE_ID`, raw route entries,
-or a guessed QEMU host. An administrative API may expose explicit placement
-constraints for diagnosis or policy, but it must still pass normal admission
-and cannot bypass reservation or capability validation.
+用户仅提供期望资源与约束，不提供物理节点 ID、vnode ID、Gateway 端口、套接字路径、`WVM_INSTANCE_ID`、原始路由条目或猜测的 QEMU 宿主。管理接口可出于诊断或策略需要暴露显式放置约束，但仍须通过标准准入流程，禁止绕过资源预留或能力校验。
 
-`AUTO` is a request policy, not a runtime fallback permission. Admission first
-tries a complete KVM placement, including the frontend and every required vCPU
-executor. If that candidate is not admissible, admission may create a new
-complete TCG placement when the request permits fallback. The TCG result must
-have its own plan digest, reservations, capability profile, and manifest
-diagnostic explaining the fallback; a partially reserved KVM candidate is
-aborted rather than being mutated in place.
+`AUTO` 是请求策略而非运行时降级许可。准入流程先尝试构造完整的 KVM 放置方案（包含前端及所有必需的 vCPU 执行器）；若该候选不可准入且请求允许回退，准入可构造一份全新的完整 TCG 放置方案。TCG 方案必须具备独立的计划摘要、资源预留、能力档位以及解释回退原因的清单诊断信息；已部分预留的 KVM 候选必须中止清理，禁止原地修改。
 
-`REQUIRE_KVM` fails when a complete KVM placement cannot be admitted.
-`REQUIRE_TCG` selects TCG directly. Once the backend is recorded in the
-admitted manifest, a guest does not silently change KVM to TCG, TCG to KVM, or
-Mode A to Mode B halfway through a running incarnation.
+`REQUIRE_KVM` 在无法准入完整 KVM 放置方案时直接失败；`REQUIRE_TCG` 直接选择 TCG。执行后端一旦写入已准入清单，Guest 在整个运行代次内不得静默在 KVM 与 TCG 之间或 Mode A 与 Mode B 之间切换。
 
-### 3.2 Candidate and Admitted VM Manifest
+### 3.2 候选与已准入 VM 清单
 
 ```text
 CandidateVmManifest {
@@ -160,7 +120,7 @@ CandidateVmManifest {
     admission_tx_id;
     eligibility_fence_digest;
     plan_digest;
-    namespace_abi;                 // LEGACY or V1_U32
+    namespace_abi;                 // LEGACY 或 V1_U32
     candidate_created_at;
 
     guest_machine;
@@ -187,7 +147,7 @@ ActivationRecord {
     coordinator_instance_id;
     required_participant_set_digest;
     required_route_snapshot_keys;
-    decision;                     // ACTIVATE or ABORT
+    decision;                     // ACTIVATE 或 ABORT
     durable_decision_sequence;
     decided_at;
 }
@@ -195,71 +155,35 @@ ActivationRecord {
 AdmittedVmManifest = CandidateVmManifest + ActivationRecord(decision=ACTIVATE)
 ```
 
-Required semantics:
+必需语义：
 
-- `vm_id`, `vm_incarnation`, `admission_tx_id`, and `manifest_generation` are
-  assigned before a reservation is emitted. `manifest_generation` begins at
-  one for an incarnation. An aborted attempt never reuses its incarnation.
-- The candidate manifest is complete, immutable, and digestible before any
-  `PREPARE_MANIFEST` participant prepares local VM state. It is not yet an
-  admitted allocation and may be aborted while every reservation remains
-  `PREPARED`.
-- The only transition from candidate to admitted is a durable
-  `ActivationRecord(decision=ACTIVATE)`. Participants must not infer activation
-  from a surviving process, a reservation ACK, or a route listener.
-- `host_node` is explicit. It names the physical node hosting the authoritative
-  QEMU frontend, not the API submitter and not the first placement entry.
-- `vcpu_placements` covers every guest vCPU exactly once. Each entry includes
-  its executor physical node, local executor role/slot, backend, and capacity
-  reservation-requirement reference.
-- `memory_placements` cover every guest RAM page/chunk exactly once. Each entry
-  includes its directory/execution node, range, capacity reservation reference,
-  and the applicable page-consistency policy.
-- `reservation_requirements` is the immutable per-node/exclusive-resource
-  intent shared with the placement plan. Actual `ResourceReservation` records
-  are derived after both plan and candidate self-digests are final, then are
-  created by `PREPARE_RESERVATION`; embedding them in the candidate would create
-  a digest cycle because they bind the candidate digest.
-- `guest_topology` is guest-visible and independent of physical placement. A
-  flat guest topology is valid even when resources span nodes.
-- `required_members` names only members admitted by the exact
-  `eligibility_fence`, including physical/role identity, node instance,
-  capability profile, and required state. A later member change cannot be
-  silently grandfathered into an unactivated candidate.
-- `route_scope_key` and `prepared_route_snapshot_key` identify an immutable
-  VM-incarnation route scope/snapshot. They never embed an editable per-packet
-  route table. Their identity includes scope, topology revision, generation,
-  and digest as defined by `identity-routing.md`.
-- Per-node runtime manifests are deterministic filtered projections generated
-  after the candidate manifest digest is final. They carry the candidate digest,
-  but their own digests are not fields of the candidate manifest; otherwise the
-  two record classes would form a hash cycle.
-- `derived_local_name_namespace` is the sole input for QEMU IPC, shared-memory,
-  worker socket, monitor, log, and temporary-name derivation. It prevents two
-  VMs on one host from deriving colliding names from only a node ID. Its
-  derivation salt is calculated before the candidate self-digest from
-  `manifest_id`, `admission_tx_id`, VM identity/generation, and physical-node
-  identity; it must not use the final candidate digest because it is itself a
-  candidate field.
-- The manifest contains no private keys, access tokens, or mutable process
-  credentials. Those are supplied through a separately protected local
-  credential channel and are not part of the VM identity.
+- `vm_id`、`vm_incarnation`、`admission_tx_id` 与 `manifest_generation` 必须在发出任何资源预留之前分配。每个实例代次的 `manifest_generation` 从 1 开始。中止的尝试绝不复用其 `vm_incarnation`。
+- 候选清单必须在任何 `PREPARE_MANIFEST` 参与者准备本地 VM 状态之前完整、不可变且可计算摘要。它在激活前不构成已准入分配；只要所有资源预留仍处于 `PREPARED` 状态，均可中止。
+- 从候选清单转为已准入清单的唯一条件是持久化的 `ActivationRecord(decision=ACTIVATE)`。参与者不得依据进程存活、预留 ACK 或路由监听状态推断激活。
+- `host_node` 必须显式指定，指明承载权威 QEMU 前端的物理节点，而非 API 提交端或放置列表的首个节点。
+- `vcpu_placements` 必须精确覆盖每个 Guest vCPU 一次，每项包含执行器物理节点、本地执行器角色/槽位、后端类型及容量预留需求引用。
+- `memory_placements` 必须精确覆盖每个 Guest RAM 页/块一次，每项包含目录/执行节点、地址范围、容量预留引用及适用的页一致性策略。
+- `reservation_requirements` 是与放置计划共享的不可变每节点/排他资源意图。实际的 `ResourceReservation` 记录在放置计划和候选清单自摘要定稿后派生，并由 `PREPARE_RESERVATION` 创建；因预留记录需绑定候选清单摘要，故不可将其反向嵌入候选清单，以免形成摘要环。
+- `guest_topology` 面向 Guest 可见且独立于物理放置；即使资源跨节点分布，Flat 拓扑依然合法。
+- `required_members` 仅列出精确匹配 `eligibility_fence` 准入条件的成员，包括物理/角色标识、节点实例 ID、能力档位及必需状态。后续成员变更不得静默并入尚未激活的候选清单。
+- `route_scope_key` 与 `prepared_route_snapshot_key` 标识不可变的 VM 实例代次路由作用域及快照，绝不内嵌可变逐包路由表；其标识包含作用域、拓扑修订号、代次与摘要（详见 `identity-routing.md`）。
+- 每节点运行时清单是在候选清单摘要确定后生成的确定性过滤投影，携带候选清单摘要，但其自身摘要不作为候选清单字段，以避免两类记录构成哈希环。
+- `derived_local_name_namespace` 是 QEMU IPC、共享内存（SHM）、工作线程套接字、监视器、日志及临时名称派生的唯一输入，避免同宿主上的两个 VM 仅凭节点 ID 派生出冲突名称。其派生盐在计算候选清单自摘要前由 `manifest_id`、`admission_tx_id`、VM 标识/代次及物理节点标识共同导出，因自身属于候选清单字段，不得依赖最终候选清单摘要。
+- 清单不得包含私钥、访问令牌或可变进程凭据；此类信息通过独立受保护的本地凭据通道下发，不属于 VM 标识。
 
-### 3.3 Per-Node Runtime Manifest
+### 3.3 每节点运行时清单
 
-Every participating `{vm_incarnation, physical_node_id}` receives a filtered
-manifest that includes enough global identity to validate traffic but exposes
-only local assignments and required peers:
+每个参与的 `{vm_incarnation, physical_node_id}` 均接收一份经过过滤的清单，其中包含足够校验流量的全局标识，但仅暴露本地分配与必需对端信息：
 
 ```text
 NodeRuntimeManifest {
-    manifest_identity;            // id, digest, VM identity, generation
+    manifest_identity;            // id、digest、VM 标识、generation
     admission_tx_id;
     eligibility_fence_digest;
     activation_fence_when_committed;
     physical_node_id;
     expected_node_instance_id;
-    local_roles;                  // QEMU host, node runtime, executor, gateway
+    local_roles;                  // QEMU host、node runtime、executor、gateway
     local_vcpu_assignments;
     local_memory_assignments;
     local_storage_assignments;
@@ -269,8 +193,8 @@ NodeRuntimeManifest {
         plan_version;
         node_runtime_data_port;
         node_runtime_control_port;
-        local_executor_service_port; // loopback-only
-        local_executor_control_port; // loopback-only
+        local_executor_service_port; // 仅 loopback
+        local_executor_control_port; // 仅 loopback
         executor_worker_count;
         vcpu_handoff_record_capacity;
         sync_batch_size;
@@ -284,91 +208,38 @@ NodeRuntimeManifest {
 }
 ```
 
-The node runtime must reject a local executor, QEMU connection, sidecar input,
-or kernel context whose identity, manifest digest, generation, route scope,
-eligibility fence, or local role does not match its accepted per-node manifest.
-Before an activation record is received it may prepare only local resources; it
-must reject guest traffic and may release that prepared state after its lease
-expires if it never observes the activation fence.
+节点运行时必须拒绝任何标识、清单摘要、代次、路由作用域、资格栅栏或本地角色与已接受每节点清单不匹配的本地执行器、QEMU 连接、Sidecar 输入或内核上下文。在收到激活记录前，节点运行时仅可准备本地资源，必须拒绝 Guest 流量；若在租约过期前未观测到 `activation_fence`，可释放已准备状态。
 
-The control plane durably stores one activated canonical
-`NodeRuntimeManifest` projection for every candidate
-`ReservationRequirement`, keyed by the candidate digest, physical node ID,
-expected node instance ID, and reservation ID. A repeated write is idempotent
-only when the canonical bytes match exactly; a second projection for the same
-candidate/node with changed identity, reservation, fence, route key, role, or
-local assignment is rejected. Recovery retrieves the exact node projection and
-never substitutes an equivalent-looking manifest from another physical node.
+控制面必须为候选清单中的每一项 `ReservationRequirement` 持久化存储一份已激活的规范 `NodeRuntimeManifest` 投影，按候选摘要、物理节点 ID、期望节点实例 ID 和预留 ID 索引。重复写入仅在规范字节完全一致时幂等成功；同一候选/节点下若标识、预留、栅栏、路由键、角色或本地分配发生变化，必须拒绝。恢复流程必须精确取回对应节点的投影，严禁以其他物理节点上的相似清单替代。
 
-`COMMITTED` additionally requires the durable projection set to be complete:
-every candidate reservation requirement must have exactly one stored
-projection whose candidate binding and activation fence match the recorded
-`ACTIVATE` decision. A generated in-memory projection, a local process that
-survived a restart, or a reservation commit without its matching durable
-projection is insufficient.
+进入 `COMMITTED` 还需要持久化投影集合完整无缺：每项候选预留需求都必须恰好对应一份已存储投影，且其候选绑定与 `activation_fence` 与已落盘的 `ACTIVATE` 决策一致。仅在内存中生成的投影、重启后存活的本地进程或缺少对应持久化投影的预留提交均不足以支撑 `COMMITTED`。
 
-`launch_plan` is a controller-selected, canonical part of the local
-projection. It binds the process-local port leases and executor concurrency
-configuration to the same admitted VM identity as the placement. The embedded
-machine and consistency configuration must exactly match the candidate manifest;
-the embedded total memory must exactly match the candidate's admitted memory
-placement total. The local executor service/control ports are loopback-only
-implementation endpoints, never cluster-membership or gateway endpoints.
+`launch_plan` 是由控制器选定、属于本地投影的规范组成部分，将进程级端口租约与执行器并发配置绑定到与放置方案一致的已准入 VM 标识上。其中内嵌的机型与一致性配置必须与候选清单完全一致，总内存大小必须与候选清单中已准入内存放置总量精确相等。本地执行器服务端口和控制端口仅为 loopback 实现端点，不得作为集群成员或 Gateway 端点。
 
-The node-runtime data and local-executor service UDP listener ports must be
-materialized as the reservation's exclusive leases before activation: the
-node-runtime data listener uses its
-wildcard binding scope, while the local-executor service listener uses its
-loopback binding scope. A launch-plan control port is not an exclusive lease
-unless the corresponding runtime implementation actually binds it. Lease
-generation is owner-epoch evidence and does not change resource identity.
+节点运行时数据监听 UDP 端口与本地执行器服务监听 UDP 端口必须在激活前物化为预留记录的排他租约：前者使用通配绑定作用域，后者使用 loopback 绑定作用域。`launch_plan` 中的控制端口仅在对应运行时实现实际绑定它时才成为排他租约。租约代次仅作为所有者纪元凭证，不改变资源标识。
 
-`wavevm_node_runtime` accepts only the runtime manifest path and expected node
-instance ID. It derives any remaining adapter arguments for the current
-master-role and executor-role implementations internally from the accepted
-manifest and its dispatch projection. A launcher must not supply independent
-RAM, worker count, port, VM ID, static topology, or role-specific argument
-groups after admission.
+`wavevm_node_runtime` 仅接受运行时清单路径与期望节点实例 ID 作为启动输入，其余用于当前 master 角色与 executor 角色实现的适配参数一律在内部依据已接受清单及其分发投影派生。准入后，启动器不得独立传入内存大小、工作线程数、端口、VM ID、静态拓扑或角色特定参数组。
 
-On each physical node, the authenticated local control receiver atomically
-publishes the accepted activated projection to the runtime-manifest path and
-fsyncs both file and parent directory before returning success. It derives and
-atomically publishes a `RuntimeDispatchProjection` at
-`<runtime-manifest-path>.dispatch` from that activated manifest, the canonical
-node records, and the exact route snapshot. The route snapshot and dispatch
-artifact must be present before the final runtime-manifest publication makes a
-launch observable. The node runtime loads only that complete manifest, its
-matching route snapshot, and its bound dispatch projection; it does not inspect
-the coordinator's journal or reconstruct placement or routes from environment
-variables. Transport delivery remains a
-`PREPARE_MANIFEST`/`ACTIVATE_MANIFEST` responsibility, while this local file
-operation is only its crash-safe handoff into the runtime process.
+在每个物理节点上，经认证的本地控制接收器需将已接受的激活投影原子写入运行时清单路径，并在返回成功前对文件及其父目录执行 `fsync`。随后基于该激活清单、规范节点记录及精确路由快照派生出 `RuntimeDispatchProjection`，原子发布至 `<runtime-manifest-path>.dispatch`。路由快照与分发产物必须在最终运行时清单发布使启动可见之前就位。节点运行时只加载该完整清单、对应路由快照及绑定的分发投影，不得读取协调器日志或从环境变量重建放置与路由。网络传输投递仍由 `PREPARE_MANIFEST`/`ACTIVATE_MANIFEST` 负责，该本地落盘流程仅作为向运行时进程移交的崩溃安全衔接。
 
-### 3.4 Immutability and Change Classes
+### 3.4 不可变性与变更分类
 
-The candidate manifest is immutable once distributed for prepare. The admitted
-manifest is the same candidate bound to one activation record. The following
-changes are not Minimum in-place updates and require a stop followed by a new
-incarnation unless a later specification defines an acknowledged
-reconfiguration protocol:
+候选清单一旦下发进入 prepare 即不可变；已准入清单是同一候选清单与单条激活记录的绑定。以下变更在 Minimum 中不支持原地更新，除非后续规范定义显式确认的重配置协议，否则必须先停止 VM 再创建新实例代次：
 
-- vCPU count, CPU placement, or execution backend.
-- Memory size, memory placement, directory ownership, or consistency policy.
-- QEMU host, guest topology, storage/device authority, or local namespace.
-- Required kernel acceleration or fault-engine selection.
+- vCPU 数量、CPU 放置方案或执行后端。
+- 内存容量、内存放置方案、目录归属或一致性策略。
+- QEMU 宿主、Guest 拓扑、存储/设备权威或本地命名空间。
+- 必需的内核加速或缺页引擎（fault engine）选择。
 
-The following may evolve without changing the resource plan when their own
-specifications' prepare/commit rules succeed:
+以下状态在满足各自规范的 prepare/commit 规则前提下可演进，而不改变资源计划：
 
-- A newer route generation that preserves the same VM namespace and endpoint
-  semantics.
-- Health observations and bounded recovery evidence.
-- Diagnostics, logs, and opaque process instance IDs.
+- 保持相同 VM 命名空间和端点语义的新 `route_generation`。
+- 健康观测与有界恢复证据。
+- 诊断信息、日志及不透明的进程实例 ID。
 
-## 4. Admission Transaction and VM Lifecycle
+## 4. 准入事务与 VM 生命周期
 
-One create request owns exactly one `admission_tx_id`. The normal transaction
-is deliberately more precise than a generic "prepare/start/commit" sequence:
+单次创建请求独占一个 `admission_tx_id`。正常事务状态推进如下：
 
 ```text
 REQUESTED -> VALIDATING -> IDENTITY_ALLOCATED -> PLANNED
@@ -377,56 +248,41 @@ REQUESTED -> VALIDATING -> IDENTITY_ALLOCATED -> PLANNED
   -> STARTING -> RUNNING
 ```
 
-Before `ACTIVATION_DECIDED`, any non-success outcome follows
-`ABORTING -> ABORTED`. After that durable decision, recovery must either finish
-the activation or run compensating teardown; it must not guess from a timeout
-that a committed reservation is safe to reclaim.
+在进入 `ACTIVATION_DECIDED` 之前，任何非成功结果均转入 `ABORTING -> ABORTED`。一旦激活决策落盘，恢复流程只能推进完成激活或执行补偿拆卸，严禁仅凭超时就推定已提交预留可以安全回收。
 
-| State | Meaning | Allowed next state |
+| 状态 | 含义 | 允许的下一状态 |
 | --- | --- | --- |
-| `ABSENT` | No lifecycle or namespace-allocation record exists. | `REQUESTED` |
-| `REQUESTED` | Idempotent request is recorded. | `VALIDATING`, `ABORTING` |
-| `VALIDATING` | Request and policy validation is in progress. | `IDENTITY_ALLOCATED`, `ABORTING` |
-| `IDENTITY_ALLOCATED` | Fresh VM namespace/incarnation and transaction ID are durable but not runnable. | `PLANNED`, `ABORTING` |
-| `PLANNED` | Complete deterministic placement and eligibility fence exist. | `ROUTE_SCOPE_PREPARED`, `ABORTING` |
-| `ROUTE_SCOPE_PREPARED` | Candidate VM route scope/snapshot and its required ACK set are prepared, never normal-traffic active. | `RESERVATIONS_PREPARED`, `ABORTING` |
-| `RESERVATIONS_PREPARED` | Every required resource/exclusive-name lease is held with expiry; no guest traffic is allowed. | `PARTICIPANTS_PREPARED`, `ABORTING` |
-| `PARTICIPANTS_PREPARED` | Every required node/QEMU/executor/kernel participant prepared the same candidate manifest and fence. | `ACTIVATION_DECIDED`, `ABORTING` |
-| `ACTIVATION_DECIDED` | One durable activation fence exists. Participants must query/replay this decision instead of allowing prepared leases to expire. | `COMMITTED`, `STOPPING` |
-| `COMMITTED` | Required participants promoted manifest and reservations to committed state; components may start but guest traffic is still gated. | `STARTING`, `STOPPING` |
-| `STARTING` | Components are starting under the committed manifest. | `RUNNING`, `STOPPING`, `FAILED` |
-| `RUNNING` | Guest execution is admitted. | `PAUSING`, `STOPPING`, `DEGRADED`, `FAILED` |
-| `PAUSING` | New vCPU handoffs are blocked while current work reaches a defined boundary. | `PAUSED`, `STOPPING`, `FAILED` |
-| `PAUSED` | Guest execution is quiesced but identity and reservations remain held. | `RUNNING`, `STOPPING`, `FAILED` |
-| `DEGRADED` | A required component/path failed; Minimum must pause or fail rather than silently rebind it. | `PAUSING`, `STOPPING`, `FAILED` |
-| `STOPPING` | Quiesce, flush, and compensating teardown are in progress. | `RETIRING`, `FAILED` |
-| `RETIRING` | Route scope, subscriber state, completion caches, local names, contexts, and reservations are being retired. | `STOPPED`, `FAILED` |
-| `STOPPED` | Retirement acknowledgements and resource release are recorded; namespace is quarantined by the allocator. | `ABSENT` only after safe namespace reuse |
-| `ABORTING` | A pre-activation candidate is being removed. | `ABORTED`, `FAILED` |
-| `ABORTED` | Candidate resources and route scope were released without guest traffic. | `ABSENT` after namespace quarantine |
-| `FAILED` | A committed VM could not continue safely. | `STOPPING`, `RETIRING`, `STOPPED` |
+| `ABSENT` | 不存在生命周期或命名空间分配记录。 | `REQUESTED` |
+| `REQUESTED` | 幂等请求已记录。 | `VALIDATING`、`ABORTING` |
+| `VALIDATING` | 正在进行请求与策略校验。 | `IDENTITY_ALLOCATED`、`ABORTING` |
+| `IDENTITY_ALLOCATED` | 新的 VM 命名空间/实例代次与事务 ID 已持久化，但尚不可运行。 | `PLANNED`、`ABORTING` |
+| `PLANNED` | 完整的确定性放置方案与资格栅栏已生成。 | `ROUTE_SCOPE_PREPARED`、`ABORTING` |
+| `ROUTE_SCOPE_PREPARED` | 候选 VM 路由作用域/快照及其必需 ACK 集合已完成准备，尚未对常规流量激活。 | `RESERVATIONS_PREPARED`、`ABORTING` |
+| `RESERVATIONS_PREPARED` | 所有必需的资源与排他名称租约均已带过期时间持有，禁止 Guest 流量。 | `PARTICIPANTS_PREPARED`、`ABORTING` |
+| `PARTICIPANTS_PREPARED` | 所有必需的节点/QEMU/执行器/内核参与者均已针对同一候选清单与栅栏完成准备。 | `ACTIVATION_DECIDED`、`ABORTING` |
+| `ACTIVATION_DECIDED` | 唯一持久化 `activation_fence` 已落盘。参与者必须查询/重放该决策，不得让已准备租约自行过期。 | `COMMITTED`、`STOPPING` |
+| `COMMITTED` | 必需参与者已将清单与资源预留提升至已提交状态；组件可启动，但 Guest 流量仍受门控。 | `STARTING`、`STOPPING` |
+| `STARTING` | 组件正在依据已提交清单启动。 | `RUNNING`、`STOPPING`、`FAILED` |
+| `RUNNING` | Guest 执行已准入。 | `PAUSING`、`STOPPING`、`DEGRADED`、`FAILED` |
+| `PAUSING` | 阻塞新的 vCPU 交接，等待当前工作到达明确边界。 | `PAUSED`、`STOPPING`、`FAILED` |
+| `PAUSED` | Guest 执行已静默，但标识与资源预留继续保持。 | `RUNNING`、`STOPPING`、`FAILED` |
+| `DEGRADED` | 必需组件或路径故障；Minimum 必须暂停或置失败，禁止静默重绑定。 | `PAUSING`、`STOPPING`、`FAILED` |
+| `STOPPING` | 正在执行静默、刷盘与补偿拆卸。 | `RETIRING`、`FAILED` |
+| `RETIRING` | 正在回收路由作用域、订阅者状态、完成缓存、本地名称、上下文及资源预留。 | `STOPPED`、`FAILED` |
+| `STOPPED` | 回收确认与资源释放已落盘；命名空间交由分配器进入隔离期。 | 仅在满足命名空间安全复用条件后转入 `ABSENT` |
+| `ABORTING` | 正在清理激活前的候选资源。 | `ABORTED`、`FAILED` |
+| `ABORTED` | 候选资源与路由作用域已释放，期间未产生任何 Guest 流量。 | 命名空间隔离期结束后转入 `ABSENT` |
+| `FAILED` | 已提交 VM 无法继续安全运行。 | `STOPPING`、`RETIRING`、`STOPPED` |
 
-Only the lifecycle coordinator changes the authoritative state. Node runtimes
-publish idempotent observations such as `LOCAL_PREPARED`, `ROUTE_PREPARED`,
-`QEMU_READY`, `EXECUTOR_READY`, `ACTIVATED`, `QUIESCED`, and `LOCAL_STOPPED`;
-they do not promote the VM to `RUNNING` independently.
+仅生命周期协调器有权变更权威状态。节点运行时仅上报幂等的本地观测状态（如 `LOCAL_PREPARED`、`ROUTE_PREPARED`、`QEMU_READY`、`EXECUTOR_READY`、`ACTIVATED`、`QUIESCED`、`LOCAL_STOPPED`），不得自行将 VM 提升至 `RUNNING`。
 
-The durable admission transaction stores the candidate's complete
-`prepared_route_snapshot_key`, including topology revision, route generation,
-and snapshot digest. A route scope alone is never a lifecycle authority:
-multiple immutable generations can legitimately share one scope. The
-coordinator therefore requires the exact persisted route transaction to be
-`PREPARING` for `PLANNED -> ROUTE_SCOPE_PREPARED`, `ACTIVATED` for
-`ACTIVATION_DECIDED -> COMMITTED`, `RETIRING` for `STOPPING -> RETIRING`,
-`RETIRED` for `RETIRING -> STOPPED`, and `ABORTED` for
-`ABORTING -> ABORTED`. Recording either activation decision also requires
-that exact route transaction to remain `PREPARING`.
+持久化准入事务必须保存候选清单完整的 `prepared_route_snapshot_key`（含拓扑修订号、路由代次与快照摘要）。由于多个不可变代次可合法共享同一路由作用域，单独的路由作用域不足以作为生命周期权威。因此协调器强制校验对应精确路由事务的状态：`PLANNED -> ROUTE_SCOPE_PREPARED` 要求路由事务为 `PREPARING`；`ACTIVATION_DECIDED -> COMMITTED` 要求为 `ACTIVATED`；`STOPPING -> RETIRING` 要求为 `RETIRING`；`RETIRING -> STOPPED` 要求为 `RETIRED`；`ABORTING -> ABORTED` 要求为 `ABORTED`。落盘任何激活或中止决策时，该精确路由事务亦须仍处于 `PREPARING`。
 
-## 5. Admission, Activation, and Recovery
+## 5. 准入、激活与恢复
 
-### 5.1 Admission Eligibility Fence
+### 5.1 准入资格栅栏
 
-Every plan contains an immutable eligibility fence:
+每份放置计划均包含一个不可变的资格栅栏：
 
 ```text
 AdmissionEligibilityFence {
@@ -436,224 +292,110 @@ AdmissionEligibilityFence {
     admission_eligibility_revision;
     inventory_revision;
     capability_profile_generation;
-    selected_member_records[];    // role, physical ID, node/gateway instance,
-                                  // ACTIVE/healthy eligibility, capability digest
+    selected_member_records[];    // 角色、物理 ID、节点/Gateway 实例 ID、
+                                  // ACTIVE/健康资格、能力摘要
     required_route_scope_key;
     required_ack_set_digest;
     fence_digest;
 }
 ```
 
-`PREPARE_ROUTE_SCOPE`, `PREPARE_RESERVATION`, `PREPARE_MANIFEST`, and the
-ordered activation pair `COMMIT_RESERVATION` plus `ACTIVATE_MANIFEST` validate
-the same fence. Cordon, health exclusion, gateway drain, required
-capability/profile change, node/gateway instance change, or topology change
-invalidates every transaction that has not reached `ACTIVATION_DECIDED` and
-depends on it. The coordinator aborts/replans those transactions.
+`PREPARE_ROUTE_SCOPE`、`PREPARE_RESERVATION`、`PREPARE_MANIFEST` 以及有序激活对（`COMMIT_RESERVATION` + `ACTIVATE_MANIFEST`）均校验同一资格栅栏。节点隔离（cordon）、健康剔除、Gateway 排空、必需能力/档位变更、节点/Gateway 实例变更或拓扑变更，都会使所有尚未进入 `ACTIVATION_DECIDED` 且依赖该对象的事务失效，协调器须中止或重新规划这些事务。
 
-An `ACTIVATION_DECIDED` transaction is a post-decision dependency even before
-every participant has acknowledged local `COMMITTED` state. Membership drain,
-host removal, and failure handling must either wait for it to finish or drive
-the documented compensating teardown before removing one of its selected
-members. Only after all required promotion ACKs is the VM lifecycle state
-`COMMITTED`. Existing `COMMITTED` allocations are not silently replanned; they
-follow their own drain/degraded policy.
+已进入 `ACTIVATION_DECIDED` 的事务即便尚未收齐全部参与者的本地 `COMMITTED` 确认，也构成决策后依赖。成员排空、宿主移除与故障处理必须等待其完成，或先执行规范的补偿拆卸，方可移除其选中成员。只有在收齐全部必需提升 ACK 后，VM 生命周期状态才进入 `COMMITTED`。已 `COMMITTED` 的分配不会被静默重规划，而是遵循其既定的排空/降级策略。
 
-### 5.2 Create and Activate Sequence
+### 5.2 创建与激活时序
 
-1. Deduplicate `request_id`. A duplicate canonical request returns the
-   recorded transaction/result; different semantic fields under the same ID are
-   rejected.
-2. Validate user policy, then allocate `vm_id`, a fresh `vm_incarnation`, and
-   `admission_tx_id` before any reservation or manifest digest is emitted.
-3. Capture a membership/topology/inventory/capability snapshot, derive the
-   eligibility fence, and calculate a complete deterministic placement plan.
-4. Create the VM-incarnation route scope from the placement plan, compile the
-   candidate route snapshot,
-   persist its `RequiredAckSet`, and prepare it on exactly that survivor set.
-   It is not normal-traffic active yet.
-5. Construct the immutable candidate manifest and its per-node projections,
-   binding the prepared route-snapshot key/digest.
-6. Send `PREPARE_RESERVATION` to every selected resource/host/exclusive-name
-   owner. Each validates the eligibility fence and stores an expiring
-   `PREPARED` reservation keyed by VM identity and transaction ID.
-7. Send `PREPARE_MANIFEST` to every required node runtime, QEMU host, executor,
-   sidecar/gateway, and optional kernel context. Each validates the candidate
-   digest, reservation, capability profile, route snapshot, and fence, then
-   prepares only local state without accepting guest traffic.
-8. Revalidate the eligibility fence and all recorded prepare acknowledgements.
-   Any change before the next step aborts/replans the candidate.
-9. Persist one `ActivationRecord(decision=ACTIVATE)` with a new
-   `activation_fence` before sending `COMMIT_RESERVATION` or
-   `ACTIVATE_MANIFEST` to any participant. This is the single admission
-   linearization point.
-10. Send idempotent `COMMIT_RESERVATION`, then `ACTIVATE_MANIFEST`, to every
-    required participant. Together these are the generic activation action. A
-    participant promotes its reservation/manifest only when the transaction,
-    digest, fence, and required route snapshot all match its prepared record.
-11. Persist every activated per-node runtime-manifest projection, then wait for
-    every required activation ACK. Record `COMMITTED` only after the durable
-    projection set is complete. Components may start under the admitted
-    manifest but must keep guest traffic gated.
-12. Start QEMU, node runtimes, and executors. Enter `RUNNING` only when required
-    local endpoints and the admitted route/capability checks are ready.
+1. 对 `request_id` 去重。规范内容相同的重复请求直接返回既有事务/结果；同一 ID 下语义字段不同则拒绝。
+2. 校验用户策略，随后在发出任何预留或清单摘要前分配 `vm_id`、全新的 `vm_incarnation` 和 `admission_tx_id`。
+3. 捕获成员关系/拓扑/资源库存/能力快照，派生 `eligibility_fence`，并计算完整的确定性放置计划。
+4. 依据放置计划创建 VM 实例代次路由作用域，编译候选路由快照，持久化其 `RequiredAckSet`，并严格在该存活集合上完成 prepare（此时不向常规流量激活）。
+5. 构造不可变候选清单及其每节点投影，绑定已准备的路由快照键与摘要。
+6. 向所有选中的资源/宿主/排他名称所有者发送 `PREPARE_RESERVATION`。各方校验 `eligibility_fence`，并按 VM 标识与事务 ID 存储带过期时间的 `PREPARED` 预留记录。
+7. 向所有必需的节点运行时、QEMU 宿主、执行器、Sidecar/Gateway 及可选内核上下文发送 `PREPARE_MANIFEST`。各方校验候选清单摘要、资源预留、能力档位、路由快照与资格栅栏，仅准备本地状态，不接纳 Guest 流量。
+8. 重新校验 `eligibility_fence` 与全部已记录的 prepare 确认；在进入下一步前出现任何变更均中止或重新规划候选方案。
+9. 在向任何参与者发送 `COMMIT_RESERVATION` 或 `ACTIVATE_MANIFEST` 之前，携带全新 `activation_fence` 持久化唯一的 `ActivationRecord(decision=ACTIVATE)`。这是整个准入流程的唯一线性化点。
+10. 向所有必需参与者依次发送幂等的 `COMMIT_RESERVATION` 与 `ACTIVATE_MANIFEST`（二者合称通用激活动作）。参与者仅在事务 ID、清单摘要、栅栏与必需路由快照全部匹配其已准备记录时，才提升预留与清单。
+11. 持久化全部已激活的每节点运行时清单投影，并等待收齐所有必需激活 ACK。仅在持久化投影集合完整后记录 `COMMITTED`。组件此时可依据已准入清单启动，但须继续门控 Guest 流量。
+12. 启动 QEMU、节点运行时与执行器；待必需本地端点以及已准入路由/能力检查全部就绪后，进入 `RUNNING`。
 
-No guest vCPU may run before all required participant readiness checks for its
-admitted execution and memory paths have completed. The distributed start
-oracle additionally requires observable remote vCPU and remote memory work,
-not merely SSH listener creation or process survival.
+在已准入执行路径与内存路径所需的全部参与者就绪检查完成之前，任何 Guest vCPU 不得开始执行。分布式启动验收门控还要求观测到真实的远端 vCPU 与远端内存工作，不能仅以 SSH 监听建立或进程存活为准。
 
-### 5.3 Abort, Crash Recovery, and Compensating Teardown
+### 5.3 中止、崩溃恢复与补偿拆卸
 
-Before `ACTIVATION_DECIDED`, a rejection, expiry, or fence invalidation causes
-the coordinator to persist `ABORT`, send idempotent abort/teardown to prepared
-participants, send `ROUTE_ABORT` for the prepared route scope, and release all prepared
-reservations. Prepared records may expire only after they confirm that no
-activation fence was observed.
+在 `ACTIVATION_DECIDED` 之前发生拒绝、租约过期或栅栏失效时，协调器持久化 `ABORT`，向已准备参与者发送幂等的中止/拆卸指令，对已准备路由作用域发送 `ROUTE_ABORT`，并释放全部已准备预留。已准备记录仅可在确认未观测到 `activation_fence` 后随租约过期释放。
 
-After `ACTIVATION_DECIDED`, coordinator restart follows this query rule:
+进入 `ACTIVATION_DECIDED` 后，协调器重启必须遵循如下查询恢复规则：
 
-1. Read the durable transaction and activation record.
-2. Query every participant by `admission_tx_id`, candidate digest, and
-   activation fence; participants replay their recorded prepare/activate result.
-3. If the durable record is `ACTIVATE`, replay missing activation/start actions
-   or begin explicit compensating teardown. Do not let a participant reclaim a
-   reservation merely because the coordinator was unavailable.
-4. If no activation record exists, the transaction is abortable after prepared
-   lease expiry and all prepared-route/reservation records are removed.
+1. 读取持久化事务记录与激活记录。
+2. 按 `admission_tx_id`、候选清单摘要与 `activation_fence` 查询所有参与者；参与者重放其持久化记录的 prepare/activate 结果。
+3. 若持久化决策为 `ACTIVATE`，则重放缺失的激活/启动动作，或发起显式补偿拆卸；禁止参与者仅因协调器暂时不可达就回收预留。
+4. 若不存在激活记录，则待已准备租约过期并清理全部已准备路由与预留记录后，事务可完成中止。
 
-Minimum has no automatic coordinator failover, but coordinator restart must recover
-the same durable transaction record. A failure after activation but before any
-guest traffic may end in `ABORTED` only after every participant confirms
-teardown; a failure after `RUNNING` follows `FAILED -> STOPPING -> RETIRING`.
-An aborted incarnation still follows the allocator's quarantine rule and is
-never reused for a later retry.
+Minimum 不要求协调器自动故障转移，但协调器重启必须恢复同一份持久化事务记录。激活后但在产生任何 Guest 流量前发生的故障，仅在所有参与者确认拆卸完成后方可进入 `ABORTED`；进入 `RUNNING` 后的故障走 `FAILED -> STOPPING -> RETIRING`。已中止的实例代次仍须遵守分配器隔离规则，绝不用于后续重试。
 
-## 6. Pause, Stop, Failure, and Recovery
+## 6. 暂停、停止、故障与恢复
 
-### 6.1 Pause and Stop
+### 6.1 暂停与停止
 
-For a normal stop the coordinator:
+正常停止流程中，协调器执行以下步骤：
 
-1. Moves the VM to `PAUSING` or `STOPPING`, blocks new vCPU handoffs and new
-   device requests at QEMU authority, and tells node runtimes to reject new
-   external work for this incarnation.
-2. Waits for in-flight vCPU, memory, and storage operations to reach their
-   documented completion, abort, or uncertain-result states. It does not
-   discard an outstanding operation merely because a wall-clock deadline fired.
-3. Performs required memory fences and storage flushes, then stops guest work
-   producers and execution in dependency order. Keep memory/storage services,
-   sidecar/control bindings, and context references needed for outstanding
-   completions, queries, fencing, and retirement ACKs until those obligations
-   finish; stopping guest execution does not authorize transport teardown.
-4. Deletes local names only after their owner has stopped and detaches every
-   manifest-bound file descriptor/mapping.
-5. Enters `RETIRING`, removes every directory subscriber for the incarnation,
-   retires the VM route scope only after its active-operation references and
-   query/retry horizon finish, and collects every required route-retirement ACK.
-6. Releases remaining service bindings/contexts and reservations only after
-   route, local-name, context, completion-cache, and subscriber teardown records
-   are complete. It then records `STOPPED` and
-   hands VM-ID reuse to the namespace allocator in `identity-routing.md`.
+1. 将 VM 置为 `PAUSING` 或 `STOPPING`，在 QEMU 权威侧阻断新的 vCPU 交接与新的设备请求，并通知节点运行时拒绝该实例代次的新外部工作。
+2. 等待在途的 vCPU、内存及存储操作到达各自规范定义的完成、中止或不确定结果状态；不得仅因墙钟超时而丢弃未决操作。
+3. 执行必需的内存栅栏与存储刷盘，随后按依赖顺序停止 Guest 工作生产者与执行单元。在未决完成确认、结果查询、栅栏同步与回收 ACK 结束前，必须保留所需的内存/存储服务、Sidecar/控制绑定及上下文引用；停止 Guest 执行并不意味着可以立即拆除传输通道。
+4. 仅在所有者停止后删除本地名称，并解绑所有清单绑定的文件描述符与内存映射。
+5. 进入 `RETIRING`，清除该实例代次的全部目录订阅者，待活动操作引用与查询/重试时间窗结束后回收 VM 路由作用域，并收齐全部必需的路由回收 ACK。
+6. 仅在路由、本地名称、上下文、完成缓存与订阅者拆卸记录全部完成后，释放剩余服务绑定/上下文及资源预留，随后记录 `STOPPED`，将 `vm_id` 复用控制权交还 `identity-routing.md` 中的命名空间分配器。
 
-Stopping VM A never removes VM B's route scope, predecessor generation,
-subscriber records, local names, or reservations, even when both are served by
-the same gateway or physical node.
+即使 VM A 与 VM B 共享同一 Gateway 或物理节点，停止 VM A 绝不影响 VM B 的路由作用域、前序路由代次、订阅者记录、本地名称或资源预留。
 
-### 6.2 Failure and Restart
+### 6.2 故障与重启
 
-A failure after `COMMITTED` is not an aborted launch. The coordinator records
-the VM as `DEGRADED`, `PAUSED`, or `FAILED` according to the affected
-subsystem's contract and preserves the existing manifest/incarnation while it
-collects recovery evidence.
+进入 `COMMITTED` 之后的故障不属于启动中止。协调器须依据受影响子系统的契约将 VM 记录为 `DEGRADED`、`PAUSED` 或 `FAILED`，保留现有清单与实例代次并收集恢复证据。
 
-Minimum distinguishes failures deliberately:
+Minimum 对各类故障的处理区分如下：
 
-| Event | Minimum outcome |
+| 事件 | Minimum 处理结果 |
 | --- | --- |
-| Noncritical local child restart with unchanged registered node instance | It may restart only against the exact manifest and local role. The new `local_runtime_instance_id` must re-register before serving traffic. |
-| Required executor or QEMU process loses state | Pause/fail the VM unless that executor's specification later proves an explicit state-safe local recovery. Minimum does not infer safety from process restart. |
-| Registered node agent or physical host replacement | New `node_instance_id`; required existing VM enters `PAUSED` or `FAILED`. No automatic rebind occurs. |
-| Gateway replacement with a prepared alternate route | Continue only through the membership/route transaction; it does not change the resource member identity captured by the manifest. |
+| 非关键本地子进程重启（已注册节点实例 ID 未变） | 仅可依据精确清单与本地角色重启；新的 `local_runtime_instance_id` 必须重新注册后方可服务流量。 |
+| 必需执行器或 QEMU 进程丢失状态 | 暂停或置失败 VM，除非对应执行器规范后续提供经证明的状态安全本地恢复机制。 |
+| 已注册节点代理或物理宿主机替换 | 产生新的 `node_instance_id`；依赖该节点的既有 VM 进入 `PAUSED` 或 `FAILED`，不执行自动重绑定。 |
+| 存在已准备备用路由的 Gateway 替换 | 仅通过成员关系/路由事务平滑继续，不改变清单捕获的资源成员标识。 |
 
-`vm_incarnation` changes only when the control plane creates a new VM lifetime.
-A node, node-agent, QEMU, executor, sidecar, or gateway restart creates a new
-node/gateway/local-runtime process identity as applicable; it never creates a
-new VM incarnation. Restart must not silently switch backend, fault engine,
-storage authority, host node, placement, or expected member instance.
+`vm_incarnation` 仅在控制面创建新 VM 生命周期时变化。节点、节点代理、QEMU、执行器、Sidecar 或 Gateway 重启只会产生新的进程/节点/Gateway 实例标识，绝不生成新 VM 实例代次，也不得静默切换执行后端、缺页引擎、存储权威、宿主机、放置方案或期望成员实例。
 
-Any future restart-in-place for a required member needs a named
-`RECOVERY_REBIND` transaction with old/new instance identities, reservation
-ownership, capability validation, exact manifest/route references, state
-recovery proof for memory/vCPU/storage, and an old-process fencing rule. A
-heartbeat or a successful listener bind is not a rebind protocol.
+未来若支持必需成员原地重启，必须定义具名的 `RECOVERY_REBIND` 事务，涵盖新旧实例标识、预留归属、能力校验、精确清单/路由引用、内存/vCPU/存储状态恢复证明以及旧进程隔离（fencing）规则。心跳或端口监听成功不构成重绑定协议。
 
-### 6.3 Cross-Subsystem Resource Retirement
+### 6.3 跨子系统资源回收
 
-This section owns the lifecycle/IPC/memory/vCPU/storage/kernel reclamation
-contract. Its logical stages refine `STOPPING` and `RETIRING`; they do not add
-wire states or require identical hook APIs in every subsystem.
+本节规定生命周期、IPC、内存、vCPU、存储与内核的跨子系统回收契约。以下逻辑阶段用于细化 `STOPPING` 与 `RETIRING`，不引入额外线协议状态，也不要求所有子系统采用相同钩子 API。
 
-| Stage | Coordinator obligation | Subsystem obligation |
+| 阶段 | 协调器职责 | 子系统职责 |
 | --- | --- | --- |
-| Quiesce | Close admission of new guest work for the affected VM incarnation and collect local gate acknowledgements. | Reject new unrelated work, stop work producers at their safe boundaries, and retain resources required by existing operations. |
-| Drain | Request completion, cancellation, or fencing of the captured operation set. | Account for queued work, executing work, callbacks, mapping references, and result/query retention; report confirmed versus uncertain outcomes. |
-| Finalize | Authorize dependent resource release after the required proofs. | Detach references, release resources in dependency order, and return idempotent, identity-bound teardown results. |
+| 静默（Quiesce） | 关闭受影响 VM 实例代次的新 Guest 工作准入，并收集本地关门确认。 | 拒绝新的无关工作，在安全边界停止工作生产者，并保留既有在途操作所需资源。 |
+| 排空（Drain） | 对已捕获的在途操作集发起完成、取消或隔离请求。 | 核算排队中工作、执行中工作、回调、映射引用及结果/查询留存，上报已确认或不确定结果。 |
+| 终结（Finalize） | 在收齐必需证明后授权释放依赖资源。 | 按依赖顺序解绑引用并释放资源，返回幂等且绑定标识的拆卸结果。 |
 
-Quiescence must still admit required completion ACKs, memory fences,
-invalidation confirmations, result queries, cancellation, and teardown traffic.
-A blanket IPC shutdown before draining is prohibited. An operation admitted
-before gate closure must either be included in the drain set or rejected
-atomically; it cannot disappear between the gate check and in-flight accounting.
+静默期间仍须放行必需的完成 ACK、内存栅栏、失效确认、结果查询、取消指令及拆卸流量，严禁在排空前粗暴关闭整个 IPC。关门前准入的操作必须原子性地纳入排空集合或被明确拒绝，不可在准入检查与在途记账之间丢失。
 
-Each subsystem owns its internal drain algorithm and exposes a completion
-contract to lifecycle. Lifecycle coordinates those contracts rather than
-manipulating private queues, page structures, device state, or kernel lists.
-Independent operations and unrelated VMs may drain concurrently; only actual
-reference and semantic dependencies impose an order.
+每个子系统拥有各自的内部排空算法，并向生命周期层暴露完成契约；生命周期层只协调这些契约，不直接操作子系统私有队列、页结构、设备状态或内核链表。独立操作与无关 VM 可并发排空，仅真实引用与语义依赖施加先后顺序。
 
-An in-flight request retains its manifest/route references, result destination,
-and borrowed or transferred buffers until its completion/cancellation contract
-permits release. A local counter reaching zero, a timeout, transport close, or
-a cancellation request alone does not prove that remote side effects stopped.
-Unreachable participants require a defined instance/operation fencing proof;
-late replies must not mutate a retired incarnation or reused local object.
+在途请求必须持有其清单/路由引用、结果目标以及借用或移交的缓冲区，直至其完成/取消契约允许释放。本地计数归零、超时、传输关闭或仅发出取消请求本身均不能证明远端副作用已停止；对不可达参与者必须具备明确的实例/操作隔离（fencing）证明，确保迟到响应不会修改已回收实例代次或被复用的本地对象。
 
-When the proof is unavailable, return `TEARDOWN_INCOMPLETE` or the relevant
-uncertain-operation result, keep necessary identity/resource quarantine, and
-retain bounded retry/reconciliation metadata. Do not report `STOPPED`, release
-an uncertain allocation for reassignment, or free an object still reachable by
-local work merely to satisfy a deadline. Logs and retries remain bounded.
-Releasing a reservation follows the admission owner's API after the required
-route, subscriber, process, mapping, context, and name-owner confirmations.
+当无法取得上述证明时，必须返回 `TEARDOWN_INCOMPLETE` 或对应的不确定操作错误，保持必要的标识与资源隔离（quarantine），并保留有界的重试/对账元数据；禁止为了满足截止时间而提前宣告 `STOPPED`、将不确定分配重新放出或释放仍可能被本地工作访问的对象。日志与重试均须有界。资源预留的释放必须待必需的路由、订阅者、进程、映射、上下文及名称所有者确认完成后，再通过准入所有者的 API 执行。
 
-Pause uses the same safe execution boundary but retains reservations and
-resources required for resume; it is not final reclamation. Minimum restart
-reconciliation follows Section 5.3. HA, transparent recovery, and migration
-remain Extended and are not prerequisites for this fail-closed retirement rule.
+暂停（Pause）使用相同的安全执行边界，但保留恢复所需的预留与资源，不属于最终回收。Minimum 的重启对账遵循第 5.3 节。HA、透明恢复与迁移属于 Extended，不影响本故障封闭回收规则的落地。
 
-## 7. Concurrency, Idempotency, and Errors
+## 7. 并发、幂等性与错误处理
 
-- Lifecycle serialization is per VM incarnation. Unrelated VM admissions and
-  local participant preparations may proceed concurrently.
-- The coordinator does not hold a global membership, placement, or VM lock
-  while making network RPCs or waiting for a process to exit.
-- A lifecycle operation carries one operation ID. Participants retain bounded
-  completion records long enough for the coordinator's retry/query horizon.
-- Every prepare/activate/abort query identifies `admission_tx_id`, candidate
-  manifest digest, eligibility-fence digest, and activation fence when one
-  exists. A duplicate returns the previously recorded state, never a fresh
-  local interpretation.
-- Reservation acquisition order is owned by the admission specification;
-  manifest code must use its atomic reservation API rather than locking nodes
-  ad hoc.
-- A stale manifest generation, digest mismatch, wrong node instance, expired
-  prepared lease, stale eligibility fence, namespace collision, or capability
-  mismatch is a typed rejection.
-  It must never be repaired by accepting a nearby node, raw route ID, or
-  guessed local path.
+- 生命周期串行化以单个 VM 实例代次为粒度；无关 VM 的准入与本地参与者准备可并发执行。
+- 协调器不得在发起网络 RPC 或等待进程退出时持有全局成员、放置或 VM 锁。
+- 每次生命周期操作携带唯一 `operation_id`。参与者保留有界完成记录，覆盖协调器的重试/查询时间窗。
+- 每次 prepare/activate/abort 查询必须标明 `admission_tx_id`、候选清单摘要、资格栅栏摘要及已存在的 `activation_fence`。重复请求返回先前记录的结果，不得重新做本地推断。
+- 资源预留获取顺序由准入规范统一定义；清单逻辑必须调用其原子预留 API，禁止临时自行对节点加锁。
+- 过期的清单代次、摘要不匹配、错误节点实例、已过期的准备租约、过期资格栅栏、命名空间冲突或能力不匹配，均须返回具类型拒绝错误，禁止通过接受邻近节点、原始路由 ID 或猜测本地路径来“兜底修复”。
 
-Required lifecycle error classes include:
+必需的生命周期错误类别包括：
 
 ```text
 INVALID_REQUEST, UNSUPPORTED_CAPABILITY, INSUFFICIENT_CAPACITY,
@@ -661,79 +403,41 @@ PLACEMENT_CONSTRAINT, MEMBER_NOT_ACTIVE, TOPOLOGY_NOT_READY,
 ROUTE_GENERATION_UNAVAILABLE, RESERVATION_CONFLICT, NAME_CONFLICT,
 MANIFEST_MISMATCH, STALE_INSTANCE, ELIGIBILITY_FENCE_STALE,
 ACTIVATION_FENCE_UNKNOWN, PREPARE_REJECTED, START_FAILED, QUIESCE_TIMEOUT,
-UNCERTAIN_OPERATION, RESULT_EXPIRED, and TEARDOWN_INCOMPLETE.
+UNCERTAIN_OPERATION, RESULT_EXPIRED, TEARDOWN_INCOMPLETE
 ```
 
-Timeout is a control-plane observation, not proof that a remote side effect did
-not occur. Retrying a prepare, commit, or stop sends the same operation ID and
-queries the recorded result before creating a new action.
+超时只是控制面观测现象，不证明远端副作用未发生。重试 prepare、commit 或 stop 时必须携带相同的 `operation_id`，先查询已记录结果再决定后续动作。
 
-## 8. Implementation Touchpoints and Requirements
+## 8. 实现触点与要求
 
-| File, symbol, or boundary | Required responsibility |
+| 文件、符号或边界 | 必需职责 |
 | --- | --- |
-| `ctl_tool/main.c` and `common_include/wavevm_resources.[ch]` | Parse/validate a request, invoke admission, and emit canonical manifests rather than being the only runtime truth. |
-| `artifacts/*/run.sh` and CI scripts | Generate a test manifest and derived scripts; retain scripts as fixtures rather than policy authority. |
-| `master_core/main_wrapper.c` / `user_backend.c` | In an admitted launch, consume only the validated per-node manifest, matching route snapshot, and derived dispatch projection before serving local QEMU or fabric traffic. |
-| `slave_daemon/slave_hybrid.c` | Register only manifest-assigned local executor roles and return lifecycle-ready state. |
-| `wavevm-qemu/accel/wavevm/` | Bind every connection, SHM registration, and accelerator operation to manifest identity/digest. |
-| `master_core/kernel_backend.c` | Attach only to a prepared per-VM kernel context from `kernel-accelerator.md`. |
+| `ctl_tool/main.c` 与 `common_include/wavevm_resources.[ch]` | 解析/校验请求、调用准入并生成规范清单，不再充当唯一运行时事实来源。 |
+| `artifacts/*/run.sh` 与 CI 脚本 | 生成测试清单与派生脚本；仅作为测试夹具保留，不作为策略权威。 |
+| `master_core/main_wrapper.c` / `user_backend.c` | 在已准入启动路径中，仅消费经校验的每节点清单、匹配路由快照及派生分发投影，完成后方提供本地 QEMU 或织网流量服务。 |
+| `slave_daemon/slave_hybrid.c` | 仅注册清单分配的本地执行器角色，并上报生命周期就绪状态。 |
+| `wavevm-qemu/accel/wavevm/` | 将每条连接、SHM 注册与加速器操作绑定到清单标识与摘要。 |
+| `master_core/kernel_backend.c` | 仅挂接到按 `kernel-accelerator.md` 准备的每 VM 内核上下文。 |
 
-## 9. Compatibility Boundary
+## 9. 兼容性边界
 
-No legacy environment-variable, static route, or launch-script configuration
-is a production input. QEMU, node runtimes, executors, gateways, and kernel
-contexts consume identity-bound manifests, route snapshots, and typed lifecycle
-records. Local names derive from the admitted manifest; unsupported or stale
-records reject before guest traffic is enabled.
+任何历史环境变量、静态路由或启动脚本配置均不构成生产输入。QEMU、节点运行时、执行器、Gateway 与内核上下文统一消费绑定标识的清单、路由快照与强类型生命周期记录。本地名称全部由已准入清单派生；不受支持或过期的记录必须在开启 Guest 流量前拒绝。
 
-## 10. Acceptance Tests
+## 10. 验收测试
 
-Minimum covers ordinary create/activation, idempotency, partial-start cleanup,
-basic durable restart reconciliation, rejection of stale eligibility,
-fail-closed required-process loss, and safe VM-scoped retirement. Targeted
-checks must cover those behaviors. Exhaustive crash/race/failure matrices,
-HA, and transparent replacement are Extended; that broader coverage does not
-defer the underlying Minimum rules.
+Minimum 覆盖常规创建/激活、幂等性、部分启动清理、基础持久化重启对账、过期资格拒绝、必需进程丢失时的故障封闭处理以及 VM 作用域安全回收，均须由针对性检查验证。穷举崩溃/竞态/故障矩阵、HA 及透明替换归属 Extended，但不得因此推迟 Minimum 基础规则的实现。
 
-- The same canonical request, member snapshot, and capability set produce the
-  same manifest digest and placement plan.
-- A two-node flat and a multi-hop fractal fixture start from generated
-  manifests with no hidden per-VM route or port input.
-- A duplicate create request returns the original result and cannot allocate a
-  second VM or reservation.
-- One participant rejecting prepare leaves no active QEMU, executor, route
-  binding, kernel context, port, SHM file, or resource reservation.
-- A process with the wrong manifest digest, incarnation, local role, or node
-  instance is rejected before it serves traffic.
-- Stop drains or reports every outstanding memory, vCPU, and storage operation
-  before releasing the VM namespace and local names.
-- Two VMs on one eligible physical node have disjoint local names, reservations,
-  route identities, logs, and runtime state.
-- A route-generation replacement for an active gateway path does not mutate
-  the VM's placement or manifest digest.
-- **Extended:** Crash/restart the coordinator after every reservation, participant prepare,
-  activation, commit, abort, and start message. The result is exactly one
-  running/committed VM with all reservations held, or full compensating teardown
-  with no leaked route scope, port, SHM name, context, or capacity.
-- **Minimum usable:** Representative pre-activation cordon, gateway drain,
-  health exclusion, capability change, and node/gateway instance replacement
-  invalidate their captured fence before `RUNNING`. Exhaustive interleavings
-  at every boundary are Extended.
-- **Minimum usable:** Noncritical child restart requires documented same-role
-  re-registration. Loss of a required QEMU/executor or replacement of a required
-  member pauses/fails rather than silently rebinding. Comprehensive independent
-  host/process failure matrices and transparent replacement are Extended.
-- **Minimum usable:** Quiescence rejects new guest work while permitting
-  required ACK/fence/query/cleanup traffic. A late callback or uncertain remote
-  operation cannot access freed resources or authorize namespace reuse.
-- **Minimum usable:** VM A route-scope retirement while VM B shares a gateway leaves VM B's current
-  and draining routes, local names, reservations, and subscriber state intact.
-- **Minimum usable:** KVM guest acceptance requires login or SSH and proof that
-  admitted remote vCPU and remote memory paths were exercised. TCG contract
-  acceptance requires bounded actual instruction execution with checked CPU
-  and remote memory results, plus clean STOP. TCG guest OS boot/login/SSH and
-  sustained multi-vCPU guest usability belong to Extended (`vcpu-handoff.md`
-  Section 8.1). Neither gate is satisfied by process survival. Runtime readiness
-  and lifecycle `RUNNING` remain manifest-bound service states; they must not
-  be relabeled as proof of guest OS login for either backend.
+- 相同的规范请求、成员快照与能力集合必须产出完全一致的清单摘要与放置计划。
+- 双节点 Flat 夹具与多跳 Fractal 夹具可完全依据生成的清单启动，无需任何隐藏的每 VM 路由或端口输入。
+- 重复的创建请求返回原始结果，不得分配第二个 VM 或重复资源预留。
+- 任一参与者拒绝 prepare 时，系统不得遗留活动的 QEMU、执行器、路由绑定、内核上下文、端口、SHM 文件或资源预留。
+- 携带错误清单摘要、实例代次、本地角色或节点实例 ID 的进程必须在提供流量服务前被拒绝。
+- 停止操作在释放 VM 命名空间与本地名称前，必须排空或明确上报所有未决内存、vCPU 及存储操作。
+- 同一合格物理节点上的两个 VM 必须拥有互不重叠的本地名称、资源预留、路由标识、日志及运行时状态。
+- 活动 Gateway 路径的 `route_generation` 替换不得变更 VM 的放置方案或清单摘要。
+- **Extended：** 在每条预留、参与者 prepare、激活、提交、中止与启动消息之后注入协调器崩溃/重启，结果必须严格收敛为单一完整运行/已提交 VM（全部预留保持），或完整补偿拆卸（无泄漏路由作用域、端口、SHM 名称、上下文或容量）。
+- **Minimum 可用：** 代表性的激活前隔离（cordon）、Gateway 排空、健康剔除、能力变更以及节点/Gateway 实例替换，必须在进入 `RUNNING` 前使捕获的资格栅栏失效；所有边界的穷举交错归属 Extended。
+- **Minimum 可用：** 非关键子进程重启须完成同角色重新注册；必需 QEMU/执行器丢失或必需成员替换须暂停/置失败，不得静默重绑定。全面的独立宿主/进程故障矩阵与透明替换归属 Extended。
+- **Minimum 可用：** 静默阶段拒绝新 Guest 工作同时放行必需的 ACK/栅栏/查询/清理流量；迟到回调或不确定远端操作不得访问已释放资源，也不得授权复用命名空间。
+- **Minimum 可用：** 当 VM A 与 VM B 共享 Gateway 时，回收 VM A 路由作用域不得影响 VM B 的当前路由、排空中路由、本地名称、预留及订阅者状态。
+- **Minimum 可用：** KVM Guest 验收要求可登录或 SSH，且证明已实际走过已准入的远端 vCPU 与远端内存路径；TCG 契约验收要求完成有界的真实指令执行、经校验的 CPU 与远端内存结果以及干净停止（TCG Guest OS 启动/登录/SSH 与持续多 vCPU 可用性归属 Extended，见 `vcpu-handoff.md` 第 8.1 节）。两类后端均不得以进程存活替代门控；运行时就绪与生命周期 `RUNNING` 仅代表清单绑定的服务状态，不可将其混同为 Guest OS 登录证明。

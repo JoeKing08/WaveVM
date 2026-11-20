@@ -665,6 +665,12 @@ int wvm_vcpu_service_complete(
     }
     entry->reply = reply;
     entry->state = VCPU_SERVICE_ENTRY_REPLY_QUEUED;
+    /* Official F10/A4 scores a real typed RET with the same evidence line
+     * as the legacy IPC path. Log the actual ACK; do not invent success. */
+    fprintf(stderr,
+            "[IPC VCPU_RUN RET] vcpu=%u target=%u rpc_ret=%d ack_status=%d ack_mode=%u\n",
+            request->vcpu_index, 0U,
+            reply_result, reply.status, reply.mode_tcg);
     pthread_cond_signal(&service->reply_available);
     pthread_mutex_unlock(&service->lock);
     return 0;

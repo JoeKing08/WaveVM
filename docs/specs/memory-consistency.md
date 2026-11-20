@@ -1,76 +1,54 @@
-# WaveVM Memory Consistency Specification
+# WaveVM 内存一致性规范
 
-Status: normative implementation specification.
+状态：规范性实现规范。
 
-The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
-rules apply to this specification.
+本规范适用[文档维护规则](../wavevm-refactor-roadmap.md#文档维护规则)。
 
-Scope: one VM incarnation's guest RAM across its QEMU frontend, local node
-runtime, local execution runtime, directory nodes, sidecar/gateway fabric, and
-optional kernel accelerator. This document defines the semantic contract shared
-by KVM and TCG. It does not define block-device durability, vCPU register
-handoff, resource placement admission, or host fault-engine selection. Those
-boundaries belong to `storage-device-authority.md`, `vcpu-handoff.md`,
-`resource-placement-admission.md`, and `capability-fault-engines.md`.
+范围：单个 VM 实例代次（`vm_incarnation`）的客户机 RAM，涵盖其 QEMU 前端、本地节点运行时、本地执行运行时、目录节点、Sidecar/Gateway 路由织网以及可选的内核加速器。本文档定义 KVM 与 TCG 共享的语义契约，不定义块设备持久化、vCPU 寄存器交接、资源放置准入或宿主机缺页引擎选择；这些边界分别归属 `storage-device-authority.md`、`vcpu-handoff.md`、`resource-placement-admission.md` 与 `capability-fault-engines.md`。
 
-Terminology: `master` and `slave` below name logical source-level roles. The
-architecture baseline calls them the node runtime's semantic-coordinator role
-and local-execution role respectively; they are not required to remain separate
-processes. This specification's authority and ordering rules apply regardless
-of that deployment choice.
+术语说明：下文中 `master` 与 `slave` 指源码层的逻辑角色，架构基线分别称其为节点运行时的语义协调者角色与本地执行角色；二者无需保持为独立进程。无论具体部署形态如何，本规范的权威与排序规则均同样适用。
 
-This specification defines required behavior. Source mappings identify where
-to apply the contract; observed implementation deviations belong in separate
-audits and do not relax it.
+本规范定义必选行为。源码映射用于标识契约的落点；现有实现中的偏差应记录在独立审计中，不构成放宽契约的依据。
 
-## Subsystem Boundary Contract
+## 子系统边界契约
 
-This summary indexes the owning rules; it does not duplicate their definitions.
-Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+下表索引本子系统的核心归属规则，不重复其详细定义。边界变更须遵循[基线第 0 节](../wavevm-architecture-baseline.md#0-架构权威与维护契约)。
 
-| Boundary | Required contract |
+| 边界 | 必选契约 |
 | --- | --- |
-| Responsibility and authority | Own page-version/directory/subscriber semantics and memory fences. For each VM-incarnation/page key, the manifest-selected directory runtime is authoritative for bytes/version; capture engines are not. |
-| State and mutation | Section 2 distinguishes authority and copies. Authorized per-page commits mutate bytes/version atomically; QEMU/executor/kernel caches retain explicit validity and subscriber lifetime. |
-| Allowed implementation dependencies | Public identity/route/IPC, immutable placement projections, fault-engine and local-memory APIs. No private lifecycle, device, or vCPU state; the vCPU coordinator consumes the public fence result. |
-| Interactions and lifetime | Section 4.6 owns handoff visibility. [IPC Section 5.1](wire-ipc-abi.md#51-buffer-ownership-visibility-and-completion-context) owns buffer publication; [lifecycle retirement](runtime-manifest-lifecycle.md#63-cross-subsystem-resource-retirement) orders page, subscriber and mapping release. |
-| Concurrency and cost | Section 6 requires independent-page progress, asynchronous diffs/capture, batching, bounded QoS queues and explicit copy/round-trip costs; one authority is not one global executor. |
-| Failure and verification | Sections 7 and 10 require version-gap resync, retained uncertain operations and checked bytes/ACKs. Local mapping alone is not cross-host shared-memory proof. |
+| 职责与权威 | 拥有页版本、目录、订阅者语义与内存栅栏。对每个 VM 实例代次/页键，清单选定的目录运行时是页字节与版本号的唯一权威，捕获引擎不具备该权威。 |
+| 状态与变更 | 第 2 节区分权威状态与副本状态。经授权的单页提交须原子更新字节与版本号；QEMU、执行器与内核缓存须维护显式有效性及订阅者生命周期。 |
+| 允许的实现依赖 | 公共身份/路由/IPC、不可变放置投影、缺页引擎及本地内存 API。不得访问私有生命周期、设备或 vCPU 状态；vCPU 协调器仅消费公共栅栏结果。 |
+| 交互与生命周期 | 第 4.6 节负责交接可见性；[IPC 第 5.1 节](wire-ipc-abi.md#51-缓冲区所有权与完成上下文)负责缓冲区发布；[生命周期回收](runtime-manifest-lifecycle.md#63-跨子系统资源回收)约束页、订阅者与映射的释放顺序。 |
+| 并发与成本 | 第 6 节要求独立页并行推进、异步 diff/捕获、批处理、有界 QoS 队列及显式拷贝/往返开销；单一权威不意味着全局串行执行器。 |
+| 故障与验证 | 第 7 节与第 10 节要求版本缺口重同步、保留不确定操作及校验字节与 ACK。仅具备本地映射不足以证明跨主机共享内存正确性。 |
 
-## 1. Goal and Non-Goals
+## 1. 目标与非目标
 
-The goal is to make every successful guest-memory read and write explainable by
-one VM-scoped directory authority and one monotonically advancing per-page
-version. A guest must not observe a successful remote handoff against memory
-whose required writes were silently dropped, reordered, or attributed to a
-different VM.
+目标是使每一次成功的客户机内存读写都可由单一 VM 作用域的目录权威及单调递增的逐页版本号完整解释。客户机不得在所需的内存写入被静默丢弃、乱序或错误归属到其他 VM 的情况下观测到一次成功的远端交接。
 
-This is a directory plus version plus subscriber/copyset protocol. It is not a
-claim to implement full hardware MESI, cache-line coherence, transparent live
-migration, or durable storage ordering.
+本协议采用「目录 + 版本号 + 订阅者/副本集」机制，并不旨在实现完整硬件 MESI、缓存行级一致性、透明热迁移或持久化存储排序。
 
-The unit of coherence is one 4 KiB guest physical page:
+一致性粒度为单个 4 KiB 客户机物理页：
 
 ```text
 page_key = (vm_id, incarnation, gpa aligned to 4096)
 ```
 
-`vm_id` alone is insufficient after VM deletion and reuse. Production traffic
-must carry and validate the incarnation using `wire-ipc-abi.md`; reject packets
-that cannot establish the complete page identity.
+在 VM 删除与 ID 复用场景下，仅靠 `vm_id` 不足以唯一标识页。生产流量必须按 `wire-ipc-abi.md` 携带并校验实例代次（`vm_incarnation`），无法建立完整页身份的报文必须拒绝。
 
-## 2. Authority and Ownership
+## 2. 权威与所有权
 
-| State or decision | Authoritative owner | Allowed caches |
+| 状态或决策 | 权威所有者 | 允许的缓存 |
 | --- | --- | --- |
-| VM identity, incarnation, memory chunk placement | User-space admitted launch manifest | QEMU, node runtime, executor, gateway, and kernel may cache a versioned snapshot. |
-| Directory node for a page | Manifest placement plus directory function | None may infer it from a local test topology. |
-| Authoritative page bytes and version | The page's current directory runtime | QEMU RAM, executor RAM, and kernel page metadata are copies only. |
-| Subscriber/copyset | Directory runtime | Per-subscriber lifecycle records; an incomplete or stale copyset must not grant write authority. |
-| Local QEMU page bytes and local page version | The local QEMU runtime cache | Node-runtime SHM may mirror it but cannot override QEMU's registered RAMBlocks. |
-| Dirty-page capture and page invalidation mechanics | KVM, TCG, or optional kernel accelerator | These mechanics do not choose versions, owners, or placement. |
+| VM 身份、实例代次、内存分块放置 | 用户态已准入启动清单 | QEMU、节点运行时、执行器、Gateway 与内核可缓存带版本号的快照。 |
+| 指定页的目录节点 | 清单放置与目录映射函数 | 任何组件不得依据本地测试拓扑自行推断。 |
+| 权威页字节与版本号 | 该页当前的目录运行时 | QEMU RAM、执行器 RAM 与内核页元数据均仅为副本。 |
+| 订阅者/副本集 | 目录运行时 | 逐订阅者生命周期记录；不完整或过期的副本集不得授予写权威。 |
+| 本地 QEMU 页字节与本地页版本 | 本地 QEMU 运行时缓存 | 节点运行时 SHM 可镜像该内容，但不能覆盖 QEMU 已注册的 RAMBlocks。 |
+| 脏页捕获与页失效机制 | KVM、TCG 或可选内核加速器 | 这些机制不决定版本号、所有者或放置关系。 |
 
-Production cross-node traffic is always:
+生产跨节点流量固定遵循以下路径：
 
 ```text
 QEMU or local executor -> local node runtime -> local sidecar -> gateway fabric
@@ -78,33 +56,25 @@ QEMU or local executor -> local node runtime -> local sidecar -> gateway fabric
                        -> remote directory or local executor
 ```
 
-No production path sends directly from one remote executor to another remote
-executor. A node runtime may use loopback IPC or an in-process interface to its
-local executor.
+生产路径禁止从一个远端执行器直接向另一个远端执行器发包。节点运行时与其本地执行器之间可使用回环 IPC 或进程内接口。
 
-## 3. Data Model
+## 3. 数据模型
 
-### 3.1 Version
+### 3.1 版本号
 
-Each directory page has:
+每个目录页持有如下版本号：
 
 ```text
 version = (epoch << 32) | counter
 ```
 
-`counter` advances by exactly one for each accepted page mutation within an
-epoch. A page initially materialized by a directory has version
-`(current_epoch, 1)`. Version zero means "no valid local copy" and is never a
-committable base version.
+在同一 epoch 内，每次被接受的页变更将 `counter` 精确加 1。目录首次物化某页时，初始版本号为 `(current_epoch, 1)`。版本号 `0` 表示「无有效本地副本」，永远不能作为可提交的基准版本（`base_version`）。
 
-A version comparison is valid only for the same VM incarnation. A receiver
-accepts a normal incremental update only when it is the immediate successor of
-its current version. A full authoritative snapshot may replace any older local
-version, but only when it came from the current directory.
+版本比较仅在同一 VM 实例代次内有效。接收方仅当常规增量更新的版本号是当前版本的直接后继时才接受该更新。来自当前目录的完整权威快照可替换任意更旧的本地版本。
 
-### 3.2 Directory Page Record
+### 3.2 目录页记录
 
-The semantic record is:
+语义记录如下：
 
 ```text
 directory_page {
@@ -116,7 +86,7 @@ directory_page {
 }
 ```
 
-Each entry is:
+每条订阅者记录结构如下：
 
 ```text
 SubscriberRecord {
@@ -134,83 +104,38 @@ SubscriberRecord {
 }
 ```
 
-`route_scope_key` is stable subscription identity, not a permanently pinned
-forwarding generation. The directory resolves the current accepted snapshot for
-that scope immediately before each send and pins it for the send/retry attempt.
-`subscribers` is an invalidation/update target set, not an owner set. It may
-over-approximate only while each record remains `ACTIVE` and identity-valid, or
-while it is an identity-qualified provisional read target under §4.1. Its
-absence must cause an extra read or full resynchronization rather than authorize
-a client write. A new node instance or rejoined runtime never inherits an old
-subscription; it must request an authoritative full page again.
+`route_scope_key` 表示稳定的订阅身份，而非永久锁定的转发代次。目录在每次发送前即时解析该作用域当前已接受的路由快照，并在该次发送/重试期间钉住该快照引用。`subscribers` 是失效/更新的目标集合，而非所有者集合。仅当各条记录处于 `ACTIVE` 且身份有效，或处于第 4.1 节规定的身份合格临时读目标状态时，该集合才允许保守超近似（over-approximate）。订阅记录缺失必须触发额外读取或全量重同步，而不得授权客户端写入。新节点实例或重新加入的运行时绝不继承旧订阅记录，必须重新请求权威整页。
 
-### 3.3 Client Page States
+### 3.3 客户端页状态
 
-| State | Meaning | Allowed transition |
+| 状态 | 含义 | 允许的转换 |
 | --- | --- | --- |
-| `ABSENT` | No valid local bytes/version. | `MEM_READ` or authoritative full push. |
-| `CLEAN(v)` | Local bytes match directory version `v`. | Read locally; begin local write capture. |
-| `DIRTY(v, journal)` | A local write has been captured against base version `v`. | Submit a commit; no remote vCPU handoff that depends on it until its required fence succeeds. |
-| `SUBMITTING(v, req_id)` | A commit is in flight. | Retry idempotently or resolve ACK/error. |
-| `RESYNC` | Local bytes are invalid after a gap, rejection, or stale manifest. | Pull authoritative full page; become `CLEAN(new_v)`. |
+| `ABSENT` | 无有效的本地字节与版本号。 | 发起 `MEM_READ` 或接收权威整页推送。 |
+| `CLEAN(v)` | 本地字节与目录版本 `v` 一致。 | 本地读取；启动本地写捕获。 |
+| `DIRTY(v, journal)` | 已基于基准版本 `v` 捕获本地写入。 | 提交 commit；在所需栅栏成功前，不得执行依赖该页的远端 vCPU 交接。 |
+| `SUBMITTING(v, req_id)` | 提交请求在途。 | 幂等重试，或处理 ACK/错误响应。 |
+| `RESYNC` | 因版本缺口、提交被拒或清单过期导致本地字节失效。 | 拉取权威整页，转入 `CLEAN(new_v)`。 |
 
-A client may batch multiple independent dirty pages. It may not coalesce
-multiple writes to the same page across a handoff boundary without preserving
-their base-version order.
+客户端可批量提交多个相互独立的脏页，但不得在跨越交接边界时合并同一页的多次写入而破坏其基准版本顺序。
 
-## 4. Canonical Operations
+## 4. 规范操作
 
-### 4.1 Read / Fault Resolution
+### 4.1 读与缺页解析
 
-1. A local QEMU or executor fault asks its local node runtime for page `gpa`.
-2. If the local node is the directory, it copies the current directory bytes
-   and version under the page lock.
-3. Otherwise the local node runtime sends `MSG_MEM_READ` to the manifest-selected
-   directory with a nonzero request ID. Its typed V1 payload contains the
-   4-KiB-aligned GPA and the complete reply leaf RouteKey
-   `{destination_kind, destination_scope, destination_vnode}`.
-4. The directory resolves that reply RouteKey from its admitted immutable route
-   snapshot and returns `MSG_MEM_ACK`. A successful typed V1 ACK contains
-   `{gpa, version, status=SUCCESS, directory_physical_node_id,
-   directory_node_instance_id, data[4096]}`; a terminal status contains no
-   page data. The reply preserves the request operation identity and changes
-   only forwarding metadata and outer route destination.
-5. The requester verifies VM incarnation, complete operation key, GPA,
-   directory identity, status, payload size, and checksum before installing
-   the page as `CLEAN(version)`.
-6. The directory records the requester as an `ACTIVE` subscriber after
-   producing the reply snapshot, with current node/runtime identity, route
-   snapshot key, observed version, and a `HINT` delivery requirement unless a
-   documented fence explicitly requests `FENCE_REQUIRED`.
+1. 本地 QEMU 或执行器发生缺页时，向本地节点运行时请求页 `gpa`。
+2. 若本地节点即为该页目录，则在页锁保护下拷贝当前目录字节与版本号。
+3. 否则，本地节点运行时携带非零请求 ID 向清单选定的目录发送 `MSG_MEM_READ`。其强类型 V1 载荷包含 4 KiB 对齐的 GPA 及完整的回包叶 `RouteKey` `{destination_kind, destination_scope, destination_vnode}`。
+4. 目录从已准入的不可变路由快照中解析该回包 `RouteKey` 并返回 `MSG_MEM_ACK`。成功的强类型 V1 ACK 包含 `{gpa, version, status=SUCCESS, directory_physical_node_id, directory_node_instance_id, data[4096]}`；终态错误响应不携带页数据。回包保留请求的操作身份，仅变更转发元数据与外层路由目的地。
+5. 请求方在将页安装为 `CLEAN(version)` 之前，必须校验 VM 实例代次、完整操作键、GPA、目录身份、状态、载荷大小与校验和。
+6. 目录在生成读快照后将请求方记为 `ACTIVE` 订阅者，记录其当前节点/运行时身份、路由快照键、观测版本，且除非明确声明的栅栏请求 `FENCE_REQUIRED`，默认设置投递要求为 `HINT`。
 
-The directory must reserve an identity-qualified update target before copying
-the read snapshot, so a commit between the copy and reply cannot miss the
-reader. A provisional read target participates in update delivery and becomes
-`ACTIVE` once its snapshot is qualified. Failed qualification or subscription
-resource pressure cannot produce a successful, untracked `CLEAN` snapshot.
-Retirement or a failed older delivery must not invalidate a newer qualification
-by confusing their revisions. No page/subscriber lock is held over network I/O.
-Registry capacity must scale with admitted page and participant counts, with
-bounded allocation and safe pressure handling; a fixed number of reads cannot
-become an implicit guest RAM limit.
+目录必须在拷贝读快照之前预留一个经过身份鉴定的更新目标，防止拷贝与回包之间发生的提交遗漏该读请求方。临时读目标参与更新投递，并在快照确认合格后转为 `ACTIVE`。若身份校验失败或订阅资源承压，绝不可返回未受追踪的成功 `CLEAN` 快照。回收操作或旧投递失败不得因混淆修订号而使更新的合格记录失效。网络 I/O 期间不得持有任何页锁或订阅者锁。订阅注册表容量须随已准入页数与参与者数量扩展，同时具备有界内存分配与安全承压处理，避免固定读次数成为隐式的客户机 RAM 上限。
 
-The request ID identifies one VM-scoped operation. A retried read uses the same
-ID. Duplicate replies are harmless after the first matching result.
-Completed read identities, GPA/directory bindings and result-version/digest
-checks must survive through the admitted retention horizon. A consumed full
-page payload may be evicted independently: an explicit retry then fetches the
-same or a newer authoritative snapshot. An older reply cannot complete that
-retry, and different bytes at the same completed version are a conflict.
-Read-receipt capacity must scale with admitted RAM with bounded allocation;
-the in-flight/page-result window must not impose a fixed pages-per-retention
-throughput ceiling. Mutation results retain their exact replay semantics.
-A full execution-input prefetch must use bounded concurrency and one shared
-completion deadline, rather than a fresh timeout for every page. Any missing,
-failed or invalidated required page prevents execution of that interval.
+请求 ID 标识一次 VM 作用域操作。重试读取复用同一 ID；收到首个匹配结果后的重复回包应无害忽略。已完成读操作的身份、GPA/目录绑定以及结果版本/摘要校验记录须在已准入的保留窗口内持续存活。已消费的整页载荷可独立淘汰：显式重试随后获取相同或更新的权威快照；更旧的回包不得完成该重试，同一已完成版本号出现不同字节须判定为冲突。读回执容量须随已准入 RAM 扩展并受有界分配约束，在途/页结果窗口不得对每保留周期的页吞吐量施加固定上限。写变更结果则保持精确重放语义。完整执行输入预取必须采用有界并发与单一共享完成截止时间，而非为每页重置超时；任何必选页缺失、失败或失效都必须阻止该执行区间启动。
 
-### 4.2 Normal Dirty Commit
+### 4.2 常规脏页提交
 
-The canonical commit payload is `wvm_diff_log`:
+规范提交载荷为 `wvm_diff_log`：
 
 ```text
 gpa
@@ -220,40 +145,30 @@ size
 data
 ```
 
-The current field named `version` is the `base_version` on submission. The
-directory accepts a normal diff only when all conditions hold:
+提交时现有字段 `version` 即代表 `base_version`。目录仅在以下条件全部满足时才接受常规 diff：
 
-1. The message belongs to the current VM incarnation and manifest generation.
-2. The sender epoch equals the directory's accepted epoch for this operation.
-3. The target is the current directory for `gpa`.
-4. `0 < size <= 4096` and `offset + size <= 4096`.
-5. `base_version == directory_page.version`.
-6. The request ID has not already completed with a different payload.
+1. 消息归属当前 VM 实例代次与清单代次。
+2. 发送方 epoch 等于目录针对该操作接受的 epoch。
+3. 目标节点为 `gpa` 的当前目录。
+4. `0 < size <= 4096` 且 `offset + size <= 4096`。
+5. `base_version == directory_page.version`。
+6. 该请求 ID 未曾以不同载荷完成过提交。
 
-On acceptance the directory, under the page lock:
+接受后，目录在页锁保护下依次执行：
 
-1. Applies the bytes to its page copy.
-2. Advances version to `next(base_version)`.
-3. Captures the resulting version and any push payloads.
-4. Records/refreshes the writer as an identity-valid subscriber.
-5. Records an idempotent completion result for the request ID.
+1. 将字节应用到目录页副本。
+2. 将版本号推进至 `next(base_version)`。
+3. 捕获新版本号及所需的推送载荷。
+4. 记录或刷新写入方为身份有效的订阅者。
+5. 为该请求 ID 记录幂等完成结果。
 
-It then releases the page lock, dispatches updates to subscribers, and sends a
-commit ACK. Network send, QEMU IPC, allocation that may block, and waiting for
-another page must not occur while holding the page lock.
+随后释放页锁，再向订阅者派发更新并发送提交 ACK。持有页锁期间严禁执行网络发送、QEMU IPC、可能阻塞的内存分配或等待其他页。
 
-The directory retains the idempotent completion record through the maximum
-route predecessor completion-query/retry horizon. A rerouted duplicate uses the
-same semantic operation key from `wire-ipc-abi.md`; after retention expires it
-returns `RESULT_EXPIRED` and never reapplies the diff.
+目录须在最大路由前驱完成查询/重试窗口内保留幂等完成记录。经由重路由到达的重复请求使用 `wire-ipc-abi.md` 定义的同一语义操作键；保留期满后应返回 `RESULT_EXPIRED`，绝不重新应用 diff。
 
-`BACKPRESSURE` means the directory declined before applying bytes. It is not a
-completed mutation result: the directory retains the operation ID and semantic
-payload digest to reject conflicting reuse, but an identical retry may perform
-the apply when capacity returns. Terminal results and successful commits are
-the only outcomes replayed from the completion cache.
+`BACKPRESSURE` 表示目录在应用字节之前即拒绝了请求，不属于已完成的变更结果：目录保留操作 ID 与语义载荷摘要以拒绝冲突复用，但容量恢复后，完全相同的重试可执行实际应用。完成缓存仅重放终态错误结果与成功提交结果。
 
-The canonical commit ACK must contain:
+规范提交 ACK 必须包含：
 
 ```text
 commit_ack {
@@ -265,96 +180,51 @@ commit_ack {
 }
 ```
 
-`status=success` means the directory has applied the commit and recorded its
-idempotent result. With `WVM_FLAG_NEED_ACK`, it additionally means all local
-delivery barriers required by the declared handoff policy have succeeded.
+`status=success` 表示目录已应用提交并记录了幂等结果。携带 `WVM_FLAG_NEED_ACK` 时，还额外表明已声明交接策略所需的全部本地投递屏障均已成功。
 
-### 4.3 Full Page Writes and Recovery
+### 4.3 整页写入与恢复
 
-An authoritative `MSG_PAGE_PUSH_FULL` or `MSG_FORCE_SYNC` is directory to
-client recovery traffic. It may overwrite an older local cache because it
-carries directory-owned bytes and a directory version.
+权威 `MSG_PAGE_PUSH_FULL` 或 `MSG_FORCE_SYNC` 属于目录到客户端的恢复流量。因携带目录拥有的字节与目录版本，可覆盖更旧的本地缓存。
 
-A client-originated full-page commit is not a general recovery shortcut in Minimum.
-It must still carry a base version and satisfy the normal commit precondition.
-In particular, a client must not overwrite a newer directory page merely
-because it has a full 4 KiB snapshot.
+在 Minimum 轮廓下，客户端发起的整页提交不是通用的恢复捷径，仍须携带 `base_version` 并满足常规提交前置条件。客户端不得仅凭持有完整 4 KiB 快照就覆盖更新的目录页。
 
-This deliberately removes the ambiguity in the current "full-page catchup"
-behavior. A lost or reordered diff is recovered by `RESYNC`, then a new commit
-against the returned version, not by accepting an unproven client snapshot.
+该规则明确消除了历史「整页追赶（full-page catchup）」行为中的语义歧义：丢失或乱序的 diff 必须通过 `RESYNC` 恢复，再基于返回的版本号重新提交，而非直接接受未经证明的客户端快照。
 
-### 4.4 Zero Page Commit
+### 4.4 零页提交
 
-A zero page is a normal full-page mutation with explicit zero semantics. It
-uses the normal base-version precondition and advances the version once.
-`WVM_FLAG_ZERO` changes payload representation only; it must not bypass version
-checking or commit acknowledgment.
+零页属于具有显式全零语义的常规整页变更，同样遵循常规 `base_version` 前置条件并将版本号推进一次。`WVM_FLAG_ZERO` 仅改变载荷编码形式，不得绕过版本校验或提交确认。
 
-### 4.5 Subscriber Updates
+### 4.5 订阅者更新
 
-After an accepted mutation, the directory sends either:
+接受变更后，目录发送以下两类更新之一：
 
-- `MSG_PAGE_PUSH_DIFF` for an ordered bounded diff, or
-- `MSG_PAGE_PUSH_FULL` for a full page, zero page, recovery, or a receiver
-  that cannot safely apply a diff.
+- `MSG_PAGE_PUSH_DIFF`：用于有序的有界 diff；或
+- `MSG_PAGE_PUSH_FULL`：用于整页、零页、恢复场景，或无法安全应用 diff 的接收方。
 
-Clients apply a diff only when its version is the next version. Stale and
-duplicate updates are idempotent no-ops. A version gap puts the page into
-`RESYNC`; the client requests a directory full page before allowing dependent
-guest execution to continue.
+客户端仅在更新版本号为下一顺位版本时应用 diff。过期及重复更新均作幂等空操作处理。出现版本缺口时，页转入 `RESYNC` 状态，客户端须先向目录拉取整页，方可继续依赖该页的客户机执行。
 
-Subscriber state transitions are:
+订阅者状态转换如下：
 
 ```text
 ACTIVE
-  -> STALE       on node/runtime-instance change, membership failure, route-scope
-                  retirement, lease/observed-epoch expiry, or failed HINT delivery
-  -> REMOVING    on VM STOPPING, explicit unsubscribe, or directory teardown
-  -> REMOVED     after no required delivery/query reference remains
+  -> STALE       节点/运行时实例变更、成员故障、路由作用域回收、租约/观测 epoch 过期或 HINT 投递失败时
+  -> REMOVING    VM 进入 STOPPING、显式取消订阅或目录拆解时
+  -> REMOVED     不再存在必需的投递/查询引用后
 ```
 
-`HINT` pushes are cache maintenance only. A failed or unreachable HINT marks
-the record `STALE`, stops further push retry, and requires the receiver to
-resync on a future read/fault. `FENCE_REQUIRED` is valid only when a named
-memory/handoff policy includes that subscriber in its barrier. Its delivery ACK
-carries the subscription/operation identity; failure prevents the owning fence
-from succeeding and follows its bounded retry/query policy. It cannot become an
-indefinite retry against a departed node.
+`HINT` 推送仅用于缓存维护。`HINT` 投递失败或不可达时，将记录置为 `STALE` 并停止后续推送重试，要求接收方在后续读/缺页时重同步。仅当明确命名的内存/交接策略将某订阅者纳入屏障时，`FENCE_REQUIRED` 方可生效。其投递 ACK 携带订阅与操作身份；失败将阻止所属栅栏成功，并遵循有界重试/查询策略，不得针对已离线的节点无限重试。
 
-A successful local send/enqueue is not proof that the subscriber applied a
-push. It may refresh forwarding metadata, but it must not advance
-`observed_version`, renew the subscriber lease, or complete a
-`FENCE_REQUIRED` delivery. Only a qualified read snapshot or a matching
-application delivery ACK can establish the corresponding version. The current
-HINT-only production path therefore remains best-effort cache maintenance and
-must not be treated as a handoff barrier.
+本地发送/入队成功不代表订阅者已应用推送。它可以刷新转发元数据，但不得推进 `observed_version`、续期订阅者租约或完成 `FENCE_REQUIRED` 投递。仅有合格的读快照或匹配的应用层投递 ACK 才能确认对应版本。因此，当前仅使用 `HINT` 的生产路径仍属尽力而为的缓存维护，不能视为交接屏障。
 
-A normal committed G to G+1 replacement does not make a healthy subscriber
-`STALE`. `ROUTE_COMMIT` first publishes the successor as the current accepted
-snapshot for its `VmRouteScopeKey`; future subscriber sends resolve that
-successor. A delivery already holding a predecessor snapshot retains that
-snapshot reference until its attempt completes, then retries with the same
-subscription and semantic operation identity but refreshed forwarding metadata.
-For `FENCE_REQUIRED`, the delivery ticket is keyed by subscription and semantic
-operation identity, so an ACK after refresh completes the fence once rather
-than creating a second requirement. The directory subscriber registry owns this
-lookup and snapshot reference; page-lock code never performs a topology update.
+正常的 G -> G+1 路由提交替换不会导致健康订阅者变为 `STALE`。`ROUTE_COMMIT` 先将后继快照发布为对应 `VmRouteScopeKey` 的当前接受快照，后续订阅者发送即解析该后继快照。已持有前驱快照引用的在途投递保留该引用直至本次尝试结束，随后以相同的订阅身份与语义操作身份、但刷新的转发元数据重试。对于 `FENCE_REQUIRED`，投递凭据按订阅与语义操作身份索引，刷新后的 ACK 仅完成一次栅栏，不会派生第二份屏障要求。目录订阅者注册表负责该查找与快照引用管理；页锁内代码严禁执行拓扑更新。
 
-On VM `RETIRING`, the lifecycle coordinator requests removal of every
-subscriber record for the VM incarnation. On node/gateway failure or route
-scope retirement, the membership/route controller marks matching records stale
-before a new node can be admitted. Page-lock code captures records to update,
-then performs network send/removal outside the page lock.
+当 VM 进入 `RETIRING` 时，生命周期协调器请求移除该 VM 实例代次的全部订阅者记录。发生节点/Gateway 故障或路由作用域回收时，成员/路由控制器须在准入新节点之前将匹配记录标为 `STALE`。页锁内代码仅捕获待更新记录列表，网络发送与移除操作必须在页锁之外执行。
 
-The current fixed-size reorder window is an optimization only. Collision,
-overflow, or expiry must transition to `RESYNC`; it must not silently discard a
-page update and leave the page marked valid.
+现有固定大小的乱序重组窗口仅作为优化手段。发生冲突、溢出或过期时必须转入 `RESYNC`，不得静默丢弃页更新而继续将页标记为有效。
 
-### 4.6 Handoff Fence
+### 4.6 交接栅栏
 
-Before a `VCPU_RUN` handoff, the local QEMU/node runtime must drain every dirty page
-that the remote slice can observe. The required ordering is:
+在执行 `VCPU_RUN` 交接前，本地 QEMU/节点运行时必须排空远端执行片可观测到的所有脏页，严格遵循如下顺序：
 
 ```text
 capture dirty pages
@@ -364,175 +234,117 @@ capture dirty pages
   -> send VCPU_RUN
 ```
 
-This fence is per local QEMU connection and VM incarnation. It is not a global
-cluster barrier. Independent pages may remain asynchronous until a handoff,
-explicit strong-consistency policy, flush-like device operation, or shutdown
-requires a fence.
+该栅栏作用域为单个本地 QEMU 连接与 VM 实例代次，而非全局集群屏障。在交接、显式强一致策略、类 flush 设备操作或关机需要栅栏之前，相互独立的页可保持异步推进。
 
-`dirty-batch-size=1` means every captured dirty page enters the submit/fence
-policy immediately. It does not claim a stronger model than the ACK and
-handoff barriers actually supplied by this specification.
+`dirty-batch-size=1` 仅表示每个捕获的脏页立即进入提交/栅栏策略，不代表提供超出本规范实际 ACK 与交接屏障能力的更强一致性模型。
 
-## 5. Message and IPC Requirements
+## 5. 消息与 IPC 要求
 
-| Operation | Required wire/local message | QoS | Idempotency requirement |
+| 操作 | 必选网络/本地消息 | QoS | 幂等性要求 |
 | --- | --- | --- | --- |
-| Fault read | `MSG_MEM_READ` -> `MSG_MEM_ACK` with full payload | Request fast; response policy set by wire ABI | Same request ID returns same or newer authoritative snapshot. |
-| Dirty commit | `MSG_COMMIT_DIFF` -> commit ACK | Control/commit priority | Same request ID is deduplicated at the directory. |
-| Subscriber update | `MSG_PAGE_PUSH_DIFF` or `MSG_PAGE_PUSH_FULL` | Priority depends on handoff dependency | Applying same version twice is harmless. |
-| Recovery | `MSG_FORCE_SYNC` or explicit full read response | High priority correction | Replacing an older local copy is harmless. |
-| Handoff fence | Local IPC `COMMIT_DIFF_SYNC` plus explicit commit ACKs | High priority | Fence result is tied to a VM-scoped sequence, not `SYNC_MAGIC` alone. |
+| 缺页读取 | `MSG_MEM_READ` -> 携带完整载荷的 `MSG_MEM_ACK` | 请求走快路径；响应策略由传输 ABI 定义 | 同一请求 ID 返回相同或更新的权威快照。 |
+| 脏页提交 | `MSG_COMMIT_DIFF` -> 提交 ACK | 控制/提交优先级 | 目录按同一请求 ID 去重。 |
+| 订阅者更新 | `MSG_PAGE_PUSH_DIFF` 或 `MSG_PAGE_PUSH_FULL` | 优先级取决于交接依赖 | 重复应用同一版本无副作用。 |
+| 恢复 | `MSG_FORCE_SYNC` 或显式整页读响应 | 高优先级纠偏 | 覆盖更旧的本地副本无副作用。 |
+| 交接栅栏 | 本地 IPC `COMMIT_DIFF_SYNC` 加显式提交 ACK | 高优先级 | 栅栏结果绑定至 VM 作用域序号，不可仅凭 `SYNC_MAGIC`。 |
 
-The legacy `SYNC_MAGIC` marker overloads `MSG_PING` and `MSG_MEM_ACK`.
-Production fences must use typed, VM-incarnation-scoped records under the
-wire/local IPC specification; recognizing that marker cannot establish fence
-completion.
+历史 `SYNC_MAGIC` 标记复用了 `MSG_PING` 与 `MSG_MEM_ACK`。生产栅栏必须使用传输/本地 IPC 规范定义的强类型、VM 实例代次作用域记录，识别历史标记不可作为栅栏完成凭证。
 
-Legacy `MSG_MEM_WRITE` traffic carries no base version and cannot be
-the canonical multi-writer commit mechanism. It must be converted to the
-versioned commit contract or restricted to a documented single-writer,
-directory-authorized acceleration path.
+历史 `MSG_MEM_WRITE` 流量不携带 `base_version`，不能作为规范的多写入方提交机制。必须将其迁移至带版本号的提交契约，或限定于有文档定义的单写入方、目录授权加速路径。
 
-## 6. Concurrency and Backpressure
+## 6. 并发与背压
 
-### 6.1 Page and Request Locking
+### 6.1 页锁与请求锁
 
-- A directory page lock protects that page's bytes, version, and subscriber
-  mutation.
-- Lock order must be: manifest snapshot read, page lock, then local cache
-  bookkeeping. No code may acquire a second page lock while holding the first.
-- Route-map, gateway, QEMU-client, and queue locks are never acquired while a
-  directory page lock is held.
-- Request-completion state has its own lock or atomic protocol and is indexed
-  by a full VM-scoped request ID. Slot reuse requires generation validation.
+- 目录页锁保护单页的字节、版本号及订阅者变更。
+- 锁顺序必须严格遵守：清单快照读 -> 页锁 -> 本地缓存簿记。持有某一页锁时禁止再获取第二把页锁。
+- 持有目录页锁期间，严禁获取路由表锁、Gateway 锁、QEMU 客户端锁或队列锁。
+- 请求完成状态使用独立的锁或原子协议，以完整的 VM 作用域请求 ID 索引；槽位复用须校验代次。
 
-### 6.2 Normal-Path Parallelism
+### 6.2 常规路径并行性
 
-The normal path remains asynchronous and parallel:
+常规路径保持异步与并行：
 
-- Per-page or striped directory locks must permit unrelated pages to progress;
-  brief shard contention must not become a global wait spanning network I/O.
-- Dirty capture is decoupled from network transmission by bounded producer /
-  consumer queues or per-connection journals.
-- Gateway and node-runtime QoS queues preserve priority for control, ACK, and handoff
-  traffic without globally serializing page data.
-- Batched receive and grouped diff transmission remain allowed when they retain
-  each page's base-version ordering.
+- 逐页或分条（striped）目录锁必须允许无关页并行推进；短暂的分片争用不得演变为跨越网络 I/O 的全局等待。
+- 脏页捕获与网络发送之间通过有界生产者/消费者队列或每连接日志解耦。
+- Gateway 与节点运行时的 QoS 队列保障控制、ACK 与交接流量的优先级，同时不对页数据进行全局串行化。
+- 只要保留每页的基准版本顺序，允许批量接收与分组 diff 发送。
 
-These are required capabilities even when an implementation must add them.
-Implement asynchronous dirty capture, batching, and diff delivery under the
-version/fence contract; their absence is not a reason to weaken it. Document
-normal page/diff copies, queue bounds, and network round trips. A replacement
-mechanism must meet the same concurrency and visibility obligations.
+即便现有实现尚未补齐，异步脏页捕获、批处理与 diff 投递仍是本契约要求的能力，须在版本/栅栏契约下实现。实现须明确记录常规页/diff 拷贝次数、队列上限及网络往返次数；任何替代机制都必须满足同等的并发与可见性义务。
 
-Correctness changes must not replace this normal path with a global mutex,
-single global worker, disabled queue, or unconditional synchronous send.
+正确性修复不得以全局互斥锁、单一全局工作线程、禁用队列或无条件同步发送来替代常规并发路径。
 
-### 6.3 Bounded Backpressure
+### 6.3 有界背压
 
-If a dirty queue is full, allocation fails, or a required fence cannot complete:
+当脏页队列满、内存分配失败或必需的栅栏无法完成时：
 
-1. The page must not be silently dropped.
-2. The producer may synchronously submit that one page or pause the dependent
-   vCPU/handoff.
-3. The fallback must be bounded by timeout and return an explicit error.
-4. The result must leave the page either committed or `RESYNC`; it may not
-   pretend that a lost page is clean.
+1. 严禁静默丢弃脏页。
+2. 生产者可同步提交该单个页，或暂停依赖该页的 vCPU/交接。
+3. 回退操作必须受超时约束并返回显式错误。
+4. 结果必须使该页处于已提交或 `RESYNC` 状态，绝不可将丢失的页伪装为干净页。
 
-An emergency dirty-page direct-send fallback must carry the same canonical
-versioned commit semantics as the normal path; sending bytes alone must not
-mark the page clean or complete a dependent fence.
+紧急脏页直发回退必须承载与常规路径相同的规范带版本提交语义；仅发送字节本身不得将页标为干净，也不得完成依赖该页的栅栏。
 
-## 7. Failure, Retry, and Recovery
+## 7. 故障、重试与恢复
 
-| Condition | Required behavior |
+| 条件 | 必选行为 |
 | --- | --- |
-| Lost read request/reply | Retry with the same request ID until bounded timeout; do not install a partial payload. |
-| Lost commit ACK | Retry the same request ID; directory returns its recorded result without reapplying bytes. |
-| Duplicate commit | Return the original result when payload identity matches; reject same ID with different payload. |
-| Version mismatch | Directory rejects commit, sends or permits authoritative resync, client enters `RESYNC`. |
-| Push gap/queue collision | Client invalidates page validity and performs full resync before dependent execution. |
-| Stale epoch or manifest generation | Reject and resync/rejoin under the current manifest; do not reinterpret as a normal retry. |
-| Directory unavailable | Fault/commit fails after bounded timeout; dependent guest execution does not continue using an unconfirmed page. |
-| Local QEMU push barrier failure | Required commit/handoff reports failure; do not send dependent `VCPU_RUN`. |
-| Node/process restart | A node/agent/runtime obtains a new node or local-runtime instance ID, never a new VM incarnation. Existing required VM state pauses/fails under lifecycle policy; old subscriber records become `STALE` and old packets/request IDs are rejected. |
+| 读请求或回包丢失 | 使用同一请求 ID 重试直至有界超时；不得安装不完整载荷。 |
+| 提交 ACK 丢失 | 使用同一请求 ID 重试；目录返回已记录的结果，不重复应用字节。 |
+| 重复提交 | 载荷身份匹配时返回原结果；相同 ID 携带不同载荷则拒绝。 |
+| 版本不匹配 | 目录拒绝提交并发送或允许权威重同步，客户端转入 `RESYNC`。 |
+| 推送缺口/队列冲突 | 客户端使页失效，并在依赖执行继续前完成全量重同步。 |
+| epoch 或清单代次过期 | 拒绝并在当前清单下重同步/重新加入，不得按常规重试解释。 |
+| 目录不可用 | 缺页/提交在有界超时后失败；依赖该页的客户机执行不得使用未确认页继续运行。 |
+| 本地 QEMU 推送屏障失败 | 必需的提交/交接报告失败，不得发送依赖它的 `VCPU_RUN`。 |
+| 节点/进程重启 | 节点/代理/运行时获取新的节点或本地运行时实例 ID，绝不分配新的 VM 实例代次。受影响的必选 VM 状态按生命周期策略暂停或失败；旧订阅者记录变为 `STALE`，旧报文与旧请求 ID 被拒绝。 |
 
-Timeouts are liveness policy, not a reason to relax version checks. Retries
-must be bounded and logged with a rate limit.
+超时属于活性（liveness）策略，不得用于放宽版本校验。重试必须有界并做限速日志记录。
 
-## 8. Implementation Touchpoints and Requirements
+## 8. 实现触点与要求
 
-| File, symbol, or boundary | Required responsibility |
+| 文件、符号或边界 | 必选职责 |
 | --- | --- |
-| `master_core/logic_core.c` | Keep semantic authority in user space; align its paths with this state machine. |
-| `master_core/main_wrapper.c` | Preserve per-connection fence; make commit result/version explicit. |
-| `master_core/user_backend.c` | Namespace request records by VM incarnation and preserve full ACK payloads. |
-| `wavevm-qemu/accel/wavevm/wavevm-user-mem.c` | Keep capture mechanics backend-specific; obey the shared commit/fence contract. |
-| `slave_daemon/slave_hybrid.c` | Preserve async MPSC normal path; convert versionless fallback writes. |
-| `master_core/kernel_backend.c` | Remove semantic authority and module-global VM state; retain only context-scoped acceleration. |
+| `master_core/logic_core.c` | 将语义权威保留在用户态，使各路径与本状态机对齐。 |
+| `master_core/main_wrapper.c` | 保持每连接栅栏，显式化提交结果与版本号。 |
+| `master_core/user_backend.c` | 按 VM 实例代次隔离请求记录命名空间，保留完整 ACK 载荷。 |
+| `wavevm-qemu/accel/wavevm/wavevm-user-mem.c` | 将捕获机制保持为后端特定实现，遵守共享提交/栅栏契约。 |
+| `slave_daemon/slave_hybrid.c` | 保留异步 MPSC 常规路径，改造无版本回退写路径。 |
+| `master_core/kernel_backend.c` | 移除语义权威与模块级全局 VM 状态，仅保留上下文作用域加速。 |
 
-Required invariants across all affected paths:
+所有受影响路径须共同满足以下不变量：
 
-1. Commit ACKs must return typed status and the resulting page version;
-   a one-byte success marker cannot satisfy the commit contract.
-2. A full-page version catchup must carry explicit directory-authorized writer
-   lease or resync proof; it cannot bypass base-version validation.
-3. Dirty-page normal and emergency paths must use versioned commit semantics
-   or an explicitly specified directory-authorized acceleration path;
-   a versionless `MSG_MEM_WRITE` cannot independently authorize a mutation.
-4. Memory fences must be typed, VM-incarnation-scoped operations; `SYNC_MAGIC`
-   cannot overload unrelated message types as a production fence.
-5. Kernel-linked code must use derived context-scoped acceleration state and
-   must not duplicate user-space directory or route authority.
-6. Page-lock critical sections must release the lock before push or QEMU
-   notification delivery, under the ordering rules in Section 6.
-7. Subscribers must follow the identity, lease, expiry, and removal rules in
-   Section 4.5 before delivery can count toward a fence or safe identity reuse.
+1. 提交 ACK 必须返回强类型状态与结果页版本；单字节成功标记不能满足提交契约。
+2. 整页版本追赶必须携带显式的目录授权写入租约或重同步证明，不得绕过 `base_version` 校验。
+3. 脏页常规路径与紧急路径均须使用带版本提交语义，或经明确规范化的目录授权加速路径；无版本的 `MSG_MEM_WRITE` 不能独立授权变更。
+4. 内存栅栏必须是强类型、VM 实例代次作用域操作；`SYNC_MAGIC` 不得复用无关消息类型作为生产栅栏。
+5. 内核侧关联代码仅使用派生的上下文作用域加速状态，不得复制用户态目录或路由权威。
+6. 页锁临界区须遵循第 6 节的锁序规则，在执行推送或 QEMU 通知投递前释放页锁。
+7. 订阅者须满足第 4.5 节的身份、租约、过期与移除规则后，其投递方可计入栅栏或允许安全身份复用。
 
-Apply these requirements with targeted changes that preserve the normal
-concurrent data path described in Section 6.
+上述要求应通过精准改动落地，并保留第 6 节定义的常规并发数据路径。
 
-## 9. Compatibility Boundary
+## 9. 兼容性边界
 
-No legacy untyped memory write, generic ACK, guessed route, or global
-serialization workaround is a production alternative. Memory operations use
-the canonical VM-scoped identity, versioned commit result, subscriber lifetime,
-and fence contracts defined here and in the wire and accelerator specifications.
+生产环境不支持任何历史无类型内存写、通用 ACK、猜测路由或全局串行化变通方案。所有内存操作须严格遵守本文档以及传输与加速器规范定义的 VM 作用域身份、带版本提交结果、订阅者生命周期与栅栏契约。
 
-## 10. Acceptance Tests
+## 10. 验收测试
 
-The specification is accepted for implementation only when automated tests
-prove all of the following for both flat and fractal topology:
+仅当自动化测试在 Flat 与 Fractal 拓扑下同时验证以下全部项时，本规范方可视为通过验收：
 
-1. A remote page fault returns the correct 4 KiB page and matching version.
-2. Duplicate and delayed read replies cannot replace a newer local page.
-3. Two writes to the same page with the same base version yield one accepted
-   commit and one explicit resync/rejection.
-4. Duplicate commit retry produces one directory mutation and the same result
-   version.
-5. A dropped/reordered diff causes resync, never a valid stale page.
-6. A full authoritative directory push repairs a page gap.
-7. A remote vCPU handoff waits for all memory commits required by its local
-   causal boundary.
-8. Queue saturation does not drop a dirty page; it produces bounded
-   backpressure or an explicit failed handoff.
-9. Independent pages still make progress concurrently under load.
-10. KVM and TCG pass the same semantic tests, with only capture/fault
-    mechanics differing.
-11. VM A's page, request ID, subscriber update, or force-sync packet cannot
-    alter VM B.
-12. Minimum KVM guest tests include SSH/login plus evidence of remote memory
-    use and remote vCPU execution. Minimum TCG contract tests check bounded
-    real instruction execution and remote memory bytes/versions and completed
-    commits/fences; TCG guest boot/login/SSH belongs to Extended as defined in
-    `vcpu-handoff.md` Section 8.1. Process survival or listening sockets are
-    insufficient for either gate.
-13. A failed/rejoined subscriber, VM stop, route-scope retirement, and node
-   instance replacement leave bounded directory metadata. A rejoined receiver
-   obtains a full authoritative page before dependent execution.
-14. Replace one healthy gateway generation while a `FENCE_REQUIRED` subscriber
-    receives a page update. The subscriber remains active, the delivery may
-    refresh only forwarding metadata, and the fence completes exactly once.
+1. 远端缺页返回正确的 4 KiB 页与匹配的版本号。
+2. 重复或延迟到达的读回包无法覆盖更新的本地页。
+3. 基于同一基准版本对同一页发起两次写入时，产生一次接受提交与一次显式重同步/拒绝。
+4. 重复提交重试仅产生一次目录变更并返回相同的结果版本。
+5. 丢失或乱序的 diff 触发 `RESYNC`，绝不遗留被标记为有效的过期页。
+6. 目录发起的权威整页推送可修复页版本缺口。
+7. 远端 vCPU 交接等待其本地因果边界所需的全部内存提交完成。
+8. 队列饱和不会丢弃脏页，而是触发有界背压或显式交接失败。
+9. 负载下相互独立的页仍可并发推进。
+10. KVM 与 TCG 通过同一套语义测试，仅捕获/缺页机制不同。
+11. VM A 的页、请求 ID、订阅者更新或强制同步报文无法影响 VM B。
+12. Minimum KVM 客户机测试须包含 SSH/登录以及远端内存使用与远端 vCPU 执行的实证。Minimum TCG 契约测试须校验有界真实指令执行、远端内存字节/版本及已完成的提交/栅栏；TCG 客户机启动/登录/SSH 归属 `vcpu-handoff.md` 第 8.1 节定义的 Extended 门禁。进程存活或端口监听均不足以作为任一门禁的通过凭证。
+13. 订阅者故障/重连、VM 停止、路由作用域回收与节点实例替换后，目录元数据保持有界；重连的接收方在依赖执行前必须重新获取完整权威页。
+14. 在 `FENCE_REQUIRED` 订阅者接收页更新期间替换一代健康 Gateway：订阅者保持 `ACTIVE`，投递仅刷新转发元数据，且栅栏精确完成一次。
 
-Test logs and packet traces must be rate-limited and bounded. A test that fills
-an unbounded `/tmp` directory is not an acceptable regression test.
+测试日志与报文追踪必须限速且有界；导致 `/tmp` 目录无界增长的测试不能作为合格的回归测试。

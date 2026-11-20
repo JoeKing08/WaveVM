@@ -1,116 +1,88 @@
-# WaveVM Canonical Record Schema
+# WaveVM 规范记录结构定义（Canonical Record Schema）
 
-Status: normative implementation specification.
+状态：规范性实现规范。
 
-The [Document Maintenance](../wavevm-refactor-roadmap.md#document-maintenance)
-rules apply to this specification.
+本规范适用[文档维护规则](../wavevm-refactor-roadmap.md#文档维护规则)。
 
-Scope: exact V1 WVM-TLV schemas for control-plane, membership, route,
-admission, manifest, and local-runtime records. It completes the generic
-container defined by `wire-ipc-abi.md`. Memory, vCPU, and block data-plane
-payloads retain the schemas owned by their subsystem specifications.
+范围：控制面、成员管理、路由、准入、清单及本地运行时记录的精确 V1 WVM-TLV 结构定义。本规范补全 `wire-ipc-abi.md` 定义的通用容器；内存、vCPU 与块存储数据面载荷仍沿用各自子系统规范定义的结构定义。
 
-No implementation may invent a second JSON, environment-variable, or
-host-native structure as the semantic form of a record listed here. Human
-readable renderings are diagnostics only.
+任何实现均不得为本文列出的记录构造第二套 JSON、环境变量或宿主原生结构体作为语义承载形式。可读文本渲染仅用于诊断。
 
-## Subsystem Boundary Contract
+## 子系统边界契约
 
-This summary indexes the owning rules; it does not duplicate their definitions.
-Apply [baseline Section 0](../wavevm-architecture-baseline.md#0-architecture-authority-and-maintenance-contracts) to boundary changes.
+本节仅索引归属规则，不重复其详细定义。任何边界变更须遵守[架构基线第 0 节](../wavevm-architecture-baseline.md#0-架构权威与维护契约)。
 
-| Boundary | Required contract |
+| 边界 | 契约要求 |
 | --- | --- |
-| Responsibility and authority | This document owns canonical field/tag/type/order and digest rules, not membership, placement, or lifecycle decisions. Semantic validators remain with the record's domain owner. |
-| State and mutation | Codec buffers and decode results are caller/operation-owned; codecs never modify an inventory, reservation, route table, or VM state. Validate a full record before exposing it for domain mutation. |
-| Allowed implementation dependencies | Shared scalar/TLV primitives, bounded allocation, and digest utilities. No runtime/controller private structures, policy callbacks during decoding, or second JSON/native-layout schema. |
-| Interactions and lifetime | [Wire containers](wire-ipc-abi.md#13-wvm-envelope-v1) supply framing; this document supplies record bodies. Public encode/decode APIs declare copy/borrow ownership and result lifetime; domain validation follows successful decoding. |
-| Concurrency and cost | Independent records must be encodable/decodable concurrently. Bound bytes, nesting/list counts, workspace, and bulk copies; no global codec workspace shared between operations. |
-| Failure and verification | Reject malformed records atomically under Sections 1 and 3. Use [schema conformance](#5-schema-conformance-requirements); do not equate canonical validity with authorization or admission. |
+| 职责与权威 | 本文档负责规范字段、标签、类型、顺序与摘要规则，不负责成员、放置或生命周期决策。语义校验仍归各记录所属域的权威模块。 |
+| 状态与变更 | 编解码缓冲区与解码结果由调用方或所属操作持有；编解码器绝不修改资源清册、资源预留、路由表或 VM 状态。完整记录校验通过后方可交由业务域执行状态变更。 |
+| 允许的实现依赖 | 共享标量/TLV 原语、有界内存分配与摘要工具。不得依赖运行时/控制器私有结构、在解码期间回调策略逻辑，或引入第二套 JSON/原生布局 schema。 |
+| 交互与生命周期 | [线协议容器](wire-ipc-abi.md#13-wvm-envelope-v1)提供分帧，本文档提供记录体。公开的编解码 API 必须声明拷贝/借用所有权与结果生命周期；域语义校验须在解码成功后执行。 |
+| 并发与开销 | 独立记录必须支持并发编解码。须对字节数、嵌套深度/列表计数、工作区与大块拷贝施加界限；禁止在操作间共享全局编解码工作区。 |
+| 故障与验证 | 按第 1 节与第 3 节原子拒绝畸形记录，并通过[Schema 一致性要求](#5-schema-一致性要求)验证；规范编码合法不等同于已获授权或准入。 |
 
-## 1. Common Encoding Rules
+## 1. 通用编码规则
 
-Every record uses `CanonicalRecord` and `CanonicalField` from
-`wire-ipc-abi.md`, with `schema_version=1`. All fields appear in ascending tag
-order exactly once when present. `field_flags` is zero in V1. A field marked
-optional is omitted when absent; an omitted field has no implicit value unless
-this document explicitly gives one. Unknown, duplicate, out-of-order, wrong
-length, or invalid-enum fields reject the complete record before state changes.
+每条记录均采用 `wire-ipc-abi.md` 定义的 `CanonicalRecord` 与 `CanonicalField`，且 `schema_version=1`。所有存在的字段必须按 `field_tag` 严格升序排列且仅出现一次。V1 中 `field_flags` 恒为零。标记为可选（`?`）的字段缺失时直接省略；除非本文明确指定，省略字段无隐式默认值。出现未知字段、重复字段、乱序字段、长度错误或非法枚举值时，必须在产生任何状态变更前整条拒绝。
 
-The scalar aliases are:
+标量类型别名定义如下：
 
-| Alias | Canonical value |
+| 别名 | 规范编码值 |
 | --- | --- |
-| `U8`, `U16`, `U32`, `U64` | Exact-width unsigned big-endian integer. |
-| `Bool` | `U8`, exactly zero or one. |
-| `ID16`, `Digest32` | Exactly 16 or 32 raw bytes. |
-| `Addr` | Exactly 4 IPv4 bytes or 16 IPv6 bytes. |
-| `Text<N>` | UTF-8, at least one and at most `N` bytes, no NUL. |
-| `Record<T>` | Complete canonical bytes of record type `T`. |
-| `List<T, key>` | `U32 count`, followed by `count` pairs of `U32 element_bytes` and one canonical scalar value or complete `T` record, strictly ascending by the stated key with no duplicate key. |
-| `Set<T, key>` | `List<T, key>` whose members carry no positional meaning. |
+| `U8`、`U16`、`U32`、`U64` | 精确位宽的无符号大端整数。 |
+| `Bool` | `U8`，取值严格为 `0` 或 `1`。 |
+| `ID16`、`Digest32` | 精确 16 字节或 32 字节原始字节序列。 |
+| `Addr` | 精确 4 字节 IPv4 地址或 16 字节 IPv6 地址。 |
+| `Text<N>` | UTF-8 字符串，长度在 `1..N` 字节之间，禁止包含 NUL 字节。 |
+| `Record<T>` | 类型 `T` 的完整规范字节序列。 |
+| `List<T, key>` | `U32 count`，后接 `count` 组 `U32 element_bytes` 与单个规范标量值或完整 `T` 记录，按声明的 `key` 严格升序排列且无重复键。 |
+| `Set<T, key>` | 元素无位置语义的 `List<T, key>`。 |
 
-Every integer range in this document is inclusive. `vm_id=0` is reserved for
-authenticated cluster-scoped control records; a VM record
-uses `1..UINT32_MAX`. Timestamps use `U64 unix_time_ms`. Durations and
-retention horizons use `U64 milliseconds`.
+本文中所有整数范围均含上下界。`vm_id=0` 保留给经过认证的集群级控制记录；VM 记录取值为 `1..UINT32_MAX`。时间戳使用 `U64 unix_time_ms`，时长与保留窗口使用 `U64 milliseconds`。
 
-### 1.1 Digest Rule
+### 1.1 摘要计算规则
 
-A record digest is SHA-256 over its full canonical bytes, including the
-eight-byte record header. A record cannot hash its own final digest bytes.
-Therefore, a self-digest field is encoded as 32 zero bytes while calculating
-the digest and is replaced by the calculated value only in the transmitted or
-persisted record. Receivers zero that exact field before recomputing.
+记录摘要为完整规范字节序列（含 8 字节记录头）的 SHA-256。由于记录无法对自身最终摘要字节求哈希，计算自摘要字段时须先将该字段编码为 32 字节全零，计算完成后仅在传输或持久化记录中填入最终摘要值。接收方须先将该精确字段清零再重新计算校验。
 
-The V1 self-digest fields are:
+V1 规范中的自摘要字段如下：
 
-- `AdmissionEligibilityFence.tag=9` (`fence_digest`).
-- `PlacementPlan.tag=1` (`plan_digest`).
-- `CandidateVmManifest.tag=3` (`manifest_digest`).
-- The `snapshot_digest` field of every `RouteSnapshotKey` embedded by one
-  `RouteSnapshot` whose `{scope_key, topology_revision, route_generation}`
-  equals that snapshot's `RouteSnapshot.tag=1` identity. This includes the
-  top-level key and same-generation `RequiredAckEntry.expected_snapshot_key`
-  references in its required/optional ACK sets. Predecessor keys and keys for
-  a different identity retain their final digest unchanged.
+- `AdmissionEligibilityFence.tag=9`（`fence_digest`）。
+- `PlacementPlan.tag=1`（`plan_digest`）。
+- `CandidateVmManifest.tag=3`（`manifest_digest`）。
+- 单个 `RouteSnapshot` 中所有内嵌 `RouteSnapshotKey` 的 `snapshot_digest` 字段——前提是该键的 `{scope_key, topology_revision, route_generation}` 与该快照 `RouteSnapshot.tag=1` 的身份一致。这既包含顶层键，也包含其必选/可选 ACK 集合中同代次的 `RequiredAckEntry.expected_snapshot_key` 引用。前驱键及指向其他身份的键保留其最终摘要不变。
 
-A predecessor `RouteSnapshotKey`, a route key in another record, and every
-ordinary digest field contain their final nonzero digest and are included
-unchanged in the enclosing digest.
+前驱 `RouteSnapshotKey`、其他记录中的路由键以及所有普通摘要字段均携带其最终非零摘要，并在计算外层记录摘要时原样计入。
 
-## 2. Record Registry
+## 2. 记录注册表
 
-The following registry is exhaustive for V1 control-plane records. The field
-column gives `tag:type:name`; `?` denotes an optional field. Nested records and
-lists use the rules in Section 1.
+下表穷举了 V1 规范的全部控制面记录。字段列采用 `tag:type:name` 格式，`?` 表示可选字段；嵌套记录与列表遵循第 1 节规则。
 
-The V1 enum registry is:
+V1 枚举注册表：
 
-| Field family | Values |
+| 字段族 | 合法取值 |
 | --- | --- |
-| `data_transport` | `1=UDP`, `2=QUIC_DATAGRAM`. |
-| `control_transport` | `1=UNIX_STREAM`, `2=TLS_TCP`, `3=QUIC_STREAM`. |
-| `role_type` | `1=NODE_RUNTIME`, `2=GATEWAY`, `3=QEMU_FRONTEND`, `4=EXECUTOR`, `5=KERNEL_CONTEXT`. |
-| membership state | `1=PENDING`, `2=VALIDATING`, `3=PREPARED`, `4=ACTIVE`, `5=CORDONED`, `6=DRAINING`, `7=REMOVED`, `8=FAILED`. |
-| health state | `1=HEALTHY`, `2=SUSPECT`, `3=UNREACHABLE`, `4=RECOVERING`. |
-| backend / backend policy | Backend: `1=KVM`, `2=TCG`. Policy: `1=AUTO`, `2=REQUIRE_KVM`, `3=REQUIRE_TCG`. |
-| accelerator policy | `1=DISABLED`, `2=PREFER_KERNEL_ACCEL`, `3=REQUIRE_KERNEL_ACCEL`. |
-| placement policy | `1=COMPACT`, `2=SPREAD`. |
-| host constraint kind | `1=PHYSICAL_NODE`, `2=FAILURE_DOMAIN`, `3=CAPABILITY`, `4=LABEL`. |
-| host constraint operator | `1=EQUALS`, `2=NOT_EQUALS`. |
-| guest topology policy | `1=FLAT`, `2=PLACEMENT_NUMA`, `3=SYNTHETIC_NUMA`. |
-| namespace ABI | `1=LEGACY`, `2=V1_U32`. |
-| reservation state | `1=PREPARED`, `2=COMMITTED`, `3=RELEASING`, `4=RELEASED`. |
-| activation decision | `1=ACTIVATE`, `2=ABORT`. |
-| startup dependency kind | `1=REQUIRED_MEMBER`. |
-| capability state | `1=UNPROBED`, `2=PROBING`, `3=AVAILABLE`, `4=UNAVAILABLE`, `5=DEGRADED`. |
-| capability ID | `1=EXECUTION_KVM`, `2=EXECUTION_TCG`, `3=MODE_B_MEMORY`, `4=V1_VM_ID_U32`, `5=KERNEL_ACCELERATION`. |
-| route topology kind | `1=FLAT`, `2=FRACTAL`. |
-| route transaction state | `1=PREPARING`, `2=ACTIVATED`, `3=RETIRING`, `4=RETIRED`, `5=ABORTED`. |
-| gateway drain action | `1=PREPARE`, `2=COMMIT`, `3=ABORT`. |
+| `data_transport` | `1=UDP`, `2=QUIC_DATAGRAM`。 |
+| `control_transport` | `1=UNIX_STREAM`, `2=TLS_TCP`, `3=QUIC_STREAM`。 |
+| `role_type` | `1=NODE_RUNTIME`, `2=GATEWAY`, `3=QEMU_FRONTEND`, `4=EXECUTOR`, `5=KERNEL_CONTEXT`。 |
+| membership state | `1=PENDING`, `2=VALIDATING`, `3=PREPARED`, `4=ACTIVE`, `5=CORDONED`, `6=DRAINING`, `7=REMOVED`, `8=FAILED`。 |
+| health state | `1=HEALTHY`, `2=SUSPECT`, `3=UNREACHABLE`, `4=RECOVERING`。 |
+| backend / backend policy | Backend: `1=KVM`, `2=TCG`。Policy: `1=AUTO`, `2=REQUIRE_KVM`, `3=REQUIRE_TCG`。 |
+| accelerator policy | `1=DISABLED`, `2=PREFER_KERNEL_ACCEL`, `3=REQUIRE_KERNEL_ACCEL`。 |
+| placement policy | `1=COMPACT`, `2=SPREAD`。 |
+| host constraint kind | `1=PHYSICAL_NODE`, `2=FAILURE_DOMAIN`, `3=CAPABILITY`, `4=LABEL`。 |
+| host constraint operator | `1=EQUALS`, `2=NOT_EQUALS`。 |
+| guest topology policy | `1=FLAT`, `2=PLACEMENT_NUMA`, `3=SYNTHETIC_NUMA`。 |
+| namespace ABI | `1=LEGACY`, `2=V1_U32`。 |
+| reservation state | `1=PREPARED`, `2=COMMITTED`, `3=RELEASING`, `4=RELEASED`。 |
+| activation decision | `1=ACTIVATE`, `2=ABORT`。 |
+| startup dependency kind | `1=REQUIRED_MEMBER`。 |
+| capability state | `1=UNPROBED`, `2=PROBING`, `3=AVAILABLE`, `4=UNAVAILABLE`, `5=DEGRADED`。 |
+| capability ID | `1=EXECUTION_KVM`, `2=EXECUTION_TCG`, `3=MODE_B_MEMORY`, `4=V1_VM_ID_U32`, `5=KERNEL_ACCELERATION`。 |
+| route topology kind | `1=FLAT`, `2=FRACTAL`。 |
+| route transaction state | `1=PREPARING`, `2=ACTIVATED`, `3=RETIRING`, `4=RETIRED`, `5=ABORTED`。 |
+| gateway drain action | `1=PREPARE`, `2=COMMIT`, `3=ABORT`。 |
 
-| Type | Record | Fields |
+| 类型码 | 记录名 | 字段定义 |
 | --- | --- | --- |
 | `0x1001` | `Endpoint` | `1:U16:data_transport`, `2:Addr:data_address`, `3:U16:data_port`, `4:U16:control_transport`, `5:Addr:control_address?`, `6:U16:control_port`, `7:Text<253>:server_name?`, `8:Text<107>:control_socket_path?` |
 | `0x1002` | `MemberKey` | `1:U16:role_type`, `2:U32:role_id`, `3:U64:instance_id` |
@@ -165,172 +137,38 @@ The V1 enum registry is:
 | `0x1033` | `ClusterAdmissionAckEntry` | `1:Record<MemberKey>:member_key`, `2:Record<Endpoint>:endpoint`, `3:U16:role_type` |
 | `0x1034` | `ClusterAdmissionAckSet` | `1:List<ClusterAdmissionAckEntry, member_key>:entries` |
 
-## 3. Cross-Record Constraints
+## 3. 跨记录约束
 
-- `Endpoint.data_transport` and `Endpoint.control_transport` are explicitly
-  selected from the transport registry. `data_port` and `control_port` are
-  nonzero. `control_address` defaults only to the already present
-  `data_address`; it may not default to an unrelated hostname or source address.
-  `UNIX_STREAM` endpoints require an absolute `control_socket_path` and reject
-  that field for network stream transports. The path is a filesystem Unix
-  socket path limited to 107 UTF-8 bytes; it is not a substitute for
-  `server_name` and does not make a remote node locally reachable.
-- `RequiredAckSet.entries_digest` is SHA-256 over the complete entries list
-  value. When the set is embedded by a `RouteSnapshot`, any entry whose
-  expected key identifies that enclosing snapshot is normalized by zeroing its
-  `snapshot_digest` before this list hash and before the enclosing snapshot
-  self-digest are calculated. The transmitted entry still carries the final
-  snapshot digest. A standalone ACK set or a route transaction's ACK set uses
-  final expected-key digests unchanged. `RouteSnapshot.required_ack_set` must
-  match the transaction and eligibility-fence digest that prepared it.
-- `RuntimeDispatchProjection` is a node-local dispatch cache derived from
-  exactly one admitted `CandidateVmManifest`, activated
-  `NodeRuntimeManifest`, canonical node-record set, and immutable route
-  snapshot. It is not an additional placement, membership, or route authority.
-  Its candidate digest, node instance, activation fence, and route snapshot key
-  must exactly equal the manifest accepted by the local node runtime. Its
-  topology kind and every local, CPU, directory, and executor destination are
-  complete V1 route keys: flat destinations use `{FLAT_VNODE, 0, vnode}` and
-  fractal destinations use `{FRACTAL_VNODE, pod_or_prefix, vnode}`. A route
-  scope must not be discarded while publishing, loading, or looking up this
-  projection. Every memory mapping also retains its selected directory's
-  physical-node and node-instance authority, which a returned memory ACK must
-  match before it can install an authoritative page.
-- Production dispatch consumers must accept supported complete flat/fractal
-  keys or reject an unsupported projection before activation. A flat-only
-  adapter cannot flatten a hierarchical route, guess endpoints, or establish
-  a separate production launch path.
-- `CandidateVmManifest.execution_plan.backend` and every
-  `PlacementPlan.vcpu_assignments[].backend` must agree. A VM may use KVM or
-  TCG, but never a mixed vCPU backend in one admitted incarnation.
-  `VmRequest.execution_backend_policy=AUTO` is resolved KVM-first and may
-  produce a new TCG plan only before activation; `fallback_decision` records
-  that result and its diagnostic reason. `MemoryChunkAssignment` has no KVM or
-  TCG backend field because memory placement is backend-neutral subject to the
-  selected memory capability/profile and route.
-- `GatewayDrainRequest.target_gateway_member_key` is a `GATEWAY` key and all
-  three expected revisions are nonzero exact fences. Fields six and seven are
-  present exactly for `action=PREPARE`; they are absent for `COMMIT` and
-  `ABORT`. The prepare transaction operation ID must equal field eight, the
-  transaction and snapshot keys must be identical, and the successor snapshot's
-  membership revision must equal field three. The successor material is a
-  complete immutable replacement route, not a reference to mutable gateway
-  cache state.
-- `MemberCordonRequest.target_member_key` is a `NODE_RUNTIME` or `GATEWAY`
-  key. All three expected revisions are nonzero exact fences, and
-  `reason_code` is a nonzero implementation-independent audit code. Cordon
-  advances membership and admission-eligibility revisions by one while
-  leaving topology revision unchanged. It changes only an `ACTIVE` member to
-  `CORDONED`; a retry with the old fence is accepted only when the target is
-  already `CORDONED` and all three post-state revisions match exactly.
-- `RouteSnapshotKey.snapshot_digest` is a self-digest only when it identifies
-  the enclosing `RouteSnapshot`. Its digest preimage zeros every self-reference
-  described in Section 1.1, then inserts one final digest into each such
-  reference. This avoids a hash cycle while requiring every ACK entry to bind
-  the exact final snapshot key. A predecessor or unrelated snapshot key is not
-  zeroed.
-- `GatewayRecord.hosting_physical_node_id` names an existing `NodeRecord`.
-  `failure_domain_id` must equal that host's failure domain for a co-located
-  gateway role; a distinct value is valid only for a separately registered
-  external gateway host.
-- `NodeRecord.physical_host_id` is the stable host-group identity used for
-  correlated failure and aggregate resource accounting. It may be shared by
-  multiple compute records and gateway records, but `physical_node_id` remains
-  unique per resource provider. `physical_host_id` is never derived from an
-  IP address, hostname, or endpoint equality.
-- `NodeRecord.node_instance_namespace` and
-  `NodeRuntimeProfile.node_instance_namespace` must match. Every endpoint,
-  port-pool entry, local Unix socket, shared-memory name, log path, and
-  temporary path allocated to a node instance is scoped by this namespace and
-  by an explicit lease owner. A duplicate host-wide port/path or a missing
-  instance parameter rejects registration or admission; hard-coded defaults
-  are not valid production inputs.
-- `AdmissionEligibilityFence.selected_members` is the complete member set used
-  by the plan. Every plan participant, route-ACK member, reservation owner,
-  QEMU host, and executor must appear in it with its exact instance and
-  capability digest.
-- `PlacementPlan` and `CandidateVmManifest` must describe the same identity,
-  fence, host, assignments, reservation requirements/IDs, and route scope.
-  Each guest vCPU index appears once; memory assignments are page-aligned,
-  nonoverlapping, and cover the requested memory exactly once.
-- `CandidateVmManifest.plan_digest` must equal the complete placement-plan
-  digest. `namespace_abi=V1_U32` requires every selected participant to
-  advertise `WVM_CAP_VM_ID_U32`; `LEGACY` requires `vm_id <= 255`.
-- `LocalNameNamespace.derivation_salt_digest` is calculated before
-  `CandidateVmManifest.manifest_digest` from the allocated `manifest_id`,
-  `admission_tx_id`, VM identity/generation, and target physical node. The
-  final candidate digest validates the resulting namespace; it must not be an
-  input to that same namespace derivation.
-- `ReservationRequirement` is immutable plan/candidate input. It names the
-  reservation ID, exact expected node/inventory, capacity amounts, and leases
-  before either parent self-digest is finalized. A `ResourceReservation` is
-  derived only after the final plan and candidate digests exist; it must match
-  one requirement exactly. This avoids a plan/candidate self-reference cycle
-  while retaining durable reservation-to-manifest binding.
-- `NodeRuntimeManifest` records are derived after the candidate digest is
-  final. They carry that digest but their own digests are not fields of the
-  candidate, which prevents a candidate/node-manifest hash cycle.
-- A `ResourceReservation` changes from `PREPARED` to `COMMITTED` only through
-  the `COMMIT_RESERVATION` operation and a matching `ActivationRecord`.
-  `activation_fence` is absent before that transition and mandatory afterwards.
-- `ActivationRecord.decision=ACTIVATE` requires `activation_fence` and is the
-  durable admission decision. `ActivationRecord.decision=ABORT` omits
-  `activation_fence` and is valid only before one is durable. `COMMITTED` is a
-  later lifecycle state reached after all required participant promotions have
-  been acknowledged.
-- `AdmissionReservationStage` and `AdmissionParticipantStage` are envelope
-  payload carriers, not independent admission authorities. `PREPARE_*` carries
-  a `PREPARED` reservation or a non-activated runtime projection with neither
-  field three nor field four. `COMMIT_RESERVATION` carries the committed
-  reservation and the exact durable `ACTIVATE` record. `ACTIVATE_MANIFEST`
-  carries the activation-fenced runtime projection and that same exact
-  `ACTIVATE` record. `ABORT_*` carries the unactivated object and a nonzero
-  implementation-independent abort reason, without an activation record.
-  Every embedded candidate must match the reservation/projection identity,
-  transaction, candidate digest, eligibility fence, and VM identity exactly.
-- `NodeRuntimeManifest` is a filtered projection of exactly one candidate
-  manifest. It contains only assignments on `physical_node_id`; its
-  `candidate_manifest_digest`, route key, profile, and reservation must match
-  the authoritative candidate. Its `launch_plan` is controller-selected:
-  machine and consistency fields exactly equal the candidate, guest memory
-  equals the complete admitted placement total, and local executor ports are
-  implementation-local rather than route or membership identities.
-- The durable control-plane projection set contains exactly one activated
-  `NodeRuntimeManifest` for each candidate `ReservationRequirement`, keyed by
-  candidate digest plus physical node, expected node instance, and reservation
-  ID. Identical canonical replay is idempotent; a conflicting duplicate is
-  rejected. Lifecycle `COMMITTED` requires that complete set and matching
-  durable `ACTIVATE` fence, not merely in-memory projections.
-- `StartupDependency.dependency_digest` is SHA-256 over the canonical
-  `StartupDependency` record with tag 4 encoded as 32 zero bytes. The final
-  record carries the calculated digest. A node runtime uses this digest to bind
-  its prepared peer-state evidence to the exact dependency record.
-- `CapabilityRef.profile_digest` is SHA-256 over
-  `WVM-CAPABILITY-PROFILE-V1`, the big-endian physical-node ID,
-  node-instance ID, profile generation, record count, and the SHA-256
-  digests of the complete strictly ordered `CapabilityRecord` set for that
-  node. The set order is `(capability_id, provider_instance_id)`. A profile
-  contains unavailable/degraded evidence as well as available evidence; a
-  scheduler chooses only the required `AVAILABLE` records from the matched
-  profile.
-- The V1 member-key derivation is explicit where no independently registered
-  child process exists: a compute `NodeRecord` is represented as
-  `{role_type=NODE_RUNTIME, role_id=physical_node_id,
-  instance_id=node_instance_id}`. A `GatewayRecord` is represented as
-  `{role_type=GATEWAY, role_id=gateway_id,
-  instance_id=gateway_instance_id}`. QEMU/executor/kernel process identities
-  are created only during manifest preparation and cannot be substituted into
-  a route ACK set.
-- `RejoinMemberRequest.member_record` derives the new member key; it never
-  carries a second caller-selected current identity. When
-  `prior_member_key` is present, it has the same role type and stable role ID
-  as the derived key but a different instance ID. `recovery_evidence_digest`
-  is nonzero audit evidence only: it cannot rebind a running V1 VM, route,
-  reservation, or runtime manifest to the new instance.
+- `Endpoint.data_transport` 与 `Endpoint.control_transport` 必须从传输枚举注册表中显式选取，且 `data_port` 与 `control_port` 均非零。`control_address` 省略时仅默认回退到已存在的 `data_address`，不得回退到无关主机名或报文源地址。`UNIX_STREAM` 端点要求携带绝对路径 `control_socket_path`（文件系统 Unix 套接字路径，上限 107 UTF-8 字节），网络流传输则必须拒绝该字段；该路径不可替代 `server_name`，也不使远端节点变为本地可达。
+- `RequiredAckSet.entries_digest` 为完整 `entries` 列表值的 SHA-256。当该集合内嵌于 `RouteSnapshot` 中时，凡 `expected_snapshot_key` 指向外层快照本身的表项，均须先将 `snapshot_digest` 置零，再计算此列表哈希与外层快照自摘要；实际传输的表项仍携带最终快照摘要。独立 ACK 集合或路由事务中的 ACK 集合直接保留最终期望键摘要。`RouteSnapshot.required_ack_set` 必须与准备该快照的事务及资格栅栏摘要一致。
+- `RuntimeDispatchProjection` 是由单个已准入 `CandidateVmManifest`、已激活 `NodeRuntimeManifest`、规范节点记录集和不可变路由快照共同派生的节点本地分发缓存，不是独立的放置、成员或路由权威。其候选摘要、节点实例、激活栅栏与路由快照键必须与本地节点运行时接受的清单完全一致。其拓扑类型以及所有本地、CPU、目录和执行器目标均为完整 V1 路由键：Flat 目标使用 `{FLAT_VNODE, 0, vnode}`，Fractal 目标使用 `{FRACTAL_VNODE, pod_or_prefix, vnode}`。发布、加载或查找此投影时不得丢弃路由作用域。每条内存映射还须保留所选页目录的物理节点与节点实例权威信息，接收内存 ACK 安装权威页前必须核验匹配。
+- 生产分发消费端必须接受受支持的完整 Flat/Fractal 路由键，或在激活前拒绝不支持的投影。仅支持 Flat 的适配器不得拍平层级路由、猜测端点或另起独立的生产启动路径。
+- `CandidateVmManifest.execution_plan.backend` 与每条 `PlacementPlan.vcpu_assignments[].backend` 必须一致。单个已准入 VM 实例代次只能统一使用 KVM 或统一使用 TCG，严禁混用 vCPU 后端。`VmRequest.execution_backend_policy=AUTO` 按 KVM 优先解析，仅可在激活前生成新的 TCG 计划，并由 `fallback_decision` 记录结果及诊断原因。`MemoryChunkAssignment` 不含 KVM/TCG 后端字段，因为内存放置在满足所选内存能力/画像及路由约束的前提下与执行后端无关。
+- `GatewayDrainRequest.target_gateway_member_key` 必须是 `GATEWAY` 键，三个期望版本号均为非零精确栅栏。字段 6 与字段 7 仅在 `action=PREPARE` 时存在，在 `COMMIT` 与 `ABORT` 时必须省略。准备事务的 `operation_id` 必须等于字段 8，事务与快照的键必须一致，且后继快照的 `membership_revision` 必须等于字段 3。后继材料必须是完整的不可变替换路由，而非对网关可变缓存状态的引用。
+- `MemberCordonRequest.target_member_key` 必须是 `NODE_RUNTIME` 或 `GATEWAY` 键，三个期望版本号均为非零精确栅栏，`reason_code` 为非零且实现无关的审计码。隔离（cordon）操作使成员版本与准入资格版本各递增 1，保持拓扑版本不变，且仅允许将 `ACTIVE` 成员转为 `CORDONED`；使用旧栅栏重试仅在目标已处于 `CORDONED` 且三个后置版本号完全匹配时接受。
+- `RouteSnapshotKey.snapshot_digest` 仅在标识外层 `RouteSnapshot` 时作为自摘要处理：先按第 1.1 节清零所有自引用，计算后将最终摘要回填至每一处自引用。这既避免哈希环，又确保每个 ACK 表项精确绑定最终快照键。前驱或无关快照键不得清零。
+- `GatewayRecord.hosting_physical_node_id` 必须指向已存在的 `NodeRecord`。共置部署的网关其 `failure_domain_id` 须与宿主节点故障域一致；仅当网关托管于独立注册的外部网关宿主机时，才允许使用不同的故障域值。
+- `NodeRecord.physical_host_id` 是用于关联故障域与聚合资源核算的稳定物理主机组标识。多个计算节点记录与网关记录可共享同一 `physical_host_id`，但 `physical_node_id` 在每个资源提供者维度保持唯一。`physical_host_id` 绝不由 IP 地址、主机名或端点相等性推导。
+- `NodeRecord.node_instance_namespace` 与 `NodeRuntimeProfile.node_instance_namespace` 必须一致。分配给节点实例的每个端点、端口池表项、本地 Unix 套接字、共享内存名、日志路径与临时路径均须受该命名空间与显式租约所有者约束。宿主机范围内出现重复端口/路径或缺失实例参数时直接拒绝注册或准入；硬编码默认值不可作为生产输入。
+- `AdmissionEligibilityFence.selected_members` 是计划所用的完整成员集合。计划的每个参与者、路由 ACK 成员、资源预留所有者、QEMU 宿主机与执行器均须以精确的实例 ID 与能力摘要出现在该集合中。
+- `PlacementPlan` 与 `CandidateVmManifest` 必须描述一致的身份、栅栏、宿主机、分配方案、预留需求/ID 以及路由作用域。每个 Guest vCPU 索引恰好出现一次；内存分配须页对齐、互不重叠，且精确覆盖全部请求内存。
+- `CandidateVmManifest.plan_digest` 必须等于完整放置计划的摘要。`namespace_abi=V1_U32` 要求所有选定参与者均已声明 `WVM_CAP_VM_ID_U32`；`LEGACY` 要求 `vm_id <= 255`。
+- `LocalNameNamespace.derivation_salt_digest` 必须在 `CandidateVmManifest.manifest_digest` 之前，依据已分配的 `manifest_id`、`admission_tx_id`、VM 身份/代次及目标物理节点计算得出。最终候选摘要用于校验生成结果，不得反过来作为同一命名空间派生的输入。
+- `ReservationRequirement` 是不可变的计划/候选输入，在父记录自摘要定型前即确定预留 ID、期望节点/清册版本、容量额度及独占租约。`ResourceReservation` 仅在最终计划摘要与候选摘要确定后派生，并须与某条需求精确匹配。这既避免了计划/候选之间的自引用环，又保持了预留与清单的持久化绑定。
+- `NodeRuntimeManifest` 在候选摘要定型后派生，其内部携带该候选摘要，但自身摘要不纳入候选清单字段，从而避免候选清单与节点清单之间的哈希环。
+- `ResourceReservation` 仅可通过 `COMMIT_RESERVATION` 操作配合匹配的 `ActivationRecord` 从 `PREPARED` 转为 `COMMITTED`。该转换前必须省略 `activation_fence`，转换后则必填。
+- `ActivationRecord.decision=ACTIVATE` 必填 `activation_fence`，代表持久化的准入决策；`ActivationRecord.decision=ABORT` 省略 `activation_fence`，且仅在尚无持久化激活栅栏时合法。`COMMITTED` 则是后续生命周期状态，须在全部必需参与者提升确认完成后方可到达。
+- `AdmissionReservationStage` 与 `AdmissionParticipantStage` 仅为信封载荷载体，不具备独立准入权威。`PREPARE_*` 携带 `PREPARED` 预留或未激活的运行时投影，且同时省略字段 3 与字段 4；`COMMIT_RESERVATION` 携带已提交预留与精确的持久化 `ACTIVATE` 记录；`ACTIVATE_MANIFEST` 携带含激活栅栏的运行时投影与同一 `ACTIVATE` 记录；`ABORT_*` 携带未激活对象与非零且实现无关的中止原因，且不含激活记录。每条内嵌候选清单均须与预留/投影的身份、事务、候选摘要、资格栅栏和 VM 身份严格一致。
+- `NodeRuntimeManifest` 是单个候选清单的过滤投影，仅包含归属 `physical_node_id` 的分配项；其 `candidate_manifest_digest`、路由键、能力画像与预留 ID 须与权威候选清单匹配。其 `launch_plan` 由控制器选定：机型与一致性字段与候选清单完全一致，Guest 总内存等于已准入放置总和，本地执行器端口属于本地实现参数而非路由或成员身份。
+- 控制面持久化投影集须为候选清单中的每条 `ReservationRequirement` 保存恰好一条已激活的 `NodeRuntimeManifest`，按候选摘要、物理节点、期望节点实例与预留 ID 联合索引。完全一致的规范重放具备幂等性，冲突重复项直接拒绝。生命周期进入 `COMMITTED` 必须具备该完整持久化集合及匹配的持久化 `ACTIVATE` 栅栏，而不仅依赖内存态投影。
+- `StartupDependency.dependency_digest` 为规范 `StartupDependency` 记录将 tag 4 置为 32 字节全零后的 SHA-256，最终记录填入该计算值。节点运行时据此将本地准备好的对端状态证据精确绑定到依赖记录。
+- `CapabilityRef.profile_digest` 是依次对 `WVM-CAPABILITY-PROFILE-V1`、大端 `physical_node_id`、`node_instance_id`、`profile_generation`、记录计数以及该节点完整且严格排序的 `CapabilityRecord` 集合各条摘要计算得到的 SHA-256，集合按 `(capability_id, provider_instance_id)` 升序排列。能力画像同时包含不可用/降级与可用证据；调度器仅从匹配画像中选用所需的 `AVAILABLE` 记录。
+- 在无独立注册子进程时，V1 成员键派生规则如下：计算节点 `NodeRecord` 映射为 `{role_type=NODE_RUNTIME, role_id=physical_node_id, instance_id=node_instance_id}`；网关 `GatewayRecord` 映射为 `{role_type=GATEWAY, role_id=gateway_id, instance_id=gateway_instance_id}`。QEMU、执行器与内核进程身份仅在清单准备阶段创建，不得替换进入路由 ACK 集合。
+- `RejoinMemberRequest.member_record` 唯一决定新成员键，绝不接受调用方另行指定的当前身份。当 `prior_member_key` 存在时，其 `role_type` 与稳定 `role_id` 须与新派生键一致，但 `instance_id` 必须不同。`recovery_evidence_digest` 仅为非零审计证据，不能将运行中的 V1 VM、路由、资源预留或运行时清单重新绑定到新实例。
 
-## 4. Canonical Examples
+## 4. 规范示例
 
-The following two-node VM is the normative human-readable fixture:
+以下双节点 VM 为可读的规范测试夹具：
 
 ```text
 VmRequest:
@@ -352,8 +190,7 @@ CandidateVmManifest:
                                  topology_revision: 7, generation: 1 }
 ```
 
-An `Endpoint` in that fixture, with data UDP `10.0.0.1:9000` and independent
-control TLS/TCP `10.0.0.1:9001`, has this exact preimage TLV encoding:
+该夹具中数据面为 UDP `10.0.0.1:9000`、独立控制面为 TLS/TCP `10.0.0.1:9001` 的 `Endpoint` 精确 TLV 原像编码如下：
 
 ```text
 00 01 10 01 00 00 00 40
@@ -365,7 +202,7 @@ control TLS/TCP `10.0.0.1:9001`, has this exact preimage TLV encoding:
 00 06 00 00 00 00 00 02 23 29
 ```
 
-A normal gateway replacement uses the following route transaction fixture:
+常规网关替换使用如下路由事务夹具：
 
 ```text
 RouteTransaction:
@@ -379,22 +216,14 @@ RouteTransaction:
     [ { member: gateway/2/instance-21, endpoint: gateway2-control } ]
 ```
 
-The successor's `RequiredAckSet` deliberately excludes departing gateway 2.
-At `ROUTE_COMMIT`, every sender resolves the current route for the stable
-scope; it may refresh its forwarding metadata to generation 2 while retaining
-the original semantic operation key and payload digest.
+后继快照的 `RequiredAckSet` 刻意排除了正在退出的网关 2。在 `ROUTE_COMMIT` 时，所有发送方均按稳定作用域解析当前路由，可将转发元数据刷新至代次 2，同时保留原有的语义操作键与载荷摘要。
 
-## 5. Schema Conformance Requirements
+## 5. Schema 一致性要求
 
-At minimum, tests must:
+测试套件至少须覆盖以下验证：
 
-1. Encode every registry record in two independent implementations and compare
-   bytes and digests.
-2. Reject every duplicate, reordered, unknown, wrong-width, invalid-enum, and
-   invalid-list-order field.
-3. Verify the self-digest zeroing rule for candidate manifests and route
-   snapshots.
-4. Verify that a normal G to G+1 replacement preserves semantic operation
-   identity while producing a valid successor endpoint/control ACK set.
-5. Verify V1 allocation above 255 only when all required participants advertise
-   the V1 U32 VM-ID capability.
+1. 使用两套独立实现分别编码注册表中的全部记录，并比对输出字节流与摘要完全一致。
+2. 拒绝所有重复字段、乱序字段、未知字段、位宽错误、非法枚举及列表排序违规输入。
+3. 验证候选清单与路由快照的自摘要清零计算规则。
+4. 验证常规 G 到 G+1 路由替换在保留语义操作身份的同时，生成合法的后继端点与控制面 ACK 集合。
+5. 验证仅当全部必需参与者均已声明 V1 `u32` `vm_id` 能力时，才允许分配大于 255 的 V1 `vm_id`。

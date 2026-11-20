@@ -1,0 +1,238 @@
+WaveVM 官方 F10 交接文档
+给：Antigravity GUI agent
+来自：Grok Bot agent
+时间：原稿 2026-11-20 11:08 CST；网络与 SSH 段于 15:36 CST 更新（Asia/Shanghai，UTC+8）
+原因：Joe 于 11:06 让 Grok Bot 先停，随后要求把交接文档给你，让你试试。15:27 后他让 Grok Bot 恢复 Tailscale 并打通 2404→2604 的 SSH，且要求把 SSH 用法写进本文。
+
+==============================================================================
+1. 先读结论
+==============================================================================
+
+最新完整评分：官方 F10 fractal `f10-fractal-run-104059` 是 PARTIAL，不是通过。
+
+同一次运行里：
+- Cirros 登录 + SSH 成立（11:01:24 CST）
+- 官方 WRITE 成立：A 的 `[WVM-MEM-STATS]` 为 origin=801 != directory=811，`remote_commits` 依次为 1、43、100、157、214、261
+- 官方 typed RET 不成立：`vm.log`、`cell/agent-a.log`、B 主日志 `agent-b.log` 均无 `[IPC VCPU_RUN RET] ... ack_status=0 ack_mode=0`
+- 因此不能把 F10 标为 CLOSED，也不能声称 MINIMUM_COMPLETE。F05 官方 fence/RET 也仍开放。官方 flat KVM cell 也还没作为本轮关闭依据。
+
+没有 commit，没有 push。HEAD 仍是：
+  33e2db80f Official typed entry and F10 remoting WIP (not Minimum complete)
+
+Grok Bot 已按 Joe 的要求暂停官方 F10 调试，不要默认我还在跑测试或继续改代码。
+2026-11-20 15:36 CST：两台 Tailscale 已恢复在线，2404 可以用 `ssh wavevm-2604` 登录 2604。详见第 3 节。这不改变 F10 仍未 CLOSED 的结论。
+
+==============================================================================
+2. 硬约束（必须遵守）
+==============================================================================
+
+- 只走官方入口：`scripts/wavevm` → `wvm_ctl serve` + `wavevm_node_runtime agent` + `CREATE_VM`。
+- 官方测试：`scripts/wavevm f10 --role node-a|node-b --route-topology fractal`。先起 A，等到共享目录出现 READY_FOR_B，再起 B。
+- 必须设置当时的直播地址：`WVM_A4_NODE_A_IP` / `WVM_A4_NODE_B_IP`。不要沿用旧 IP。
+- 禁止设置 `WAVEVM_ALLOW_LEGACY_CLI`。禁止用 `ci_dual_node.sh` 或独立 master/slave 来评分。禁止伪造 ack / MEM-STATS。禁止用无法从当前源码复现的补丁二进制来得分。
+- 未获 Joe 明确要求：不要 commit，不要 push。他要 push 时才允许打包提交；中间不要先 commit。
+- 不要打印、记录或把 sudo 密码写进任何文件/日志。A 上密码文件在 WaveVM keys 目录的 `SSH Keys & API Tokens/sudo passward.txt`（文件名就是这样拼的）；B 用同一密码。需要 sudo 时自己读，不要打出来。
+- 不要搞坏两台虚拟机，不要在主机/显示/网络故障上死磨。主机暂时不可达就如实记录，不要擅自改 `/etc/hosts` 或重做 Tailscale 登录，除非 Joe 明确让你恢复。
+- 不要动这些无关改动：docs 里已就地翻译的章程/规格、session-backup 目录的删除或重命名、`stash@{0}: On main: Unstaged cirros image changes`、以及 `grok_bot_last_prompt.png`。
+- 不要把客户机操作系统叫「客人系统」。F01/TCG 客户机登录属于 Extended，不要拿它来关 Minimum。
+- 评分器 `sent=0` 可能只是 token 对不上，即使日志里已有真实 `[WVM-SEND]`。要核对 `[WVM-ROUTE-SEND]` 的对端地址。B 自己的日志是主证据；A 上的 B 副本可能被截断。
+- 被中途杀掉的不完整 run 不能拿来得分。
+
+官方 F10 同一次运行算成功，必须同时满足：
+1. Cirros 登录或 SSH；
+2. 真实远程 typed `[IPC VCPU_RUN RET] ... ack_status=0 ack_mode=0`；
+3. 官方 WRITE：`[WVM-MEM-STATS]` 且 origin != directory，并且有真实 `remote_commits`（不是只有 reads）；
+4. 没有客户机 panic / closeout-bar 失败。
+
+任何一项缺失，或出现 panic，都不是 CLOSED。
+
+==============================================================================
+3. 机器与网络（2026-11-20 实测；15:36 已恢复连通并完成 SSH）
+==============================================================================
+
+- A / Ubuntu 2404：machineId `2e4d3ec5-e1b1-4a36-9903-de6309119499`，git 树 `/workspaces/WaveVM`。
+  当前 Tailscale：`wavevm-f05-a` = `100.71.80.12`（Running / Online）。旧地址 `100.116.196.65` 已失效，不要再用。
+- B / Ubuntu 2604：machineId `30b14f91-ba5c-40d4-8af3-ac7f5b4169f1`，工作树 `/home/joeking/WaveVM`（无 `.git`，从 A 同步二进制/源）。
+  当前 Tailscale：`wavevm-f05-b` = `100.97.64.125`（Running / Online）。更旧的 `100.114.246.92` 已失效。
+- 2026-11-20 15:32 CST 互 ping 走直连局域网 `192.168.10.129/131:41641`，约 1ms。跑之前请再确认两端仍是 connected，以及这两个直播 IP。
+- 你（Antigravity GUI agent）只能直接操作 2404，但从 2404 已能 SSH 进 2604。2026-11-20 15:36 CST 验证成功。
+  在 2404 上执行远程命令：
+    ssh wavevm-2604
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=yes wavevm-2604 "hostname; whoami; tailscale ip -4"
+  实测输出：hostname=`joeking`，whoami=`joeking`，IPv4=`100.97.64.125`，退出码 0。
+  2404 的 ~/.ssh/config 已追加（原有 Include ~/.ssh/config.wavevm-bitbucket 保留）：
+    Host wavevm-2604
+        HostName 100.97.64.125
+        User joeking
+        IdentityFile ~/.ssh/wavevm_2604_ed25519
+        IdentitiesOnly yes
+  这是专用密钥，不要改用 GitHub / Bitbucket 密钥，也不要把私钥写进文档或日志。客户端公钥指纹：SHA256:bDUajUnyRLLxkhYMRoD/FArNwpagAUUfS8xW3Zbnd5I。
+  B 原先没有 openssh-server。已安装 1:10.2p1-2ubuntu3.8，并执行 systemctl enable --now ssh.socket。UFW 本来就是不活动，未改防火墙，未改 sshd 安全默认。
+  B 主机密钥已与本机 /etc/ssh/ssh_host_*.pub 核对后钉进 2404 的 known_hosts（未使用 StrictHostKeyChecking=no）：
+    ED25519 SHA256:Oqjxqap12zgGpn909JU9D+t+O7nZ4jd/UxoevnPQz/Y
+    ECDSA   SHA256:SSILHblGNt9T1dmNiI2LcZTM/Z3uzaRuxP/JVYNm91o
+    RSA     SHA256:VUpgA4zBBrLsz4Pcb+P0wgC+aY/G1CHHBxXhJrkrzeE
+  如果 B 的 Tailscale IP 变了，先改 HostName，再重新核对主机指纹，不要关掉严格校验。
+- 共享目录：/mnt/hgfs/SharedFolder。复制用 cp -f，不要用 cp -a。如需重新挂载，按 ~/刷新共享文件夹.txt；必要时用 sudo（不要把密码写出来）。
+  注意：2026-11-20 15:36 CST 在 A 上检查时，该路径还不存在（尚未重新挂载）。跑测试前需要先挂上。
+- /dev/shm 必须是 6G；重启后常常会掉回半内存，先检查再跑。
+  注意：同一时刻 A 上 df 显示只有 2.9G。跑测试前需要先调回 6G。
+- 2404 上建议 bash --noprofile --norc，避免残留 set -eux。那台上可能没有 rg，用 grep。
+- 清理时只检查明确的 QEMU / runtime / wvm_ctl 残留，不要做过于宽泛的杀进程。
+
+==============================================================================
+4. 仓库状态与未提交源码
+==============================================================================
+
+HEAD / origin tip：`33e2db80ff8053afc1613fd4cada59089ac5f2c5`（短号 33e2db80f）。
+11-19 / 11-20 的修复都还在工作区，未提交。
+
+与本轮 F10 直接相关的已修改源文件（相对 HEAD 的 diffstat）：
+  node_runtime/kvm_page_cache.c              |  50
+  node_runtime/kvm_page_cache.h              |   6
+  node_runtime/vcpu_service.c                |   6
+  slave_daemon/slave_hybrid.c                | 596
+  tests/control-plane/test_kvm_page_cache.c  |  39
+  wavevm-qemu/accel/kvm/kvm-all.c            | 101
+  wavevm-qemu/accel/wavevm/wavevm-cpu.c      | 137
+  wavevm-qemu/accel/wavevm/wavevm-user-mem.c | 509
+  8 files changed, 1247 insertions(+), 197 deletions(-)
+
+工作区里还有大量无关脏项：docs/specs 与章程的就地翻译、session-backup 删除/改名、以及很多旧 audit-evidence。请不要把那些塞进你的提交，也不要还原它们来「清理工作区」。
+
+请以当前工作区实文件为准阅读补丁，不要假设下面这份摘要覆盖了 093804 之后每一次 QEMU 微调。Grok Bot 在排查登录前 NX 时曾中断，1030 到 1040 之间还有重建，完整 delta 以 `git diff` 为准。
+
+已确认并在后续 run 中看到效果的要点：
+- `wavevm-qemu/accel/kvm/kvm-all.c`：`kvm_discard_virgin_dirty_log`。KVM `MANUAL_PROTECT` 下，`GET_DIRTY_LOG` 不会清掉内核脏位；`INITIALLY_SET` 会让新 slot 出生即为全 1。需要在 GET 之后对 slot 做 `KVM_CLEAR_DIRTY_LOG`，并清零用户态 bitmap。日志后缀 `(kernel cleared)`。
+- `wavevm-qemu/accel/wavevm/wavevm-user-mem.c`：dirty-log 开始/重新启用时要先把 `baseline_consumed` 复位，再消费，否则会跳过 QEMU 侧的基线清除。handoff 脏页收获是有预算的：150ms / 256 pages，跳过全 0 窗口，保留未提交的脏位。禁止同步走完整 3GB = 786432 页，那会在 1 秒路由时限内把 vCPU 卡住，并导致客户机 soft lockup。
+- `wavevm-qemu/accel/wavevm/wavevm-cpu.c`：KVM 交接前的 flush/fence，以及有界的 stay-local 启动收获。
+- `slave_daemon/slave_hybrid.c`：TR/TSS/GDT/IDT/event prefetch、EFAULT demand-fill、KVM slice 边界。
+- `node_runtime/kvm_page_cache.c/.h`：ABSENT 全量快照、较新的 CLEAN 中段 snapshot/diff apply；dirty/SUBMITTING 受保护。
+- `node_runtime/vcpu_service.c` 与 QEMU user-mem：真实 typed RET 日志、脏页收获。
+- `tests/control-plane/test_kvm_page_cache.c` 上一次已知为 PASS。不要为了迁就旧测试去改官方生产路径。
+
+最新测试用哈希（来自 launch 日志，不要另造）：
+  runtime_sha256 = 8f61733e3df2bcbb44d901c70f5f97ed22510cd79b290a017c402164e44dd388
+  qemu_sha256    = 6cef67a5a298289a6b0039bc861d205c2c9e2a74e509b41946a28d5204c1c207
+  HEAD           = 33e2db80f no-commit
+  WAVEVM_ALLOW_LEGACY_CLI 未设置
+
+runtime 哈希在 11-20 这几轮保持不变；QEMU 哈希随未提交重建变化，见下一节。
+
+==============================================================================
+5. 最近几轮官方 fractal（都不要当 CLOSED）
+==============================================================================
+
+证据根目录：
+  /workspaces/WaveVM/audit-evidence/fix-blockers-20261117/official-f05-f10-fix/
+
+- f10-fractal-run-162924（11-19，上一轮暂停前最后完整评分）
+  PARTIAL/FAIL。登录+SSH+SEND 有；官方 RET 有（大量 ack_status=0 ack_mode=0）；官方 WRITE 有。之后 wvm-aff2 上 cpuidle stack-protector panic，再 double fault。当时脏页基线几乎没清掉（首次 remaining 约 785911/786432）。不要把这一轮写成已通过。
+
+- f10-fractal-run-090432（11-20 早）
+  登录+SSH 有；真实 SEND 20；真实 typed RET 131 次成功（另有一次结尾 -14）；官方 WRITE 有（origin=811，remote_commits=419）。但仍 FAIL：客户机约 846s TSC watchdog，随后 CPU2 kworker double fault / NX。首次 flush remaining=785931，最后 777529，说明当时的「清除」是假的。根因已定位：MANUAL_PROTECT 下 GET 不清理内核全 1 位，同步时又 OR 回来。这之后才加上明确的 CLEAR。
+
+- f10-fractal-run-093804
+  qemu_sha256=b0d836faa30c496b8c1ee1037ccd9fd10f9c97b9f71c5f5944a46730ded8a2a9
+  runtime 同上。官方 VERDICT=FAIL。基线这次对上了：首次 flush remaining=49712，不再把整份 3GB 当真实脏页；41 次 `(kernel cleared)`。但客户机约 59 秒、登录前就对 NX 页取指，idle 任务被杀。无登录、无 RET、无 WRITE。`remote_defer=4120`。
+
+- f10-fractal-run-101244
+  qemu_sha256=e8398d35e94d0419067d18909f19b2e00c1891b156660b4a9978d2d577fa48d6
+  官方 VERDICT=FAIL。`login_ok=0`，`ssh_ok=0`。评分器还写了 `ack_mode0=5136`、`remote_vcpu_evidence_kvm=1`、`remote_mem_evidence=1` 等数字。Grok Bot 没有把这一轮当作关闭依据，也没有在交接时完整重放它的每一条日志解释；请以该目录里的 `verdict.txt` / `score.txt` 和原始日志为准，不要只看摘要。
+
+- f10-fractal-run-104059（当前最新完整评分，请从这里接着查）
+  qemu_sha256=6cef67a5a298289a6b0039bc861d205c2c9e2a74e509b41946a28d5204c1c207
+  官方与独立评分都是 PARTIAL，不是通过。详见第 6 节。
+
+现场临时目录（可能还在，不要当唯一副本）：
+  /tmp/wavevm-official-f10-fractal-fix-20261120-104059-A/
+  /tmp/wavevm-official-f10-fractal-fix-20261120-104059-B/
+
+已拷贝（无证书私钥、未 commit）到：
+  /workspaces/WaveVM/audit-evidence/fix-blockers-20261117/official-f05-f10-fix/f10-fractal-run-104059/
+  内有 A/、B/、shared/、verdict.txt、score.txt、hashes.txt。
+  B 主日志以 `B/agent-b.log`（95905 字节）为准；A 上的 B 副本是 95785 字节，截断了。
+
+==============================================================================
+6. 当前洞：run-104059 为什么不是通过
+==============================================================================
+
+时间（CST / UTC+8）：
+- A wrapper 10:40:58 启动；CREATE_VM / QEMU FE 10:42:10；B 10:42:11 启动（agent pid=14397，child 14416）。
+- 登录和 SSH：11:01:24。vCPU2 burn 11:01:24–11:01:49，burn rc=0。
+- A 于 11:01:56 写 PARTIAL，共享目录 DONE=11:01:56；B 于 11:01:59 收到 DONE 并停止。
+- A 相关进程 11:02:42 已全部自行退出；B 在 11:04:42 复查时已干净。没有人为杀进程。
+
+登录 / SSH：成立。这是第二次启动。第一次启动在 metadata `failed 10/20: up 256.03` 后出现
+  `[KVM-SHUTDOWN] cpu=0 rip=0xffffffffbb8a1af3`
+  `[WVM-RESET] reason=guest-reset(7)`（vm.log 约 2097–2098）
+同一次重启的内存重加阶段还有第二条 `WVM-RESET guest-reset(7)`（约 2205）。
+第二次启动 metadata `failed 20/20: up 746.85`，随后出现 `cirros login:`（横幅 uptime=796.71）。
+`ssh.out`：`SSH_OK` 以及 `Linux cirros 5.15.0-71-generic`。串口没有 classic kernel panic / Oops 字样。
+官方计数：`kvm_shutdown=1`，`wvm_reset=2`。
+
+SEND：`vm.log` 有真实
+  `[WVM-SEND] cpu=2 rip=0x401810 rax=0xc0ec4033 rdx=0x3239cd ...`
+官方计数却是 `sent=0`（不要被这个 0 骗过）。
+`cell/agent-a.log` 有 32 条 `[WVM-ROUTE-SEND] msg=28` 发往 `100.97.64.125:17220`；
+B 主日志有 32 条 `msg=30` 发往 `100.71.80.12:17210`（这是内存路径，不是 RET）。
+SEND 之后：`WVM-HANDOFF` flush ret=0，`[WVM-PUSH-BARRIER] rx/ack cookie=1`，push-fence ret=0 flush=0。
+`fence_done=1`，`push_fail=0`，`handoff_fail=0`。未见 closeout-bar failure 字样。
+
+RET：不成立。ack_mode0=0，ack_mode1=0，remote_vcpu_evidence=0，remote_done_cpu2=0。
+
+WRITE：A 成立，见上面 remote_commits=261（最后 gpa=3220865024）。B 主日志只有 1 条 MEM-STATS：origin=811 != directory=801，`remote_reads=1 remote_commits=0`，这一条不能当成 B 侧的真实 remote_commits。官方：`mem_stats_raw=7`，`remote_mem_peer=262`，`remote_mem_evidence=1`。
+
+SEND 之后 B slave 上的关键失败（请优先看 B/agent-b.log）：
+  `[VCPU-RUN] mode=0 vcpu=2`
+  `[SLAVE-MEM] GPA=0x401810 unreadable (PROT_NONE or unmapped)`
+  `[DBG-SHUTDOWN] req=1 -- triple fault!`（同一个 rip=0x401810，cs=0x33，属于用户态）
+  随后 runtime child `pid=14416` 以 `sig=11`（SIGSEGV）退出，日志有 `has_required_child_failed`。
+缺 RET 与这次 B 侧 triple-fault / SIGSEGV 是对得上的。注意这里的 GPA `0x401810` 和 SEND 的 RIP 相同；要自己判断这是把 RIP 误当成 GPA、页权限/映射真的缺了，还是 demand-fill / 远程页安装没有在 vCPU 跑起来之前就绪。不要把未经日志和代码核对的猜测写成已证实根因。
+
+脏页 / flush：处女脏页基线已被丢弃且未 commit，没有再把整份 3GB 当真实脏页。32 条 `handoff dirty flush` 均为 rc=0。首次 remaining=49065（dirty=472，skipped_zero=216），最大 53866，最后 45815。`remote_defer=3187`。剩余约 4.5–5.4 万脏页是不是 benign，尚未被证明。
+
+主机插曲：B（2604）在 10:56 之后到大约 11:03 的几次 Shell 曾暂时不可达，当时没有做主机恢复；11:04:42 第三次轻量重试成功，并拷贝了 B 本地产物。若你再跑，先确认 2604 可达。
+
+==============================================================================
+7. 建议你接着做什么
+==============================================================================
+
+优先查 104059 里这次 B 侧失败，而不是立刻再开一轮空跑：
+- 为什么 SEND 之后 slave 认为 `GPA=0x401810` 不可读（PROT_NONE or unmapped），并在同一 RIP 上 triple fault？
+- 为什么 handoff/fence/barrier 都显示成功，却没有 typed RET？
+- 第一次启动的 guest-reset（metadata 失败后的 KVM-SHUTDOWN）是否和后续页状态有关，还是 Cirros metadata 超时后的正常重启？第二次启动毕竟已经登录并 SSH 成功。
+- 剩余约 5 万脏页、以及 CLEAR 是否可能丢掉真实写，目前仍是假说，不是已证实根因。093804 的登录前 NX 也还没有被正式关闭；104059 已经能登录，当前应以这一轮的 B 侧 triple fault / 缺 RET 为主。
+
+如果要复测：只走官方 fractal 入口，确认直播 IP 和 `/dev/shm`、SharedFolder，先 A 后 B。复测后诚实评分。不要在没看懂 104059 之前盲目加大预算或重新同步走 3GB。不要声称 F10 CLOSED 或 MINIMUM_COMPLETE。
+
+跑完后把完整 A/B 产物（不要证书私钥）拷到
+  /workspaces/WaveVM/audit-evidence/fix-blockers-20261117/official-f05-f10-fix/
+下的新 run 目录。未获 Joe 同意不要 commit/push。
+
+==============================================================================
+8. 怎么启动官方 F10 fractal
+==============================================================================
+
+在 A、B 上都不要用 legacy CLI。大致流程（以当时直播 IP 为准，先再查一遍）：
+
+A：
+  scripts/wavevm f10 --role node-a --route-topology fractal
+  等共享目录 `/mnt/hgfs/SharedFolder/wavevm-official-f10-fractal/READY_FOR_B`
+
+B：
+  scripts/wavevm f10 --role node-b --route-topology fractal
+
+环境里要有当前的 `WVM_A4_NODE_A_IP` / `WVM_A4_NODE_B_IP`。
+同日前两轮在「QEMU FE observed」后再等 25 分钟登录超时；104059 第二次启动大约到 11:01 才登录，所以不要过早杀。
+
+==============================================================================
+9. 联系与暂停状态
+==============================================================================
+
+Joe 是仓库主人。Grok Bot 在 2026-11-20 11:06 CST 按他的「先停一下」暂停，本文件是应他「给 Antigravity GUI agent 一份交接文档」写的。
+
+本文件路径：
+  /workspaces/WaveVM/audit-evidence/fix-blockers-20261117/official-f05-f10-fix/HANDOFF-antigravity-gui-20261120.txt
+
+它目前也是未跟踪文件，不要为了交文档单独提交。

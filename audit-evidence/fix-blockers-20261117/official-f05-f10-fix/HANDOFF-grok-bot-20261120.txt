@@ -1,0 +1,113 @@
+=== HANDOFF TO GROK BOT AGENT (2026-11-20 21:35 CST) ===
+From: Antigravity GUI agent
+To: Grok Bot agent
+Topic: Official F10 Fractal KVM Remoting Progress, Run-211754 Evidence & Remaining Action Items
+
+========================================================================
+1. CURRENT STATE & WORKSPACE STATUS
+========================================================================
+- SSH to Node B (`wavevm-2604`) works via Tailscale; user reduced Node B VM to 4C4G (3.3Gi RAM + 4.0Gi swap) to save host memory.
+- Current live Tailscale IPs (re-verify before running):
+  * Node A (`wavevm-f05-a` / local `/workspaces/WaveVM`): `100.71.80.12`
+  * Node B (`wavevm-2604` / `/home/joeking/WaveVM`): `100.97.64.125`
+- Rebuilt binaries on BOTH Node A and Node B currently match byte-for-byte:
+  * `/workspaces/WaveVM/wavevm_node_runtime`
+    sha256: `2f0aff98703e775f87cafe83d59a1ba51536be196dc0186b97d9fc91a2298433`
+  * `/workspaces/WaveVM/wavevm-qemu/build-native/qemu-system-x86_64`
+    sha256: `4d2188771ec54511e81f238c0d45b9ca45e05383fe792f9eb2c7af8b89323a35`
+- **NO `git commit` and NO `git push` was run by Antigravity.**
+- Unrelated dirty items in `/workspaces/WaveVM` MUST NOT be reverted:
+  * `docs/` & `docs/specs/` (translated to Chinese; user requested keeping them)
+  * `scripts/` & `session-backup/` deletions (moved by user to standalone repo `/workspaces/ai info and session backup`)
+  * `stash@{0}`, old `audit-evidence/` runs.
+- Reminder: after reboots, `/mnt/hgfs` and `size=6G /dev/shm` reset; re-mount with `~/刷新共享文件夹.txt` and `mount -o remount,size=6G /dev/shm` on both A & B before running `scripts/wavevm f10` (sudo password in `SSH Keys & API Tokens/sudo passward.txt` — never print/log it).
+
+========================================================================
+2. SIX ROOT CAUSES ALREADY FIXED BY ANTIGRAVITY (WITH UNIT TESTS PASSING)
+========================================================================
+Files modified in `/workspaces/WaveVM` (relative to prior WIP):
+1. `slave_daemon/slave_hybrid.c` (line ~3330):
+   - Fixed fatal Node B `SIGSEGV` (`sig=11`) on `KVM_EXIT_SHUTDOWN` (`exit_reason == 8`): `[DBG-SHUTDOWN]` previously raw-dereferenced `*(uint32_t*)(g_phy_ram + 0xFFFF0/0xF0000)` while unfetched RAM was `mprotect(PROT_NONE)`. Replaced with safe `process_vm_readv()` reads.
+2. `node_runtime/memory_service.c`:
+   - In `publish_typed_commit()`:
+     (a) Filtered out writer in subscriber count/snapshot loops so writer never triggers `read_page()` self-echoes;
+     (b) Avoided calling `read_page()` -> `wvm_handle_local_fault_fastpath()` for full-page (`offset == 0 && data_bytes == 4096`) commits (previously `read_frontend_live_page` saw live FE SHM drift and silently bumped `page->version` behind QEMU's back, causing permanent `ESTALE`);
+     (c) Added remote-FE `need_fe_fallback` `PAGE_PUSH_FULL` delivery when a non-FE writer commits to a remote directory whose FE lease missed/expired;
+     (d) In `service_remote_ack()`, upserted the FE subscriber entry on `first_publish_live_page()`.
+3. `node_runtime/kvm_page_cache.{h,c}`, `slave_daemon/slave_hybrid.c`, `tests/control-plane/test_kvm_page_cache.c`:
+   - Added `wvm_kvm_page_cache_expire_leases()` / `wvm_kvm_page_cache_global_expire_leases()` with `conceal_kvm_cached_page()` callback (called before `wvm_kvm_execution_global_join()`) so `RESYNC` and lease-expired `CLEAN` pages transition back to `ABSENT` + `mprotect(PROT_NONE)`.
+   - Added unit test `kvm_lease_expiry` to `tests/control-plane/test_kvm_page_cache.c`.
+   - Unit checks passed after edits:
+     * `bash tests/control-plane/test_kvm_page_cache.sh` -> PASS
+     * `bash tests/control-plane/test_memory_service.sh` -> PASS
+4. `wavevm-qemu/accel/wavevm/wavevm-user-mem.c`:
+   - Atomicized `commit_is_inflight` / `set_local_page_version` check in `push_check_should_apply()` & `complete_commit_inflight()` to close the ACK vs `PAGE_PUSH` echo TOCTOU race in `wvm_apply_push()`.
+   - Added subrange containment deduplication in `wavevm_register_ram_block()` (`dedup-subrange`): `g_mem_blocks` dropped from 12+ overlapping 3GB entries to 1 (`blocks=1`).
+   - Replaced the permanent `handoff ESTALE fail-closed` abort-loop in `flush_dirty_to_ipc()` with a bounded 2-attempt rebase via `request_page_over_ipc()`, plus a 2-phase round-robin scan cursor (`g_flush_cursor_bi`, `g_flush_cursor_off`) + complement restore in `restore_uncommitted_dirty_snapshot()`.
+
+========================================================================
+3. LIVE OFFICIAL F10 FRACTAL RUN RESULT: `f10-fractal-run-211754`
+========================================================================
+Archive directory (sanitized — zero certs/keys):
+`/workspaces/WaveVM/audit-evidence/fix-blockers-20261117/official-f05-f10-fix/f10-fractal-run-211754/`
+
+Observed metrics (`verdict.txt` + `score.txt` + raw logs):
+- `VERDICT=PARTIAL` (exit 1) — NOT CLOSED yet!
+- Improvements verified vs `run-104059` / `run-101244`:
+  * Criterion 1 PASSED: `login_ok=1`, `ssh_ok=1` (`2026-11-20 21:31:53 CST`), first-boot login cleanly with ZERO guest reboot (`wvm_reset=0`, `ap_shutdown=0`, `kvm_shutdown=0`, `blocks=1`).
+  * ZERO Node B `SIGSEGV`, ZERO `handoff ESTALE fail-closed`, ZERO Boot-1 echoes crash.
+  * Criterion 2 real KVM remoting progressed much further: `ack_mode0=3`, `ack_mode1=0`, `remote_done_cpu2=3`, `fence_done=4`, `push_fail=0` (`req=1`, `req=2`, `req=3` executed remotely on Node B with real `ack_status=0 ack_mode=0`).
+  * Criterion 3 real remote writes happened: `B/agent-b.log` `[WVM-MEM-STATS]` `origin=811` != `directory=801` reached `remote_reads=1243`, `remote_commits=1135` (compared to `remote_commits=0` in `104059`).
+
+HOWEVER, two blockers remain at `req=3 -> req=4` (during 5s `wvm-aff2` burn):
+- Blocker A (Guest Kernel Panic — Criterion 4 FAILS):
+  `A/vm-serial.log` tail:
+  `[  803.921382] Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in: serial8250_console_write+0x3c5/0x3d0`
+  `[  803.921636] CPU: 2 PID: 531 Comm: wvm-aff2 Not tainted 5.15.0-71-generic #78-Ubuntu`
+- Blocker B (`req=4` Dirty Commit Horizon Timeout — killed QEMU):
+  `B/agent-b.log`:
+  `[KVM cache] slice commit failed GPA=0 reason=KVM dirty commits exceeded horizon`
+  `[KVM cache] dirty commit failed GPA=0x1277a000 base=0x2 status=4 result=-110 reason=V1 local memory commit exceeded completion horizon`
+  `A/cell/agent-a.log`:
+  `[IPC VCPU_RUN RET] vcpu=2 target=0 rpc_ret=0 ack_status=-14 ack_mode=0`
+  `A/vm.log`:
+  `qemu-system-x86_64: WaveVM vCPU 2 terminal handoff failure status=-14 gpa=0`
+
+========================================================================
+4. EXACT DIAGNOSIS & NEXT FIXES FOR GROK BOT AGENT
+========================================================================
+Look at `A/vm.log` lines 1887–1930 and `B/agent-b.log` around `req=1..4`:
+
+1. **Why Blocker A (`serial8250_console_write` stack-protector panic) happened**:
+   - In `A/vm.log` (`req=1..4` flushes), `flush_dirty_to_ipc()` reported:
+     * `req=1`: `pages=256 remaining=55270 budgeted=1`
+     * `req=2`: `pages=256 remaining=55014 budgeted=1`
+     * `req=3`: `pages=256 remaining=54758 budgeted=1`
+     * `req=4`: `pages=256 remaining=54503 budgeted=1`
+   - Why were 55,270 boot-dirty pages still sitting un-flushed at `wvm-aff2`? Because `WVM-HALT-WAKE` parked vCPU2 ~840 times without harvesting boot dirty pages (only `stay-local dirty harvest` did, once when `mp_state` changed), so when `WVM-SEND` started, the sequential/round-robin cursor with `page_budget=256` ONLY flushed 256 old boot pages near low GPAs (`0x00000000..0x01000000`)!
+   - Between `req=2` (`rip=0xffffffffa56897f2`), `req=3` (`exit=2 port=0x3f9`, `WVM-IO-REPLAY` + `WVM-KVM-DRAIN` on Node A), and `req=4` (`rip=0xffffffffa56a62bb rsp=0xffffbf2840313a00`), Node A modified `cpu=2`'s kernel stack page (`rsp=0xffffbf2840313a00`, well above GPA `0x01000000`).
+   - Because `flush_dirty_to_ipc` only flushed 256 pages at the cursor far below the kernel stack's GPA, **the dirty kernel stack page was NEVER committed to the directory before `dispatch #3` (`req=4`)**, so Node B executed `serial8250_console_write` using stale cached stack contents -> stack canary corruption!
+   - **Recommended Fix 1 (Critical)**:
+     * At KVM handoff (`flush_dirty_to_ipc` when `journal_out != NULL`, or right before `WVM_SEND`), ALWAYS prioritize & flush **working-set GPAs** first (current vCPU `RSP` stack page +- 1 page, `RIP` page, `CR3` top page tables, GDT/IDT/TSS) BEFORE the background `remaining=55270` backlog cursor, AND/OR ensure the 55k boot-dirty backlog is drained before transitioning from stay-local to remote (or discard/flush boot dirty in `stay-local` / `WVM-HALT-WAKE` batches so `remaining` is near 0 BEFORE `wvm-aff2` starts, while still ensuring ALL post-baseline writes in the vCPU working set are committed cleanly!).
+     * Wait: double-check WHY `remaining=55270` accumulated in the first place — `kvm_discard_virgin_dirty_log` discarded virgin bits at boot, then Cirros boot touched ~55k pages (~220 MB) on BSP/AP0/AP1 while `cpu=2` was halted in `WVM-HALT-WAKE`! When `flush_dirty_to_ipc` finally ran at `wvm-aff2`, `remaining` was 55,270!
+       Wait: `flush_dirty_to_ipc` currently takes only ~45ms for 256 pages (`elapsed_us=42615`), i.e., **~5700 pages/sec**! If `remaining=55270` is NOT drained before allowing `cpu=2` remote `VCPU_RUN` (or if working-set GPAs written by `WVM-KVM-DRAIN` / DMA / BSP aren't flushed ahead of the 55k backlog!), ANY high-GPA dirty page written between `req=N` and `req=N+1` gets starved behind 200+ sequential `flush_dirty_to_ipc` rounds!
+     * **IMPORTANT DESIGN POINT**: Draining/flushing BEFORE remoting alone is NOT enough if `CPU 0`/`CPU 1` keep dirtying >256 pages elsewhere while `CPU 2` runs! Therefore:
+       (a) Either flush the full active dirty set on handoff (`journal_out != NULL`) when dirty count is modest OR explicitly priority-flush the target vCPU's active page-walk + stack (`RSP +/- 2 pages`, `CR3` PML4/PDPT/PD/PT, `GDT`, `IDT`, `TSS`, `RIP`) at the very start of `flush_dirty_to_ipc` / before `VCPU_RUN`!
+       (b) Check `PAGE_PUSH` / local version tracking on Node A: verify when Node A's `cpu=2` runs `WVM-KVM-DRAIN` locally after a remote slice (`req=2`, `req=3`), Node B's pushed `PAGE_PUSH_FULL` (`local_ver` bumped to `3` on A) wasn't missed and A's subsequent local writes ARE dirtied in KVM and flushed back before `req=4`.
+       (c) Also allow `WVM-HALT-WAKE` / stay-local background harvest (rate-limited, say every 500ms-1s while `remaining > 0`) to steadily harvest boot dirty pages during the ~796s Cirros boot so `remaining` is ~0 by the time `login` happens! (In `run-211754`, Cirros took 796s to boot while `cpu=2` woke in `WVM-HALT-WAKE` 840 times without harvesting!)
+
+2. **Why Blocker B (`req=4` `-110` commit horizon timeout) happened**:
+   - In `slave_daemon/slave_hybrid.c:7033`:
+     `cache_config.completion_timeout_ms = g_executor_manifest_storage.manifest.launch_plan.consistency_policy.max_commit_latency_ms;`
+     That equals **`1000` ms** (commit latency bound), NOT the directory subscriber lease horizon (`operation_retention_horizon_ms = 6000` ms from `ctl_tool/main.c:2244`!).
+   - Because `wvm_kvm_page_cache_expire_leases()` (`kvm_page_cache.c:1049`) computed `lease_limit = timeout / 2 = 500 ms`, Node B aggressively invalidated ALL `CLEAN` cached pages every `0.5s` (notice `req=4` did **532 remote reads**, re-fetching almost everything, plus `419` dirty commits in one 800ms slice, overflowing the 1000ms commit completion wait window on 4C4G Node B!).
+   - **Recommended Fix 2**:
+     * Separate `lease_timeout_ms` (against `6000ms` directory retention horizon, e.g. `4500ms`) from commit `completion_timeout_ms` (`1000ms`) in `wvm_kvm_page_cache_config` / `wvm_kvm_page_cache_expire_leases()` (while updating `test_kvm_page_cache.c` appropriately).
+     * Reduce `WVM_KVM_SLICE_GUEST_NS` (e.g. `50ms` -> `15ms`) and `WVM_KVM_SLICE_WALL_NS` (`800ms` -> `300-350ms`) in `slave_hybrid.c:657-658` so one KVM slice never accumulates 400+ dirty commits to push within the 1000ms commit window.
+     * Also investigate WHY Cirros boot took 796s in `run-211754` (`WVM-HALT-WAKE` 1s local slices / timer interaction) if possible — shorter boot means much faster iteration!
+
+========================================================================
+5. USER'S REQUEST FOR GROK BOT AGENT NEXT
+========================================================================
+User asked to hand this off cleanly to Grok Bot agent to fix the remaining two issues (`serial8250_console_write` stack-page coherence + `lease_limit`/slice-budget tuning), verify F10 PASS, and then handle git push & session backup (moved to `/workspaces/ai info and session backup`).
+Do NOT forge F10 PASS. All 4 official criteria (login/SSH, real remote `ack_mode0>0`, `[WVM-MEM-STATS]` `origin!=directory` with `remote_commits>0`, zero guest panic/Oops/closeout failure) must hold simultaneously in ONE complete run.
